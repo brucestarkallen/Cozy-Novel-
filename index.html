@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#201e1a" />
+    <meta name="description" content="A quiet home for your novel." />
+    <title>Cozy Novel</title>
+    <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./css/studio.css" />
+    <script type="module" src="./js/app.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="appbar">
+        <button id="homeButton" class="brand" aria-label="Open your library">
+          <span class="brandmark">N</span
+          ><span>Cozy Novel<small>A little room for a whole world</small></span>
+        </button>
+        <nav aria-label="Application">
+          <button data-action="library">Library</button
+          ><button data-action="backups">Backups</button
+          ><button data-action="settings">Connections</button
+          ><button
+            data-action="appearance"
+            aria-label="Appearance and reading settings"
+          >
+            Aa
+          </button>
+        </nav>
+      </header>
+      <div id="notice" role="status" aria-live="polite"></div>
+      <main id="home">
+        <div class="welcome">
+          <p class="eyebrow">YOUR WRITING ROOM</p>
+          <h1>Every story starts<br />with a little possibility.</h1>
+          <p>
+            Bring a scene, a stray thought, or just yourself.<br />There is room
+            to see where it goes.
+          </p>
+          <div class="actions">
+            <button class="primary" data-action="newNovel">Start a novel</button
+            ><button data-action="importText">Import writing</button
+            ><button id="continueNovel" hidden data-action="continueNovel">
+              Continue writing
+            </button>
+          </div>
+        </div>
+        <section class="shelf">
+          <div class="sectionhead">
+            <h2>Your novels</h2>
+            <label
+              ><input id="showArchived" type="checkbox" /> Include archived
+              work</label
+            >
+          </div>
+          <div id="novelList" class="novelgrid"></div>
+        </section>
+        <p class="quiet footnote">
+          Your words stay yours. Writing, reading and saving work without a
+          model connection.
+        </p>
+      </main>
+      <main id="studio" hidden>
+        <nav class="mobiletabs" aria-label="Workspace">
+          <button data-action="panel" data-panel="navigator">Chapters</button
+          ><button data-action="panel" data-panel="manuscript">Write</button
+          ><button data-action="panel" data-panel="partner">Partner</button
+          ><button data-action="panel" data-panel="bible">Story Bible</button>
+        </nav>
+        <div class="workspace" data-panel="manuscript">
+          <aside id="navigator" class="navigator">
+            <div class="sectionhead">
+              <div>
+                <p class="eyebrow">THE MANUSCRIPT</p>
+                <h2 id="novelTitle"></h2>
+              </div>
+              <button data-action="novelDetails" aria-label="Novel details">
+                •••
+              </button>
+            </div>
+            <div class="compactActions">
+              <button data-action="newChapter">＋ Chapter</button
+              ><button data-action="newScene">＋ Scene</button
+              ><button data-action="search">Find</button>
+            </div>
+            <div id="chapterList"></div>
+            <div class="navfoot">
+              <button data-action="style">Writing style</button
+              ><button data-action="prompts">Prompt templates</button
+              ><button data-action="exports">Export manuscript</button
+              ><button data-action="bookmarks">Bookmarks</button>
+            </div>
+          </aside>
+          <section class="manuscript" aria-label="Writing workspace">
+            <div class="manuscriptbar">
+              <span id="scenePath" class="quiet"></span>
+              <div>
+                <button data-action="sceneDetails">Scene details</button
+                ><button data-action="history">History</button
+                ><button data-action="read">Read</button
+                ><button data-action="immersive">Focus</button
+                ><button
+                  data-action="togglePartner"
+                  aria-label="Toggle writing partner"
+                >
+                  ☷
+                </button>
+              </div>
+            </div>
+            <div id="writingSurface" class="writingSurface">
+              <div class="sceneheading">
+                <p class="eyebrow" id="sceneNumber"></p>
+                <h1 id="sceneTitle"></h1>
+              </div>
+              <textarea
+                id="editor"
+                aria-label="Manuscript"
+                spellcheck="true"
+                placeholder="Write your opening here, or give your writing partner a direction below."
+              ></textarea>
+              <div id="readingView" class="readingView" hidden></div>
+              <section
+                id="candidateBox"
+                class="candidateBox"
+                hidden
+                aria-label="Proposed passage"
+              >
+                <div class="sectionhead">
+                  <p class="eyebrow">A POSSIBLE PASSAGE</p>
+                  <span id="candidateState" class="quiet"></span>
+                </div>
+                <div id="candidateText" class="prose"></div>
+                <div class="actions">
+                  <button class="primary" data-action="acceptCandidate">
+                    Keep passage</button
+                  ><button data-action="retryCandidate">Try another</button
+                  ><button data-action="reviseCandidate">
+                    Revise candidate</button
+                  ><button data-action="compareCandidate">Compare</button
+                  ><button data-action="discardCandidate">Discard</button>
+                </div>
+              </section>
+              <div
+                id="suggestions"
+                class="suggestions"
+                aria-label="Possible next directions"
+              ></div>
+              <button class="textbutton" data-action="candidates">
+                Earlier candidates
+              </button>
+            </div>
+            <div class="directionDock">
+              <label for="direction"
+                >Where would you like the story to go?</label
+              ><textarea
+                id="direction"
+                rows="2"
+                placeholder="A rainy café. Three old friends. One has been quieter than usual."
+              ></textarea>
+              <div class="generationActions">
+                <button class="primary" data-action="write">Write scene</button
+                ><button data-action="continue">Continue</button
+                ><button data-action="reviseSelection">Revise selection</button
+                ><button data-action="quickRP">Quick RP</button
+                ><button id="cancelGeneration" data-action="cancel" hidden>
+                  Stop
+                </button>
+              </div>
+            </div>
+          </section>
+          <aside id="partnerPanel" class="partnerPanel">
+            <div class="paneltabs">
+              <button
+                data-action="sideTab"
+                data-tab="partner"
+                aria-selected="true"
+              >
+                Writing partner</button
+              ><button data-action="sideTab" data-tab="bible">
+                Story Bible
+              </button>
+            </div>
+            <section id="partner">
+              <p class="eyebrow">THINK IT THROUGH</p>
+              <h2>A second chair at your desk.</h2>
+              <p class="quiet">
+                Talk through a motive, a quiet moment, or a scene that has not
+                quite found its shape.
+              </p>
+              <label
+                >Conversation scope<select id="discussionScope">
+                  <option value="scene">Current scene</option>
+                  <option value="selection">Selection</option>
+                  <option value="chapter">Current chapter</option>
+                  <option value="overview">Novel overview</option>
+                  <option value="sources">Selected sources</option>
+                </select></label
+              ><button class="textbutton" data-action="selectSources">
+                Choose sources
+              </button>
+              <div id="discussion" class="discussion" aria-live="polite"></div>
+              <label for="discussionInput">Ask your writing partner</label
+              ><textarea
+                id="discussionInput"
+                rows="3"
+                placeholder="What might she be avoiding saying?"
+              ></textarea>
+              <div class="actions">
+                <button data-action="discuss">Discuss</button
+                ><button data-action="partnerEdit">
+                  Propose selection edit
+                </button>
+              </div>
+              <button class="textbutton" data-action="receipts">
+                What the writer received</button
+              ><button class="textbutton" data-action="analyze">
+                Refresh suggestions and reading
+              </button>
+              <div id="memoryProposals"></div>
+            </section>
+            <section id="bible" hidden>
+              <div class="sectionhead">
+                <h2>Story Bible</h2>
+                <button data-action="newEntity">＋ Person or place</button>
+              </div>
+              <p class="quiet">
+                Facts, beliefs and possibilities each have their own place.
+              </p>
+              <button data-action="newCanon">Add a story record</button>
+              <div id="storyRecords"></div>
+            </section>
+          </aside>
+        </div>
+        <footer class="statusbar">
+          <span id="saveStatus" role="status">Saved in browser</span
+          ><span id="deviceStatus">Browser only</span
+          ><span id="wordCount">0 words</span
+          ><button data-action="receipts" id="modelStatus">
+            No model connected
+          </button>
+        </footer>
+      </main>
+      <dialog id="modal">
+        <div class="modalhead">
+          <h2 id="modalTitle"></h2>
+          <button id="closeModal" aria-label="Close dialog">×</button>
+        </div>
+        <div id="modalBody"></div>
+      </dialog>
+    </div>
+  </body>
+</html>

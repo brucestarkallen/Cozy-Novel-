@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Cozy Novel launcher. This file belongs only to Cozy Novel.
+set -eu
+COZYNOVEL_APP_DIR=${COZYNOVEL_APP_DIR:-"$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"}
+exec python3 "$COZYNOVEL_APP_DIR/serve.py" "$@"

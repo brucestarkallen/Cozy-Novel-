@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "Cozy Novel",
+  "short_name": "Cozy Novel",
+  "description": "A quiet home for your novel",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#191916",
+  "theme_color": "#201f1b",
+  "icons": [
+    {
+      "src": "./assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
