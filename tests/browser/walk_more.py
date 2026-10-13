@@ -444,13 +444,128 @@ async def scenario_round(b):
     check('no page errors (this round)', not errs, errs[:5])
     await pg.close()
 
+DRAWN_THE_SAME = r"""async () => {
+  const { drawProse, growProse, sourceOffset } = await import('/js/ui/prose.js');
+  const { streamLines } = await import('/js/ui/live.js');
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const bits = ['The rain ', 'came in. ', '“You should ', 'have stayed,” ', 'she said. ', '\n\n', '*soft* ', '**loud** ', '\n', '* * *', '# Heading', '   ', 'end'];
+  const bad = [];
+  for (let run = 0; run < 40; run++) {
+    const a = document.createElement('div'), b = document.createElement('div'), s1 = document.createElement('div'), s2 = document.createElement('div');
+    let text = '';
+    const tint = run % 2 === 0;
+    for (let step = 0; step < 60; step++) {
+      const r = rnd();
+      if (r < 0.75) { const many = 1 + Math.floor(rnd() * 3); for (let j = 0; j < many; j++) text += bits[Math.floor(rnd() * bits.length)]; }
+      else if (r < 0.85) text = text.slice(0, Math.floor(rnd() * text.length));
+      else if (r < 0.95 && text.length > 4) { const i = Math.floor(rnd() * text.length); text = text.slice(0, i) + bits[Math.floor(rnd() * bits.length)] + text.slice(i); }
+      else text = '';
+      growProse(a, text, { tint }); drawProse(b, text, { tint });
+      if (a.innerHTML !== b.innerHTML) { bad.push(['prose', run, step]); break; }
+      const pa = [...a.querySelectorAll('p')], pb = [...b.querySelectorAll('p')];
+      for (let i = 0; i < pa.length; i++) {
+        const ta = pa[i].firstChild, tb = pb[i].firstChild;
+        if (ta && tb && sourceOffset(ta, 0) !== sourceOffset(tb, 0)) { bad.push(['where it stands', run, step, i]); break; }
+      }
+      for (const blocks of [true, false]) {
+        const box = blocks ? s1 : s2;
+        streamLines(box, text, { blocks });
+        const got = blocks ? [...box.childNodes].map((n) => n.textContent).join('\n') : box.textContent;
+        if (got !== text) { bad.push(['lines', blocks, run, step]); break; }
+      }
+    }
+  }
+  return bad;
+}"""
+
+async def scenario_follow(b):
+    """the page follows the words being written until his finger moves it up, then stays where he put it"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Follow')
+    bad = await pg.evaluate(DRAWN_THE_SAME)
+    check('words drawn as they arrive end exactly as the whole text drawn at once (2,400 random steps)', not bad, bad[:3])
+    await add_conn(pg)
+    for i in range(4):
+        await pg.fill('#direction', ' '.join(['The tide turned under the lighthouse and the gulls went quiet, one by one, as if they knew.'] * 12))
+        await pg.click('#mineBtn'); await pg.wait_for_timeout(150)
+    reset()
+    await pg.fill('#direction', 'SLOW the lamp goes out')
+    await pg.click('#writeBtn')
+    await pg.wait_for_function("(() => { const p = document.querySelector('.passage.streaming .prose'); return p && p.textContent.length > 120; })()", timeout=10000)
+    await pg.wait_for_timeout(400)
+    y0 = await pg.evaluate("document.querySelector('#pageWrap').scrollTop")
+    cdp = await pg.context.new_cdp_session(pg)
+    await cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': 200, 'y': 300}]})
+    for i in range(1, 13):
+        await cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': 200, 'y': 300 + 400 * i / 12}]})
+        await pg.wait_for_timeout(16)
+    await cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+    await pg.wait_for_timeout(500)
+    y1 = await pg.evaluate("document.querySelector('#pageWrap').scrollTop")
+    grew = await pg.evaluate("document.querySelector('.passage.streaming .prose').textContent.length")
+    await pg.wait_for_timeout(1500)
+    y2 = await pg.evaluate("document.querySelector('#pageWrap').scrollTop")
+    grew2 = await pg.evaluate("(() => { const p = document.querySelector('.passage.streaming .prose'); return p ? p.textContent.length : 0; })()")
+    check('a flick up while it streams moves the page up', y1 < y0 - 100, (y0, y1))
+    check('…and the writing never pulls it back down', abs(y2 - y1) <= 2 and grew2 > grew, (y1, y2, grew, grew2))
+    check('"Follow the writing" shows while he reads above it', await pg.locator('#followBtn:not([hidden])').count() == 1)
+    await pg.click('#followBtn')
+    await pg.wait_for_timeout(700)
+    y3 = await pg.evaluate("document.querySelector('#pageWrap').scrollTop")
+    check('…and takes him back down to the words, following again', y3 > y2 + 100 and await pg.locator('#followBtn[hidden]').count() == 1, (y2, y3))
+    await idle(pg, 30000)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (follow)', not errs, errs[:5])
+    await pg.close()
+
+async def scenario_made_while_asked(b):
+    """a record made while the page asks the phone what changed is kept, with every change after"""
+    logs = []
+    pg = await page(b, logs)
+    await pg.goto(f'http://127.0.0.1:{PORT}/')
+    await pg.wait_for_selector('#shelf:not([hidden])', timeout=8000)
+    await pg.wait_for_timeout(800)
+    # the phone answers "what changed?" before the new record lands; the page hears that answer after it landed
+    asked, landed = asyncio.Event(), asyncio.Event()
+    async def revs(route):
+        resp = await route.fetch()
+        asked.set()
+        await landed.wait()
+        await pg.wait_for_timeout(300)
+        await route.fulfill(response=resp)
+    async def made(route):
+        if route.request.method != 'PUT':
+            await route.continue_(); return
+        await asked.wait()
+        resp = await route.fetch()
+        await route.fulfill(response=resp)
+        landed.set()
+    await pg.route('**/api/revs', revs)
+    await pg.route('**/api/store/draft/race-check', made)
+    await pg.evaluate("""async () => { const S = await import('/js/store.js');
+      S.create('draft', 'race-check', { id: 'race-check', novelId: 'race-check', direction: 'first words' }).catch(() => {});
+      S.recheck(); }""")
+    await asyncio.wait_for(landed.wait(), 10)
+    await pg.wait_for_timeout(900)
+    await pg.unroute('**/api/revs'); await pg.unroute('**/api/store/draft/race-check')
+    got = await pg.evaluate("""async () => { const S = await import('/js/store.js');
+      S.change('draft', 'race-check', (d) => { d.direction = 'changed after'; }, { now: true });
+      await S.flush('draft', 'race-check');
+      const r = await (await fetch('/api/store/draft/race-check')).json();
+      return r.data && r.data.direction; }""")
+    check('a change after it reaches the phone (it was not taken for deleted)', got == 'changed after', got)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (made while asked)', not errs, errs[:5])
+    await pg.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

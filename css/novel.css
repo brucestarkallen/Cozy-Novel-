@@ -310,6 +310,8 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .thinkbox > button .chev { transition: transform .2s; }
 .thinkbox.open > button .chev { transform: rotate(90deg); }
 .thinkbox .words { display: none; padding: 0 12px 12px; white-space: pre-wrap; max-height: 40vh; overflow-y: auto; }
+/* a line of streamed text (live.js): an empty one keeps a line's height, as the finished text does */
+.ln:empty::before { content: '\200b'; }
 .thinkbox.open .words { display: block; }
 .thinkbox.live .words { display: block; }
 .thinkbox .thinkcopy { display: none; padding: 0 8px 8px; }

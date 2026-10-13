@@ -86,9 +86,22 @@ export function chapterText(chapter, { upto = null, from = null } = {}) {
   if (from !== null) { const i = list.findIndex((p) => p.id === from); if (i >= 0) a = i + 1; }
   return list.slice(a, b).map(passageText).filter((t) => t.trim()).join('\n\n');
 }
+/* each passage is counted once for the words it shows: the chapter list
+ * counts the whole book again whenever any chapter changes — every few
+ * seconds while a page streams — and only the passage that changed is
+ * counted again */
+const counted = new WeakMap();   /* passage -> { text, n } */
 export function chapterWords(chapter) {
   let n = 0;
-  for (const p of (chapter && chapter.passages) || []) if (p.by !== 'break') n += countWords(passageText(p));
+  for (const p of (chapter && chapter.passages) || []) {
+    if (p.by === 'break') continue;
+    const text = passageText(p);
+    const was = counted.get(p);
+    if (was && was.text === text) { n += was.n; continue; }
+    const k = countWords(text);
+    counted.set(p, { text, n: k });
+    n += k;
+  }
   return n;
 }
 export function chapterNumber(novel, chapterId) {

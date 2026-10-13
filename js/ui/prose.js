@@ -76,28 +76,85 @@ export function paragraph(raw, { tint = false } = {}) {
   return { html, srcOf };
 }
 
+/* one line of the stored text as it is drawn: a paragraph, a scene break, a
+ * heading — or nothing, for an empty line. start: where it stands in the text */
+function lineEl(line, start, tint) {
+  if (!line.trim()) return null;
+  if (BREAK.test(line)) { const p = document.createElement('p'); p.className = 'brk'; p.textContent = '❦'; return p; }
+  const hm = HEADING.exec(line);
+  if (hm) { const p = document.createElement('p'); p.className = 'sub'; p.textContent = hm[1].replace(/\*+/g, ''); return p; }
+  const lead = line.match(/^\s*/)[0].length;
+  const { html, srcOf } = paragraph(line.slice(lead), { tint });
+  const p = document.createElement('p');
+  p.innerHTML = html;
+  maps.set(p, { start: start + lead, srcOf });
+  return p;
+}
+
+/* what each .prose was last drawn with, line by line — so words still
+ * arriving redraw only the paragraph they land on: the text, its lines (and
+ * the paragraph each became), how many paragraphs are on screen, and where
+ * its last line begins */
+const drawn = new WeakMap();   /* .prose -> { tint, text, lines: [{ line, el }], shown, lastAt } */
+
+function drawLines(frag, parts, pos, tint, lines) {
+  for (const line of parts) {
+    const el = lineEl(line, pos, tint);
+    lines.push({ line, el });
+    if (el) frag.append(el);
+    pos += line.length + 1;
+  }
+}
+function keep(into, tint, text, lines) {
+  let shown = 0;
+  for (const l of lines) if (l.el) shown++;
+  drawn.set(into, { tint, text, lines, shown, lastAt: text.length - lines[lines.length - 1].line.length });
+}
+
 /* Draw a passage's text into `into` (a .prose element). */
 export function drawProse(into, text, { tint = false } = {}) {
   const raw = String(text || '');
   into.textContent = '';
-  let pos = 0;
+  const lines = [];
   const frag = document.createDocumentFragment();
-  for (const line of raw.split('\n')) {
-    const start = pos;
-    pos += line.length + 1;
-    if (!line.trim()) continue;
-    if (BREAK.test(line)) { const p = document.createElement('p'); p.className = 'brk'; p.textContent = '❦'; frag.append(p); continue; }
-    const hm = HEADING.exec(line);
-    if (hm) { const p = document.createElement('p'); p.className = 'sub'; p.textContent = hm[1].replace(/\*+/g, ''); frag.append(p); continue; }
-    const lead = line.match(/^\s*/)[0].length;
-    const body = line.slice(lead);
-    const { html, srcOf } = paragraph(body, { tint });
-    const p = document.createElement('p');
-    p.innerHTML = html;
-    maps.set(p, { start: start + lead, srcOf });
-    frag.append(p);
-  }
+  drawLines(frag, raw.split('\n'), 0, tint, lines);
   into.append(frag);
+  keep(into, tint, raw, lines);
+}
+
+/* The same, for a passage still being written: the paragraphs before the
+ * first one that changed stay exactly as they are on screen. Words that only
+ * grow the text (the usual stream) are not even split again before the last
+ * line drawn — the work is the newest paragraph's, however long the passage. */
+export function growProse(into, text, { tint = false } = {}) {
+  const raw = String(text || '');
+  const was = drawn.get(into);
+  /* drawn some other way since (or with something else in it, like "Writing…"): drawn whole */
+  if (!was || was.tint !== tint || into.childNodes.length !== was.shown) { drawProse(into, raw, { tint }); return; }
+  if (raw === was.text) return;
+  let k;
+  let pos;
+  let parts;
+  if (raw.startsWith(was.text.slice(0, was.lastAt))) {
+    /* only the last line drawn, and what comes after it, can be new */
+    k = was.lines.length - 1;
+    pos = was.lastAt;
+    parts = raw.slice(pos).split('\n');
+    if (parts[0] === was.lines[k].line) { pos += parts[0].length + 1; parts = parts.slice(1); k += 1; }
+  } else {
+    const all = raw.split('\n');
+    const n = Math.min(all.length, was.lines.length);
+    k = 0;
+    pos = 0;
+    while (k < n && all[k] === was.lines[k].line) { pos += all[k].length + 1; k++; }
+    parts = all.slice(k);
+  }
+  for (let i = was.lines.length - 1; i >= k; i--) if (was.lines[i].el) was.lines[i].el.remove();
+  const lines = was.lines.slice(0, k);
+  const frag = document.createDocumentFragment();
+  drawLines(frag, parts, pos, tint, lines);
+  into.append(frag);
+  keep(into, tint, raw, lines);
 }
 
 /* Where a point on screen (a text node and an offset in it) stands in the

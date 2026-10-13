@@ -379,6 +379,15 @@ export function quiet() {
   if (letGo) { const r = letGo; letGo = null; r(); }
 }
 
+/* An answer that a record is not on the phone is about the moment it was
+ * asked. It means deleted only if the page held the record as on the phone
+ * then (rev > 0), nothing of it has been saved since and no save is on its
+ * way — never for a record still being made when it asked (the phone
+ * answered before the record landed), which would be marked deleted and
+ * every change to it after dropped. */
+function stillGone(r, revAsked) {
+  return revAsked > 0 && r.rev === revAsked && !r.saving && Boolean(r.data) && !r.deleted;
+}
 function gone(r) {
   r.deleted = true;
   r.pending = [];
@@ -392,10 +401,11 @@ async function refresh(r) {
   try {
     for (;;) {
       r.refreshAgain = false;
+      const revAsked = r.rev;
       const { status: code, data } = await api('GET', `/api/store/${r.kind}/${r.id}`);
       if (code === 404 || (code === 200 && data && data.data === null)) {
         /* deleted — never a record this page made that the phone has not taken yet */
-        if (r.data && r.rev > 0 && !r.deleted) gone(r);
+        if (stillGone(r, revAsked)) gone(r);
         return;
       }
       if (code === 200 && data && data.data && (data.rev > r.rev || r.deleted)) {
@@ -421,6 +431,7 @@ async function recheckAll() {
   for (const fn of shelfFns) fn();
   const held = [...recs.values()].filter((r) => r.loaded);
   if (!held.length) return;
+  const asked = new Map(held.map((r) => [r, r.rev]));
   let revs = null;
   try {
     const { status: code, data } = await api('POST', '/api/revs', { body: held.map((r) => [r.kind, r.id]) });
@@ -430,7 +441,7 @@ async function recheckAll() {
     if (!revs) { if (!r.deleted) refresh(r); continue; }
     const n = revs[keyOf(r.kind, r.id)];
     if (n === undefined) continue;
-    if (n <= 0) { if (r.rev > 0 && r.data && !r.deleted) gone(r); continue; }
+    if (n <= 0) { if (stillGone(r, asked.get(r))) gone(r); continue; }
     if (n > r.rev || r.deleted) refresh(r);
   }
 }

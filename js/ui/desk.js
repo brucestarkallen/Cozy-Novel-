@@ -6,11 +6,12 @@ import * as store from '../store.js';
 import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack } from './dom.js';
-import { drawProse, selectionIn } from './prose.js';
+import { drawProse, growProse, selectionIn } from './prose.js';
 import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, newPassage, passageNumbers } from '../novel/shape.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
 import { thinkBox as makeThinkBox, updateThinkBox } from './think.js';
+import { paced, follower } from './live.js';
 
 const S = {
   novelId: null, chapterId: null,
@@ -19,7 +20,8 @@ const S = {
   rewriting: null,       /* the passage with the rewrite box open */
   sel: null,             /* {passageId, start, end, text} — words selected for rewriting */
   error: null,           /* the last page that did not come, said once */
-  follow: true,
+  followId: null,        /* the passage being written here, whose newest words the page follows */
+  drawn: null,           /* what the page was last drawn from (shownSig) */
   els: new Map(),        /* passageId -> element */
   offs: [],
   live: new Map(),       /* passageId -> {text, thinking} while being written */
@@ -31,6 +33,7 @@ const S = {
   making: false,         /* a new chapter on its way (one tap, one chapter) */
 };
 let ui = null;           /* the elements this module draws into */
+let F = null;            /* the follow law on the page (live.js) */
 let hooks = {};          /* app.js: openChapters, openNotes, … */
 let fitDirection = () => {};
 
@@ -45,8 +48,9 @@ export function initDesk(elements, appHooks) {
   ui.lengthBtn.addEventListener('click', () => lengthMenu());
   ui.writerBtn.addEventListener('click', () => hooks.writerMenu(ui.writerBtn));
   ui.wrap.addEventListener('scroll', onScroll, { passive: true });
+  F = follower(ui.wrap, { tail: () => tailTop(S.followId), onChange: (on) => { ui.followBtn.hidden = on || !busy(); } });
   initScroller();
-  ui.followBtn.addEventListener('click', () => { S.follow = true; ui.followBtn.hidden = true; toBottom(); });
+  ui.followBtn.addEventListener('click', () => { F.start(); ui.followBtn.hidden = true; toBottom(S.followId); });
   ui.chapname.addEventListener('focus', () => { ui.chapname.dataset.was = ui.chapname.textContent; });
   ui.chapname.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ui.chapname.blur(); } });
   ui.chapname.addEventListener('blur', renameFromHeading);
@@ -59,7 +63,7 @@ export function initDesk(elements, appHooks) {
   writer.onLive(onLive);
   writer.onJob((novelId) => {
     if (novelId !== S.novelId) return;
-    if (!busy()) { ui.followBtn.hidden = true; S.follow = true; }
+    if (!busy()) ui.followBtn.hidden = true;
     drawComposer(); drawSoon();
   });
 }
@@ -76,9 +80,13 @@ export async function openChapter(novelId, chapterId) {
   if (changingBook) saveDraftSoon.now();
   S.novelId = novelId;
   S.chapterId = chapterId;
-  S.selected = null; S.editing = null; S.rewriting = null; S.sel = null; S.error = null; S.follow = true; S.insertAfter = null;
+  S.selected = null; S.editing = null; S.rewriting = null; S.sel = null; S.error = null; S.insertAfter = null; S.followId = null;
+  F.start();
   S.offs.push(store.subscribe('chapter', chapterId, (data, why) => {
     if (why === 'deleted') { hooks.chapterGone(); return; }
+    /* the writer here keeping what it has streamed so far: the page shows
+     * those words already, as they come — it is not drawn again for them */
+    if (S.drawn !== null && S.drawn === shownSig(chapter())) return;
     drawSoon();
   }));
   S.offs.push(store.subscribe('novel', novelId, () => { drawHead(); drawComposer(); }));
@@ -119,6 +127,17 @@ function renameFromHeading() {
 let drawFrame = 0;
 function drawSoon() { if (!drawFrame) drawFrame = requestAnimationFrame(() => { drawFrame = 0; drawPage(); }); }
 
+/* what the page shows of a chapter, as one string: a version this window is
+ * writing shows its words from the stream, so the writer's own checkpoints
+ * of them (every few seconds, and its heartbeat) leave it the same */
+const writingHere = (v) => v.streaming && v.tab === store.CLIENT;
+function shownSig(c) {
+  if (!c) return '';
+  return JSON.stringify([c.name || '', (c.passages || []).map((p) => ((p.versions || []).some(writingHere)
+    ? { ...p, versions: p.versions.map((v) => (writingHere(v) ? { ...v, text: 0, thinking: 0, beat: 0 } : v)) }
+    : p))]);
+}
+
 export function drawPage({ keepScroll = true } = {}) {
   if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
   const c = chapter();
@@ -132,14 +151,36 @@ export function drawPage({ keepScroll = true } = {}) {
   const rewriting = ui.passages.querySelector('.rewriterow input');
   const kept = { edit: editing ? editing.value : null, editFocus: editing && document.activeElement === editing, editSel: editing ? [editing.selectionStart, editing.selectionEnd] : null,
     note: rewriting ? rewriting.value : null };
-  ui.passages.textContent = '';
-  S.els.clear();
   const list = c.passages || [];
   if (!S.selected || !list.some((p) => p.id === S.selected)) S.selected = defaultSelected(list);
+  /* Only the passages that changed are drawn again (Cozy Tavern draws only
+   * the message that changed): the rest stay on the page exactly as they
+   * are, so a passage finishing, or a tap choosing another, costs one or two
+   * passages however long the chapter — never the whole chapter. A passage
+   * stays only while it is the same record (a newer copy from the phone is
+   * drawn afresh) drawn the same way (drawnKey). */
+  const nums = passageNumbers(c);
+  const working = busy();
+  const was = S.els;
+  S.els = new Map();
+  const staying = new Set();
+  const keys = new Map();
   for (const p of list) {
-    const el = drawPassage(p, { tint });
+    const key = drawnKey(p, { tint, nums, working });
+    keys.set(p.id, key);
+    const old = was.get(p.id);
+    const as = old && drawnAs.get(old);
+    if (as && as.p === p && as.key === key && old.parentNode === ui.passages) staying.add(old);
+  }
+  for (const node of [...ui.passages.childNodes]) if (!staying.has(node)) node.remove();
+  let at = ui.passages.firstChild;
+  for (const p of list) {
+    const old = was.get(p.id);
+    const el = old && staying.has(old) ? old : drawPassage(p, { tint });
+    drawnAs.set(el, { p, key: keys.get(p.id) });
     S.els.set(p.id, el);
-    ui.passages.append(el);
+    if (el === at) at = at.nextSibling;
+    else ui.passages.insertBefore(el, at);
   }
   drawEnd();
   drawHead();
@@ -148,8 +189,24 @@ export function drawPage({ keepScroll = true } = {}) {
     if (box) { box.value = kept.edit; box.dispatchEvent(new Event('input')); if (kept.editFocus) { box.focus({ preventScroll: true }); try { box.setSelectionRange(kept.editSel[0], kept.editSel[1]); } catch (_) { /* fine */ } } }
   }
   if (kept.note !== null) { const inp = ui.passages.querySelector('.rewriterow input'); if (inp) inp.value = kept.note; }
-  if (keepScroll) ui.wrap.scrollTop = keep;
+  /* his place is kept — and the page is only moved when drawing it again
+   * moved it, so a fling under way goes on */
+  if (keepScroll && ui.wrap.scrollTop !== keep) setTop(keep);
+  else F.moved();
+  S.drawn = shownSig(c);
   placeScrollerSoon();
+}
+
+/* everything a passage is drawn from: the record, its words still arriving,
+ * and how it is shown (chosen, being edited, the rewrite box, its thinking
+ * unfolded) — and for the chosen one its controls (busy, its number, when) */
+const drawnAs = new WeakMap();   /* element -> { p, key } */
+function drawnKey(p, { tint, nums, working }) {
+  const sel = S.selected === p.id;
+  const live = S.live.get(p.id);
+  const v = sel ? picked(p) || {} : null;
+  return JSON.stringify([p, live ? [live.text, live.thinking] : 0, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id),
+    sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : ''] : 0]);
 }
 
 function defaultSelected(list) {
@@ -472,14 +529,16 @@ function lengthMenu() {
 
 async function run(fn) {
   S.error = null;
-  S.follow = true;
+  S.followId = null;
+  F.start();
   drawEnd();
   const out = await fn();
   if (out && !out.ok && !out.stopped && out.error) {
     S.error = { words: sentence(out.error), needsConnection: out.needsConnection };
     drawPage();
     if (!S.els.size) drawEnd();
-    toBottomSoon();
+    /* the reason is shown where he will see it */
+    toBottomSoon(null, true);
   } else if (out && out.ok) {
     archivist.nudge(S.novelId);
   }
@@ -516,9 +575,8 @@ function onMine() {
     ui.direction.value = '';
     ui.direction.dispatchEvent(new Event('input'));
     S.selected = id;
-    S.follow = !after;
     drawPage();
-    if (!after) toBottomSoon();
+    if (!after) toBottomSoon(null, true);
     archivist.nudge(S.novelId);
   }
 }
@@ -582,38 +640,47 @@ async function onRewriteSelection() {
 
 /* --------------------------------------------------------- live words */
 
-let liveFrame = 0;
+/* The words arrive many times a second; the page paints them at most once a
+ * frame (and less often once a paint costs more — live.js), and only the
+ * paragraph they land on is drawn again. */
 const pending = new Map();
+const livePaint = paced(flushLive);
 function onLive(ev) {
   if (ev.novelId !== S.novelId) return;
   if (ev.done) {
     S.live.delete(ev.passageId);
     pending.delete(ev.passageId);
-    if (ev.chapterId === S.chapterId) { drawPage(); if (S.follow) toBottomSoon(); }
+    if (ev.chapterId === S.chapterId) {
+      drawPage();
+      /* the finished page, drawn whole: still with him if he was following it */
+      toBottomSoon(ev.passageId);
+    }
+    if (S.followId === ev.passageId) S.followId = null;
     return;
   }
   S.live.set(ev.passageId, { text: ev.text, thinking: ev.thinking });
   if (ev.chapterId !== S.chapterId) return;
+  S.followId = ev.passageId;
   /* what is being written is what is shown with its controls */
   if (S.selected !== ev.passageId && !S.editing) { S.selected = ev.passageId; S.rewriting = null; pending.set(ev.passageId, ev); drawSoon(); return; }
   pending.set(ev.passageId, ev);
-  if (!liveFrame) liveFrame = requestAnimationFrame(flushLive);
+  livePaint.ask();
 }
 function flushLive() {
-  liveFrame = 0;
-  const look = (store.peek('house', 'house') || {}).look || {};
+  if (!pending.size) return;
+  const tint = ((store.peek('house', 'house') || {}).look || {}).tint !== 'off';
   for (const [pid, ev] of pending) {
     const el = S.els.get(pid);
     if (!el) { drawPage(); break; }
-    el.classList.add('streaming');
-    let box = el.querySelector('.thinkbox');
+    if (!el.classList.contains('streaming')) el.classList.add('streaming');
+    let box = el.querySelector(':scope > .thinkbox');
     if (ev.thinking && !box) { box = thinkBox(pid, ev.thinking, !ev.text); el.prepend(box); }
     else if (box) updateThinkBox(box, ev.thinking, { live: !ev.text });
-    const prose = el.querySelector('.prose');
-    if (prose && ev.text) drawProse(prose, ev.text, { tint: look.tint !== 'off' });
+    const prose = el.querySelector(':scope > .prose');
+    if (prose && ev.text) growProse(prose, ev.text, { tint });
   }
   pending.clear();
-  if (S.follow) toBottom();
+  if (F.follow()) SC.self = Date.now();
   placeScrollerSoon();
 }
 
@@ -622,7 +689,7 @@ function flushLive() {
  * (its number on the page) and, dragged, moves through the chapter quickly —
  * the phone's own scrollbar can't be held. While he scrolls or holds it,
  * "Passage N of M" shows beside it (Cozy Tavern's "page N of M"). */
-const SC = { bar: null, thumb: null, tip: null, drag: null, idle: 0, frame: 0, self: 0 };
+const SC = { bar: null, thumb: null, tip: null, drag: null, idle: 0, frame: 0, self: 0, said: '' };
 function initScroller() {
   SC.bar = document.getElementById('scroller');
   if (!SC.bar) return;
@@ -687,11 +754,15 @@ function placeScroller() {
   const top = Math.round((max > 0 ? ui.wrap.scrollTop / max : 0) * Math.max(0, SC.bar.clientHeight - SC.thumb.offsetHeight));
   SC.thumb.style.top = `${top}px`;
   SC.tip.style.top = `${top}px`;
+  /* touched only when they change: this runs every frame while the page streams */
+  const say = `Passage ${n} of ${total}`;
+  if (SC.said === say) return;
+  SC.said = say;
   SC.thumb.textContent = String(n);
   SC.thumb.setAttribute('aria-valuemax', String(total));
   SC.thumb.setAttribute('aria-valuenow', String(n));
-  SC.thumb.setAttribute('aria-valuetext', `Passage ${n} of ${total}`);
-  SC.tip.textContent = `Passage ${n} of ${total}`;
+  SC.thumb.setAttribute('aria-valuetext', say);
+  SC.tip.textContent = say;
 }
 /* shown in full while the page moves, a little after */
 function wake() {
@@ -712,24 +783,34 @@ function toPassage(step) {
 
 /* ------------------------------------------------------------ scrolling */
 
+/* following and not following is the follow law's (live.js); this keeps the
+ * scroller and his place */
 function onScroll() {
   placeScrollerSoon();
   if (Date.now() - (SC.self || 0) > 200) wake();
-  const near = ui.wrap.scrollHeight - ui.wrap.scrollTop - ui.wrap.clientHeight < 220;
-  if (busy()) {
-    if (!near && S.follow) { S.follow = false; ui.followBtn.hidden = false; }
-    if (near && !S.follow) { S.follow = true; ui.followBtn.hidden = true; }
-  } else ui.followBtn.hidden = true;
+  if (!busy()) ui.followBtn.hidden = true;
   rememberScroll();
 }
-function toBottom() {
-  const p = ui.passages.lastElementChild;
-  if (!p) return;
-  const target = p.offsetTop + p.offsetHeight - ui.wrap.clientHeight * 0.55;
-  /* the page following the writing is not him scrolling: the scroller stays quiet */
-  if (target > ui.wrap.scrollTop) { SC.self = Date.now(); ui.wrap.scrollTop = target; }
+/* where the page stands when it is with the newest words: the end of the
+ * passage being written (or the last one) a little past the middle */
+function tailTop(pid) {
+  const el = (pid && S.els.get(pid)) || ui.passages.lastElementChild;
+  if (!el) return 0;
+  return el.getBoundingClientRect().bottom - ui.wrap.getBoundingClientRect().top + ui.wrap.scrollTop - ui.wrap.clientHeight * 0.55;
 }
-function toBottomSoon() { requestAnimationFrame(() => requestAnimationFrame(toBottom)); }
+/* the page moved by the app (his place kept, a jump to the words): the
+ * scroller stays quiet and the follow law knows it was not his hand */
+function setTop(y) { SC.self = Date.now(); F.jump(y); }
+/* down to the newest words — never up */
+function toBottom(pid) {
+  const max = ui.wrap.scrollHeight - ui.wrap.clientHeight;
+  const target = Math.min(max, tailTop(pid));
+  if (target > ui.wrap.scrollTop + 1) setTop(target);
+}
+/* after the page is drawn: when following (and no finger on it), or always (force) */
+function toBottomSoon(pid = null, force = false) {
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (force || (F.on && !F.hand)) toBottom(pid); }));
+}
 
 const rememberScroll = debounce(() => {
   try { sessionStorage.setItem(`cozynovel.scroll.${S.chapterId}`, String(ui.wrap.scrollTop)); } catch (_) { /* fine */ }
@@ -738,9 +819,12 @@ function restoreScroll() {
   let y = null;
   try { y = sessionStorage.getItem(`cozynovel.scroll.${S.chapterId}`); } catch (_) { y = null; }
   requestAnimationFrame(() => {
-    if (y !== null) ui.wrap.scrollTop = Number(y) || 0;
-    else if (busy()) toBottom();
-    else ui.wrap.scrollTop = 0;
+    if (y !== null) {
+      setTop(Number(y) || 0);
+      /* back where he was reading, above the words being written: he stays there */
+      if (busy() && !F.atTail()) F.stop();
+    } else if (busy()) toBottom(S.followId);
+    else setTop(0);
   });
 }
 

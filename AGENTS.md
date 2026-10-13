@@ -20,7 +20,7 @@ window onto the server.
 | `sw.js` | a service worker that caches nothing: it exists so the app sits on the home screen and so the 1.x worker (which served stale copies) is retired |
 | `js/store.js` | records in the page: open, change by *steps* (written by id, so they replay over a newer copy after a refused save), save, the news line (one visible window holds it for every window of the browser and hands the news on), the journal of unsaved work in IndexedDB for when Android closes a tab |
 | `js/app.js` | the front door: routes (`#/`, `#/n/<book>/<chapter>`), the bars, full screen and reading mode, updates landing by themselves |
-| `js/ui/*` | the screens: `shelf`, `desk` (the page, the box, the scroller and passage numbers), `panes` (chapters, notes, partner and its changes, scenes), `settings`, `book` (About this book, Manual / Automatic), `sent` (what was sent), `dom` (sheets, menus, the Back stack, toasts), `think` (the thinking, streamed open then folded), `full` (full screen), `prose`, `look` |
+| `js/ui/*` | the screens: `shelf`, `desk` (the page, the box, the scroller and passage numbers), `panes` (chapters, notes, partner and its changes, scenes), `settings`, `book` (About this book, Manual / Automatic), `sent` (what was sent), `dom` (sheets, menus, the Back stack, toasts), `think` (the thinking, streamed open then folded), `full` (full screen), `live` (words as they arrive: painted at most once a frame and never more than a fifth of the time, line by line; the follow law), `prose`, `look` |
 | `js/novel/shape.js` | what a book is made of, and the steps that change it (pure) |
 | `js/novel/writer.js` | writing: a new passage, another take, rewrite, rewrite the selected words, Go on, a scene into prose, his own words, his edits; repairs a page left "being written" by a closed window |
 | `js/novel/archivist.js` | the helper: reads what changed, keeps the notes and the chapter summaries and names, What it's about / How it reads for a book set to Automatic, undo of a reading, its light |
@@ -43,6 +43,7 @@ window onto the server.
 - **Updates land without a manual refresh**, and the app repairs what it can detect.
 - **One button, one meaning; controls named the way the screen names them;** busy sections fold closed; no debug surfaces; no content filters.
 - **The phone's Back closes what is open, top first, before it leaves the book.** Every overlay goes through `onBack()` in `js/ui/dom.js`.
+- **Streaming never fights his hand.** While words stream, the page (and the partner and scenes beside it) follows them only until he moves it up; from then on it stays where he put it until he brings it back down or taps Follow the writing. A stream repaints only the paragraph its words land on, and nothing is drawn again for the writer's own saves of what it has streamed.
 
 ## Working on it
 

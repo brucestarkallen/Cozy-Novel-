@@ -13,11 +13,16 @@ import { showSent } from './sent.js';
 import { thinkBox, updateThinkBox } from './think.js';
 import { wordsOf, changesComing } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
+import { paced, follower, streamLines } from './live.js';
 import * as desk from './desk.js';
 
 let ui = null;
 let hooks = {};
-const P = { novelId: null, chapterId: null, side: 'notes', playId: null, offs: [], watched: new Set(), leftOpen: false, rightOpen: false, release: { left: null, right: null } };
+let SF = null;           /* the follow law beside the page (live.js) */
+const P = { novelId: null, chapterId: null, side: 'notes', playId: null, offs: [], watched: new Set(), leftOpen: false, rightOpen: false, release: { left: null, right: null },
+  shownView: '',    /* the view last drawn beside the page (sideView) */
+  drawn: '',        /* the conversation it was drawn from (turnsSig) */
+  liveTurn: null }; /* the reply being written here, whose newest words the pane follows */
 
 export function initPanes(elements, appHooks) {
   ui = elements;
@@ -25,8 +30,10 @@ export function initPanes(elements, appHooks) {
   ui.scrim.addEventListener('click', () => { closeLeft(); closeRight(); });
   for (const b of ui.tabs.querySelectorAll('button')) b.addEventListener('click', () => { P.side = b.dataset.tab; drawSide(); });
   archivist.onLight((novelId) => { if (novelId === P.novelId) { drawLight(); if (P.side === 'notes') drawSide(); } });
+  SF = follower(ui.rightBody, { tail: sideTail });
   talk.onTalkLive(onTalkLive);
-  talk.onTalkJob(() => { if (P.side === 'partner' || P.side === 'play') drawSide(); });
+  /* a reply asked for: the pane follows it in, until his hand moves it up */
+  talk.onTalkJob((key, job) => { if (job) SF.start(); if (P.side === 'partner' || P.side === 'play') drawSide(); });
   window.addEventListener('resize', dockWide);
 }
 
@@ -273,6 +280,9 @@ function drawSide() {
   keepTyped();
   /* the notes drawn again (the helper read something) stay where he had scrolled them */
   const scroll = ui.right.dataset.tab === P.side && P.side === 'notes' ? ui.rightBody.scrollTop : 0;
+  /* and a conversation drawn again keeps his place too, unless he is with its newest words */
+  sideKeep = { view: P.shownView, top: ui.rightBody.scrollTop };
+  P.shownView = sideView();
   for (const b of ui.tabs.querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.tab === P.side));
   ui.right.dataset.tab = P.side;
   ui.rightBody.textContent = '';
@@ -389,7 +399,7 @@ async function drawPartner() {
   const t = store.peek('talk', novelId) ?? await store.open('talk', novelId).catch(() => null);
   if (P.side !== 'partner' || P.novelId !== novelId) return;
   if (t) talk.repairStaleTurns('talk', novelId);
-  if (!P.offs.talkSub) { P.offs.push(store.subscribe('talk', novelId, () => { if (P.side === 'partner') drawPartnerSoon(); })); P.offs.talkSub = true; }
+  if (!P.offs.talkSub) { P.offs.push(store.subscribe('talk', novelId, () => { if (P.side === 'partner' && !drawnAlready('talk', novelId)) drawPartnerSoon(); })); P.offs.talkSub = true; }
   ui.rightBody.textContent = '';
   const box = h('div.talk');
   const turns = (t && t.turns) || [];
@@ -413,7 +423,8 @@ async function drawPartner() {
   ui.rightFoot.append(ta, h('div.crow', turns.length ? h('button.btn.quiet.small', { onclick: clearTalk }, 'Start over') : null, h('span.grow'), send));
   autoGrow(ta, 0.3);
   restoreTyped('talk:' + novelId);
-  ui.rightBody.scrollTop = 1e9;
+  P.drawn = 'talk:' + novelId + turnsSig(t);
+  placeSide();
 }
 function drawPartnerSoon() { if (!partnerFrame) partnerFrame = requestAnimationFrame(() => { partnerFrame = 0; if (P.side === 'partner') drawPartner(); }); }
 
@@ -541,27 +552,85 @@ function removeTurn(kind, id, turn) {
   });
 }
 
+/* the view beside the page now, and whether a reply for (kind, id) is in it */
+function sideView() { return `${P.side}/${P.side === 'play' ? P.playId || '' : ''}/${P.novelId}`; }
+function showing(kind, id) { return kind === 'talk' ? P.side === 'partner' && id === P.novelId : P.side === 'play' && P.playId === id; }
+
+/* what the pane shows of a conversation, as one string: a reply this window
+ * is writing shows its words from the stream, so its own checkpoints of them
+ * leave it the same — it is not drawn again for them */
+const writingHere = (v) => v.streaming && v.tab === store.CLIENT;
+function turnsSig(rec) {
+  if (!rec) return '';
+  return JSON.stringify({ ...rec, turns: (rec.turns || []).map((t) => ((t.versions || []).some(writingHere)
+    ? { ...t, versions: t.versions.map((v) => (writingHere(v) ? { ...v, text: 0, thinking: 0, beat: 0 } : v)) }
+    : t)) });
+}
+function drawnAlready(kind, id) { return P.drawn === kind + ':' + id + turnsSig(store.peek(kind, id)); }
+
+/* where the pane stands with the newest words: the end of the reply being
+ * written at the bottom of the pane (the very bottom, for the last one) */
+let sideKeep = null;
+function sideTail() {
+  const max = ui.rightBody.scrollHeight - ui.rightBody.clientHeight;
+  const el = P.liveTurn && ui.rightBody.querySelector(`.turn[data-id="${P.liveTurn}"]`);
+  if (!el) return max;
+  const bottom = el.getBoundingClientRect().bottom - ui.rightBody.getBoundingClientRect().top + ui.rightBody.scrollTop;
+  return Math.min(max, bottom + 30 - ui.rightBody.clientHeight);
+}
+/* a conversation just drawn: opened afresh, at its newest words; drawn again,
+ * at his place — or still with the newest words if he was following them */
+function placeSide() {
+  const same = sideKeep && sideKeep.view === sideView();
+  if (!same) { SF.start(); SF.jump(sideTail()); return; }
+  if (SF.on && !SF.hand) SF.jump(Math.max(sideTail(), 0));
+  else SF.jump(sideKeep.top);
+}
+
+/* The words arrive many times a second; the pane paints them at most once a
+ * frame (and less often once a paint costs more — live.js), only the line
+ * they land on drawn again, and goes down with them only while he follows. */
+const sideLive = new Map();   /* turnId -> the newest event not yet painted */
+const sidePaint = paced(paintSide);
 function onTalkLive(ev) {
   const map = ev.kind === 'talk' ? partnerLive : playLive;
-  if (ev.done) { map.delete(ev.turnId); if ((ev.kind === 'talk' && P.side === 'partner') || (ev.kind === 'play' && P.side === 'play')) drawSide(); return; }
-  const entry = { text: ev.text, thinking: ev.thinking, note: ev.note || '' };
-  map.set(ev.turnId, entry);
-  const turnEl = ui.rightBody.querySelector(`.turn[data-id="${ev.turnId}"]`);
-  /* the reply's own words — never the thinking box's, which sits before them */
-  const el = turnEl && turnEl.querySelector(':scope > span.words');
-  if (el) {
+  if (ev.done) {
+    map.delete(ev.turnId);
+    sideLive.delete(ev.turnId);
+    if ((ev.kind === 'talk' && P.side === 'partner') || (ev.kind === 'play' && P.side === 'play')) drawSide();
+    if (P.liveTurn === ev.turnId) P.liveTurn = null;
+    return;
+  }
+  map.set(ev.turnId, { text: ev.text, thinking: ev.thinking, note: ev.note || '' });
+  sideLive.set(ev.turnId, ev);
+  sidePaint.ask();
+}
+function paintSide() {
+  let redraw = false;
+  let painted = false;
+  for (const [turnId, ev] of sideLive) {
+    if (!showing(ev.kind, ev.id)) continue;
+    const turnEl = ui.rightBody.querySelector(`.turn[data-id="${turnId}"]`);
+    /* the reply's own words — never the thinking box's, which sits inside the box */
+    const el = turnEl && turnEl.querySelector(':scope > .words');
+    if (!el) { redraw = true; continue; }
+    P.liveTurn = turnId;
+    const entry = (ev.kind === 'talk' ? partnerLive : playLive).get(turnId) || { text: ev.text, thinking: ev.thinking, note: ev.note || '' };
+    const box = turnEl.querySelector(':scope > .thinkbox');
     if (ev.thinking) {
-      const box = turnEl.querySelector('.thinkbox');
       if (box) updateThinkBox(box, ev.thinking, { live: !ev.text });
-      else turnEl.insertBefore(turnThinkBox(ev.turnId, ev.thinking, !ev.text), el);
-    } else if (!ev.text) {
+      else turnEl.insertBefore(turnThinkBox(turnId, ev.thinking, !ev.text), el);
+    } else if (!ev.text && box) {
       /* a new round (it is reading a chapter): the last round's thinking goes */
-      const box = turnEl.querySelector('.thinkbox');
-      if (box) box.remove();
+      box.remove();
     }
-    el.textContent = shownWords(ev.kind, { by: 'ai' }, ev.text || '', entry);
-    ui.rightBody.scrollTop = 1e9;
-  } else if ((ev.kind === 'talk' && P.side === 'partner') || (ev.kind === 'play' && P.side === 'play')) drawSide();
+    streamLines(el, shownWords(ev.kind, { by: 'ai' }, ev.text || '', entry));
+    painted = true;
+  }
+  sideLive.clear();
+  if (redraw) drawSide();
+  /* only the conversation on screen is followed — never the notes, or a scene he is not in */
+  else if (painted) SF.follow();
 }
 
 /* ----------------------------------------------------------------- play */
@@ -603,7 +672,7 @@ async function drawPlay() {
       if (!name) { toast('Say who you play.'); who.focus(); return; }
       const id = await talk.newPlay({ novelId: P.novelId, chapterId: P.chapterId, who: name, from: from.value.trim() });
       P.playId = id;
-      P.offs.push(store.subscribe('play', id, () => { if (P.side === 'play' && P.playId === id) drawSideSoon(); }));
+      P.offs.push(store.subscribe('play', id, () => { if (P.side === 'play' && P.playId === id && !drawnAlready('play', id)) drawSideSoon(); }));
       drawSide();
       const out = await talk.playSay({ playId: id, text: '' });
       if (out && !out.ok && out.error) toast('The narrator did not answer: ' + out.error, 6000);
@@ -616,7 +685,7 @@ function drawSideSoon() { if (!sideFrame) sideFrame = requestAnimationFrame(() =
 function drawOnePlay(p) {
   const n = store.peek('novel', P.novelId);
   talk.repairStaleTurns('play', p.id);
-  if (!P.offs['play:' + p.id]) { P.offs.push(store.subscribe('play', p.id, () => { if (P.side === 'play' && P.playId === p.id) drawSideSoon(); })); P.offs['play:' + p.id] = true; }
+  if (!P.offs['play:' + p.id]) { P.offs.push(store.subscribe('play', p.id, () => { if (P.side === 'play' && P.playId === p.id && !drawnAlready('play', p.id)) drawSideSoon(); })); P.offs['play:' + p.id] = true; }
   const c = store.peek('chapter', p.chapterId);
   const full = fullKind() === 'scene';
   const head = h('div.scenehead',
@@ -659,7 +728,8 @@ function drawOnePlay(p) {
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
   autoGrow(ta, 0.3);
   restoreTyped('play:' + p.id);
-  ui.rightBody.scrollTop = 1e9;
+  P.drawn = 'play:' + p.id + turnsSig(p);
+  placeSide();
 }
 
 async function toProse(p, fromStart) {
