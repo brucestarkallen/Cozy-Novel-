@@ -1,91 +1,22 @@
-const PREFIX = "cozynovel.assets.";
-const CACHE = PREFIX + "1.2.0";
-const ASSETS = [
-  "./",
-  "./index.html",
-  "./manifest.webmanifest",
-  "./assets/icon.svg",
-  "./css/studio.css",
-  "./css/room.css",
-  "./assets/room/desktop.webp",
-  "./assets/room/mobile.webp",
-  "./assets/room/cat.webp",
-  "./js/connections/presets.js",
-  "./js/connections/features.js",
-  "./js/connections/structured.js",
-  "./js/connections/usage.js",
-  "./js/connections/transport.js",
-  "./js/connections/library.js",
-  "./js/storage/drafts.js",
-  "./js/ai/reading-queue.js",
-  "./js/ui/connections.js",
-  "./js/ui/author-tools.js",
-  "./js/app.js",
-  "./js/config.js",
-  "./js/core/ids.js",
-  "./js/core/digest.js",
-  "./js/core/schema.js",
-  "./js/storage/database.js",
-  "./js/storage/coordination.js",
-  "./js/storage/repository.js",
-  "./js/storage/backup.js",
-  "./js/storage/sync.js",
-  "./js/novel/operations.js",
-  "./js/context/assemble.js",
-  "./js/context/scope.js",
-  "./js/context/index.js",
-  "./js/ai/providers/adapters.js",
-  "./js/ai/prompts/templates.js",
-  "./js/ai/jobs.js",
-  "./js/ai/analysis.js",
-  "./js/rp/session.js",
-  "./js/story/entities.js",
-  "./js/story/reading.js",
-  "./js/export/manuscript.js",
-  "./js/ui/dom.js",
-  "./js/ui/library.js",
-  "./js/ui/settings.js",
-  "./js/ui/story.js",
-  "./js/ui/rp.js",
-  "./js/ui/manuscript.js",
-  "./js/ui/partner.js",
-];
-const owned = new Set(
-  ASSETS.map((path) => new URL(path, self.registration.scope).href),
-);
-self.addEventListener("install", (event) =>
-  event.waitUntil(
-    (async () => {
-      const cache = await caches.open(CACHE);
-      try {
-        await cache.addAll(ASSETS);
-      } catch (error) {
-        await caches.delete(CACHE);
-        throw error;
-      }
-    })(),
-  ),
-);
-self.addEventListener("activate", (event) =>
-  event.waitUntil(
-    (async () => {
-      for (const name of await caches.keys())
-        if (name.startsWith(PREFIX) && name !== CACHE)
-          await caches.delete(name);
-      await self.clients.claim();
-    })(),
-  ),
-);
-self.addEventListener("message", (event) => {
-  if (event.data?.owner === "cozyNovel" && event.data?.type === "activate")
-    self.skipWaiting();
-});
-self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET" || !owned.has(event.request.url)) return;
-  event.respondWith(
-    (async () => {
-      const cache = await caches.open(CACHE);
-      return (await cache.match(event.request)) || fetch(event.request);
-    })(),
-  );
-});
+/* Cozy Novel — the service worker caches nothing.
+ *
+ * A fix you cannot see because a stale copy was served is a fix that was never
+ * made, so every file comes from the phone's server, every time. It exists so
+ * the app can sit on the home screen — and to retire the first Cozy Novel's
+ * worker, which served its own saved copy of the old app. When it takes over
+ * from that one, it clears the old copies and reloads any open page into the
+ * new app, so nobody is left looking at the old one. */
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil((async () => {
+  const names = await caches.keys();
+  const old = names.filter((n) => n.startsWith('cozynovel.'));
+  await Promise.all(old.map((n) => caches.delete(n)));
+  await self.clients.claim();
+  if (old.length) {
+    const pages = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    /* Never waited on here: a page's reload is answered through this worker,
+     * which is not active until this returns — waiting would hold both forever. */
+    for (const page of pages) page.navigate(page.url).catch(() => { /* it reloads on its next visit */ });
+  }
+})()));
+self.addEventListener('fetch', () => { /* straight to the network, always */ });

@@ -1,294 +1,109 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
-  <head>
-    <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width,initial-scale=1,viewport-fit=cover"
-    />
-    <meta name="theme-color" content="#201e1a" />
-    <meta name="description" content="A quiet home for your novel." />
-    <title>Cozy Novel</title>
-    <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
-    <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./css/studio.css" />
-    <link rel="stylesheet" href="./css/room.css" />
-    <script type="module" src="./js/app.js"></script>
-  </head>
-  <body>
-    <div id="app">
-      <header class="appbar">
-        <button id="homeButton" class="brand" aria-label="Open your library">
-          <span class="brandmark" aria-hidden="true">♧</span
-          ><span>Cozy Novel<small>A little room for a whole world</small></span>
-        </button>
-        <nav aria-label="Application">
-          <button data-action="library">Library</button
-          ><button
-            class="desktopLink"
-            data-action="panel"
-            data-panel="manuscript"
-          >
-            Write</button
-          ><button class="desktopLink" data-action="authorTools">
-            Plan and references</button
-          ><button class="desktopLink" data-action="panel" data-panel="bible">
-            Characters</button
-          ><button data-action="backups">Backups</button
-          ><button data-action="settings">Connections</button
-          ><button
-            data-action="appearance"
-            aria-label="Appearance and reading settings"
-          >
-            Aa
-          </button>
-        </nav>
-        <div class="modelQuick">
-          <select id="connectionPicker" aria-label="Active writing connection">
-            <option value="">Choose a connection</option></select
-          ><span id="connectionHealth" role="status">Not configured</span>
-        </div>
-      </header>
-      <button class="focusExit" data-action="exitFocus">
-        Return to studio
-      </button>
-      <div id="updateBanner" hidden role="status"></div>
-      <div id="notice" role="status" aria-live="polite"></div>
-      <main id="home">
-        <div class="welcome">
-          <p class="eyebrow">YOUR WRITING ROOM</p>
-          <h1>Every story starts<br />with a little possibility.</h1>
-          <p>
-            Bring a scene, a stray thought, or just yourself.<br />There is room
-            to see where it goes.
-          </p>
-          <div class="actions">
-            <button class="primary" data-action="newNovel">Start a novel</button
-            ><button data-action="importText">Import writing</button
-            ><button id="continueNovel" hidden data-action="continueNovel">
-              Continue writing
-            </button>
-          </div>
-        </div>
-        <section class="shelf">
-          <div class="sectionhead">
-            <h2>Your novels</h2>
-            <label
-              ><input id="showArchived" type="checkbox" /> Include archived
-              work</label
-            >
-          </div>
-          <input
-            id="librarySearch"
-            class="librarySearch"
-            type="search"
-            aria-label="Find a novel"
-            placeholder="Find a novel by title or premise"
-          />
-          <div id="novelList" class="novelgrid"></div>
-        </section>
-        <p class="quiet footnote">
-          Your words stay yours. Writing, reading and saving work without a
-          model connection.
-        </p>
-      </main>
-      <main id="studio" hidden>
-        <nav class="mobiletabs" aria-label="Workspace">
-          <button data-action="panel" data-panel="navigator">Chapters</button
-          ><button data-action="panel" data-panel="manuscript">Write</button
-          ><button data-action="panel" data-panel="partner">Partner</button
-          ><button data-action="panel" data-panel="bible">Story Bible</button>
-        </nav>
-        <div class="workspace" data-panel="manuscript">
-          <aside id="navigator" class="navigator">
-            <div class="sectionhead">
-              <div>
-                <p class="eyebrow">THE MANUSCRIPT</p>
-                <h2 id="novelTitle"></h2>
-              </div>
-              <button data-action="novelDetails" aria-label="Novel details">
-                •••
-              </button>
-            </div>
-            <div class="compactActions">
-              <button data-action="newChapter">＋ Chapter</button
-              ><button data-action="newScene">＋ Scene</button
-              ><button data-action="search">Find</button>
-            </div>
-            <div id="chapterList"></div>
-            <div class="navfoot">
-              <button data-action="style">Writing style</button
-              ><button data-action="prompts">Prompt templates</button
-              ><button data-action="exports">Export manuscript</button
-              ><button data-action="bookmarks">Bookmarks</button
-              ><button data-action="authorTools">
-                Plans, craft and references</button
-              ><button data-action="draftRecovery">Draft recovery</button>
-            </div>
-          </aside>
-          <section class="manuscript" aria-label="Writing workspace">
-            <div class="manuscriptbar">
-              <span id="scenePath" class="quiet"></span>
-              <div>
-                <button
-                  data-action="toggleNavigator"
-                  aria-label="Toggle chapters"
-                >
-                  Chapters</button
-                ><button data-action="sceneDetails">Scene details</button
-                ><button data-action="history">History</button
-                ><button data-action="read">Read</button
-                ><button data-action="immersive">Focus writing</button
-                ><button data-action="focusReading">Focus reading</button
-                ><button
-                  data-action="togglePartner"
-                  aria-label="Toggle writing partner"
-                >
-                  ☷
-                </button>
-              </div>
-            </div>
-            <div id="writingSurface" class="writingSurface">
-              <div class="sceneheading">
-                <p class="eyebrow" id="sceneNumber"></p>
-                <h1 id="sceneTitle"></h1>
-              </div>
-              <textarea
-                id="editor"
-                aria-label="Manuscript"
-                spellcheck="true"
-                placeholder="Write your opening here, or give your writing partner a direction below."
-              ></textarea>
-              <div id="readingView" class="readingView" hidden></div>
-              <section
-                id="candidateBox"
-                class="candidateBox"
-                hidden
-                aria-label="Proposed passage"
-              >
-                <div class="sectionhead">
-                  <p class="eyebrow">A POSSIBLE PASSAGE</p>
-                  <span id="candidateState" class="quiet"></span>
-                </div>
-                <div id="candidateText" class="prose"></div>
-                <div class="actions">
-                  <button class="primary" data-action="acceptCandidate">
-                    Keep passage</button
-                  ><button data-action="retryCandidate">Try another</button
-                  ><button data-action="reviseCandidate">
-                    Revise candidate</button
-                  ><button data-action="compareCandidate">Compare</button
-                  ><button data-action="discardCandidate">Discard</button>
-                </div>
-              </section>
-              <div
-                id="suggestions"
-                class="suggestions"
-                aria-label="Possible next directions"
-              ></div>
-              <button class="textbutton" data-action="candidates">
-                Earlier candidates
-              </button>
-            </div>
-            <div class="directionDock">
-              <small id="draftStatus" role="status"></small>
-              <label for="direction"
-                >Where would you like the story to go?</label
-              ><textarea
-                id="direction"
-                rows="2"
-                placeholder="A rainy café. Three old friends. One has been quieter than usual."
-              ></textarea>
-              <div class="generationActions">
-                <button class="primary" data-action="write">Write scene</button
-                ><button data-action="continue">Continue</button
-                ><button data-action="reviseSelection">Revise selection</button
-                ><button data-action="quickRP">Quick RP</button
-                ><button id="cancelGeneration" data-action="cancel" hidden>
-                  Stop
-                </button>
-              </div>
-            </div>
-          </section>
-          <aside id="partnerPanel" class="partnerPanel">
-            <div class="paneltabs">
-              <button
-                data-action="sideTab"
-                data-tab="partner"
-                aria-selected="true"
-              >
-                Writing partner</button
-              ><button data-action="sideTab" data-tab="bible">
-                Story Bible
-              </button>
-            </div>
-            <section id="partner">
-              <p class="eyebrow">THINK IT THROUGH</p>
-              <h2>A second chair at your desk.</h2>
-              <p class="quiet">
-                Talk through a motive, a quiet moment, or a scene that has not
-                quite found its shape.
-              </p>
-              <label
-                >Conversation scope<select id="discussionScope">
-                  <option value="scene">Current scene</option>
-                  <option value="selection">Selection</option>
-                  <option value="chapter">Current chapter</option>
-                  <option value="overview">Novel overview</option>
-                  <option value="sources">Selected sources</option>
-                </select></label
-              ><button class="textbutton" data-action="selectSources">
-                Choose sources
-              </button>
-              <div id="discussion" class="discussion" aria-live="polite"></div>
-              <label for="discussionInput">Ask your writing partner</label
-              ><textarea
-                id="discussionInput"
-                rows="3"
-                placeholder="What might she be avoiding saying?"
-              ></textarea>
-              <div class="actions">
-                <button data-action="discuss">Discuss</button
-                ><button data-action="partnerEdit">
-                  Propose selection edit
-                </button>
-              </div>
-              <button class="textbutton" data-action="receipts">
-                What the writer received</button
-              ><button class="textbutton" data-action="analyze">
-                Refresh suggestions and reading
-              </button>
-              <div id="memoryProposals"></div>
-            </section>
-            <section id="bible" hidden>
-              <div class="sectionhead">
-                <h2>Story Bible</h2>
-                <button data-action="newEntity">＋ Person or place</button>
-              </div>
-              <p class="quiet">
-                Facts, beliefs and possibilities each have their own place.
-              </p>
-              <button data-action="newCanon">Add a story record</button>
-              <div id="storyRecords"></div>
-            </section>
-          </aside>
-        </div>
-        <footer class="statusbar">
-          <span id="saveStatus" role="status">Saved in browser</span
-          ><span id="deviceStatus">Browser only</span
-          ><span id="wordCount">0 words</span
-          ><button data-action="receipts" id="modelStatus">
-            No model connected
-          </button>
-        </footer>
-      </main>
-      <dialog id="modal">
-        <div class="modalhead">
-          <h2 id="modalTitle"></h2>
-          <button id="closeModal" aria-label="Close dialog">×</button>
-        </div>
-        <div id="modalBody"></div>
-      </dialog>
+<html lang="en" data-theme="study">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Cozy Novel</title>
+<meta name="theme-color" content="#1b1511">
+<meta name="description" content="A cozy room to write your novel in.">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preload" href="assets/fonts/literata-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/cormorant-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/novel.css">
+</head>
+<body class="shelfview">
+<div class="room" aria-hidden="true"></div>
+
+<main id="shelf" hidden>
+  <header class="shelf-head">
+    <div class="brand">
+      <h1>Cozy Novel</h1>
+      <p>a little room for a whole world</p>
     </div>
-  </body>
+    <button class="icon" id="shelfSettings" aria-label="Settings" title="Settings">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 9v.03A1.7 1.7 0 0 0 21 10.06H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>
+    </button>
+  </header>
+  <div class="shelf-actions"><input class="shelf-search" id="search" type="search" placeholder="Find a book" aria-label="Find a book" hidden></div>
+  <section class="books" id="books" aria-label="Your books"></section>
+  <footer class="shelf-foot" id="shelfFoot"></footer>
+</main>
+
+<main id="desk" hidden>
+  <header class="deskbar">
+    <button class="icon" id="toShelf" aria-label="Back to your books" title="Your books">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <button class="booktitle" id="bookTitle" title="Chapters" aria-label="Chapters"><b></b><small></small></button>
+    <button class="icon notesbtn" id="notesBtn" aria-label="Notes" title="Notes">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h9l3 3V20.5H6z"/><path d="M9 9.5h6M9 13h6M9 16.5h4"/></svg>
+      <span class="dot" aria-hidden="true"></span>
+    </button>
+    <button class="icon" id="partnerBtn" aria-label="Partner" title="Partner">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16v10H9l-5 4z"/></svg>
+    </button>
+    <button class="icon" id="moreBtn" aria-label="More" title="More">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+    </button>
+  </header>
+
+  <div class="scrim" id="scrim"></div>
+  <div class="deskbody">
+    <aside class="pane left" id="chaptersPane" aria-label="Chapters">
+      <div class="panehead"><h2 id="chaptersTitle">Chapters</h2><button class="icon" id="chaptersClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="panebody" id="chaptersBody"></div>
+    </aside>
+
+    <section class="pagewrap" id="pageWrap">
+      <article class="page" id="page">
+        <header class="chapterhead">
+          <p class="chapnum" id="chapnum"></p>
+          <h1 class="chapname" id="chapname" contenteditable="plaintext-only" spellcheck="false" aria-label="The chapter's name"></h1>
+        </header>
+        <div id="passages"></div>
+        <div id="pageEnd"></div>
+      </article>
+      <button class="btn small follow" id="followBtn" hidden>Follow the writing &darr;</button>
+    </section>
+
+    <aside class="pane right" id="sidePane" aria-label="Notes, partner and scenes">
+      <div class="panehead">
+        <div class="tabs" id="sideTabs" role="tablist" style="flex:1;padding:0">
+          <button data-tab="notes" role="tab">Notes</button>
+          <button data-tab="partner" role="tab">Partner</button>
+          <button data-tab="play" role="tab">Scenes</button>
+        </div>
+        <button class="icon" id="sideClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="panebody" id="sideBody"></div>
+      <div class="talkbox" id="sideFoot" hidden></div>
+    </aside>
+  </div>
+
+  <footer class="composer">
+    <div class="inner">
+      <div class="selbar" id="selBar" hidden>
+        <span class="what" id="selWhat"></span>
+        <button class="btn small quiet" id="selClear" aria-label="Never mind" title="Never mind">&times;</button>
+      </div>
+      <div class="say-row">
+        <textarea id="direction" rows="1" placeholder="What happens next?" aria-label="What happens next" autocapitalize="sentences" spellcheck="true"></textarea>
+        <button class="btn primary" id="writeBtn">Write</button>
+      </div>
+      <div class="crow">
+        <button class="chip" id="lengthBtn" aria-label="How much to write"></button>
+        <button class="chip" id="writerBtn" aria-label="Who writes"></button>
+        <span class="grow"></span>
+        <button class="chip mine" id="mineBtn" title="Put the words in the box onto the page as your own">Add as my words</button>
+      </div>
+    </div>
+  </footer>
+</main>
+
+<div class="banner" id="banner" hidden role="alert"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
 </html>

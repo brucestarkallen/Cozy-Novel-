@@ -1,879 +1,314 @@
-import { authorToolsAction } from "./ui/author-tools.js";
-import { Drafts } from "./storage/drafts.js";
-import { ReadingQueue } from "./ai/reading-queue.js";
-import { ConnectionLibrary } from "./connections/library.js";
-import { applyReading, readingMode } from "./story/reading.js";
-import { Repository } from "./storage/repository.js";
-import { DeviceSync } from "./storage/sync.js";
-import { Writer } from "./ai/jobs.js";
-import { analyze } from "./ai/analysis.js";
-import { revise, acceptCandidate, reorder } from "./novel/operations.js";
-import { $, el, button, notice, closePanel } from "./ui/dom.js";
-import { renderLibrary, libraryAction } from "./ui/library.js";
-import { renderNav, manuscriptAction } from "./ui/manuscript.js";
-import { settingsAction, applyAppearance } from "./ui/settings.js";
-import { renderBible, storyAction, showMemoryProposals } from "./ui/story.js";
-import { rpAction } from "./ui/rp.js";
-import { partnerAction, renderDiscussion } from "./ui/partner.js";
-import { DEFAULT_CONNECTION } from "./config.js";
-export const moduleDescriptor = Object.freeze({
-  moduleId: "cozyNovel",
-  protocolVersion: 1,
-  displayName: "Cozy Novel",
-  standaloneEntry: "./index.html",
-  importSchemas: ["cozyNovel.backup/1", "text/plain", "text/markdown"],
-  exportSchemas: [
-    "cozyNovel.backup/1",
-    "text/plain",
-    "text/markdown",
-    "text/html",
-  ],
-  mount,
-  dispose: (app) => app.dispose(),
-});
-export async function mount(root = document.querySelector("#app")) {
-  if (!root) throw new Error("Cozy Novel requires its own application root.");
-  const app = new Studio(root);
-  await app.start();
-  return Object.freeze({
-    moduleId: "cozyNovel",
-    dispose: () => app.dispose(),
-    setTheme: (theme) => {
-      if (["light", "dark"].includes(theme))
-        document.documentElement.dataset.theme = theme;
-    },
+/* Cozy Novel — js/app.js — the front door: what opens, what the bars do, and
+ * the care that runs underneath (saving, live changes from other windows,
+ * updates landing by themselves). */
+
+import * as store from './store.js';
+import * as writer from './novel/writer.js';
+import * as archivist from './novel/archivist.js';
+import { onLearn, onKey } from './model/call.js';
+import { h, $, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays } from './ui/dom.js';
+import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
+import { initDesk, openChapter, drawComposer, deskState } from './ui/desk.js';
+import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight } from './ui/panes.js';
+import { openSettings, redrawSettings } from './ui/settings.js';
+import { openBook } from './ui/book.js';
+import { applyLook } from './ui/look.js';
+import { bringOldBooks } from './legacy.js';
+import { DEFAULT_WRITING } from './novel/prompts.js';
+import { chapterLabel, novelSteps } from './novel/shape.js';
+import { plural, numberWords } from './util.js';
+import { talkBusy, repairStaleTurns as talkRepair } from './novel/talk.js';
+
+const A = { novelId: null, chapterId: null, booting: true, updateWaiting: false, fromShelf: false, reading: null };
+
+/* ------------------------------------------------------------- boot */
+
+async function boot() {
+  /* a reload with a sheet open left its step in the history: it is stepped
+   * back over, so the first Back does what it says */
+  const st = history.state;
+  if (st && Number.isInteger(st.cozy) && st.cozy > 0) {
+    await new Promise((resolve) => {
+      const done = () => { window.removeEventListener('popstate', done); resolve(); };
+      window.addEventListener('popstate', done);
+      history.go(-st.cozy);
+      setTimeout(done, 600);
+    });
+  }
+  store.listen();
+  bindChrome();
+  let house = null;
+  /* the page waits for the phone as long as it takes; the banner says how to wake it */
+  for (;;) {
+    try { house = await store.open('house', 'house'); break; }
+    catch (_) { banner(true); await new Promise((r) => setTimeout(r, 2000)); }
+  }
+  banner(false);
+  /* work a tab closed by Android left in this browser goes to the phone first */
+  try {
+    const n = await store.replayJournal();
+    if (n) house = await store.open('house', 'house', { fresh: true }) || house;
+  } catch (e) { console.warn('the journal waits for the next try', e); }
+  if (!house) {
+    house = await store.create('house', 'house', {
+      connections: [], roles: {}, you: { name: '' },
+      instructions: { system: DEFAULT_WRITING, late: '', partner: '' },
+      look: { theme: 'study', room: 'on', tint: 'on', indent: 'off', font: 'literata', size: '18', lead: '1.72', width: '680' },
+      created: Date.now(),
+    });
+  }
+  applyLook(house.look);
+  /* a change made here is already on screen; one made in another window is drawn */
+  store.subscribe('house', 'house', (data, why) => {
+    if (data) applyLook(data.look);
+    drawComposer(); drawBar();
+    if (why === 'remote') redrawSettings();
+    /* a helper chosen (or changed) starts on whatever it has not read */
+    if (A.novelId) archivist.nudge(A.novelId, 3000);
   });
+  /* what a model teaches about itself, and a Hermes key that moved, are kept on the connection */
+  onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
+  onKey((id, key) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.key = key; }));
+  /* the first Cozy Novel's books come along, once */
+  try {
+    const n = await bringOldBooks();
+    if (n) toast(`${plural(n, 'book')} from the first Cozy Novel ${n === 1 ? 'is' : 'are'} on the shelf.`, 6000);
+  } catch (e) { console.warn(e); }
+  A.booting = false;
+  window.addEventListener('hashchange', route);
+  await route();
+  if (!(house.connections || []).length) setTimeout(() => toast('Add a connection in Settings to let a writer write with you — your own words need none.', 6500), 900);
 }
-class Studio {
-  constructor(root) {
-    this.root = root;
-    this.events = new AbortController();
-    this.editor = $("#editor");
-    this.novelId = null;
-    this.sceneId = null;
-    this.revisionId = null;
-    this.selection = null;
-    this.candidateId = null;
-    this.dirty = false;
-    this.composing = false;
-    this.savePromise = Promise.resolve();
-    this.connections = [];
-    this.sourceIds = [];
-    this.drag = null;
+
+/* ------------------------------------------------------------- routes */
+/* #/                 the shelf
+ * #/n/<novel>        a book, at the chapter last open
+ * #/n/<novel>/<ch>   a book, at that chapter */
+async function route() {
+  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  if (parts[0] === 'n' && parts[1]) return showNovel(parts[1], parts[2] || null);
+  return showShelf();
+}
+
+async function showShelf() {
+  closeMenu();
+  closeAllSheets();
+  closeLeft(); closeRight();
+  exitReading();
+  A.novelId = null; A.chapterId = null;
+  if (A.offBook) { A.offBook(); A.offBook = null; }
+  document.body.classList.add('shelfview');
+  $('#desk').hidden = true;
+  $('#shelf').hidden = false;
+  document.title = 'Cozy Novel';
+  await refreshShelf();
+}
+
+async function showNovel(novelId, chapterId) {
+  let novel;
+  try { novel = await store.open('novel', novelId); } catch (_) { banner(true); return; }
+  if (!novel) { toast('That book is not on the shelf any more.'); go('#/'); return; }
+  /* every chapter of the book, so the writer can read the whole of it */
+  await Promise.all((novel.order || []).map((id) => store.open('chapter', id).catch(() => null)));
+  if (!chapterId || !novel.order.includes(chapterId)) {
+    chapterId = (novel.prefs && novel.order.includes(novel.prefs.at) ? novel.prefs.at : null) || novel.order[novel.order.length - 1];
   }
-  async start() {
-    this.repo = await Repository.open();
-    this.device = new DeviceSync(
-      this.repo,
-      (s) => ($("#deviceStatus").textContent = s),
-    );
-    this.writer = new Writer(this.repo, this.device);
-    this.connectionLibrary = new ConnectionLibrary(this);
-    this.drafts = new Drafts(
-      this.repo,
-      (e) => notice(e.message, true),
-      (s) => {
-        if ($("#draftStatus")) $("#draftStatus").textContent = s;
-      },
-    );
-    this.readingQueue = new ReadingQueue(this);
-    await applyAppearance(await this.repo.get("appearance", "meta"));
-    await renderLibrary(this);
-    await this.writer.recoverInterrupted();
-    await this.readingQueue.recoverOnOpen();
-    const signal = this.events.signal;
-    $("#connectionPicker")?.addEventListener(
-      "change",
-      async (e) => {
-        try {
-          await this.connectionLibrary.use(
-            e.target.value,
-            "writer",
-            this.novelId ? "novel" : "global",
-          );
-        } catch (error) {
-          notice(error.message, true);
-          this.updateModel();
-        }
-      },
-      { signal },
-    );
-    window.addEventListener(
-      "cozynovelversionchange",
-      () =>
-        notice(
-          "Cozy Novel was upgraded in another tab. Your visible draft is retained. Copy or download it before refreshing.",
-          true,
-        ),
-      { signal },
-    );
-    const legacy = (await this.repo.query("type", "novel")).filter(
-      (n) => n.storyMode == null && n.autoSuggestions !== false,
-    );
-    if (legacy.length && !(await this.repo.get("storyUpgradeNotice", "meta"))) {
-      notice(
-        "New accepted passages can now update the Story Brain automatically. Your existing text is unchanged. Choose review only or off in Writing style.",
-      );
-      await this.repo.localPut({ id: "storyUpgradeNotice", shown: true });
-    }
-    this.root.addEventListener(
-      "click",
-      (e) => {
-        const b = e.target.closest("[data-action]");
-        if (b)
-          this.action(b.dataset.action, b).catch((err) =>
-            notice(err.message, true),
-          );
-      },
-      { signal },
-    );
-    $("#homeButton").addEventListener(
-      "click",
-      () => this.action("library", {}).catch((e) => notice(e.message, true)),
-      { signal },
-    );
-    $("#closeModal").addEventListener("click", closePanel, { signal });
-    $("#librarySearch").addEventListener("input", () => renderLibrary(this), {
-      signal,
-    });
-    $("#showArchived").addEventListener("change", () => renderLibrary(this), {
-      signal,
-    });
-    this.editor.addEventListener(
-      "compositionstart",
-      () => {
-        this.composing = true;
-      },
-      { signal },
-    );
-    this.editor.addEventListener(
-      "compositionend",
-      () => {
-        this.composing = false;
-        this.input();
-      },
-      { signal },
-    );
-    this.editor.addEventListener("input", () => this.input(), { signal });
-    for (const event of ["select", "keyup", "pointerup"])
-      this.editor.addEventListener(
-        event,
-        () => {
-          this.selection = [
-            this.editor.selectionStart,
-            this.editor.selectionEnd,
-          ];
-        },
-        { signal },
-      );
-    window.addEventListener(
-      "beforeunload",
-      (e) => {
-        if (this.dirty || this.drafts.pending) {
-          e.preventDefault();
-          e.returnValue = "";
-        }
-      },
-      { signal },
-    );
-    document.addEventListener(
-      "visibilitychange",
-      () => {
-        if (document.visibilityState === "hidden") {
-          this.flush().catch(() => {});
-          this.drafts.flush().catch(() => {});
-          this.saveDirection().catch(() => {});
-        }
-      },
-      { signal },
-    );
-    document.addEventListener(
-      "keydown",
-      (e) => {
-        if (!this.root.contains(document.activeElement)) return;
-        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-          e.preventDefault();
-          this.flush().catch((err) => notice(err.message, true));
-        }
-        if (e.key === "Escape" && document.body.dataset.focus)
-          this.action("exitFocus", {}).catch(() => {});
-      },
-      { signal },
-    );
-    $("#chapterList").addEventListener(
-      "dragstart",
-      (e) => {
-        const s = e.target.closest("[data-scene]");
-        if (s) {
-          this.drag = { id: s.dataset.scene, owner: s.dataset.owner };
-          e.dataTransfer.setData("text/plain", s.dataset.scene);
-        }
-      },
-      { signal },
-    );
-    $("#chapterList").addEventListener(
-      "dragover",
-      (e) => {
-        if (e.target.closest("[data-scene]")) e.preventDefault();
-      },
-      { signal },
-    );
-    $("#chapterList").addEventListener(
-      "drop",
-      async (e) => {
-        const s = e.target.closest("[data-scene]");
-        if (!s || !this.drag) return;
-        e.preventDefault();
-        if (s.dataset.owner !== this.drag.owner) {
-          notice(
-            "Use scene details to keep chapter ownership explicit. Dragging reorders within a chapter.",
-          );
-          return;
-        }
-        try {
-          await this.flush();
-          const c = await this.repo.get(this.drag.owner);
-          await reorder(
-            this.repo,
-            c.id,
-            "orderedSceneIds",
-            this.drag.id,
-            c.orderedSceneIds.indexOf(s.dataset.scene) -
-              c.orderedSceneIds.indexOf(this.drag.id),
-          );
-          await this.renderNav();
-        } catch (err) {
-          notice(err.message, true);
-        }
-      },
-      { signal },
-    );
-    this.unsubscribe = this.repo.subscribe((op) => {
-      if (op.kind === "connections.changed")
-        this.connectionLibrary.refresh().catch(() => {});
-      if (op.kind?.startsWith("connection.") && op.novelId)
-        this.repo
-          .get(op.novelId)
-          .then((n) => {
-            this.connectionLibrary.novels.set(n.id, n);
-            this.updateModel();
-          })
-          .catch(() => {});
-      if (
-        [
-          "author",
-          "candidate.accept",
-          "selection.replace",
-          "revision.restore",
-        ].includes(op.kind)
-      )
-        this.readingQueue
-          .enqueue(op)
-          .catch((e) =>
-            notice("Passage saved. Story reading pending: " + e.message),
-          );
-      if (op.kind === "library.restore" && op.generation) {
-        this.writer.dispose();
-        this.writer = new Writer(this.repo, this.device);
-        this.readingQueue.dispose();
-        this.readingQueue = new ReadingQueue(this);
-        this.connectionLibrary.load().catch((e) => notice(e.message, true));
-      }
-      if (op.novelId === this.novelId && this.sceneId)
-        this.checkExternal().catch(() => {});
-    });
-    const status = await this.device.connect();
-    await this.connectionLibrary.load(status?.connections || []);
-    this.readingQueue.schedule();
-    if (status?.connectionWarning) notice(status.connectionWarning, true);
-    this.updateModel();
-    await this.device.flush();
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register(new URL("../sw.js", import.meta.url), {
-          scope: new URL("../", import.meta.url).pathname,
-        })
-        .then((reg) => {
-          this.registration = reg;
-          const waiting = () => {
-            if (reg.waiting) {
-              $("#updateBanner").hidden = false;
-              $("#updateBanner").replaceChildren(
-                el("span", {}, "An application update is ready. "),
-                button("Save and refresh", "updateApp"),
-              );
-            }
-          };
-          waiting();
-          reg.addEventListener(
-            "updatefound",
-            () => {
-              reg.installing?.addEventListener("statechange", waiting);
-            },
-            { signal },
-          );
-        })
-        .catch(() => {});
-    }
+  if (!chapterId) return;
+  if (A.novelId !== novelId) exitReading();
+  if (A.novelId !== novelId || !A.offBook) {
+    if (A.offBook) A.offBook();
+    /* a chapter that joins the book while it is open (made in another window,
+     * brought back from Recently deleted) is read in, so the page, the writer
+     * and the helper all have the whole book */
+    A.offBook = store.subscribe('novel', novelId, (data) => { if (data) openMissing(novelId, data); });
   }
-  input() {
-    this.dirty = true;
-    $("#saveStatus").textContent = "Unsaved changes";
-    $("#wordCount").textContent =
-      (this.editor.value.match(/\S+/g) || []).length + " words";
-    $("#suggestions").replaceChildren();
-    clearTimeout(this.saveTimer);
-    if (!this.composing)
-      this.saveTimer = setTimeout(
-        () => this.flush().catch((e) => notice(e.message, true)),
-        850,
-      );
-  }
-  async flush() {
-    clearTimeout(this.saveTimer);
-    if (this.composing)
-      throw new Error(
-        "Finish the current text composition before switching work.",
-      );
-    this.savePromise = this.savePromise
-      .catch(() => {})
-      .then(async () => {
-        if (!this.dirty || !this.sceneId) return;
-        const sceneId = this.sceneId,
-          base = this.revisionId,
-          text = this.editor.value;
-        $("#saveStatus").textContent = "Saving";
-        try {
-          const revision = await revise(this.repo, sceneId, base, text);
-          if (this.sceneId === sceneId) {
-            this.revisionId = revision.id;
-            this.dirty = this.editor.value !== text;
-            $("#saveStatus").textContent = this.dirty
-              ? "Unsaved changes"
-              : "Saved in browser";
-          }
-        } catch (e) {
-          this.dirty = true;
-          $("#saveStatus").textContent = "Save failed. Text is still here.";
-          notice(
-            e.message +
-              " Copy your visible text or use the emergency download below.",
-            true,
-          );
-          const b = el(
-            "button",
-            {
-              onClick: () => {
-                const a = document.createElement("a");
-                a.href = URL.createObjectURL(
-                  new Blob([this.editor.value], { type: "text/plain" }),
-                );
-                a.download = "CozyNovel-visible-draft.txt";
-                a.click();
-                setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-              },
-            },
-            "Download visible draft",
-          );
-          $("#notice").append(" ", b);
-          throw e;
-        }
-      });
-    await this.savePromise;
-    if (this.dirty) await this.flush();
-  }
-  async checkExternal() {
-    if (!this.sceneId) return;
-    const s = await this.repo.get(this.sceneId);
-    if (s && s.currentRevisionId !== this.revisionId && this.dirty)
-      $("#saveStatus").textContent =
-        "Changed elsewhere. Your visible draft is retained.";
-  }
-  async openNovel(id) {
-    await this.flush();
-    await this.drafts.flush();
-    if (this.sceneId) await this.saveDirection();
-    await this.partnerDraft?.release();
-    const n = await this.repo.get(id);
-    if (!n || n.type !== "novel") throw new Error("Novel not found.");
-    this.novelId = id;
-    this.connectionLibrary?.novels.set(id, n);
-    await this.connectionLibrary?.refresh();
-    this.updateModel();
-    this.sourceIds = [];
-    const lib = await this.repo.get("library", "meta");
-    await this.repo.localPut({ ...lib, activeProjectId: id });
-    let first = (await this.repo.get("activeScene." + id, "meta"))?.sceneId;
-    if (first && !(await this.repo.get(first))) first = null;
-    for (const cid of n.orderedChapterIds) {
-      const c = await this.repo.get(cid);
-      if (!first && c.orderedSceneIds.length) {
-        first = c.orderedSceneIds[0];
-        break;
-      }
-    }
-    if (!first) throw new Error("This novel has no scenes.");
-    $("#home").hidden = true;
-    $("#studio").hidden = false;
-    await this.loadScene(first);
-    this.partnerDraft = await this.drafts.bind($("#discussionInput"), {
-      novelId: this.novelId,
-      ownerId: this.novelId,
-      kind: "partner",
-    });
-    await renderDiscussion(this);
-    await renderBible(this);
-  }
-  async saveDirection() {
-    await this.directionDraft?.save();
-    if (this.sceneId)
-      await this.repo.localPut({
-        id: "direction." + this.sceneId,
-        value: $("#direction").value,
-        selection: this.selection,
-        scrollTop: $(".writingSurface").scrollTop,
-        editorScrollTop: this.editor.scrollTop,
-      });
-  }
-  async openScene(id) {
-    await this.flush();
-    await this.saveDirection();
-    await this.loadScene(id);
-  }
-  async loadScene(id) {
-    const switching = id !== this.sceneId;
-    const directionField = $("#direction");
-    directionField.disabled = true;
-    try {
-      if (switching) await this.directionDraft?.release();
-      const { scene, revision, text } = await this.repo.sceneText(id);
-      if (scene.novelId !== this.novelId)
-        throw new Error("Scene belongs to another novel.");
-      this.sceneId = id;
-      this.revisionId = revision.id;
-      this.editor.value = text;
-      this.editor.hidden = false;
-      this.dirty = false;
-      this.selection = [text.length, text.length];
-      this.candidateId = null;
-      $("#readingView").hidden = true;
-      $("#candidateBox").hidden = true;
-      $("#suggestions").replaceChildren();
-      $("#memoryProposals").replaceChildren();
-      $("#sceneTitle").textContent = scene.title;
-      const chapter = await this.repo.get(scene.chapterId);
-      $("#scenePath").textContent = chapter.title;
-      $("#sceneNumber").textContent =
-        scene.status.toUpperCase() +
-        " · " +
-        (scene.timeLabel || "A MOMENT IN YOUR STORY");
-      const position = await this.repo.get("direction." + id, "meta");
-      if (switching) {
-        $("#direction").value = position?.value || "";
-        this.directionDraft = await this.drafts.bind($("#direction"), {
-          novelId: this.novelId,
-          ownerId: id,
-          kind: "direction",
-        });
-      }
-      $("#saveStatus").textContent = "Saved in browser";
-      $("#wordCount").textContent =
-        (text.match(/\S+/g) || []).length + " words";
-      this.panel("manuscript");
-      await this.renderNav();
-      const candidates = (await this.repo.query("sceneId", id))
-        .filter(
-          (r) =>
-            r.type === "candidate" &&
-            ["ready", "partial", "stale"].includes(r.status),
-        )
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      if (candidates[0]) await this.showCandidate(candidates[0].id);
-      else await this.renderSuggestions();
-      if (switching) {
-        $(".writingSurface").scrollTop = position?.scrollTop || 0;
-        this.editor.scrollTop = position?.editorScrollTop || 0;
-        if (position?.selection) {
-          this.selection = position.selection.map((x) =>
-            Math.min(text.length, x),
-          );
-          this.editor.setSelectionRange(...this.selection);
-        }
-      }
-      await this.repo.localPut({
-        id: "activeScene." + this.novelId,
-        sceneId: id,
-      });
-    } finally {
-      directionField.disabled = false;
-    }
-  }
-  renderNav() {
-    return renderNav(this);
-  }
-  panel(name) {
-    $(".workspace").dataset.panel = name;
-    if (["partner", "bible"].includes(name)) this.sideTab(name);
-  }
-  sideTab(name) {
-    $("#partner").hidden = name !== "partner";
-    $("#bible").hidden = name !== "bible";
-    for (const b of this.root.querySelectorAll("[data-action=sideTab]"))
-      b.setAttribute("aria-selected", b.dataset.tab === name);
-  }
-  connection(helper = false, novelId = this.novelId) {
-    return (
-      this.connectionLibrary?.resolve(helper, novelId) ||
-      structuredClone(DEFAULT_CONNECTION)
-    );
-  }
-  requestConnection(helper = false, novelId = this.novelId) {
-    return this.connectionLibrary.forRequest(helper, novelId);
-  }
-  updateModel() {
-    const c = this.connection();
-    $("#modelStatus").textContent = c.model || "No model selected";
-    const picker = $("#connectionPicker");
-    if (picker) {
-      picker.replaceChildren(
-        el("option", { value: "" }, "Choose a connection"),
-        ...(this.connectionLibrary?.profiles || []).map((p) =>
-          el(
-            "option",
-            { value: p.id },
-            p.displayName + " · " + (p.model || "Model needed"),
-          ),
-        ),
-      );
-      picker.value = c.id;
-    }
-    if ($("#connectionHealth"))
-      $("#connectionHealth").textContent =
-        this.connectionLibrary?.status(c) || "Not configured";
-  }
-  async generate(kind, options = {}) {
-    const novelId = this.novelId,
-      sceneId = this.sceneId,
-      direction = options.direction ?? $("#direction").value;
-    $("#candidateState").textContent = "Preparing";
-    this.root.querySelector("[data-action=acceptCandidate]").disabled = true;
-    if (this.acceptingPassage) await this.acceptingPassage;
-    await this.flush();
-    if (novelId !== this.novelId || sceneId !== this.sceneId)
-      throw new Error(
-        "The workspace changed while preparing the request. Your original input is retained.",
-      );
-    await this.saveDirection();
-    if (!direction.trim() && kind === "write")
-      throw new Error("Give the writer a glimpse of your scene first.");
-    $("#cancelGeneration").hidden = false;
-    $("#candidateBox").hidden = false;
-    $("#candidateText").textContent = "";
-    $("#candidateState").textContent = "Writing";
-    $("#suggestions").replaceChildren();
-    try {
-      const result = await this.writer.run({
-        connection: await this.requestConnection(),
-        novelId,
-        sceneId,
-        kind,
-        direction:
-          direction || "Continue the current scene by one meaningful beat.",
-        ...options,
-        onDelta: (text, c) => {
-          if (sceneId === this.sceneId && novelId === this.novelId) {
-            this.candidateId = c?.id;
-            $("#candidateBox").hidden = false;
-            $("#candidateText").textContent = text;
-          }
-        },
-      });
-      if (sceneId === this.sceneId && novelId === this.novelId) {
-        await this.showCandidate(result.candidate.id);
-        notice("A new passage is ready for your review.");
-      }
-      const n = await this.repo.get(novelId);
-      if (
-        n.autoSuggestions ||
-        (await readingMode(this.repo, novelId)) === "auto"
-      )
-        this.analyze(result.candidate.id).catch((e) =>
-          notice("Passage saved. Optional suggestions: " + e.message),
-        );
-    } catch (e) {
-      if (e.candidate && sceneId === this.sceneId)
-        await this.showCandidate(e.candidate.id);
-      else if (sceneId === this.sceneId) $("#candidateBox").hidden = true;
-      throw e;
-    } finally {
-      $("#cancelGeneration").hidden = true;
-    }
-  }
-  async showCandidate(id) {
-    const c = await this.repo.get(id);
-    this.candidateId = id;
-    $("#candidateBox").hidden = false;
-    $("#candidateText").textContent = await this.repo.text(c.textBlobId);
-    const scene = await this.repo.get(c.sceneId);
-    const stale = scene.currentRevisionId !== c.baseRevisionId;
-    $("#candidateState").textContent =
-      stale && c.status !== "kept"
-        ? "Source changed. Compare first."
-        : c.status;
-    const keep = this.root.querySelector("[data-action=acceptCandidate]");
-    keep.disabled = stale || !["ready", "partial"].includes(c.status);
-    await this.renderSuggestions();
-  }
-  async analyze(candidateId = null, extra = {}) {
-    const candidateSource = candidateId
-      ? await this.repo.get(candidateId)
-      : null;
-    const novelId = extra.novelId || candidateSource?.novelId || this.novelId,
-      sceneId = extra.sceneId || candidateSource?.sceneId || this.sceneId;
-    const artifact = await analyze(this.writer, {
-      connection: await this.requestConnection(true, novelId),
-      libraryGeneration: this.repo.generation,
-      novelId,
-      sceneId,
-      direction:
-        "Read the source with typed story changes, explicit coverage and three calm next possibilities.",
-      candidateId,
-      ...extra,
-    });
-    const c = candidateId ? await this.repo.get(candidateId) : null;
-    if (
-      c?.status === "kept" &&
-      !artifact.error &&
-      !artifact.coverage.complete &&
-      artifact.coverage.end > 0
-    )
-      this.maintainReading(
-        novelId,
-        sceneId,
-        candidateId,
-        artifact.coverage.end,
-      ).catch((e) => notice("Story reading remains pending: " + e.message));
-    if (novelId === this.novelId && sceneId === this.sceneId) {
-      await this.renderSuggestions(artifact);
-      await showMemoryProposals(this, artifact);
-    }
-  }
-  async maintainReading(novelId, sceneId, candidateId, start) {
-    this.readingTasks ??= new Set();
-    const key = candidateId || sceneId;
-    if (
-      this.readingTasks.has(key) ||
-      (await readingMode(this.repo, novelId)) !== "auto"
-    )
-      return;
-    this.readingTasks.add(key);
-    try {
-      for (let i = 0; i < 2; i++) {
-        if (this.writer.foreground) return;
-        const a = await analyze(this.writer, {
-          connection: await this.requestConnection(true, novelId),
-          novelId,
-          sceneId,
-          candidateId,
-          readingStart: start,
-        });
-        if (
-          a.error ||
-          a.coverage.complete ||
-          a.coverage.end <= start ||
-          a.freshness === "stale"
-        )
-          break;
-        start = a.coverage.end;
-      }
-    } finally {
-      this.readingTasks.delete(key);
-    }
-  }
-  async analyzeExploration(ex, source, coverage) {
-    let readingStart = 0;
-    const prior = (await this.repo.query("novelId", ex.novelId)).filter(
-      (a) =>
-        a.kind === "analysis" &&
-        a.explorationId === ex.id &&
-        a.branchId === ex.activeBranchId &&
-        a.freshness !== "stale" &&
-        a.textBlobId &&
-        (a.coveredTurnIds || []).every((id) =>
-          coverage.coveredTurnIds.includes(id),
-        ),
-    );
-    for (const a of prior) {
-      const stablePrefix = a.sourceTurnSpans?.length
-        ? a.sourceTurnSpans.every((span, i) => {
-            const current = coverage.sourceTurnSpans[i];
-            return (
-              current?.id === span.id &&
-              current.textBlobId === span.textBlobId &&
-              current.header === span.header
-            );
-          })
-        : source.startsWith(await this.repo.text(a.textBlobId));
-      if (stablePrefix && !a.error)
-        readingStart = Math.max(readingStart, a.coverage?.end || 0);
-    }
-    if (readingStart >= source.length) return;
-    return analyze(this.writer, {
-      connection: await this.requestConnection(true, ex.novelId),
-      novelId: ex.novelId,
-      sceneId: ex.baseSceneId,
-      exploration: ex,
-      sourceText: source,
-      readingStart,
-      sourceTurnSpans: coverage.sourceTurnSpans,
-      coveredTurnIds: coverage.coveredTurnIds,
-      direction:
-        "Read the next exploration segment. Changes remain exploration only.",
-    });
-  }
-  readingNotice(e) {
-    notice("Writing is saved. Source reading remains pending: " + e.message);
-  }
-  async readingUpdated(a) {
-    if (a.novelId === this.novelId && a.sceneId === this.sceneId) {
-      await this.renderSuggestions(a);
-      await renderBible(this);
-    }
-  }
-  async acceptedWork(op) {
-    if (op.libraryGeneration !== this.repo.generation) return;
-    const records = await this.repo.query("novelId", op.novelId);
-    const revisions = records.filter(
-      (r) =>
-        op.affectedIds.includes(r.id) && r.type === "revision" && r.candidateId,
-    );
-    for (const revision of revisions) {
-      const readings = records.filter(
-        (r) => r.kind === "analysis" && r.candidateId === revision.candidateId,
-      );
-      for (const a of readings) {
-        await applyReading(this.repo, a.id);
-        if (!a.coverage?.complete && a.coverage?.end > 0)
-          this.maintainReading(
-            op.novelId,
-            revision.ownerId,
-            revision.candidateId,
-            a.coverage.end,
-          ).catch((e) => notice("Story reading remains pending: " + e.message));
-      }
-      if (op.novelId === this.novelId) await renderBible(this);
-    }
-  }
-  async renderSuggestions(artifact = null) {
-    const records = await this.repo.query("sceneId", this.sceneId);
-    if (!artifact)
-      artifact = records
-        .filter(
-          (r) =>
-            r.type === "artifact" &&
-            r.kind === "analysis" &&
-            !r.explorationId &&
-            r.freshness === "fresh",
-        )
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    $("#suggestions").replaceChildren();
-    if (!artifact || artifact.explorationId || artifact.freshness !== "fresh")
-      return;
-    const novel = await this.repo.get(this.novelId);
-    if (novel.autoSuggestions === false) return;
-    const source = artifact.candidateId
-      ? await this.repo.get(artifact.candidateId)
-      : null;
-    const scene = await this.repo.get(this.sceneId);
-    const acceptance =
-      source?.status === "kept"
-        ? (await this.repo.get(scene.currentRevisionId)).candidateId ===
-          source.id
-        : false;
-    if (source && source.id !== this.candidateId && !acceptance) return;
-    if (source && !["ready", "kept"].includes(source.status)) return;
-    if (!acceptance && scene.currentRevisionId !== artifact.baseRevisionId)
-      return;
-    for (const text of artifact.body.suggestions) {
-      const needsKeep = source && source.status === "ready";
-      const b = el(
-        "button",
-        {
-          onClick: async () => {
-            try {
-              await this.flush();
-              if (needsKeep) {
-                await acceptCandidate(this.repo, source.id);
-                await this.loadScene(this.sceneId);
-              }
-              $("#direction").value = text;
-              this.directionDraft?.mark();
-              await this.generate("continue", { direction: text });
-            } catch (e) {
-              notice(e.message, true);
-            }
-          },
-        },
-        (needsKeep ? "Keep this passage and continue: " : "Continue: ") + text,
-      );
-      $("#suggestions").append(b);
-    }
-    await showMemoryProposals(this, artifact);
-  }
-  async action(action, target) {
-    if (action === "panel") {
-      if (!this.novelId) {
-        notice("Open or create a novel first.");
-        return;
-      }
-      this.panel(target.dataset.panel);
-      return;
-    }
-    if (action === "updateApp") {
-      await this.flush();
-      await this.drafts.flush();
-      await this.saveDirection();
-      if (this.writer.foreground || this.writer.helper)
-        throw new Error(
-          "Finish writing or the current source reading before refreshing.",
-        );
-      this.registration?.waiting?.postMessage({
-        type: "activate",
-        owner: "cozyNovel",
-      });
-      navigator.serviceWorker.addEventListener(
-        "controllerchange",
-        () => location.reload(),
-        { once: true },
-      );
-      return;
-    }
-    for (const handler of [
-      libraryAction,
-      settingsAction,
-      manuscriptAction,
-      storyAction,
-      rpAction,
-      partnerAction,
-      authorToolsAction,
-    ])
-      if (await handler(this, action, target)) return;
-  }
-  async dispose() {
-    await this.flush();
-    await this.saveDirection();
-    await this.drafts.flush();
-    this.drafts.dispose();
-    this.readingQueue.dispose();
-    clearTimeout(this.saveTimer);
-    this.writer.dispose();
-    this.device.dispose();
-    this.unsubscribe();
-    this.events.abort();
-    this.repo.dispose();
+  A.novelId = novelId;
+  A.chapterId = chapterId;
+  document.body.classList.remove('shelfview');
+  $('#shelf').hidden = true;
+  $('#desk').hidden = false;
+  /* where he is in the book is remembered, without filling the book's earlier copies */
+  store.change('novel', novelId, novelSteps.opened(Date.now()), { delay: 3000, checkpoint: true });
+  if (!novel.prefs || novel.prefs.at !== chapterId) store.change('novel', novelId, novelSteps.setPref('at', chapterId), { delay: 3000, checkpoint: true });
+  if (!store.peek('chapter', chapterId)) await store.open('chapter', chapterId);
+  await openChapter(novelId, chapterId);
+  openPanes(novelId, chapterId);
+  drawBar();
+  document.title = `${novel.meta.title} — Cozy Novel`;
+  /* a page or a reply left being written by a window that closed is set right */
+  repairNow(novelId);
+  /* the helper looks over what it has not read yet */
+  archivist.nudge(novelId, 2500);
+}
+
+function openMissing(novelId, novel) {
+  for (const id of novel.order || []) {
+    if (store.peek('chapter', id) === undefined) store.open('chapter', id).catch(() => {});
   }
 }
-if (document.querySelector("#app"))
-  mount().catch((e) =>
-    notice("Cozy Novel could not open its working store. " + e.message, true),
-  );
+
+async function repairNow(novelId) {
+  try {
+    await writer.repairStale(novelId);
+    if (store.peek('talk', novelId)) await talkRepair('talk', novelId);
+    for (const id of (store.peek('novel', novelId) || {}).plays || []) if (store.peek('play', id)) await talkRepair('play', id);
+  } catch (e) { console.warn(e); }
+}
+/* and looked at again while the book is open: a writer in another window may stop beating */
+setInterval(() => { if (A.novelId && document.visibilityState === 'visible') repairNow(A.novelId); }, 60000);
+
+/* every move to another address goes through here */
+export async function go(hash) {
+  dropOverlays();
+  await afterBacks();
+  if (location.hash === hash) return route();
+  location.hash = hash;
+}
+/* Into a book from the shelf is a step forward; the book's ← is the same as
+ * the phone's Back, so the shelf is never stacked over itself. */
+function openNovel(id) {
+  A.fromShelf = true;
+  go(`#/n/${id}`);
+}
+async function toShelf() {
+  dropOverlays();
+  await afterBacks();
+  if (A.fromShelf && /^#\/n\//.test(location.hash)) { A.fromShelf = false; history.back(); return; }
+  A.fromShelf = false;
+  location.replace('#/');
+}
+/* chapters are pages of one book, not steps: moving between them takes no step in the history */
+export async function goChapter(chapterId) {
+  if (!A.novelId) return;
+  dropOverlays();
+  await afterBacks();
+  const hash = `#/n/${A.novelId}/${chapterId}`;
+  if (location.hash === hash) { route(); return; }
+  location.replace(hash);
+}
+
+/* ------------------------------------------------------------- the bars */
+
+function bindChrome() {
+  initShelf({ root: $('#shelf'), books: $('#books'), search: $('#search'), foot: $('#shelfFoot') }, { openNovel });
+  $('#shelfSettings').addEventListener('click', () => openSettings());
+  initDesk({
+    wrap: $('#pageWrap'), passages: $('#passages'), end: $('#pageEnd'), chapnum: $('#chapnum'), chapname: $('#chapname'),
+    direction: $('#direction'), writeBtn: $('#writeBtn'), mineBtn: $('#mineBtn'), lengthBtn: $('#lengthBtn'), writerBtn: $('#writerBtn'),
+    followBtn: $('#followBtn'), selBar: $('#selBar'), selWhat: $('#selWhat'), selClear: $('#selClear'),
+  }, {
+    goChapter, writerMenu, openSettings, drawBar,
+    chapterGone: () => { const n = store.peek('novel', A.novelId); if (n && n.order.length) goChapter(n.order[n.order.length - 1]); else toShelf(); },
+  });
+  initPanes({
+    left: $('#chaptersPane'), leftBody: $('#chaptersBody'), leftTitle: $('#chaptersTitle'),
+    right: $('#sidePane'), rightBody: $('#sideBody'), rightFoot: $('#sideFoot'), tabs: $('#sideTabs'),
+    scrim: $('#scrim'), light: $('#notesBtn'),
+  }, { goChapter });
+  $('#toShelf').addEventListener('click', () => toShelf());
+  $('#bookTitle').addEventListener('click', () => toggleLeft());
+  $('#chaptersClose').addEventListener('click', () => closeLeft());
+  $('#sideClose').addEventListener('click', () => closeRight());
+  $('#notesBtn').addEventListener('click', () => showSide('notes'));
+  $('#partnerBtn').addEventListener('click', () => showSide('partner'));
+  $('#moreBtn').addEventListener('click', (e) => moreMenu(e.currentTarget));
+  /* a phone puts a hidden page away without warning: what waits is saved now */
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { store.flushOnHide(); store.quiet(); }
+    else store.recheck();
+  });
+  window.addEventListener('pagehide', () => { store.flushOnHide(); store.quiet(); });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) store.recheck(); });
+  window.addEventListener('beforeunload', (e) => {
+    if (writer.anyRunning()) { e.preventDefault(); e.returnValue = ''; }
+  });
+  store.onStatus((s) => banner(s.offline));
+  store.onUpdate(() => { A.updateWaiting = true; reloadWhenQuiet(); });
+  store.onReload(() => { toast('A copy was brought back — showing it now.'); setTimeout(() => location.reload(), 500); });
+}
+
+export function drawBar() {
+  const n = store.peek('novel', A.novelId);
+  const c = store.peek('chapter', A.chapterId);
+  if (!n || !c) return;
+  $('#bookTitle b').textContent = n.meta.title || 'Untitled';
+  const num = n.order.indexOf(c.id) + 1;
+  $('#bookTitle small').textContent = `Chapter ${numberWords(num)}${c.name ? ` — ${c.name}` : ''}`;
+}
+
+function writerMenu(anchor) {
+  const hs = store.peek('house', 'house') || {};
+  const conns = [...(hs.connections || [])].sort((a, b) => writer.connName(a).localeCompare(writer.connName(b)));
+  const cur = (hs.roles || {}).writer;
+  menu(anchor, [
+    { label: 'The writer', header: true },
+    ...conns.map((c) => ({ label: `${writer.connName(c)}${c.model && c.name ? ` — ${c.model}` : ''}`, checked: c.id === cur, run: () => {
+      store.change('house', 'house', (x) => { x.roles = x.roles || {}; x.roles.writer = c.id; }, { now: true });
+      drawComposer();
+      toast(`${writer.connName(c)} writes now.`);
+    } })),
+    conns.length ? '-' : null,
+    { label: conns.length ? 'Connections…' : 'Add a connection…', run: () => openSettings('connections') },
+  ]);
+}
+
+/* what has no button of its own on the bar */
+function moreMenu(anchor) {
+  menu(anchor, [
+    { label: 'Scenes', run: () => showSide('play') },
+    { label: 'About this book', run: () => openBook(A.novelId, { onGone: () => toShelf() }) },
+    { label: 'Reading mode', run: readingMode },
+    '-',
+    { label: 'Settings', run: () => openSettings() },
+  ]);
+}
+
+/* Reading mode: only the page. The phone's Back (or Escape, or Back to
+ * writing) brings the bars back; leaving the book leaves it too. */
+function readingMode() {
+  if (A.reading) return;
+  document.body.classList.add('reading');
+  const out = h('button.btn.small.readexit', { onclick: () => exitReading() }, 'Back to writing');
+  document.body.append(out);
+  A.reading = { out, release: onBack(() => exitReading(true)) };
+}
+function exitReading(fromBack = false) {
+  const r = A.reading;
+  if (!r) return;
+  A.reading = null;
+  document.body.classList.remove('reading');
+  r.out.remove();
+  if (!fromBack && r.release) r.release();
+}
+
+/* ------------------------------------------------------------- notices */
+
+function banner(offline) {
+  const b = $('#banner');
+  if (!offline) { b.hidden = true; return; }
+  b.hidden = false;
+  b.innerHTML = '';
+  b.append('Cozy Novel’s server on the phone is not answering, so nothing can be saved or written just now. Open Termux and run ', h('code', 'cozynovel'), ' — what you typed here waits and is saved the moment it answers.');
+}
+
+/* An update to the app lands by itself: the page refreshes once nothing is
+ * being written and he is not typing. */
+function reloadWhenQuiet() {
+  if (!A.updateWaiting) return;
+  const typing = document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName) && document.activeElement.value;
+  const busy = writer.anyRunning() || store.hasPending() || (A.novelId && talkBusy('talk', A.novelId)) || document.querySelector('.editbox');
+  if (busy || typing) { setTimeout(reloadWhenQuiet, 4000); return; }
+  toast('Cozy Novel was updated — refreshing.');
+  setTimeout(() => location.reload(), 800);
+}
+
+/* ------------------------------------------------------------- the service worker */
+/* It caches nothing: it is there so the app can sit on the home screen, and
+ * so the first Cozy Novel's worker (which served old copies) is replaced. */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+}
+
+boot();
+
+export { A as appState, deskState };

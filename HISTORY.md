@@ -24,3 +24,11 @@ Repaired CN03 through CN12: metadata merging, creative draft persistence, depend
 
 
 Final prepublication checks extended expiry to known entry conditions as RP time advances, made the first reading task atomic with accepted text, and made unfinished startup work explicitly resumable. The complete journey and preservation suites were rerun before publication. No 1.2 code had been pushed before these checks.
+
+## 2.0.0, rebuilt from the ground up
+
+The 1.x studio could not be used day to day, so Cozy Novel was rebuilt as one page and one small server that lives on the phone. The book is chapters of passages; every take, rewrite and edit is a version of its passage, one arrow away. Write, Another take, Rewrite (whole, or just the selected words), Stop and Go on, his own words, scene breaks, writing from the middle and starting a chapter from a passage. A helper keeps the notes (people and where they are now, places, things worth remembering, threads), the chapter summaries and names, with Undo of a reading that puts back only what it changed. A partner to talk the book over with, and Scenes to play one of its people and turn it into prose.
+
+The books live in `~/.cozynovel` on the phone, the same in every browser and every window, live: numbered saves that never write over newer work, earlier copies of every chapter and book, a copy of everything each day, Recently deleted for thirty days, a journal for work typed while the server was away. The model layer is Cozy Tavern's and CozyMaker's: his settings sent exactly, nothing sent that he left empty, thinking per provider, and the lessons a model teaches about itself. The `cozynovel` command updates, replaces an older server on the port, and opens the app; a 1.x book, its notes, drafts, conversations and connections come across by themselves, once, and the 1.x files are only read.
+
+The 1.x documents (SPEC.md, HANDOFF.md, docs/) went with the 1.x code; they remain in the history before this release. AGENTS.md maps the new code. Checked with tests/server.py, tests/app.mjs, tests/thinking.mjs and the two browser walks in tests/browser, on synthetic books with stand-in models; the upgrade was checked against a real 1.x install and its data. No paid provider call and no deployment were made.
