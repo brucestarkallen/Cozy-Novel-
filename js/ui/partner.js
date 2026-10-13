@@ -65,13 +65,17 @@ export async function partnerAction(app, action) {
       blobs: [blob],
     });
     await renderDiscussion(app);
-    $("#discussionInput").value = "";
+    if (novelId === app.novelId) {
+      $("#discussionInput").value = "";
+      app.partnerDraft?.mark();
+      await app.partnerDraft?.save();
+    }
     const preview = el("article", { "data-role": "partner" });
     $("#discussion").append(preview);
     let partial = "";
     try {
       const result = await app.writer.run({
-        connection: app.connection(),
+        connection: await app.requestConnection(false, novelId),
         novelId,
         sceneId,
         kind: "discuss",
@@ -134,7 +138,7 @@ export async function partnerAction(app, action) {
   }
   if (action === "selectSources") {
     const scenes = (await app.repo.query("novelId", app.novelId)).filter(
-      (r) => r.type === "scene",
+      (r) => r.type === "scene" || r.kind === "reference",
     );
     const checks = scenes.map((s) =>
       el(
@@ -142,10 +146,10 @@ export async function partnerAction(app, action) {
         {},
         el("input", {
           type: "checkbox",
-          value: s.currentRevisionId,
-          checked: app.sourceIds.includes(s.currentRevisionId),
+          value: s.currentRevisionId || s.id,
+          checked: app.sourceIds.includes(s.currentRevisionId || s.id),
         }),
-        " " + s.title,
+        " " + (s.kind === "reference" ? "Reference: " : "") + s.title,
       ),
     );
     panel(
@@ -190,7 +194,42 @@ export async function partnerAction(app, action) {
         el(
           "article",
           { class: "storycard" },
-          el("h3", {}, r.snapshot.kind + " · " + r.snapshot.model),
+          el(
+            "h3",
+            {},
+            (r.connectionName || r.connectionId || "Saved connection") +
+              " · " +
+              r.snapshot.model,
+          ),
+          el(
+            "small",
+            {},
+            (r.auxiliary
+              ? "Optional Story Brain or helper: "
+              : "Foreground: ") + r.snapshot.kind,
+          ),
+          el(
+            "p",
+            {},
+            "Reported input " +
+              (r.usage?.input_tokens ?? r.usage?.prompt_tokens ?? "unknown") +
+              ", output " +
+              (r.usage?.output_tokens ??
+                r.usage?.completion_tokens ??
+                "unknown") +
+              ", cached " +
+              (r.usage?.cache_read_input_tokens ??
+                r.usage?.input_tokens_details?.cached_tokens ??
+                r.usage?.prompt_tokens_details?.cached_tokens ??
+                "not reported") +
+              ", cache write " +
+              (r.usage?.cache_creation_input_tokens ?? "not reported") +
+              ". Duration " +
+              (r.durationMs ?? "unknown") +
+              " ms. Finish " +
+              (r.finishReason || r.state) +
+              ".",
+          ),
           el(
             "p",
             {},
@@ -221,6 +260,29 @@ export async function partnerAction(app, action) {
                 panel(
                   "Request receipt",
                   el("pre", { class: "receipt" }, JSON.stringify(r, null, 2)),
+                  ...(await app.repo.query("novelId", r.novelId))
+                    .filter(
+                      (a) =>
+                        a.kind === "invalidStructuredOutput" &&
+                        a.jobId === r.jobId,
+                    )
+                    .map((a) =>
+                      el(
+                        "button",
+                        {
+                          onClick: async () =>
+                            panel(
+                              "Original structured provider output, outside the manuscript",
+                              el(
+                                "pre",
+                                { class: "receipt" },
+                                await app.repo.text(a.textBlobId),
+                              ),
+                            ),
+                        },
+                        "Inspect retained structured output",
+                      ),
+                    ),
                   el("h3", {}, "Selected original sources and stored blocks"),
                   el("pre", { class: "receipt" }, blocks.join("\n\n")),
                 );
@@ -235,7 +297,7 @@ export async function partnerAction(app, action) {
   }
   if (action === "analyze") {
     await app.flush();
-    await app.analyze();
+    await app.analyze(null, { force: true });
     return true;
   }
   return false;

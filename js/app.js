@@ -1,3 +1,7 @@
+import { authorToolsAction } from "./ui/author-tools.js";
+import { Drafts } from "./storage/drafts.js";
+import { ReadingQueue } from "./ai/reading-queue.js";
+import { ConnectionLibrary } from "./connections/library.js";
 import { applyReading, readingMode } from "./story/reading.js";
 import { Repository } from "./storage/repository.js";
 import { DeviceSync } from "./storage/sync.js";
@@ -64,10 +68,35 @@ class Studio {
       (s) => ($("#deviceStatus").textContent = s),
     );
     this.writer = new Writer(this.repo, this.device);
+    this.connectionLibrary = new ConnectionLibrary(this);
+    this.drafts = new Drafts(
+      this.repo,
+      (e) => notice(e.message, true),
+      (s) => {
+        if ($("#draftStatus")) $("#draftStatus").textContent = s;
+      },
+    );
+    this.readingQueue = new ReadingQueue(this);
     await applyAppearance(await this.repo.get("appearance", "meta"));
     await renderLibrary(this);
     await this.writer.recoverInterrupted();
     const signal = this.events.signal;
+    $("#connectionPicker")?.addEventListener(
+      "change",
+      async (e) => {
+        try {
+          await this.connectionLibrary.use(
+            e.target.value,
+            "writer",
+            this.novelId ? "novel" : "global",
+          );
+        } catch (error) {
+          notice(error.message, true);
+          this.updateModel();
+        }
+      },
+      { signal },
+    );
     window.addEventListener(
       "cozynovelversionchange",
       () =>
@@ -103,6 +132,9 @@ class Studio {
       { signal },
     );
     $("#closeModal").addEventListener("click", closePanel, { signal });
+    $("#librarySearch").addEventListener("input", () => renderLibrary(this), {
+      signal,
+    });
     $("#showArchived").addEventListener("change", () => renderLibrary(this), {
       signal,
     });
@@ -136,7 +168,7 @@ class Studio {
     window.addEventListener(
       "beforeunload",
       (e) => {
-        if (this.dirty) {
+        if (this.dirty || this.drafts.pending) {
           e.preventDefault();
           e.returnValue = "";
         }
@@ -146,7 +178,11 @@ class Studio {
     document.addEventListener(
       "visibilitychange",
       () => {
-        if (document.visibilityState === "hidden") this.flush().catch(() => {});
+        if (document.visibilityState === "hidden") {
+          this.flush().catch(() => {});
+          this.drafts.flush().catch(() => {});
+          this.saveDirection().catch(() => {});
+        }
       },
       { signal },
     );
@@ -158,7 +194,8 @@ class Studio {
           e.preventDefault();
           this.flush().catch((err) => notice(err.message, true));
         }
-        if (e.key === "Escape") document.body.classList.remove("immersive");
+        if (e.key === "Escape" && document.body.dataset.focus)
+          this.action("exitFocus", {}).catch(() => {});
       },
       { signal },
     );
@@ -211,19 +248,43 @@ class Studio {
       { signal },
     );
     this.unsubscribe = this.repo.subscribe((op) => {
-      if (["candidate.accept", "selection.replace"].includes(op.kind))
-        this.acceptedWork(op).catch((e) =>
-          notice("Passage saved. Story reading pending: " + e.message),
-        );
+      if (op.kind === "connections.changed")
+        this.connectionLibrary.refresh().catch(() => {});
+      if (op.kind?.startsWith("connection.") && op.novelId)
+        this.repo
+          .get(op.novelId)
+          .then((n) => {
+            this.connectionLibrary.novels.set(n.id, n);
+            this.updateModel();
+          })
+          .catch(() => {});
+      if (
+        [
+          "author",
+          "candidate.accept",
+          "selection.replace",
+          "revision.restore",
+        ].includes(op.kind)
+      )
+        this.readingQueue
+          .enqueue(op)
+          .catch((e) =>
+            notice("Passage saved. Story reading pending: " + e.message),
+          );
       if (op.kind === "library.restore" && op.generation) {
         this.writer.dispose();
         this.writer = new Writer(this.repo, this.device);
+        this.readingQueue.dispose();
+        this.readingQueue = new ReadingQueue(this);
+        this.connectionLibrary.load().catch((e) => notice(e.message, true));
       }
       if (op.novelId === this.novelId && this.sceneId)
         this.checkExternal().catch(() => {});
     });
     const status = await this.device.connect();
-    this.connections = status?.connections || [];
+    await this.connectionLibrary.load(status?.connections || []);
+    this.readingQueue.schedule();
+    if (status?.connectionWarning) notice(status.connectionWarning, true);
     this.updateModel();
     await this.device.flush();
     if ("serviceWorker" in navigator) {
@@ -235,11 +296,11 @@ class Studio {
           this.registration = reg;
           const waiting = () => {
             if (reg.waiting) {
-              notice(
-                "An application update is ready. Save and refresh when you are ready.",
+              $("#updateBanner").hidden = false;
+              $("#updateBanner").replaceChildren(
+                el("span", {}, "An application update is ready. "),
+                button("Save and refresh", "updateApp"),
               );
-              const b = button("Save and refresh", "updateApp");
-              $("#notice").append(" ", b);
             }
           };
           waiting();
@@ -329,10 +390,15 @@ class Studio {
   }
   async openNovel(id) {
     await this.flush();
+    await this.drafts.flush();
     if (this.sceneId) await this.saveDirection();
+    await this.partnerDraft?.release();
     const n = await this.repo.get(id);
     if (!n || n.type !== "novel") throw new Error("Novel not found.");
     this.novelId = id;
+    this.connectionLibrary?.novels.set(id, n);
+    await this.connectionLibrary?.refresh();
+    this.updateModel();
     this.sourceIds = [];
     const lib = await this.repo.get("library", "meta");
     await this.repo.localPut({ ...lib, activeProjectId: id });
@@ -349,10 +415,16 @@ class Studio {
     $("#home").hidden = true;
     $("#studio").hidden = false;
     await this.loadScene(first);
+    this.partnerDraft = await this.drafts.bind($("#discussionInput"), {
+      novelId: this.novelId,
+      ownerId: this.novelId,
+      kind: "partner",
+    });
     await renderDiscussion(this);
     await renderBible(this);
   }
   async saveDirection() {
+    await this.directionDraft?.save();
     if (this.sceneId)
       await this.repo.localPut({
         id: "direction." + this.sceneId,
@@ -369,56 +441,71 @@ class Studio {
   }
   async loadScene(id) {
     const switching = id !== this.sceneId;
-    const { scene, revision, text } = await this.repo.sceneText(id);
-    if (scene.novelId !== this.novelId)
-      throw new Error("Scene belongs to another novel.");
-    this.sceneId = id;
-    this.revisionId = revision.id;
-    this.editor.value = text;
-    this.editor.hidden = false;
-    this.dirty = false;
-    this.selection = [text.length, text.length];
-    this.candidateId = null;
-    $("#readingView").hidden = true;
-    $("#candidateBox").hidden = true;
-    $("#suggestions").replaceChildren();
-    $("#memoryProposals").replaceChildren();
-    $("#sceneTitle").textContent = scene.title;
-    const chapter = await this.repo.get(scene.chapterId);
-    $("#scenePath").textContent = chapter.title;
-    $("#sceneNumber").textContent =
-      scene.status.toUpperCase() +
-      " · " +
-      (scene.timeLabel || "A MOMENT IN YOUR STORY");
-    const position = await this.repo.get("direction." + id, "meta");
-    if (switching) $("#direction").value = position?.value || "";
-    $("#saveStatus").textContent = "Saved in browser";
-    $("#wordCount").textContent = (text.match(/\S+/g) || []).length + " words";
-    this.panel("manuscript");
-    await this.renderNav();
-    const candidates = (await this.repo.query("sceneId", id))
-      .filter(
-        (r) =>
-          r.type === "candidate" &&
-          ["ready", "partial", "stale"].includes(r.status),
-      )
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    if (candidates[0]) await this.showCandidate(candidates[0].id);
-    else await this.renderSuggestions();
-    if (switching) {
-      $(".writingSurface").scrollTop = position?.scrollTop || 0;
-      this.editor.scrollTop = position?.editorScrollTop || 0;
-      if (position?.selection) {
-        this.selection = position.selection.map((x) =>
-          Math.min(text.length, x),
-        );
-        this.editor.setSelectionRange(...this.selection);
+    const directionField = $("#direction");
+    directionField.disabled = true;
+    try {
+      if (switching) await this.directionDraft?.release();
+      const { scene, revision, text } = await this.repo.sceneText(id);
+      if (scene.novelId !== this.novelId)
+        throw new Error("Scene belongs to another novel.");
+      this.sceneId = id;
+      this.revisionId = revision.id;
+      this.editor.value = text;
+      this.editor.hidden = false;
+      this.dirty = false;
+      this.selection = [text.length, text.length];
+      this.candidateId = null;
+      $("#readingView").hidden = true;
+      $("#candidateBox").hidden = true;
+      $("#suggestions").replaceChildren();
+      $("#memoryProposals").replaceChildren();
+      $("#sceneTitle").textContent = scene.title;
+      const chapter = await this.repo.get(scene.chapterId);
+      $("#scenePath").textContent = chapter.title;
+      $("#sceneNumber").textContent =
+        scene.status.toUpperCase() +
+        " · " +
+        (scene.timeLabel || "A MOMENT IN YOUR STORY");
+      const position = await this.repo.get("direction." + id, "meta");
+      if (switching) {
+        $("#direction").value = position?.value || "";
+        this.directionDraft = await this.drafts.bind($("#direction"), {
+          novelId: this.novelId,
+          ownerId: id,
+          kind: "direction",
+        });
       }
+      $("#saveStatus").textContent = "Saved in browser";
+      $("#wordCount").textContent =
+        (text.match(/\S+/g) || []).length + " words";
+      this.panel("manuscript");
+      await this.renderNav();
+      const candidates = (await this.repo.query("sceneId", id))
+        .filter(
+          (r) =>
+            r.type === "candidate" &&
+            ["ready", "partial", "stale"].includes(r.status),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      if (candidates[0]) await this.showCandidate(candidates[0].id);
+      else await this.renderSuggestions();
+      if (switching) {
+        $(".writingSurface").scrollTop = position?.scrollTop || 0;
+        this.editor.scrollTop = position?.editorScrollTop || 0;
+        if (position?.selection) {
+          this.selection = position.selection.map((x) =>
+            Math.min(text.length, x),
+          );
+          this.editor.setSelectionRange(...this.selection);
+        }
+      }
+      await this.repo.localPut({
+        id: "activeScene." + this.novelId,
+        sceneId: id,
+      });
+    } finally {
+      directionField.disabled = false;
     }
-    await this.repo.localPut({
-      id: "activeScene." + this.novelId,
-      sceneId: id,
-    });
   }
   renderNav() {
     return renderNav(this);
@@ -433,17 +520,35 @@ class Studio {
     for (const b of this.root.querySelectorAll("[data-action=sideTab]"))
       b.setAttribute("aria-selected", b.dataset.tab === name);
   }
-  connection(helper = false) {
+  connection(helper = false, novelId = this.novelId) {
     return (
-      (helper ? this.connections.find((c) => c.id === "helper") : null) ||
-      this.connections.find((c) => c.id === "primary") || {
-        ...DEFAULT_CONNECTION,
-      }
+      this.connectionLibrary?.resolve(helper, novelId) ||
+      structuredClone(DEFAULT_CONNECTION)
     );
   }
+  requestConnection(helper = false, novelId = this.novelId) {
+    return this.connectionLibrary.forRequest(helper, novelId);
+  }
   updateModel() {
-    $("#modelStatus").textContent =
-      this.connection().model || "No model connected";
+    const c = this.connection();
+    $("#modelStatus").textContent = c.model || "No model selected";
+    const picker = $("#connectionPicker");
+    if (picker) {
+      picker.replaceChildren(
+        el("option", { value: "" }, "Choose a connection"),
+        ...(this.connectionLibrary?.profiles || []).map((p) =>
+          el(
+            "option",
+            { value: p.id },
+            p.displayName + " · " + (p.model || "Model needed"),
+          ),
+        ),
+      );
+      picker.value = c.id;
+    }
+    if ($("#connectionHealth"))
+      $("#connectionHealth").textContent =
+        this.connectionLibrary?.status(c) || "Not configured";
   }
   async generate(kind, options = {}) {
     const novelId = this.novelId,
@@ -467,7 +572,7 @@ class Studio {
     $("#suggestions").replaceChildren();
     try {
       const result = await this.writer.run({
-        connection: this.connection(),
+        connection: await this.requestConnection(),
         novelId,
         sceneId,
         kind,
@@ -485,15 +590,15 @@ class Studio {
       if (sceneId === this.sceneId && novelId === this.novelId) {
         await this.showCandidate(result.candidate.id);
         notice("A new passage is ready for your review.");
-        const n = await this.repo.get(novelId);
-        if (
-          n.autoSuggestions ||
-          (await readingMode(this.repo, novelId)) === "auto"
-        )
-          this.analyze(result.candidate.id).catch((e) =>
-            notice("Passage saved. Optional suggestions: " + e.message),
-          );
       }
+      const n = await this.repo.get(novelId);
+      if (
+        n.autoSuggestions ||
+        (await readingMode(this.repo, novelId)) === "auto"
+      )
+        this.analyze(result.candidate.id).catch((e) =>
+          notice("Passage saved. Optional suggestions: " + e.message),
+        );
     } catch (e) {
       if (e.candidate && sceneId === this.sceneId)
         await this.showCandidate(e.candidate.id);
@@ -519,10 +624,13 @@ class Studio {
     await this.renderSuggestions();
   }
   async analyze(candidateId = null, extra = {}) {
-    const novelId = this.novelId,
-      sceneId = this.sceneId;
+    const candidateSource = candidateId
+      ? await this.repo.get(candidateId)
+      : null;
+    const novelId = extra.novelId || candidateSource?.novelId || this.novelId,
+      sceneId = extra.sceneId || candidateSource?.sceneId || this.sceneId;
     const artifact = await analyze(this.writer, {
-      connection: this.connection(true),
+      connection: await this.requestConnection(true, novelId),
       libraryGeneration: this.repo.generation,
       novelId,
       sceneId,
@@ -562,7 +670,7 @@ class Studio {
       for (let i = 0; i < 2; i++) {
         if (this.writer.foreground) return;
         const a = await analyze(this.writer, {
-          connection: this.connection(true),
+          connection: await this.requestConnection(true, novelId),
           novelId,
           sceneId,
           candidateId,
@@ -610,7 +718,7 @@ class Studio {
     }
     if (readingStart >= source.length) return;
     return analyze(this.writer, {
-      connection: this.connection(true),
+      connection: await this.requestConnection(true, ex.novelId),
       novelId: ex.novelId,
       sceneId: ex.baseSceneId,
       exploration: ex,
@@ -621,6 +729,15 @@ class Studio {
       direction:
         "Read the next exploration segment. Changes remain exploration only.",
     });
+  }
+  readingNotice(e) {
+    notice("Writing is saved. Source reading remains pending: " + e.message);
+  }
+  async readingUpdated(a) {
+    if (a.novelId === this.novelId && a.sceneId === this.sceneId) {
+      await this.renderSuggestions(a);
+      await renderBible(this);
+    }
   }
   async acceptedWork(op) {
     if (op.libraryGeneration !== this.repo.generation) return;
@@ -654,11 +771,13 @@ class Studio {
           (r) =>
             r.type === "artifact" &&
             r.kind === "analysis" &&
+            !r.explorationId &&
             r.freshness === "fresh",
         )
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     $("#suggestions").replaceChildren();
-    if (!artifact || artifact.freshness !== "fresh") return;
+    if (!artifact || artifact.explorationId || artifact.freshness !== "fresh")
+      return;
     const novel = await this.repo.get(this.novelId);
     if (novel.autoSuggestions === false) return;
     const source = artifact.candidateId
@@ -687,6 +806,7 @@ class Studio {
                 await this.loadScene(this.sceneId);
               }
               $("#direction").value = text;
+              this.directionDraft?.mark();
               await this.generate("continue", { direction: text });
             } catch (e) {
               notice(e.message, true);
@@ -701,13 +821,21 @@ class Studio {
   }
   async action(action, target) {
     if (action === "panel") {
+      if (!this.novelId) {
+        notice("Open or create a novel first.");
+        return;
+      }
       this.panel(target.dataset.panel);
       return;
     }
     if (action === "updateApp") {
       await this.flush();
-      if (this.writer.foreground)
-        throw new Error("Finish or stop generation before refreshing.");
+      await this.drafts.flush();
+      await this.saveDirection();
+      if (this.writer.foreground || this.writer.helper)
+        throw new Error(
+          "Finish writing or the current source reading before refreshing.",
+        );
       this.registration?.waiting?.postMessage({
         type: "activate",
         owner: "cozyNovel",
@@ -726,12 +854,16 @@ class Studio {
       storyAction,
       rpAction,
       partnerAction,
+      authorToolsAction,
     ])
       if (await handler(this, action, target)) return;
   }
   async dispose() {
     await this.flush();
     await this.saveDirection();
+    await this.drafts.flush();
+    this.drafts.dispose();
+    this.readingQueue.dispose();
     clearTimeout(this.saveTimer);
     this.writer.dispose();
     this.device.dispose();

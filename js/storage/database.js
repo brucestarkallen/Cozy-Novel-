@@ -39,11 +39,15 @@ export function openDatabase(name = APP.database) {
         if (library.result)
           meta.put({
             ...library.result,
-            minimumWriter: 2,
+            minimumWriter: APP.writerProtocol,
             commitSequence: library.result.commitSequence || 0,
           });
       };
-      meta.put({ id: "compatibility", minimumWriter: 2, databaseVersion: 2 });
+      meta.put({
+        id: "compatibility",
+        minimumWriter: APP.writerProtocol,
+        databaseVersion: APP.databaseVersion,
+      });
     };
     req.onsuccess = () => {
       const db = req.result;

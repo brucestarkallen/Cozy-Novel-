@@ -1,13 +1,7 @@
+import { connectionManager } from "./connections.js";
 import { $, el, field, formPanel, panel, notice } from "./dom.js";
-import { DEFAULT_CONNECTION } from "../config.js";
 import { id, now } from "../core/ids.js";
 import { TEMPLATES } from "../ai/prompts/templates.js";
-const endpointDefaults = {
-  responses: "https://api.openai.com/v1/responses",
-  chat: "https://api.openai.com/v1/chat/completions",
-  anthropic: "https://api.anthropic.com/v1/messages",
-  openrouter: "https://openrouter.ai/api/v1/chat/completions",
-};
 export async function settingsAction(app, action) {
   if (action === "appearance") {
     const prefs = (await app.repo.get("appearance", "meta")) || {
@@ -21,11 +15,37 @@ export async function settingsAction(app, action) {
         field("Theme", "theme", prefs.theme, "select", ["dark", "light"]),
         field("Reading size in pixels", "size", prefs.size, "number"),
         field("Reading width in pixels", "width", prefs.width, "number"),
+        field("Line spacing", "leading", prefs.leading || 1.8, "number"),
+        field("Manuscript surface", "paper", prefs.paper || "cream", "select", [
+          "cream",
+          "night",
+        ]),
+        field(
+          "Room background",
+          "background",
+          prefs.background || "room",
+          "select",
+          [
+            { value: "room", label: "Rainy window" },
+            { value: "cat", label: "Library and cat on mobile" },
+            { value: "none", label: "Solid colour, minimal decoration" },
+          ],
+        ),
+        field(
+          "Tint dialogue in reading view",
+          "dialogue",
+          prefs.dialogue,
+          "checkbox",
+        ),
       ],
       async (v) => {
         const p = {
           id: "appearance",
           theme: v.theme,
+          leading: Math.max(1.3, Math.min(2.4, Number(v.leading))),
+          paper: v.paper,
+          background: v.background,
+          dialogue: v.dialogue,
           size: Math.max(14, Math.min(32, Number(v.size))),
           width: Math.max(400, Math.min(1100, Number(v.width))),
         };
@@ -40,7 +60,7 @@ export async function settingsAction(app, action) {
       const status = await app.device.connect();
       if (status) app.connections = status.connections || [];
     }
-    await connectionPanel(app, "primary");
+    await connectionManager(app);
     return true;
   }
   if (action === "style") {
@@ -96,15 +116,15 @@ export async function settingsAction(app, action) {
         ),
       async (v) => {
         const { autoSuggestions, storyMode, ...styleProfile } = v;
-        await app.repo.update(
-          {
-            ...(await app.repo.get(n.id)),
-            styleProfile,
-            autoSuggestions,
-            storyMode,
-          },
-          "style.update",
-        );
+        await app.repo.withMutation(async () => {
+          const current = await app.repo.get(n.id);
+          await app.repo.commitLocked({
+            novelId: n.id,
+            kind: "style.update",
+            expectedRecord: { id: n.id, version: current.recordVersion || 0 },
+            records: [{ ...current, styleProfile, autoSuggestions, storyMode }],
+          });
+        });
       },
       {
         help: "These instructions belong to this novel. Source samples are preserved as you enter them.",
@@ -182,230 +202,17 @@ export async function settingsAction(app, action) {
 export function applyAppearance(p) {
   if (!p) return;
   document.documentElement.dataset.theme = p.theme;
+  document.documentElement.dataset.background = p.background || "room";
+  document.documentElement.dataset.paper = p.paper || "cream";
+  document.documentElement.style.setProperty("--leading", p.leading || 1.8);
+  document.documentElement.style.setProperty(
+    "--dialogueink",
+    p.dialogue
+      ? p.paper === "night"
+        ? "#e7c892"
+        : "#795423"
+      : "var(--paperink)",
+  );
   document.documentElement.style.setProperty("--reading", p.size + "px");
   document.documentElement.style.setProperty("--measure", p.width + "px");
-}
-async function connectionPanel(app, slot) {
-  const c = app.connections.find((x) => x.id === slot) || {
-    ...structuredClone(DEFAULT_CONNECTION),
-    id: slot,
-  };
-  const form = formPanel(
-    slot === "primary" ? "Writing connection" : "Optional helper connection",
-    [
-      field("Adapter", "adapter", c.adapter, "select", [
-        { value: "responses", label: "OpenAI Responses" },
-        { value: "chat", label: "OpenAI compatible Chat Completions" },
-        { value: "anthropic", label: "Anthropic Messages" },
-        { value: "openrouter", label: "OpenRouter" },
-      ]),
-      field("Model identifier", "model", c.model),
-      field("Full endpoint URL", "endpoint", c.endpoint),
-      field("API key, blank keeps the current key", "secret", "", "password"),
-      field(
-        "Context limit including output",
-        "contextLimit",
-        c.contextLimit,
-        "number",
-      ),
-      field("Maximum output tokens", "outputLimit", c.outputLimit, "number"),
-      field(
-        "Reasoning reserve tokens",
-        "reasoningReserve",
-        c.reasoningReserve || 0,
-        "number",
-      ),
-      field(
-        "Provider capability verified for this context limit",
-        "capabilityConfirmed",
-        c.capabilityConfirmed,
-        "checkbox",
-      ),
-      field(
-        "Explicitly allow a loopback local model endpoint",
-        "allowLocal",
-        c.allowLocal,
-        "checkbox",
-      ),
-      field(
-        "Persist key in a separate local file with restricted permissions",
-        "persistSecret",
-        c.persistSecret,
-        "checkbox",
-      ),
-      field(
-        "Model supports temperature",
-        "temperatureEnabled",
-        c.capabilities?.temperature,
-        "checkbox",
-      ),
-      field(
-        "Temperature",
-        "temperature",
-        c.parameters?.temperature ?? 0.8,
-        "number",
-      ),
-      field(
-        "Model supports top p",
-        "topPEnabled",
-        c.capabilities?.top_p,
-        "checkbox",
-      ),
-      field("Top p", "topP", c.parameters?.top_p ?? 1, "number"),
-      field(
-        "Chat transport supports usage stream events",
-        "usageEnabled",
-        c.capabilities?.usage,
-        "checkbox",
-      ),
-      field(
-        "Chat transport supports disabling provider storage",
-        "storageEnabled",
-        c.capabilities?.storage,
-        "checkbox",
-      ),
-      field(
-        "Chat transport uses max completion tokens",
-        "maxCompletionTokens",
-        c.capabilities?.maxCompletionTokens,
-        "checkbox",
-      ),
-      field(
-        "Responses model supports reasoning effort",
-        "reasoningEnabled",
-        c.capabilities?.reasoning,
-        "checkbox",
-      ),
-      field(
-        "Reasoning effort",
-        "reasoning",
-        c.parameters?.reasoning || "medium",
-        "select",
-        ["minimal", "low", "medium", "high"],
-      ),
-      field(
-        "Input price per million tokens, optional",
-        "inputPrice",
-        c.inputPrice ?? "",
-        "number",
-      ),
-      field(
-        "Output price per million tokens, optional",
-        "outputPrice",
-        c.outputPrice ?? "",
-        "number",
-      ),
-    ],
-    async (v) => {
-      if (!app.device.token)
-        throw new Error(
-          "Start the local server first. Browser only mode does not expose provider keys.",
-        );
-      const profile = {
-        id: slot,
-        adapter: v.adapter,
-        model: v.model,
-        endpoint: v.endpoint,
-        secret: v.secret,
-        persistSecret: v.persistSecret,
-        allowLocal: v.allowLocal,
-        contextLimit: Number(v.contextLimit),
-        outputLimit: Number(v.outputLimit),
-        reasoningReserve: Number(v.reasoningReserve),
-        capabilityConfirmed: v.capabilityConfirmed,
-        capabilities: {
-          temperature: v.temperatureEnabled,
-          top_p: v.topPEnabled,
-          usage: v.usageEnabled,
-          storage: v.storageEnabled,
-          maxCompletionTokens: v.maxCompletionTokens,
-          reasoning: v.reasoningEnabled,
-        },
-        parameters: {
-          temperature: Number(v.temperature),
-          top_p: Number(v.topP),
-          reasoning: v.reasoning,
-        },
-        inputPrice: v.inputPrice === "" ? null : Number(v.inputPrice),
-        outputPrice: v.outputPrice === "" ? null : Number(v.outputPrice),
-      };
-      if (
-        !Number.isInteger(profile.contextLimit) ||
-        !Number.isInteger(profile.outputLimit) ||
-        !Number.isInteger(profile.reasoningReserve) ||
-        profile.reasoningReserve < 0 ||
-        profile.contextLimit < 2048 ||
-        profile.outputLimit < 64 ||
-        profile.outputLimit >= profile.contextLimit
-      )
-        throw new Error("Choose valid context and output limits.");
-      const saved = await app.device.api("connections", {
-        method: "POST",
-        body: profile,
-      });
-      app.connections = app.connections
-        .filter((x) => x.id !== slot)
-        .concat(saved);
-      app.updateModel();
-      await app.repo.localPut({ id: "connection." + slot, profile: saved });
-      notice("Connection configured. No paid model call was made.");
-    },
-    {
-      help: "Use the local relay for model requests. Saving checks the profile and endpoint, without a paid model call. Context capability is your confirmation, not automatic model certification. Keys stay in memory unless you choose local persistence. File permissions are not encryption.",
-      submit: "Validate and save connection",
-    },
-  );
-  const adapter = form.elements.adapter;
-  const refresh = () => {
-    for (const name of ["temperature", "topP", "reasoning"]) {
-      const enabled =
-        form.elements[
-          {
-            temperature: "temperatureEnabled",
-            topP: "topPEnabled",
-            reasoning: "reasoningEnabled",
-          }[name]
-        ].checked;
-      form.elements[name].disabled = !enabled;
-    }
-    form.elements.reasoningEnabled.disabled = adapter.value !== "responses";
-    form.elements.reasoning.disabled =
-      adapter.value !== "responses" || !form.elements.reasoningEnabled.checked;
-    for (const name of [
-      "usageEnabled",
-      "storageEnabled",
-      "maxCompletionTokens",
-    ])
-      form.elements[name].disabled = !["chat", "openrouter"].includes(
-        adapter.value,
-      );
-  };
-  form.addEventListener("change", refresh);
-  refresh();
-  $("#modalBody").append(
-    el(
-      "div",
-      { class: "actions" },
-      el(
-        "button",
-        {
-          onClick: () => {
-            form.elements.endpoint.value = endpointDefaults[adapter.value];
-            notice(
-              "The default endpoint was loaded. Your model and other settings are unchanged.",
-            );
-          },
-        },
-        "Use adapter default endpoint",
-      ),
-      el(
-        "button",
-        {
-          onClick: () =>
-            connectionPanel(app, slot === "primary" ? "helper" : "primary"),
-        },
-        slot === "primary" ? "Configure optional helper" : "Writing connection",
-      ),
-    ),
-  );
 }

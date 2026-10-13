@@ -97,6 +97,9 @@ try {
   await page
     .getByLabel("Explicitly allow a loopback local model endpoint")
     .check();
+  await page
+    .getByText("Model settings and capabilities", { exact: true })
+    .click();
   await page.getByLabel("Model supports temperature", { exact: true }).check();
   await page.getByLabel("Temperature", { exact: true }).fill("0.7");
   await page
@@ -500,12 +503,25 @@ try {
       unchanged: before === JSON.stringify(after.records),
     };
   }, backup);
-  assert.deepEqual(roundtrip.actual.records, backup.records);
+  for (const original of backup.records) {
+    const restored = roundtrip.actual.records.find((r) => r.id === original.id);
+    if (
+      (original.type === "job" ||
+        ["readingQueue", "readingTask"].includes(original.kind)) &&
+      ["running", "queued"].includes(original.state)
+    ) {
+      assert.equal(restored.state, "interrupted");
+      assert.ok(restored.error.includes("never restarted automatically"));
+      const unchanged = ({ state, error, ...rest }) => rest;
+      assert.deepEqual(unchanged(restored), unchanged(original));
+    } else assert.deepEqual(restored, original);
+  }
+  assert.equal(roundtrip.actual.records.length, backup.records.length);
   assert.deepEqual(roundtrip.actual.blobs, backup.blobs);
   assert.notEqual(roundtrip.generation, backup.library.generation);
   assert.ok(roundtrip.rejected && roundtrip.foreign && roundtrip.unchanged);
   ok(
-    "Portable backup roundtrip preserves exact records, text, branches and provenance; invalid imports are harmless",
+    "Portable backup roundtrip preserves text, branches and provenance; active paid jobs become interrupted and invalid imports are harmless",
   );
   // Isolated foreign browser resources and inert manuscript output.
   await page.evaluate(async () => {

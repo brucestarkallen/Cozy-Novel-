@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote,urlsplit,parse_qs
 from server.store import Store,Conflict,validate_backup
-from server.relay import Profiles
+from server.relay import Profiles,ProviderError
 
 ROOT=Path(__file__).resolve().parent
 class NovelServer(ThreadingHTTPServer):
@@ -42,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError('Use JSON content type.')
     def send(self,status,body,content_type='application/json'):
         data=json.dumps(body).encode() if content_type=='application/json' else body
-        self.send_response(status);self.send_header('Content-Type',content_type);self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store' if self.path.startswith('/api/') else 'no-cache');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer');self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");self.end_headers();self.wfile.write(data)
+        self.send_response(status);self.send_header('Content-Type',content_type);self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store' if self.path.startswith('/api/') else 'no-cache');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer');self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");self.end_headers();self.wfile.write(data)
     def body(self):
         size=int(self.headers.get('Content-Length','0'));limit=64*1024*1024 if '/restore/' in self.path else 8*1024*1024
         if size<=0 or size>limit:raise ValueError('Request is empty or exceeds its size limit.')
@@ -55,22 +55,26 @@ class Handler(BaseHTTPRequestHandler):
             self.allowed(mutation);url=urlsplit(self.path);path=unquote(url.path);query=parse_qs(url.query)
             if path.startswith('/api/novel/'):
                 route=path[len('/api/novel/'):];data=self.body() if mutation else None
-                if route=='status' and not mutation:self.send(200,self.server.store.identity()|{'sessionToken':self.server.token,'connections':self.server.profiles.public()});return
+                if route=='status' and not mutation:self.send(200,self.server.store.identity()|{'sessionToken':self.server.token,'connections':self.server.profiles.public(),'connectionWarning':self.server.profiles.warning,'connectionProtocol':2});return
                 if route=='projects' and not mutation:self.send(200,self.server.store.projects(max(0,int(query.get('cursor',['0'])[0]))));return
                 if route=='snapshot' and not mutation:self.send(200,self.server.store.snapshot(max(0,int(query.get('cursor',['0'])[0]))));return
                 if route.startswith('projects/'):
                     parts=route.split('/')
                     if len(parts)==3 and parts[2]=='operations' and mutation:self.send(200,self.server.store.apply(parts[1],data));return
                     if len(parts)==2 and not mutation:self.send(200,self.server.store.snapshot(max(0,int(query.get('cursor',['0'])[0])),parts[1]));return
-                if route=='connections' and mutation:self.send(200,self.server.profiles.save(data));return
+                if route=='connections' and mutation:
+                    if data.get('connectionProtocol')!=2:raise Conflict('Refresh Cozy Novel before changing saved profiles. Existing settings were retained.')
+                    self.send(200,self.server.profiles.save(data));return
+                if route=='connections/remove' and mutation:self.send(200,self.server.profiles.remove(data['id']));return
+                if route=='connections/models' and mutation:self.send(200,self.server.profiles.models(data['id']));return
                 if route=='backups' and mutation:self.send(200,{'snapshot':self.server.store.backup()});return
                 if route=='manifest' and not mutation:self.send(200,self.server.store.manifest(max(0,int(query.get('cursor',['0'])[0]))));return
                 if route.startswith('restore/operations/') and not mutation:self.send(200,self.server.store.restore_outcome(route.split('/')[-1]));return
                 if route=='restore/preview' and mutation:
-                    if data.get('clientProtocol')!=2:raise Conflict('Refresh Cozy Novel for safe restore coordination.')
+                    if data.get('clientProtocol')!=3:raise Conflict('Refresh Cozy Novel for safe restore coordination.')
                     self.send(200,self.server.store.prepare_restore(data['restoreOperationId'],data['snapshotDigest'],data['snapshotJson']));return
                 if route=='restore/commit' and mutation:
-                    if data.get('clientProtocol')!=2:raise Conflict('Refresh Cozy Novel for safe restore coordination.')
+                    if data.get('clientProtocol')!=3:raise Conflict('Refresh Cozy Novel for safe restore coordination.')
                     self.send(200,self.server.store.commit_restore(data['restoreOperationId'],data['snapshotDigest'],data['expectedServerRevision']));return
                 if route=='cancel' and mutation:
                     with self.server.guard:conn=self.server.active.get(data.get('requestId'))
@@ -87,6 +91,7 @@ class Handler(BaseHTTPRequestHandler):
             if '..' in Path(relative).parts or not target.is_relative_to(ROOT) or not (relative in {'index.html','manifest.webmanifest','sw.js'} or relative.startswith(('js/','css/','assets/'))) or not target.is_file():
                 self.send(404,{'error':'Application asset not found.'});return
             self.send(200,target.read_bytes(),mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
+        except ProviderError as e:self.send(400,{'error':str(e),'code':e.code,'providerStatus':e.status,'parameter':e.parameter})
         except Conflict as e:self.send(409,{'error':str(e)})
         except PermissionError as e:self.send(403,{'error':str(e)})
         except (ValueError,KeyError,TypeError,OverflowError) as e:self.send(400,{'error':str(e) if isinstance(e,ValueError) else 'Invalid request shape.'})

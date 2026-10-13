@@ -20,7 +20,28 @@ export function makeScope(scene, revision, text, options, records, library) {
     const head = chosen.find((t) => t.id === options.transcriptHeadId);
     if (head) chosen.splice(chosen.findIndex((t) => t.id === head.id) + 1);
   }
+  const frames = records
+    .filter(
+      (r) =>
+        r.kind === "branchFrame" &&
+        r.explorationId === ex?.id &&
+        r.freshness !== "stale" &&
+        r.coveredTurnIds?.length &&
+        r.coveredTurnIds.every((id) => chosen.some((t) => t.id === id)),
+    )
+    .sort(
+      (a, b) =>
+        Math.max(
+          ...a.coveredTurnIds.map((id) => chosen.findIndex((t) => t.id === id)),
+        ) -
+        Math.max(
+          ...b.coveredTurnIds.map((id) => chosen.findIndex((t) => t.id === id)),
+        ),
+    );
+  const branchFrame = frames.at(-1)?.body;
   return {
+    branchFictionalTime: branchFrame?.fictionalTime ?? null,
+    branchRelativeTime: branchFrame?.relativeTime || "Not yet established",
     novelId: scene.novelId,
     libraryGeneration: library.generation,
     sceneId: scene.id,
@@ -36,6 +57,8 @@ export function makeScope(scene, revision, text, options, records, library) {
     transcriptHead: chosen.at(-1)?.id || null,
     liveTranscriptHead,
     historical: options.kind === "rp" || ex != null,
+    authorOverview:
+      ["discuss", "director", "editor", "recall"].includes(options.kind) && !ex,
   };
 }
 export function mappedRange(ref, source, target, byId) {
@@ -88,15 +111,52 @@ function knownEarlierTime(scope, byId) {
   return time;
 }
 export function permitted(record, scope, byId) {
+  if (
+    scope.authorOverview &&
+    record.scope !== "exploration" &&
+    !(
+      record.explorationId &&
+      record.type === "entity" &&
+      record.scope !== "novel"
+    ) &&
+    !["turn", "exploration"].includes(record.type)
+  )
+    return true;
+  // A branch replacement is an overlay, never a mutation of the shared ancestor.
+  if (
+    record.scope === "exploration" &&
+    [...byId.values()].some(
+      (r) =>
+        r.supersedes === record.id &&
+        r.status === "active" &&
+        r.explorationId === scope.explorationId &&
+        r.coveredTurnIds?.length &&
+        r.coveredTurnIds.every((id) => scope.turnIds.includes(id)) &&
+        (r.validFrom == null ||
+          scope.branchFictionalTime == null ||
+          r.validFrom <= scope.branchFictionalTime),
+    )
+  )
+    return false;
+  if (
+    scope.explorationId &&
+    record.explorationId === scope.explorationId &&
+    record.coveredTurnIds?.length &&
+    !record.coveredTurnIds.every((id) => scope.turnIds.includes(id))
+  )
+    return false;
   if (record.scope === "exploration") {
-    return (
-      record.explorationId === scope.explorationId &&
-      (
-        record.coveredTurnIds ||
-        record.sourceRefs?.map((s) => s.id) ||
-        []
-      ).every((id) => scope.turnIds.includes(id))
-    );
+    if (
+      !(
+        record.explorationId === scope.explorationId &&
+        (
+          record.coveredTurnIds ||
+          record.sourceRefs?.map((s) => s.id) ||
+          []
+        ).every((id) => scope.turnIds.includes(id))
+      )
+    )
+      return false;
   }
   if (
     record.explorationId &&
@@ -104,20 +164,27 @@ export function permitted(record, scope, byId) {
     record.scope !== "novel"
   )
     return false;
+  const effectiveTime =
+    record.scope === "exploration"
+      ? scope.branchFictionalTime
+      : scope.fictionalTime;
   if (
     record.validFrom != null &&
-    (scope.fictionalTime == null
-      ? knownEarlierTime(scope, byId) == null ||
-        record.validFrom > knownEarlierTime(scope, byId)
-      : record.validFrom > scope.fictionalTime)
+    (effectiveTime == null
+      ? record.scope === "exploration"
+        ? false
+        : knownEarlierTime(scope, byId) == null ||
+          record.validFrom > knownEarlierTime(scope, byId)
+      : record.validFrom > effectiveTime)
   )
     return false;
   if (
     record.validUntil != null &&
-    scope.fictionalTime != null &&
-    record.validUntil < scope.fictionalTime
+    effectiveTime != null &&
+    record.validUntil <= effectiveTime
   )
     return false;
+  if (record.scope === "exploration") return true;
   if (record.temporalScope === "invariant") return true;
   if (record.type === "scene") {
     if (record.id === scope.sceneId) return true;
@@ -200,9 +267,19 @@ export function profileAt(entity, scope, byId) {
   const claims = (entity.profileClaims || [])
     .filter((c) => permitted({ ...c, derived: true }, scope, byId))
     .map((c) => c.text);
+  if (
+    !scope.historical &&
+    entity.profile &&
+    entity.profileScope !== "invariant"
+  )
+    claims.unshift(
+      "Author supplied profile, historical scope may be uncertain. Do not grant characters timed developments without eligible sources:\n" +
+        entity.profile,
+    );
   if (entity.invariantProfile) claims.unshift(entity.invariantProfile);
   if (entity.profileScope === "invariant") claims.unshift(entity.profile);
   else if (
+    scope.historical &&
     entity.profileValidFrom != null &&
     permitted(
       {

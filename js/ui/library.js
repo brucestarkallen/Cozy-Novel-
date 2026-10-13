@@ -22,6 +22,12 @@ export async function renderLibrary(app) {
   $("#novelList").replaceChildren(
     ...novels
       .filter((n) => archived || !n.archivedAt)
+      .filter((n) => {
+        const term = $("#librarySearch")?.value.toLocaleLowerCase() || "";
+        return (n.title + " " + (n.premise || ""))
+          .toLocaleLowerCase()
+          .includes(term);
+      })
       .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))
       .map((n) =>
         el(
@@ -222,6 +228,7 @@ export async function libraryAction(app, action, target) {
   }
   if (action === "backups") {
     await app.flush();
+    await app.drafts.flush();
     await backupPanel(app);
     return true;
   }

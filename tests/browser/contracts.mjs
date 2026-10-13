@@ -251,7 +251,9 @@ export async function browserContracts() {
     let cancelled;
     try {
       await writer.run({
-        connection: server.connections.find((c) => c.id === "primary"),
+        connection:
+          server.connections.find((c) => c.id === "primary") ||
+          server.connections[0],
         novelId: n,
         sceneId: scene.id,
         kind: "rp",

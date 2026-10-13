@@ -12,17 +12,28 @@
     <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="stylesheet" href="./css/studio.css" />
+    <link rel="stylesheet" href="./css/room.css" />
     <script type="module" src="./js/app.js"></script>
   </head>
   <body>
     <div id="app">
       <header class="appbar">
         <button id="homeButton" class="brand" aria-label="Open your library">
-          <span class="brandmark">N</span
+          <span class="brandmark" aria-hidden="true">♧</span
           ><span>Cozy Novel<small>A little room for a whole world</small></span>
         </button>
         <nav aria-label="Application">
           <button data-action="library">Library</button
+          ><button
+            class="desktopLink"
+            data-action="panel"
+            data-panel="manuscript"
+          >
+            Write</button
+          ><button class="desktopLink" data-action="authorTools">
+            Plan and references</button
+          ><button class="desktopLink" data-action="panel" data-panel="bible">
+            Characters</button
           ><button data-action="backups">Backups</button
           ><button data-action="settings">Connections</button
           ><button
@@ -32,7 +43,16 @@
             Aa
           </button>
         </nav>
+        <div class="modelQuick">
+          <select id="connectionPicker" aria-label="Active writing connection">
+            <option value="">Choose a connection</option></select
+          ><span id="connectionHealth" role="status">Not configured</span>
+        </div>
       </header>
+      <button class="focusExit" data-action="exitFocus">
+        Return to studio
+      </button>
+      <div id="updateBanner" hidden role="status"></div>
       <div id="notice" role="status" aria-live="polite"></div>
       <main id="home">
         <div class="welcome">
@@ -58,6 +78,13 @@
               work</label
             >
           </div>
+          <input
+            id="librarySearch"
+            class="librarySearch"
+            type="search"
+            aria-label="Find a novel"
+            placeholder="Find a novel by title or premise"
+          />
           <div id="novelList" class="novelgrid"></div>
         </section>
         <p class="quiet footnote">
@@ -93,17 +120,26 @@
               <button data-action="style">Writing style</button
               ><button data-action="prompts">Prompt templates</button
               ><button data-action="exports">Export manuscript</button
-              ><button data-action="bookmarks">Bookmarks</button>
+              ><button data-action="bookmarks">Bookmarks</button
+              ><button data-action="authorTools">
+                Plans, craft and references</button
+              ><button data-action="draftRecovery">Draft recovery</button>
             </div>
           </aside>
           <section class="manuscript" aria-label="Writing workspace">
             <div class="manuscriptbar">
               <span id="scenePath" class="quiet"></span>
               <div>
-                <button data-action="sceneDetails">Scene details</button
+                <button
+                  data-action="toggleNavigator"
+                  aria-label="Toggle chapters"
+                >
+                  Chapters</button
+                ><button data-action="sceneDetails">Scene details</button
                 ><button data-action="history">History</button
                 ><button data-action="read">Read</button
-                ><button data-action="immersive">Focus</button
+                ><button data-action="immersive">Focus writing</button
+                ><button data-action="focusReading">Focus reading</button
                 ><button
                   data-action="togglePartner"
                   aria-label="Toggle writing partner"
@@ -155,6 +191,7 @@
               </button>
             </div>
             <div class="directionDock">
+              <small id="draftStatus" role="status"></small>
               <label for="direction"
                 >Where would you like the story to go?</label
               ><textarea

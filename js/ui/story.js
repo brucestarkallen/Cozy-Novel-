@@ -56,8 +56,9 @@ export async function readingDetails(app) {
   const records = await app.repo.query("novelId", app.novelId);
   for (const a of records.filter(
     (r) =>
-      ["analysis", "readingTask"].includes(r.kind) &&
-      (r.kind !== "readingTask" || r.state !== "completed") &&
+      ["analysis", "readingTask", "readingQueue"].includes(r.kind) &&
+      (!["readingTask", "readingQueue"].includes(r.kind) ||
+        !["completed", "superseded"].includes(r.state)) &&
       r.coverage &&
       !r.coverage.complete &&
       r.freshness !== "stale",
@@ -157,7 +158,16 @@ export async function storyAction(app, action, target) {
   }
   if (action === "readRemaining") {
     const a = await app.repo.get(target.dataset.id);
-    const extra = { readingStart: a.coverage.end };
+    if (a.kind === "readingQueue") {
+      await app.readingQueue.resume(a);
+      return true;
+    }
+    const extra = {
+      readingStart: a.coverage.end,
+      novelId: a.novelId,
+      sceneId: a.sceneId,
+      sourceRevisionId: a.baseRevisionId,
+    };
     if (
       !a.candidateId &&
       !a.explorationId &&
@@ -431,7 +441,14 @@ export async function storyAction(app, action, target) {
   if (action === "undoReading") {
     await undoReading(app.repo, target.dataset.id);
     await renderBible(app);
-    notice("Derived batch undone. The same reading will not recreate it.");
+    const batch = await app.repo.get(target.dataset.id);
+    notice(
+      batch.undoReceipt?.partial
+        ? "Reading undone. Later author work or independent dependencies kept " +
+            batch.undoReceipt.retainedIds.length +
+            " identities available. The same reading will not recreate it."
+        : "Derived batch undone. The same reading will not recreate it.",
+    );
     return true;
   }
   if (action === "applyReading") {

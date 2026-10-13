@@ -1,3 +1,4 @@
+import { APP } from "../config.js";
 import { request, complete } from "./database.js";
 import { exportBackup, restoreBackup, inspectBackup } from "./backup.js";
 import { assert } from "../core/schema.js";
@@ -49,6 +50,8 @@ export class DeviceSync {
       const d = await r.json().catch(() => ({}));
       throw Object.assign(new Error(d.error || "Device service unavailable"), {
         status: r.status,
+        code: d.code,
+        parameter: d.parameter,
       });
     }
     return r.json();
@@ -57,7 +60,7 @@ export class DeviceSync {
     try {
       const s = await this.api("status");
       assert(
-        s.service === "cozyNovel" && s.protocol === 1 && s.syncVersion === 2,
+        s.service === "cozyNovel" && s.protocol === 1 && s.syncVersion === 3,
         "Update the local Cozy Novel service before device synchronization.",
       );
       this.token = s.sessionToken;
@@ -114,7 +117,7 @@ export class DeviceSync {
             );
           if (!pending.length) {
             if (
-              sync?.reconciledProtocol !== 2 ||
+              sync?.reconciledProtocol !== APP.writerProtocol ||
               sync?.serverRevision !== server.serverRevision
             ) {
               const equal = await this.reconcile(lib, server);
@@ -142,7 +145,10 @@ export class DeviceSync {
           this.status("Saving to device");
           const ack = await this.api(
             "projects/" + encodeURIComponent(item.novelId) + "/operations",
-            { method: "POST", body: { ...item, clientProtocol: 2 } },
+            {
+              method: "POST",
+              body: { ...item, clientProtocol: APP.writerProtocol },
+            },
           );
           if (this.disposed) return;
           await this.repo.withMutation(async () => {
@@ -252,7 +258,7 @@ export class DeviceSync {
         id: "sync",
         serverRevision: server.serverRevision,
         queuedRevision: server.serverRevision,
-        reconciledProtocol: 2,
+        reconciledProtocol: APP.writerProtocol,
       });
       await done;
       return true;
@@ -312,7 +318,7 @@ export class DeviceSync {
         restoreOperationId: intent.restoreOperationId,
         snapshotDigest,
         snapshotJson,
-        clientProtocol: 2,
+        clientProtocol: APP.writerProtocol,
       },
     });
     return { preview, commit: () => this.commitRestore(intent, preview) };
@@ -348,7 +354,7 @@ export class DeviceSync {
                 restoreOperationId: intent.restoreOperationId,
                 snapshotDigest: intent.snapshotDigest,
                 expectedServerRevision: preview.serverRevision,
-                clientProtocol: 2,
+                clientProtocol: APP.writerProtocol,
               },
             });
             await this.finishRestore(state, ack);
@@ -408,7 +414,7 @@ export class DeviceSync {
         serverRevision: ack.serverRevision,
         queuedRevision: ack.serverRevision,
         needsRestore: false,
-        reconciledProtocol: 2,
+        reconciledProtocol: APP.writerProtocol,
       });
       tx.objectStore("meta").put({ ...intent, phase: "acknowledged", ack });
       await done;

@@ -1,11 +1,25 @@
 const PREFIX = "cozynovel.assets.";
-const CACHE = PREFIX + "1.1.0";
+const CACHE = PREFIX + "1.2.0";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./assets/icon.svg",
   "./css/studio.css",
+  "./css/room.css",
+  "./assets/room/desktop.webp",
+  "./assets/room/mobile.webp",
+  "./assets/room/cat.webp",
+  "./js/connections/presets.js",
+  "./js/connections/features.js",
+  "./js/connections/structured.js",
+  "./js/connections/usage.js",
+  "./js/connections/transport.js",
+  "./js/connections/library.js",
+  "./js/storage/drafts.js",
+  "./js/ai/reading-queue.js",
+  "./js/ui/connections.js",
+  "./js/ui/author-tools.js",
   "./js/app.js",
   "./js/config.js",
   "./js/core/ids.js",

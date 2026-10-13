@@ -1,4 +1,43 @@
+import { requestFeatures } from "../../connections/features.js";
 import { assert } from "../../core/schema.js";
+const SAFE_CODES = new Set([
+  "invalid_credentials",
+  "permission_denied",
+  "unknown_model",
+  "rate_limited",
+  "quota_restricted",
+  "unsupported_parameter",
+  "unsupported_endpoint",
+  "invalid_request",
+  "provider_error",
+  "connection_unavailable",
+  "local_service_unavailable",
+  "dns_failure",
+  "tls_failure",
+  "timeout",
+  "key_needed",
+  "stream_error",
+  "server_error",
+  "rate_limit_exceeded",
+]);
+const safeCode = (value, fallback) =>
+  SAFE_CODES.has(value) ? value : fallback;
+const SAFE_PARAMETERS = new Set([
+  "temperature",
+  "top_p",
+  "top_k",
+  "min_p",
+  "presence_penalty",
+  "frequency_penalty",
+  "repetition_penalty",
+  "seed",
+  "stop",
+  "thinking",
+  "reasoning",
+  "reasoning_effort",
+  "response_format",
+  "prefix",
+]);
 export const ADAPTERS = ["responses", "chat", "anthropic", "openrouter"];
 export function validateConnection(c) {
   assert(ADAPTERS.includes(c.adapter), "Choose a supported adapter.");
@@ -17,39 +56,69 @@ export function validateConnection(c) {
       Number.isFinite(Number(c.outputLimit)),
     "Invalid context limits.",
   );
+  for (const key of [
+    "inputPrice",
+    "outputPrice",
+    "cachedPrice",
+    "cacheWritePrice",
+  ])
+    if (c[key] != null)
+      assert(
+        typeof c[key] === "number" && Number.isFinite(c[key]) && c[key] >= 0,
+        "Prices must be finite nonnegative numbers or left unknown.",
+      );
+  if (c.reasoningReserve != null)
+    assert(
+      Number.isSafeInteger(c.reasoningReserve) && c.reasoningReserve >= 0,
+      "Use a nonnegative integer reasoning reserve.",
+    );
   return c;
 }
-export function serialize(c, { system, user, outputLimit }) {
-  const p = { model: c.model, stream: true };
-  if (c.capabilities?.temperature && c.parameters?.temperature != null)
-    p.temperature = Number(c.parameters.temperature);
-  if (c.capabilities?.top_p && c.parameters?.top_p != null)
-    p.top_p = Number(c.parameters.top_p);
-  if (c.adapter === "responses") {
+export function serialize(c, { system, user, outputLimit, kind }) {
+  const features = requestFeatures(c, {
+    outputLimit,
+    helper: ["analysis", "eventProposal", "recall"].includes(kind),
+  });
+  if (c.prefillBanned && features.prefill.sent)
+    system +=
+      "\nExclude these phrases from new prose: " +
+      JSON.stringify(c.prefillBanned.split("\n").filter(Boolean));
+  const p = { model: c.model, stream: true, ...features.wire };
+  let messages = [{ role: "user", content: user }];
+  if (features.prefill.sent && !features.prefill.structured)
+    messages.push({
+      role: "assistant",
+      content: c.prefillMode === "thinking" ? "" : c.prefill,
+      ...(c.prefillMode === "thinking" ? { reasoning_content: c.prefill } : {}),
+      ...(c.capabilities?.prefix ? { prefix: true } : {}),
+    });
+  if (c.adapter === "responses")
     return {
       ...p,
       instructions: system,
       input: [{ role: "user", content: [{ type: "input_text", text: user }] }],
       max_output_tokens: outputLimit,
       store: false,
-      ...(c.capabilities?.reasoning && c.parameters?.reasoning
-        ? { reasoning: { effort: c.parameters.reasoning } }
-        : {}),
     };
-  }
   if (c.adapter === "anthropic")
     return {
       ...p,
-      system,
-      messages: [{ role: "user", content: user }],
+      system:
+        c.promptCache && c.capabilities?.promptCache
+          ? [
+              {
+                type: "text",
+                text: system,
+                cache_control: { type: "ephemeral" },
+              },
+            ]
+          : system,
+      messages,
       max_tokens: outputLimit,
     };
   return {
     ...p,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
+    messages: [{ role: "system", content: system }, ...messages],
     [c.capabilities?.maxCompletionTokens
       ? "max_completion_tokens"
       : "max_tokens"]: outputLimit,
@@ -102,14 +171,19 @@ export function normalize(adapter, event) {
   try {
     d = JSON.parse(event.data);
   } catch {
-    throw new Error("The provider sent a malformed streaming event.");
+    throw Object.assign(
+      new Error("The provider sent a malformed streaming event."),
+      { code: "malformed_response" },
+    );
   }
   if (d.error || event.event === "error")
     return {
       error: "The provider reported an error during generation.",
-      code: d.error?.code || d.error?.type || "stream_error",
+      code: safeCode(d.error?.code || d.error?.type, "stream_error"),
     };
   if (adapter === "responses") {
+    if (d.type === "response.reasoning_summary_text.delta")
+      return { reasoning: typeof d.delta === "string" ? d.delta : "" };
     if (d.type === "response.output_text.delta")
       return { text: typeof d.delta === "string" ? d.delta : "" };
     if (
@@ -145,6 +219,8 @@ export function normalize(adapter, event) {
     if (d.type === "message_start") return { usage: d.message?.usage };
     if (d.type === "content_block_delta" && d.delta?.type === "text_delta")
       return { text: d.delta.text || "" };
+    if (d.type === "content_block_delta" && d.delta?.type === "thinking_delta")
+      return { reasoning: d.delta.thinking || "" };
     if (d.type === "message_delta") {
       if (d.delta?.stop_reason === "refusal")
         return { error: "The provider declined this request.", refusal: true };
@@ -168,21 +244,60 @@ export function normalize(adapter, event) {
     text:
       typeof choice?.delta?.content === "string" ? choice.delta.content : "",
     usage: d.usage,
+    reasoning:
+      typeof choice?.delta?.reasoning_content === "string"
+        ? choice.delta.reasoning_content
+        : typeof choice?.delta?.reasoning === "string"
+          ? choice.delta.reasoning
+          : "",
     finishReason: choice?.finish_reason,
   };
 }
 export async function consumeStream(response, adapter, onDelta, signal) {
-  assert(
-    response.ok,
-    "The provider request failed with HTTP " +
-      response.status +
-      ". Check the connection and quota.",
-  );
+  if (!response.ok) {
+    let diagnostic;
+    try {
+      diagnostic = await response.json();
+    } catch {}
+    const code =
+      safeCode(diagnostic?.code, null) ||
+      {
+        401: "invalid_credentials",
+        403: "permission_denied",
+        404: "unknown_model",
+        429: "rate_limited",
+      }[response.status] ||
+      "provider_error";
+    const safeMessages = {
+      invalid_credentials: "Provider authentication failed. Reenter the key.",
+      permission_denied: "Provider permission denied.",
+      unknown_model: "Model or endpoint not found.",
+      rate_limited: "Provider rate limited this request.",
+    };
+    throw Object.assign(
+      new Error(
+        response.url &&
+        new URL(response.url).origin === globalThis.location?.origin &&
+        diagnostic?.error
+          ? diagnostic.error
+          : safeMessages[code] ||
+            "Provider returned HTTP " + response.status + ".",
+      ),
+      {
+        code,
+        status: response.status,
+        parameter: SAFE_PARAMETERS.has(diagnostic?.parameter)
+          ? diagnostic.parameter
+          : null,
+      },
+    );
+  }
   assert(response.body, "The provider returned no stream.");
   let done = false,
     finishReason = null,
     usage = {},
-    text = "";
+    text = "",
+    reasoning = "";
   try {
     for await (const event of sseEvents(response.body)) {
       if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
@@ -191,11 +306,12 @@ export async function consumeStream(response, adapter, onDelta, signal) {
         text += n.text;
         await onDelta(n.text);
       }
+      if (n.reasoning) reasoning += n.reasoning;
       if (n.usage) usage = { ...usage, ...n.usage };
       if (n.finishReason) finishReason = n.finishReason;
       if (n.error)
         throw Object.assign(new Error(n.error), {
-          code: n.code,
+          code: n.code || (n.refusal ? "provider_refusal" : "stream_error"),
           refusal: n.refusal,
         });
       if (n.done) {
@@ -208,7 +324,7 @@ export async function consumeStream(response, adapter, onDelta, signal) {
       done,
       "The provider disconnected before confirming completion. Partial text has been preserved.",
     );
-    return { text, usage, finishReason };
+    return { text, usage, finishReason, reasoning };
   } catch (e) {
     e.partialText = text;
     e.usage = usage;

@@ -5,7 +5,10 @@ import { applyReading } from "../story/reading.js";
 export async function analyze(writer, options) {
   const scene = await writer.repo.get(options.sceneId),
     source = await writer.repo.get(
-      options.exploration?.id || options.candidateId || scene.currentRevisionId,
+      options.exploration?.id ||
+        options.candidateId ||
+        options.sourceRevisionId ||
+        scene.currentRevisionId,
     ),
     text = options.sourceText ?? (await writer.repo.text(source.textBlobId));
   const generation =
@@ -23,7 +26,7 @@ export async function analyze(writer, options) {
     : null;
   const task = {
     id:
-      "artifact_task_" +
+      (options.force ? id("artifact") + "_" : "artifact_task_") +
       (
         await textBlob(
           JSON.stringify([
@@ -40,7 +43,7 @@ export async function analyze(writer, options) {
     kind: "readingTask",
     state: "running",
     candidateId: options.candidateId || null,
-    baseRevisionId: scene.currentRevisionId,
+    baseRevisionId: options.sourceRevisionId || scene.currentRevisionId,
     sourceRefs: [{ id: source.id }],
     coverage: {
       start,
@@ -61,6 +64,11 @@ export async function analyze(writer, options) {
       : {}),
     createdAt: now(),
   };
+  const existingTask = await writer.repo.get(task.id);
+  if (existingTask?.state === "completed" && existingTask.resultArtifactId)
+    return writer.repo.get(existingTask.resultArtifactId);
+  if (existingTask?.state === "running" && writer.helper)
+    throw new Error("This exact source reading is already running.");
   await writer.repo.commit({
     novelId: options.novelId,
     kind: "reading.pending",
@@ -156,6 +164,8 @@ export async function analyze(writer, options) {
       updates,
       entities: Array.isArray(parsed.entities) ? parsed.entities : [],
       summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      frame:
+        parsed.frame && typeof parsed.frame === "object" ? parsed.frame : null,
     },
     candidateId: options.candidateId || null,
     baseRevisionId: result.sourceRevisionId,
@@ -220,6 +230,7 @@ export async function analyze(writer, options) {
       {
         ...task,
         state: partial ? "failed" : "completed",
+        resultArtifactId: artifact.id,
         coverage: artifact.coverage,
         error: artifact.error || null,
       },

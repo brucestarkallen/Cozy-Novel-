@@ -14,7 +14,7 @@ from serve import NovelServer
 
 def operation(op_id='op1',expected=0,text='Exact 雨 ☕\n  spaces  '):
     blob={'id':'text_'+hashlib.sha256(text.encode()).hexdigest(),'text':text}
-    return {'clientProtocol':2,'id':op_id,'novelId':'n','libraryId':'lib','libraryGeneration':'g1','expectedServerRevision':expected,'records':[{'id':'n','type':'novel','novelId':'n','libraryId':'lib','title':'Synthetic novel','contentVersion':1,'orderedChapterIds':['c']},{'id':'c','type':'chapter','novelId':'n','orderedSceneIds':['s']},{'id':'s','type':'scene','novelId':'n','chapterId':'c','currentRevisionId':'r'},{'id':'r','type':'revision','novelId':'n','ownerId':'s','parentRevisionId':None,'textBlobId':blob['id']}],'blobs':[blob],'tombstones':[]}
+    return {'clientProtocol':3,'id':op_id,'novelId':'n','libraryId':'lib','libraryGeneration':'g1','expectedServerRevision':expected,'records':[{'id':'n','type':'novel','novelId':'n','libraryId':'lib','title':'Synthetic novel','contentVersion':1,'orderedChapterIds':['c']},{'id':'c','type':'chapter','novelId':'n','orderedSceneIds':['s']},{'id':'s','type':'scene','novelId':'n','chapterId':'c','currentRevisionId':'r'},{'id':'r','type':'revision','novelId':'n','ownerId':'s','parentRevisionId':None,'textBlobId':blob['id']}],'blobs':[blob],'tombstones':[]}
 
 class StoreTests(unittest.TestCase):
     def setUp(self):self.temp=tempfile.TemporaryDirectory();self.store=Store(self.temp.name)
@@ -76,6 +76,22 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(Conflict):self.store.apply('n',changed)
         self.assertEqual(self.store.identity()['serverRevision'],1)
 
+    def test_upgrade_resend_recognizes_legacy_digest_but_blocks_new_old_writer_operations(self):
+        from server.store import content_digest
+        original=operation();ack=self.store.apply('n',original)
+        self.store.db.execute('UPDATE operations SET digest=? WHERE id=?',(content_digest(dict(original,clientProtocol=2)),original['id']))
+        self.assertEqual(self.store.apply('n',original),ack)
+        old=operation('old_writer_new_op',1);old['clientProtocol']=2
+        with self.assertRaises(Conflict):self.store.apply('n',old)
+        self.assertEqual(self.store.identity()['serverRevision'],1)
+    def test_temporary_condition_expiry_survives_device_operation_snapshot_and_restore(self):
+        a=operation();a['records'].append({'id':'expiry','type':'canon','novelId':'n','recordKind':'condition','proposition':'Temporary condition','validFrom':1,'validUntil':5,'status':'active','derived':True,'sourceRefs':[{'id':'r','start':0,'end':5}]})
+        self.store.apply('n',a);snapshot=self.store.snapshot()
+        self.assertEqual(next(r for r in snapshot['records'] if r['id']=='expiry')['validUntil'],5)
+        data={'format':'cozyNovel.backup','schemaVersion':1,**snapshot};data['library']['generation']='restored'
+        ack=self.store.restore(data,1);self.assertTrue((pathlib.Path(self.temp.name)/'backups'/ack['recoverySnapshot']).exists())
+        self.assertEqual(self.store.record('expiry')['validUntil'],5)
+
 class HTTPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -100,7 +116,7 @@ class HTTPTests(unittest.TestCase):
         with self.assertRaises(ValueError):endpoint('https://key:secret@example.com/v1/chat/completions')
     def test_secret_separate_from_device_records(self):
         profile={'id':'primary','adapter':'chat','model':'mock','endpoint':'http://127.0.0.1:8899/v1/chat/completions','allowLocal':True,'secret':'SYNTHETIC_SECRET','persistSecret':False,'outputLimit':200}
-        status,result=self.req('/api/novel/connections','POST',profile);self.assertEqual(status,200);self.assertNotIn(b'SYNTHETIC_SECRET',result);self.assertNotIn('SYNTHETIC_SECRET',(pathlib.Path(self.temp.name)/'connections.json').read_text());self.assertNotIn(b'SYNTHETIC_SECRET',self.req('/api/novel/status')[1])
+        profile['connectionProtocol']=2;status,result=self.req('/api/novel/connections','POST',profile);self.assertEqual(status,200);self.assertNotIn(b'SYNTHETIC_SECRET',result);self.assertNotIn('SYNTHETIC_SECRET',(pathlib.Path(self.temp.name)/'connections.json').read_text());self.assertNotIn(b'SYNTHETIC_SECRET',self.req('/api/novel/status')[1])
         profile['persistSecret']=True;self.req('/api/novel/connections','POST',profile);self.assertEqual((pathlib.Path(self.temp.name)/'connections.json').stat().st_mode&0o777,0o600)
 
 class RelayTests(unittest.TestCase):

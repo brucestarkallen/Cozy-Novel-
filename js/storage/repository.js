@@ -148,6 +148,7 @@ export class Repository {
     operationId = id("op"),
     generation,
     contextPrecondition,
+    localMetadata = [],
   }) {
     records.forEach(validateRecord);
     assert(
@@ -407,6 +408,14 @@ export class Repository {
       tx.objectStore("operations").put(op);
       tx.objectStore("outbox").put({ ...payload, acknowledgement: null });
       meta.put({ ...sync, queuedRevision: sync.queuedRevision + 1 });
+      for (const value of localMetadata) {
+        assert(
+          value.id === "connectionLibrary" ||
+            value.id.startsWith("connection."),
+          "Unsupported imported configuration metadata.",
+        );
+        meta.put(value);
+      }
       await done;
       this.emit(op);
       this.channel?.postMessage(op);

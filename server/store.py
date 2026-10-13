@@ -25,6 +25,16 @@ def validate_backup(data):
     library = data.get('library', {})
     if not library.get('id') or not library.get('generation'):
         raise ValueError('Missing library identity.')
+    if data.get('configuration'):
+        if data['configuration'].get('version')!=1:raise ValueError('Unsupported future configuration format.')
+        def inspect(value):
+            if isinstance(value,dict):
+                for key,item in value.items():
+                    if key in {'secret','apiKey','accessToken','sessionToken','token','authorization'}:raise ValueError('Credentials are not permitted in portable backups.')
+                    inspect(item)
+            elif isinstance(value,list):
+                for item in value:inspect(item)
+        inspect(data['configuration'])
     records = data.get('records'); blobs = data.get('blobs')
     if not isinstance(records, list) or not isinstance(blobs, list): raise ValueError('Missing backup records.')
     rm = {r['id']: r for r in records}; bm = {b['id']: b for b in blobs}
@@ -72,6 +82,10 @@ def validate_graph(records, get_record, get_blob, library_id):
         saved=r.get('baseContextRecords') or (r.get('body',{}).get('records') if r.get('kind')=='explorationBase' else None)
         if saved is not None and (not isinstance(saved,list) or any(x.get('novelId')!=r['novelId'] or x.get('type') not in TYPES for x in saved)):raise ValueError('Invalid exploration baseline ownership.')
         if r.get('coveredTurnIds') is not None and (not isinstance(r['coveredTurnIds'],list) or any(not isinstance(x,str) for x in r['coveredTurnIds'])):raise ValueError('Invalid transcript coverage.')
+        for field in ('validFrom','validUntil','fictionalTime'):
+            if r.get(field) is not None and (not isinstance(r[field],(int,float)) or not __import__('math').isfinite(r[field])):raise ValueError('Invalid fictional time.')
+        if r.get('validFrom') is not None and r.get('validUntil') is not None and r['validUntil']<=r['validFrom']:raise ValueError('Expiry must follow its start.')
+        if r['type']=='job' and r.get('outputType') is not None and r['outputType'] not in {'worldResponse','sourceReading','eventProposal','discussion','proseCandidate','authorGuidance','craftReview','sourceSelection'}:raise ValueError('Invalid job output ownership.')
         n = ref(r.get('novelId'), 'novel')
         if n.get('libraryId') != library_id: raise ValueError('Wrong library ownership.')
         if r.get('textBlobId') and not get_blob(r['textBlobId']): raise ValueError('Missing text body.')
@@ -122,13 +136,12 @@ class Store:
         row=self.db.execute('SELECT value FROM meta WHERE key=?',(key,)).fetchone();return json.loads(row[0]) if row else None
     def set_meta(self,key,value): self.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',(key,json.dumps(value)))
     def identity(self):
-        with self.lock: return {'service':'cozyNovel','protocol':1,'syncVersion':2,'minimumWriter':2,'schemaVersion':1,'libraryId':self.meta('libraryId'),'generation':self.meta('generation'),'serverRevision':self.meta('serverRevision') or 0}
+        with self.lock: return {'service':'cozyNovel','protocol':1,'syncVersion':3,'minimumWriter':3,'schemaVersion':1,'libraryId':self.meta('libraryId'),'generation':self.meta('generation'),'serverRevision':self.meta('serverRevision') or 0}
     def record(self,key):
         row=self.db.execute('SELECT body FROM records WHERE id=?',(key,)).fetchone();return json.loads(row[0]) if row else None
     def blob(self,key):
         row=self.db.execute('SELECT text FROM blobs WHERE id=?',(key,)).fetchone();return {'id':key,'text':row[0]} if row else None
     def apply(self,novel_id,op):
-        if op.get("clientProtocol")!=2:raise Conflict("Refresh Cozy Novel before saving to this service. Your local work remains intact.")
         if op.get('novelId')!=novel_id or not all(isinstance(op.get(k),str) and op[k] for k in ['id','libraryId','libraryGeneration']):raise ValueError('Invalid operation ownership.')
         if not isinstance(op.get('records'),list) or not isinstance(op.get('blobs'),list) or op.get('tombstones'):raise ValueError('Invalid operation. Archive records rather than deleting them.')
         with self.lock:
@@ -138,8 +151,9 @@ class Store:
                 if identity['libraryId'] and (identity['libraryId']!=op['libraryId'] or identity['generation']!=op['libraryGeneration']):raise Conflict('Library generation conflict. Both libraries are retained.')
                 prior=self.db.execute('SELECT ack,digest FROM operations WHERE id=?',(op['id'],)).fetchone()
                 if prior:
-                    if prior[1] and prior[1]!=content_digest(op):raise Conflict('Operation identity was reused with different contents.')
+                    if prior[1] and prior[1] not in {content_digest(op),content_digest(dict(op,clientProtocol=2)) if op.get('clientProtocol')==3 else content_digest(op)}:raise Conflict('Operation identity was reused with different contents.')
                     ack=json.loads(prior[0]);ack.update({'libraryId':op['libraryId'],'expectedServerRevision':ack['serverRevision']-1});self.db.execute('COMMIT');return ack
+                if op.get('clientProtocol')!=3:raise Conflict('Refresh Cozy Novel before saving to this service. Your visible local work remains intact.')
                 if op.get('expectedServerRevision')!=identity['serverRevision']:raise Conflict('Device revision conflict. Your local version is retained.')
                 rm={r['id']:r for r in op['records']};bm={b['id']:b for b in op['blobs']}
                 if len(rm)!=len(op['records']) or len(bm)!=len(op['blobs']):raise ValueError('Duplicate operation records.')

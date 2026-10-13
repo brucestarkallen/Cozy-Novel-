@@ -307,6 +307,8 @@ export async function branchState(repo, ex, turns) {
     playerCharacterId: ex.playerCharacterId,
     narrativeViewpoint: ex.narrativeViewpoint,
     fictionalTime: ex.sceneSnapshot?.fictionalTime ?? null,
+    currentFictionalTime: scope.branchFictionalTime,
+    relativeTime: scope.branchRelativeTime,
     claims: claims.map((r) => ({
       id: r.id,
       kind: r.recordKind,
@@ -315,6 +317,8 @@ export async function branchState(repo, ex, turns) {
       proposition: r.proposition,
       certainty: r.certainty,
       planState: r.planState,
+      validFrom: r.validFrom,
+      validUntil: r.validUntil,
       sourceRefs: r.sourceRefs,
     })),
     unreadTurnIds: turns.filter((t) => !covered.has(t.id)).map((t) => t.id),
@@ -496,7 +500,12 @@ export async function keepEvents(
     if (
       !CANON_KINDS.includes(item.recordKind) ||
       !item.proposition ||
-      !item.quote
+      !item.quote ||
+      (item.validFrom != null && !Number.isFinite(item.validFrom)) ||
+      (item.validUntil != null && !Number.isFinite(item.validUntil)) ||
+      (item.validFrom != null &&
+        item.validUntil != null &&
+        item.validUntil <= item.validFrom)
     )
       continue;
     const sourceTurn = turns.find(
@@ -556,7 +565,8 @@ export async function keepEvents(
       coveredTurnIds: [evidenceTurn.id],
       transcriptHeadId: coverage.transcriptHeadId,
       entryBoundary: ex.boundary,
-      validFrom: ex.sceneSnapshot?.fictionalTime ?? null,
+      validFrom: item.validFrom ?? ex.sceneSnapshot?.fictionalTime ?? null,
+      validUntil: item.validUntil ?? null,
       sourceRefs: [{ id: evidenceTurn.id }],
       acceptedEventId: event.id,
       proseInserted: false,

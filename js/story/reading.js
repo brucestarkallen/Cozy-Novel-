@@ -15,6 +15,16 @@ function evidence(update, text, start, end, offset = 0) {
         return found < 0 ? -1 : found + offset;
       })();
   if (
+    !Number.isInteger(update.start) &&
+    at >= 0 &&
+    text.indexOf(update.quote, at - offset + 1) >= 0 &&
+    text.indexOf(update.quote, at - offset + 1) +
+      offset +
+      update.quote.length <=
+      end
+  )
+    return null;
+  if (
     at < start ||
     at + update.quote.length > end ||
     text.slice(at - offset, at - offset + update.quote.length) !== update.quote
@@ -109,7 +119,8 @@ export async function applyReading(
     ),
     records = [],
     reviews = [],
-    beforeRecords = [];
+    beforeRecords = [],
+    reusedIds = [];
   const coverageTurns = (range) =>
     a.sourceTurnSpans?.length
       ? a.sourceTurnSpans
@@ -232,7 +243,10 @@ export async function applyReading(
           ].includes(u.recordKind)
         ? "Unsupported information class"
         : (u.validFrom != null && !Number.isFinite(u.validFrom)) ||
-            (u.validUntil != null && !Number.isFinite(u.validUntil))
+            (u.validUntil != null && !Number.isFinite(u.validUntil)) ||
+            (u.validFrom != null &&
+              u.validUntil != null &&
+              u.validUntil <= u.validFrom)
           ? "Fictional time is invalid"
           : typeof u.proposition !== "string" || !u.proposition
             ? "Missing proposition"
@@ -278,6 +292,54 @@ export async function applyReading(
         )
       ).id.slice(5);
     if (owned.some((r) => r.id === recordId)) continue;
+    const equivalent = owned.find(
+      (r) =>
+        r.type === "canon" &&
+        r.derived &&
+        (r.status === "active" || r.rejectedByAuthor) &&
+        r.recordKind === u.recordKind &&
+        r.subjectId === subject &&
+        r.holderId === holder &&
+        r.proposition === u.proposition &&
+        (r.validFrom ?? null) ===
+          (u.temporalScope === "invariant"
+            ? null
+            : (u.validFrom ?? scene.fictionalTime ?? null)) &&
+        (r.validUntil ?? null) === (u.validUntil ?? null) &&
+        (r.planState ?? null) === (u.planState ?? null) &&
+        (r.certainty || "source reading") ===
+          (u.certainty || "source reading") &&
+        (r.scope === "exploration") === !!a.explorationId &&
+        (r.sourceRefs || []).some((ref) => {
+          if (a.explorationId)
+            return (
+              r.explorationId === a.explorationId &&
+              coverageTurns(range).includes(ref.id) &&
+              r.evidence === u.quote
+            );
+          const mapped = mappedRange(
+            ref,
+            ref.revisionId || ref.id,
+            revisionId,
+            new Map(owned.map((x) => [x.id, x])),
+          );
+          return (
+            mapped?.start === offset + range.start &&
+            mapped?.end === offset + range.end
+          );
+        }),
+    );
+    if (equivalent && !u.supersedes) {
+      reusedIds.push(equivalent.id);
+      if (equivalent.rejectedByAuthor)
+        reviews.push({
+          item: u,
+          reason:
+            "The author undid this unchanged source interpretation. It remains retracted unless deliberately reviewed again.",
+        });
+      continue;
+    }
+
     if (u.supersedes) {
       const previous = owned.find(
         (r) => r.id === u.supersedes && r.type === "canon",
@@ -285,6 +347,11 @@ export async function applyReading(
       if (
         !previous ||
         previous.scope !== (a.explorationId ? "exploration" : undefined) ||
+        (a.explorationId &&
+          (previous.explorationId !== a.explorationId ||
+            !(previous.coveredTurnIds || []).every((id) =>
+              a.coveredTurnIds?.includes(id),
+            ))) ||
         records.some((r) => r.id === previous.id)
       ) {
         reviews.push({
@@ -294,14 +361,16 @@ export async function applyReading(
         });
         continue;
       }
-      beforeRecords.push(previous);
-      records.push({
-        ...previous,
-        status: "superseded",
-        supersededFrom: u.validFrom ?? scene.fictionalTime,
-        supersededBy: recordId,
-        supersededReadingBatch: batchId,
-      });
+      if (!a.explorationId) {
+        beforeRecords.push(previous);
+        records.push({
+          ...previous,
+          status: "superseded",
+          supersededFrom: u.validFrom ?? scene.fictionalTime,
+          supersededBy: recordId,
+          supersededReadingBatch: batchId,
+        });
+      }
     }
     records.push({
       id: recordId,
@@ -320,6 +389,7 @@ export async function applyReading(
         u.temporalScope === "invariant"
           ? null
           : (u.validFrom ?? scene.fictionalTime),
+      validUntil: u.validUntil ?? null,
       temporalScope: u.temporalScope || "source",
       planState: u.planState || null,
       supersedes: u.supersedes || null,
@@ -340,6 +410,50 @@ export async function applyReading(
       },
     });
   }
+  const frame = a.body.frame,
+    frameRange =
+      frame &&
+      evidence(
+        frame,
+        sourceText,
+        coverage.start,
+        coverage.end,
+        a.sourceTextOffset || 0,
+      );
+  if (
+    a.explorationId &&
+    frameRange &&
+    (reviewed || (mode === "auto" && frame.support === "explicit")) &&
+    (frame.fictionalTime == null || Number.isFinite(frame.fictionalTime))
+  ) {
+    records.push({
+      id: id("artifact"),
+      type: "artifact",
+      novelId: a.novelId,
+      sceneId: a.sceneId,
+      kind: "branchFrame",
+      scope: "exploration",
+      explorationId: a.explorationId,
+      branchId: a.branchId,
+      coveredTurnIds: coverageTurns(frameRange),
+      sourceRefs: [sourceRef(frameRange)],
+      readingBatchId: batchId,
+      freshness: "fresh",
+      sourceCoverage: { start: frameRange.start, end: frameRange.end },
+      body: {
+        relativeTime:
+          typeof frame.relativeTime === "string" ? frame.relativeTime : "",
+        fictionalTime: frame.fictionalTime ?? null,
+        evidence: frame.quote,
+      },
+      createdAt: now(),
+    });
+  } else if (frame?.quote)
+    reviews.push({
+      item: frame,
+      reason:
+        "Time interpretation needs eligible source coverage or author review",
+    });
   if (
     a.body.summary &&
     coverage.end > coverage.start &&
@@ -364,6 +478,8 @@ export async function applyReading(
             subjectId: r.subjectId,
             proposition: r.proposition,
             certainty: r.certainty,
+            validFrom: r.validFrom,
+            validUntil: r.validUntil,
             planState: r.planState,
           })),
         complete: coverage.complete,
@@ -412,6 +528,7 @@ export async function applyReading(
       appliedIds: records.map((r) => r.id),
       reviews,
       beforeRecords,
+      reusedIds,
       coverage,
     },
     state: "applied",
@@ -441,26 +558,72 @@ export async function applyReading(
   }
   return batch;
 }
-export async function undoReading(repo, batchId) {
+export async function undoReading(repo, batchId, held = false) {
+  if (!held) return repo.withMutation(() => undoReading(repo, batchId, true));
   const batch = await repo.get(batchId);
   assert(batch?.kind === "readingBatch", "Missing reading batch.");
-  const records = [];
+  const records = [],
+    retainedIds = [],
+    owned = await repo.query("novelId", batch.novelId);
   for (const key of batch.body.appliedIds) {
     const r = await repo.get(key);
     if (!r || r.readingBatchId !== batchId) continue;
     if (r.type === "canon")
       records.push({ ...r, status: "superseded", rejectedByAuthor: true });
     else if (r.type === "artifact") records.push({ ...r, freshness: "stale" });
-    else if (r.type === "entity") records.push({ ...r, derivedHidden: true });
+    else if (r.type === "entity") {
+      const authored =
+        r.authorAdopted ||
+        r.profileRevisionId ||
+        r.profile ||
+        owned.some(
+          (x) =>
+            x.readingBatchId !== batchId &&
+            !x.derived &&
+            (x.subjectId === r.id || x.holderId === r.id),
+        );
+      const independent =
+        r.authorAdopted ||
+        r.profileRevisionId ||
+        r.profile ||
+        owned.some(
+          (x) =>
+            x.id !== r.id &&
+            x.readingBatchId !== batchId &&
+            (x.subjectId === r.id ||
+              x.holderId === r.id ||
+              x.actorId === r.id ||
+              x.playerCharacterId === r.id),
+        );
+      if (independent) {
+        retainedIds.push(r.id);
+        records.push({
+          ...r,
+          derived: authored ? false : r.derived,
+          authorAdopted: !!authored,
+          derivedHidden: false,
+          retractedContribution: batchId,
+        });
+      } else records.push({ ...r, derivedHidden: true });
+    }
   }
   for (const before of batch.body.beforeRecords || []) {
     const current = await repo.get(before.id);
     if (
       current?.supersededReadingBatch === batchId &&
-      current.status === "superseded"
+      current.status === "superseded" &&
+      (current.recordVersion || 0) === (before.recordVersion || 0) + 1
     )
       records.push(before);
   }
-  records.push({ ...batch, state: "undone" });
-  await repo.commit({ novelId: batch.novelId, kind: "reading.undo", records });
+  records.push({
+    ...batch,
+    state: "undone",
+    undoReceipt: { retainedIds, partial: retainedIds.length > 0 },
+  });
+  await repo.commitLocked({
+    novelId: batch.novelId,
+    kind: "reading.undo",
+    records,
+  });
 }

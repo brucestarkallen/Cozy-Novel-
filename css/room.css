@@ -1,0 +1,640 @@
+/* Cozy Novel's approved literary room. Artwork remains crisp under readable surfaces. */
+:root {
+  --bg: #16130f;
+  --panel: #1d1915;
+  --raised: #30271d;
+  --accent: #d8b371;
+  --accentink: #251909;
+  --line: #51412e;
+  --paper: #f3e8d2;
+  --paperink: #30271d;
+  --paperquiet: #74634c;
+  --leading: 1.8;
+}
+html[data-theme="light"] {
+  --bg: #e4d8c4;
+  --panel: #f4eadb;
+  --raised: #e6d7bf;
+  --accent: #825017;
+  --accentink: #fff7e7;
+  --line: #c2aa84;
+}
+body {
+  background: var(--bg);
+  background-image:
+    linear-gradient(#100d0973, #100d0980), url("../assets/room/desktop.webp");
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+html[data-background="none"] body {
+  background-image: none;
+}
+.appbar {
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  border-bottom: 1px solid var(--line);
+  gap: 18px;
+  padding: 12px 22px;
+}
+.brandmark {
+  background: transparent;
+  color: var(--accent);
+  border: 0;
+  font-size: 32px;
+}
+.brand {
+  font-family: var(--serif);
+  font-size: 25px;
+}
+.brand small {
+  font-family: system-ui;
+  font-size: 11px;
+}
+.appbar nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.appbar nav button {
+  min-height: 40px;
+}
+.modelQuick {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-left: auto;
+  min-width: 0;
+}
+.modelQuick select {
+  max-width: 280px;
+  min-height: 40px;
+  background: var(--panel);
+}
+#connectionHealth {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 120px;
+}
+.welcome,
+.shelf {
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  padding: 36px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+#home {
+  max-width: 1250px;
+  margin: 32px auto;
+  padding: 0 20px;
+}
+.welcome {
+  margin-bottom: 25px;
+}
+.workspace {
+  gap: 14px;
+  padding: 12px 16px;
+  height: calc(100dvh - 155px);
+  grid-template-columns: 220px minmax(320px, 1fr) 280px;
+  min-height: 520px;
+}
+.navigator,
+.partnerPanel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  padding: 20px 15px;
+}
+.manuscript {
+  border-radius: 7px;
+  border: 1px solid #b59a72;
+  box-shadow:
+    0 9px 26px #0006,
+    -5px 4px 0 #c8b085;
+  overflow: hidden;
+  color: var(--paperink);
+  --muted: var(--paperquiet);
+  --line: #ccb994;
+  --raised: #e7d4b1;
+}
+.manuscriptbar {
+  padding: 10px 16px;
+  background: #efe1c8;
+  position: relative;
+  flex-wrap: wrap;
+}
+.manuscriptbar button {
+  min-height: 34px;
+}
+.writingSurface {
+  padding: 34px clamp(22px, 4vw, 65px);
+}
+.sceneheading h1 {
+  font-size: clamp(30px, 3vw, 42px);
+  font-weight: 400;
+}
+.sceneheading .eyebrow {
+  color: var(--paperquiet);
+}
+#editor,
+.manuscript .prose,
+.manuscript .readingView {
+  font: var(--reading) / var(--leading) var(--serif);
+  color: var(--paperink);
+}
+#editor {
+  height: 42vh;
+  min-height: 200px;
+  padding: 2px;
+}
+#editor:focus-visible {
+  outline: 2px solid #9f732c !important;
+  outline-offset: 5px;
+}
+.candidateBox {
+  border-top-color: #b08c48;
+}
+.candidateBox .primary {
+  background: #d8b371;
+  color: #251909;
+}
+.candidateBox button {
+  border-color: #b8a17a;
+}
+.suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin: 24px auto 14px;
+}
+.suggestions button {
+  border-radius: 12px;
+  background: #ead9b9;
+  color: #48351d;
+  border: 1px solid #c9aa75;
+  padding: 14px;
+  text-align: left;
+  min-height: 64px;
+}
+.directionDock {
+  background: #231f19;
+  color: #f3e8d2;
+  border: 1px solid #645238;
+  border-radius: 13px;
+  margin: 0 20px 18px;
+  padding: 14px 18px;
+  flex-shrink: 0;
+  --muted: #c1b299;
+  --line: #635341;
+  --raised: #3a3023;
+}
+.directionDock textarea {
+  background: #191714;
+  color: #f3e8d2;
+  max-height: 125px;
+}
+.directionDock label {
+  color: #c1b299;
+}
+.generationActions .primary {
+  background: #d8b371;
+  color: #241a0e;
+}
+.statusbar {
+  background: color-mix(in srgb, var(--panel) 97%, transparent);
+  flex-wrap: wrap;
+  gap: 9px;
+  font-size: 11px;
+  padding: 6px 18px;
+  min-height: 32px;
+}
+#notice:empty {
+  display: none;
+}
+#notice {
+  background: var(--panel);
+  padding: 8px 20px;
+  max-height: 120px;
+  overflow: auto;
+}
+.collapsedNavigator .workspace {
+  grid-template-columns: minmax(320px, 1fr) 280px;
+}
+.collapsedNavigator #navigator {
+  display: none;
+}
+.collapsedPartner .workspace {
+  grid-template-columns: 220px minmax(320px, 1fr);
+}
+.collapsedPartner #partnerPanel {
+  display: none;
+}
+.collapsedPartner.collapsedNavigator .workspace {
+  grid-template-columns: minmax(320px, 1fr);
+}
+.connectionList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+.connectionCard {
+  padding: 18px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.connectionCard p {
+  overflow-wrap: anywhere;
+}
+.connectionAdvanced {
+  margin: 20px 0;
+  border: 1px solid var(--line);
+  padding: 12px;
+  border-radius: 8px;
+}
+.connectionAdvanced summary {
+  cursor: pointer;
+  margin-bottom: 14px;
+}
+.diagnostic {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.focusExit {
+  display: none;
+}
+body[data-focus] .focusExit {
+  display: block;
+  position: fixed;
+  right: 20px;
+  top: 12px;
+  z-index: 50;
+  background: var(--panel);
+  color: var(--ink);
+}
+body[data-focus] .appbar,
+body[data-focus] #navigator,
+body[data-focus] #partnerPanel,
+body[data-focus] .mobiletabs,
+body[data-focus] .manuscriptbar {
+  display: none;
+}
+body[data-focus] .workspace {
+  display: block;
+  height: calc(100dvh - 40px);
+  padding: 48px 5vw 8px;
+}
+.workspace .manuscript {
+  height: 100%;
+}
+body[data-focus="reading"] .directionDock,
+body[data-focus="reading"] #candidateBox,
+body[data-focus="reading"] #suggestions,
+body[data-focus="reading"] [data-action="candidates"] {
+  display: none;
+}
+body[data-focus="writing"] .directionDock {
+  display: block;
+}
+body[data-focus] .writingSurface {
+  padding-top: 30px;
+}
+html[data-paper="night"] {
+  --paper: #25211b;
+  --paperink: #f0e3ce;
+  --paperquiet: #b8a78d;
+}
+html[data-paper="night"] .manuscriptbar {
+  background: #292219;
+}
+html[data-paper="night"] .manuscript {
+  --raised: #393024;
+  --line: #61503b;
+}
+.readingView .dialogue {
+  color: var(--dialogueink, var(--paperink));
+}
+.librarySearch {
+  max-width: 420px;
+  width: 100%;
+  margin: 12px 0;
+}
+@media (min-width: 1001px) {
+  .mobiletabs {
+    display: none;
+  }
+}
+@media (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: 185px minmax(300px, 1fr) 240px;
+    padding: 10px;
+    gap: 10px;
+  }
+  .appbar {
+    flex-wrap: wrap;
+  }
+  .modelQuick {
+    margin-left: 0;
+  }
+  .workspace {
+    height: calc(100dvh - 190px);
+  }
+}
+@media (max-width: 1000px) {
+  body {
+    background-image:
+      linear-gradient(#100d0930, #100d0950), url("../assets/room/mobile.webp");
+    background-position: center;
+  }
+  html[data-background="cat"] body {
+    background-image:
+      linear-gradient(#100d0930, #100d0950), url("../assets/room/cat.webp");
+  }
+  html[data-background="none"] body {
+    background-image: none;
+  }
+  .appbar {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .brand {
+    font-size: 21px;
+  }
+  .brand small {
+    display: none;
+  }
+  .appbar nav {
+    margin-left: auto;
+    gap: 4px;
+  }
+  .appbar nav button {
+    padding: 6px 8px;
+    min-height: 40px;
+    font-size: 12px;
+  }
+  .appbar nav .desktopLink {
+    display: none;
+  }
+  .modelQuick {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .modelQuick select {
+    max-width: calc(100% - 100px);
+    width: 100%;
+  }
+  .mobiletabs {
+    display: flex;
+    justify-content: space-between;
+    gap: 3px;
+    padding: 8px 10px;
+    background: var(--panel);
+  }
+  .mobiletabs button {
+    flex: 1;
+    min-height: 42px;
+    padding: 8px 5px;
+    font-size: 12px;
+  }
+  .workspace,
+  .collapsedPartner .workspace,
+  .collapsedNavigator .workspace {
+    display: block;
+    height: auto;
+    min-height: calc(100dvh - 220px);
+    padding: 10px;
+  }
+  .workspace .navigator,
+  .workspace .partnerPanel {
+    display: none;
+    min-height: 65dvh;
+  }
+  .workspace[data-panel="navigator"] #navigator,
+  .workspace[data-panel="partner"] #partnerPanel,
+  .workspace[data-panel="bible"] #partnerPanel {
+    display: block;
+  }
+  .workspace[data-panel="navigator"] .manuscript,
+  .workspace[data-panel="partner"] .manuscript,
+  .workspace[data-panel="bible"] .manuscript {
+    display: none;
+  }
+  .manuscript {
+    min-height: calc(100dvh - 220px);
+    height: auto;
+  }
+  .writingSurface {
+    overflow: visible;
+    padding: 26px 22px;
+  }
+  .manuscriptbar {
+    padding: 8px 10px;
+  }
+  .manuscriptbar button {
+    font-size: 11px;
+    min-height: 38px;
+  }
+  #editor {
+    height: 45dvh;
+    min-height: 220px;
+  }
+  .directionDock {
+    margin: 0 12px 14px;
+    padding: 12px;
+    position: relative;
+  }
+  .generationActions button {
+    min-height: 44px;
+    flex: auto;
+  }
+  .directionDock textarea {
+    min-height: 68px;
+  }
+  .statusbar {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  .suggestions {
+    grid-template-columns: 1fr;
+  }
+  .sceneheading h1 {
+    font-size: 32px;
+  }
+  .formgrid {
+    grid-template-columns: 1fr;
+  }
+  dialog {
+    max-width: calc(100vw - 16px);
+    padding: 16px;
+  }
+  dialog button {
+    min-height: 44px;
+  }
+  .connectionList {
+    grid-template-columns: 1fr;
+  }
+  #home {
+    padding: 0 12px;
+    margin: 18px auto;
+  }
+  .welcome,
+  .shelf {
+    padding: 24px 18px;
+  }
+  body[data-focus] .workspace {
+    padding: 52px 10px 10px;
+    height: auto;
+  }
+  body[data-focus] .manuscript {
+    height: auto;
+    min-height: calc(100dvh - 70px);
+  }
+  body[data-focus] .focusExit {
+    right: 12px;
+  }
+}
+@media (prefers-reduced-data: reduce) {
+  body {
+    background-image: none !important;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
+.appbar {
+  height: auto;
+  min-height: 79px;
+}
+#updateBanner {
+  flex-shrink: 0;
+  background: var(--panel);
+  padding: 8px 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+#updateBanner button {
+  margin-left: 10px;
+}
+.brandmark svg {
+  width: 34px;
+  height: 34px;
+  display: block;
+}
+@media (max-width: 1000px) {
+  .appbar {
+    height: auto;
+    min-height: 0;
+  }
+  .appbar nav button[data-action="library"] {
+    display: block;
+  }
+  .workspace,
+  .collapsedPartner .workspace,
+  .collapsedNavigator .workspace {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+  }
+  .workspace .manuscript {
+    height: 100%;
+    min-height: 0;
+  }
+  .workspace .writingSurface {
+    overflow-y: auto;
+    min-height: 0;
+    flex: 1;
+    padding: 22px;
+  }
+  .workspace .navigator,
+  .workspace .partnerPanel {
+    height: 100%;
+    min-height: 0;
+    overflow: auto;
+  }
+  #editor {
+    height: 42dvh;
+    min-height: 180px;
+  }
+  .directionDock {
+    margin: 0 10px 10px;
+    padding: 10px 12px;
+  }
+  .generationActions {
+    gap: 5px;
+  }
+  .generationActions button {
+    min-height: 44px;
+    font-size: 11px;
+    padding: 7px 9px;
+  }
+  .statusbar {
+    height: auto;
+    min-height: 32px;
+  }
+  .statusbar #deviceStatus {
+    white-space: normal;
+    max-width: 60%;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  body[data-focus] .workspace {
+    padding: 48px 10px 6px;
+    height: auto;
+    min-height: 0;
+  }
+  body[data-focus] .workspace .manuscript {
+    height: 100%;
+    min-height: 0;
+  }
+}
+@media (max-width: 1000px) and (max-height: 600px) {
+  .appbar .brand {
+    font-size: 16px;
+  }
+  .appbar nav button {
+    min-height: 30px;
+    padding: 4px;
+    font-size: 11px;
+  }
+  .modelQuick select {
+    min-height: 32px;
+    padding: 4px;
+  }
+  .appbar {
+    padding: 6px 10px;
+  }
+  .mobiletabs {
+    padding: 4px;
+  }
+  .mobiletabs button {
+    min-height: 32px;
+  }
+  .directionDock label {
+    font-size: 11px;
+  }
+  .directionDock textarea {
+    min-height: 45px;
+    max-height: 70px;
+  }
+  .directionDock {
+    padding: 7px 10px;
+  }
+  .generationActions button {
+    min-height: 36px;
+  }
+  .manuscriptbar {
+    padding: 4px;
+  }
+  #notice {
+    max-height: 60px;
+  }
+}
+
+/* Craft and partner previews inherit their dark panel ink, not manuscript paper ink. */
+dialog .prose,
+.partnerPanel .prose {
+  color: var(--ink);
+}

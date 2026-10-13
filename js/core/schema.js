@@ -92,6 +92,25 @@ export function validateRecord(r) {
   for (const field of ["validFrom", "validUntil", "fictionalTime"])
     if (r[field] != null)
       assert(Number.isFinite(r[field]), "Invalid fictional time.");
+  if (r.validFrom != null && r.validUntil != null)
+    assert(
+      r.validUntil > r.validFrom,
+      "Fictional expiry must follow its start.",
+    );
+  if (r.type === "job" && r.outputType)
+    assert(
+      [
+        "worldResponse",
+        "sourceReading",
+        "eventProposal",
+        "discussion",
+        "proseCandidate",
+        "authorGuidance",
+        "craftReview",
+        "sourceSelection",
+      ].includes(r.outputType),
+      "Invalid job output ownership.",
+    );
   const saved =
     r.baseContextRecords ||
     (r.kind === "explorationBase" ? r.body?.records : null);
@@ -125,6 +144,42 @@ export function validateBackup(data) {
     data.records.length <= 1000000 && data.blobs.length <= 1000000,
     "Backup has too many records.",
   );
+  if (data.configuration) {
+    assert(
+      data.configuration.version === 1,
+      "Unsupported future configuration format.",
+    );
+    const inspect = (v) => {
+      if (v && typeof v === "object")
+        for (const [key, value] of Object.entries(v)) {
+          assert(
+            ![
+              "secret",
+              "apiKey",
+              "accessToken",
+              "sessionToken",
+              "token",
+              "authorization",
+            ].includes(key),
+            "Credentials are not permitted in portable backups.",
+          );
+          inspect(value);
+        }
+    };
+    inspect(data.configuration);
+    const profiles = data.configuration.connectionLibrary?.profiles;
+    if (profiles)
+      assert(
+        Array.isArray(profiles) &&
+          profiles.every(
+            (p) =>
+              typeof p.id === "string" &&
+              typeof p.endpoint === "string" &&
+              typeof p.model === "string",
+          ),
+        "Invalid saved connection metadata.",
+      );
+  }
   const records = new Map(),
     blobs = new Map();
   for (const r of data.records) {

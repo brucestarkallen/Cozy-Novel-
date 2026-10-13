@@ -180,7 +180,7 @@ try {
         restoreOperationId: recovered.restoreOperationId,
         snapshotDigest: recovered.snapshotDigest,
         expectedServerRevision: recovered.expectedServerRevision,
-        clientProtocol: 2,
+        clientProtocol: 3,
       },
     });
     const recovery = {

@@ -18,7 +18,7 @@ Story records carry information class, certainty, holder, temporal eligibility, 
 
 Context selection is separate from provider serialization. An incremental local scene index ranks original passages using relevant terms and author pins. Mandatory author instructions and selected text cannot be silently truncated. Whole optional units are omitted when they do not fit, with a receipt. Numeric fictional time anchors filter later information. Unknown chronology remains labelled, and unknown earlier scene chronology is excluded from character exploration.
 
-The primary connection is sufficient for every feature. An optional helper connection can handle suggestions and source readings. Supported transports are OpenAI Responses, compatible Chat Completions, Anthropic Messages and OpenRouter. Model capabilities remain explicit configuration. The application does not certify a user entered context limit.
+The selected saved writer connection is sufficient for every feature. An optional saved helper connection can handle suggestions and source readings. Supported transports are OpenAI Responses, compatible Chat Completions, Anthropic Messages and OpenRouter. Model capabilities remain explicit configuration. The application does not certify a user entered context limit.
 
 Foreground prose uses one request. Optional analysis uses at most one bounded request after completion. There is no model call during typing, panel changes or reopening. An interrupted request preserves partial text and is never automatically restarted.
 
@@ -26,11 +26,11 @@ Foreground prose uses one request. Optional analysis uses at most one bounded re
 
 The manuscript editor is plain text. Markdown imports preserve the exact file as one scene, rather than guessing chapter boundaries. Manuscript export supports text, Markdown and safe printable HTML.
 
-Chronology uses an optional numeric coordinate and a human readable label. This supports flashbacks without imposing a calendar system. The author reviews model derived memories before acceptance. This is stricter than automatically applying clear proposals and avoids making semantic certainty a software claim.
+Chronology uses an optional numeric coordinate and a human readable label. This supports flashbacks without imposing a calendar system. Automatic mode applies structurally supported, direct derived readings reversibly; inference and conflict stay reviewable. Review only and disabled modes remain available. No interpretation is a software claim of semantic certainty.
 
 Removal is recoverable archive or discard. There is no automatic history pruning. The standalone application exposes a versioned module descriptor and disposal boundary; a combined host and cross application transfers remain future work.
 
-The static application supports offline manual writing and portable exports. AI connections require the local relay. No browser key mode or security bypass is offered.
+The static application supports offline manual writing and portable exports. AI uses a preferred protected local relay or an explicitly selected browser direct path with endpoint CORS permission. No browser security bypass is offered.
 
 ## Security and isolation
 
@@ -55,3 +55,19 @@ Request assembly captures record metadata consistently and reads immutable bodie
 Story Brain defaults to automatic for new novels, preserving older disabled preferences. One bounded auxiliary reader produces approximately three possibilities plus typed identities, facts, knowledge, beliefs, conditions, relationships, plans, events and source summaries. Structural evidence locates quotes; it cannot prove the interpretation. Inference, unresolved identity and conflict remain reviewable. Every derived batch is idempotent and reversible, preserves primary sources, and cannot supersede manual declarations. Undo suppresses the unchanged reading. Coverage and failed tasks remain visible. No full audit runs on opening or upgrade.
 
 Quick RP stores its baseline as an owned immutable artifact rather than resending the catalog with every session update. Temporary state belongs to transcript ancestry and source ranges. Retry excludes abandoned consequences and identities. Switching player changes control only. Long transcripts use bounded original turns and sourced summaries, retain omitted originals, and track partial reading coverage in at most 12000 character source segments. Event proposals and adaptations retain exact branch, turn IDs and transcript head. Continued exploration cannot enlarge accepted provenance.
+
+## 1.2 connection, studio and ownership contract
+
+Named connection IDs are reusable profiles, separate from global defaults and novel roles. Existing primary and helper IDs remain interpretable. A request resolves the committed assignment after pending selector changes and captures immutable model settings. Editing a profile or changing a role does not change an already sent request. Named metadata persists independently of explicit secret retention. Connection file format 2 uses atomic writes and separate secret references, with legacy recovery retained. Saving does no DNS or generation; discovery and Test are explicit actions.
+
+Four independent transports retain their stream dialects. Provider presets construct editable endpoints for Claude, OpenAI, OpenRouter, Gemini compatible, DeepSeek, Z.ai, Hermes Agent, local and custom endpoints. Advertised or explicitly configured capabilities govern reasoning, sampling, output, native web, cache accounting and prefill. Unset values stay unset. Unsupported configured values remain visible with explanations. No automatic paid retry or provider substitution occurs.
+
+The approved room artwork is an owned decorative layer under real HTML controls and readable manuscript paper. Solid colour, dark and light themes, background reduction, phone panels, side panel collapse and distinct reading and writing focus modes are functional. Original manuscript and draft DOM remain stable during typing and streaming.
+
+Physical IndexedDB version 3 and writer contract 3 fence older release 1.1 writers while preserving all stores, records and exact text. Portable schema, SQLite schema and service protocol remain 1. Metadata merging during a text revision preserves concurrent notes and viewpoint. Durable creative drafts retain scene, novel, branch, actor and action mode ownership. Backups include nonsecret appearance, reusable styles and named profile configuration.
+
+Source reading is queued durably by revision, source identity and exact coverage. Manual saves coalesce; opening a panel, upgrading or restoring does not start a full audit or restart an interrupted paid request. Existing complete work is idempotent. Undo preserves later author biographies and relationships and suppresses unchanged rejected contributions. Temporary conditions retain exclusive validUntil boundaries. Branch replacements do not mutate their ancestor records. Evidenced branch clocks remain separate from the frozen main novel baseline.
+
+Only worldResponse RP jobs can enter transcript recovery, and recovery requires an explicit alternate branch. Stale responses remain in their original jobs. The same historical prefix governs RP, branch analysis and event proposals. Author discussion, Director, Editor and explicit recall may deliberately examine later chapters without giving an earlier character that knowledge.
+
+Reusable styles affect future instructions, source samples remain exact, references are inert noncanonical artifacts, craft review remains advisory and optional Smart recall returns original source IDs. Model benchmarking is optional in the handoff and is not included. No general assistant, combined home, deployment or RP integration is performed.

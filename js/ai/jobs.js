@@ -1,3 +1,7 @@
+import { requestFeatures } from "../connections/features.js";
+import { requestCost } from "../connections/usage.js";
+import { estimateTokens } from "../context/assemble.js";
+import { providerFetch, consumeOutput } from "../connections/transport.js";
 import { branchTurns } from "../rp/session.js";
 import { id, now, textBlob } from "../core/ids.js";
 import {
@@ -60,7 +64,7 @@ export class Writer {
     } = options;
     validateConnection(connection);
     assert(
-      this.device.token,
+      this.device.token || connection.transport === "direct",
       "Start the local Cozy Novel server to connect a model. Manual writing works in browser only mode.",
     );
     if (auxiliary) {
@@ -86,12 +90,33 @@ export class Writer {
           options.libraryGeneration === library.generation,
         "This request belongs to an earlier library generation.",
       );
+      assert(
+        !options.expectedRevisionId ||
+          options.expectedRevisionId === context.snapshot.revisionId,
+        "The reviewed source changed. Compare the preserved original before targeting a new passage.",
+      );
       job = {
         id: id("job"),
         type: "job",
         novelId,
         sceneId,
         kind,
+        outputType:
+          kind === "rp"
+            ? "worldResponse"
+            : kind === "analysis"
+              ? "sourceReading"
+              : kind === "eventProposal"
+                ? "eventProposal"
+                : kind === "discuss"
+                  ? "discussion"
+                  : kind === "director"
+                    ? "authorGuidance"
+                    : kind === "editor"
+                      ? "craftReview"
+                      : kind === "recall"
+                        ? "sourceSelection"
+                        : "proseCandidate",
         state: "running",
         requestId: id("request"),
         attempts: 1,
@@ -136,6 +161,21 @@ export class Writer {
         state: "running",
         retries: 0,
         exactWireRetained: false,
+        effectiveFeatures: requestFeatures(connection, {
+          outputLimit: context.outputLimit,
+          helper: ["analysis", "eventProposal", "recall"].includes(kind),
+        }),
+        connectionId: connection.id,
+        connectionName: connection.displayName || connection.id,
+        model: connection.model,
+        purpose: kind,
+        auxiliary,
+        prices: {
+          input: connection.inputPrice ?? null,
+          output: connection.outputPrice ?? null,
+          cached: connection.cachedPrice ?? null,
+          cacheWrite: connection.cacheWritePrice ?? null,
+        },
       };
       await this.repo.withMutation(async () => {
         const initial = await contextCheck(this.repo, context.snapshot, {
@@ -153,26 +193,15 @@ export class Writer {
           records: [job, receipt],
         });
       });
-      const response = await fetch(
-        new URL("api/novel/generate", document.baseURI),
-        {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            "Content-Type": "application/json",
-            "X-CozyNovel-Session": this.device.token,
-          },
-          body: JSON.stringify({
-            connectionId: connection.id,
-            requestId: job.requestId,
-            adapter: connection.adapter,
-            request: serialize(connection, context),
-          }),
-        },
+      const response = await providerFetch(
+        this.device,
+        connection,
+        serialize(connection, { ...context, kind }),
+        { signal: controller.signal, requestId: job.requestId },
       );
-      result = await consumeStream(
+      result = await consumeOutput(
         response,
-        connection.adapter,
+        connection,
         async (delta) => {
           text += delta;
           onDelta(text, candidate);
@@ -199,6 +228,7 @@ export class Writer {
           }
         },
         controller.signal,
+        { helper: ["analysis", "eventProposal", "recall"].includes(kind) },
       );
       const check = await contextCheck(this.repo, context.snapshot, {
         allowAcceptedCandidate: kind === "analysis",
@@ -248,9 +278,18 @@ export class Writer {
             state: "completed",
             finishedAt: now(),
             usage: result.usage,
+            durationMs: Date.parse(now()) - Date.parse(receipt.startedAt),
+            prefill: result.prefill,
             finishReason: result.finishReason,
             stale,
-            cost: cost(result.usage, connection),
+            cost: requestCost(result.usage, connection),
+            outputEstimate: estimateTokens(text),
+            reasoning: result.reasoning
+              ? {
+                  source: "provider supplied public output",
+                  body: result.reasoning,
+                }
+              : null,
           },
         ],
         blobs: [body],
@@ -318,6 +357,29 @@ export class Writer {
             ],
           })
           .catch(() => {});
+      if (e.rawOutput && job) {
+        const raw = await textBlob(e.rawOutput);
+        await this.repo
+          .commit({
+            novelId,
+            kind: "job.structured.invalid",
+            records: [
+              {
+                id: id("artifact"),
+                type: "artifact",
+                novelId,
+                sceneId,
+                kind: "invalidStructuredOutput",
+                textBlobId: raw.id,
+                jobId: job.id,
+                sourceRefs: [],
+                error: e.message,
+              },
+            ],
+            blobs: [raw],
+          })
+          .catch(() => {});
+      }
       e.candidate = candidate;
       e.jobId = job?.id;
       throw e;
@@ -379,14 +441,4 @@ export class Writer {
     this.foreground?.abort();
     this.helper?.abort();
   }
-}
-function cost(u, c) {
-  const input = u?.input_tokens ?? u?.prompt_tokens,
-    output = u?.output_tokens ?? u?.completion_tokens;
-  return input != null &&
-    output != null &&
-    c.inputPrice != null &&
-    c.outputPrice != null
-    ? (input * c.inputPrice + output * c.outputPrice) / 1000000
-    : null;
 }

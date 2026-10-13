@@ -99,36 +99,55 @@ export async function revise(
       ? { status: r.derived ? "stale" : r.status }
       : { freshness: "stale" }),
   }));
-  await (
-    extra.coordinationHeld
-      ? repo.commitLocked.bind(repo)
-      : repo.commit.bind(repo)
-  )({
-    novelId: n.id,
-    kind: sourceKind,
-    expectedScene: { id: sceneId, revisionId: baseRevisionId },
-    operationId: op,
-    contextPrecondition: extra.contextPrecondition,
-    records: [
-      revision,
-      {
-        ...scene,
-        currentRevisionId: revision.id,
-        searchIndex: indexText(text),
-      },
-      ...stale.filter((r) => !(extra.records || []).some((x) => x.id === r.id)),
-      ...(extra.records || []).map((r) =>
-        r.type === "candidate" && r.status === "kept"
-          ? {
-              ...r,
-              acceptedRevisionId: revision.id,
-              acceptedRange: extra.acceptedRange,
-            }
-          : r,
-      ),
-    ],
-    blobs: [blob],
-  });
+  const publish = async () => {
+    const latestScene = await repo.get(sceneId);
+    assert(
+      latestScene?.currentRevisionId === baseRevisionId,
+      "The manuscript changed before saving. Your visible draft is retained.",
+    );
+    const liveStale = [];
+    for (const dependent of stale) {
+      const latest = await repo.get(dependent.id);
+      if (!latest || (latest.type === "canon" && !latest.derived)) continue;
+      liveStale.push({
+        ...latest,
+        ...(latest.type === "canon"
+          ? { status: "stale" }
+          : { freshness: "stale" }),
+      });
+    }
+    await repo.commitLocked({
+      novelId: n.id,
+      kind: sourceKind,
+      expectedScene: { id: sceneId, revisionId: baseRevisionId },
+      expectedRecord: { id: sceneId, version: latestScene.recordVersion || 0 },
+      operationId: op,
+      contextPrecondition: extra.contextPrecondition,
+      records: [
+        revision,
+        {
+          ...latestScene,
+          currentRevisionId: revision.id,
+          searchIndex: indexText(text),
+        },
+        ...liveStale.filter(
+          (r) => !(extra.records || []).some((x) => x.id === r.id),
+        ),
+        ...(extra.records || []).map((r) =>
+          r.type === "candidate" && r.status === "kept"
+            ? {
+                ...r,
+                acceptedRevisionId: revision.id,
+                acceptedRange: extra.acceptedRange,
+              }
+            : r,
+        ),
+      ],
+      blobs: [blob],
+    });
+  };
+  if (extra.coordinationHeld) await publish();
+  else await repo.withMutation(publish);
   return revision;
 }
 export async function createCandidate(

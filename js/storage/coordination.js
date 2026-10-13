@@ -37,6 +37,8 @@ export function material(record, previous) {
     );
   return (
     record.type === "artifact" &&
-    ["entityProfile", "storySummary", "branchReading"].includes(record.kind)
+    ["entityProfile", "storySummary", "branchReading", "branchFrame"].includes(
+      record.kind,
+    )
   );
 }

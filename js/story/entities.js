@@ -24,7 +24,12 @@ export async function saveEntity(repo, entity, changes = {}) {
       sourceRefs: [],
     });
   }
-  const next = { ...entity, ...changes },
+  const next = {
+      ...entity,
+      ...changes,
+      authorAdopted: true,
+      derivedHidden: false,
+    },
     revisionId = id("artifact");
   records.push(
     { ...next, profileRevisionId: revisionId },

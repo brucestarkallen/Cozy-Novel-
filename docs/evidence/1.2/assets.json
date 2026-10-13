@@ -1,0 +1,9 @@
+{
+  "bundleArchiveSHA256": "5cd2fac94e45e74633c5984aa541c5e54149cc80578fe8a54b659752a9e23619",
+  "backgroundArchiveSHA256": "870adb64778e5f08e2780cfe6d9a312534c797077157e0e3e81b5311cdcf4377",
+  "installedAssets": {
+    "assets/room/cat.webp": "9183e255f3fee98559e1069a684a657ea42e5dff26eb7dce3bce88090cbf1cf4",
+    "assets/room/desktop.webp": "26bad1178ab300aac946de7f3dc11a2f8d5a2ce40fdedabc1a5b5facf8f768f0",
+    "assets/room/mobile.webp": "334e1f28775db14ee89ee7e251cf1423fbc96bc1a6921d4beff127991bda13f3"
+  }
+}

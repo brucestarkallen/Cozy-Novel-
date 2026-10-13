@@ -39,6 +39,15 @@ export const button = (text, action, data = {}, className = "") =>
 export function notice(text, error = false) {
   $("#notice").textContent = text;
   $("#notice").classList.toggle("error", error);
+  if ($("#modal")?.open) {
+    let local = $("#modalNotice");
+    if (!local) {
+      local = el("p", { id: "modalNotice", role: "status", class: "help" });
+      $("#modalBody").prepend(local);
+    }
+    local.textContent = text;
+    local.classList.toggle("error", error);
+  }
 }
 export function panel(title, ...content) {
   $("#modalTitle").textContent = title;

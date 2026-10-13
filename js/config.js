@@ -1,12 +1,12 @@
 export const APP = Object.freeze({
   id: "cozyNovel",
   schema: 1,
-  databaseVersion: 2,
-  writerProtocol: 2,
+  databaseVersion: 3,
+  writerProtocol: 3,
   protocol: 1,
   database: "cozynovel.v1",
   channel: "cozynovel",
-  version: "1.1.0",
+  version: "1.2.0",
 });
 export const DEFAULT_STYLE = Object.freeze({
   person: "Third person limited",

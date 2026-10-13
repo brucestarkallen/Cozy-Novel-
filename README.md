@@ -43,9 +43,19 @@ Chapters and scenes can be renamed, annotated and reordered. Use arrow controls 
 
 ## Connect a model
 
-Open **Connections**, choose the exact adapter, enter the model identifier and its complete API endpoint, then enter your key. **Validate and save connection** checks configuration without a paid model call. The local relay keeps the key outside the manuscript database. It remains in memory unless you explicitly choose local persistence.
+Open **Connections**. Choose a provider preset, name the connection, enter the API key, then **Fetch models** or enter the model yourself. **Test connection** sends a small provider request and may use billable tokens. **Validate and save connection** saves configuration without DNS lookup or a model call. **Use** assigns it, and the compact model picker changes the writer for the open novel.
 
-One writing connection supports all workflows. An optional helper connection can handle suggestions and source readings. In **Writing style**, choose automatic, review only or disabled **Story Brain**, and separately control recommendation bubbles. New novels enable quiet source reading. Existing explicit disabled preferences stay disabled. Supported adapters are OpenAI Responses, compatible Chat Completions, Anthropic Messages and OpenRouter. See [provider details](docs/PROVIDERS.md).
+Save several models from the same provider or different providers. **Copy** makes an independent editable profile. **Change**, **Test**, **Details** and **Remove** are available for each one. Choose a default writer and optional helper, or set explicit novel assignments. A global default never replaces a novel override. Helpers fall back to the selected writer. Removing a connection explains its assignments and retains request history.
+
+Choose **Remember this API key on this device** deliberately if you want it available after a normal service restart. Otherwise the key lasts only while the local service runs. Profile metadata always remains. Remembered keys use a separate restricted local file; permissions are not encryption. The previous primary and helper identities migrate without deleting their settings or historical receipts. A missing memory only key is shown as **Key needed**.
+
+The local relay is preferred. **Browser direct** is an explicit alternative only when the endpoint permits browser CORS access. Its key stays in page memory and is exposed to the running application environment. It cannot be remembered across a page restart. Transport never changes silently after an error. See [provider details](docs/PROVIDERS.md).
+
+In **Writing style**, choose automatic, review only or disabled **Story Brain**, and separately control recommendation bubbles. New novels enable quiet source reading. Existing explicit disabled preferences stay disabled. Accepted source reading continues under its original scene and revision even when you switch panels. Pending coverage and reversible updates remain in Story Bible details.
+
+**Plan and references** opens optional Director guidance, Literary Editor review, Smart recall, exact text references and reusable styles. These tools do not establish future events or rewrite manuscript text. An Editor replacement is a separate candidate. References remain outside canon. All optional model tools are explicit requests except the bounded source reading enabled in Writing style.
+
+Use **Focus writing** to keep the manuscript and direction composer, or **Focus reading** to hide writing controls. **Return to studio** exits either mode. **Aa** controls theme, paper, size, width, spacing, dialogue tint and the decorative background. On a phone, switch between Chapters, Write, Partner and Story Bible. Unsent directions, questions, RP actions and temporary revision instructions save as recoverable creative drafts, with their original owners.
 
 ## Where your writing is saved
 
@@ -55,7 +65,7 @@ The local server saves changed records to `~/.cozynovel/library.sqlite3`. **Save
 
 Device snapshots live under `~/.cozynovel/backups`. Optional saved connection profiles live in `~/.cozynovel/connections.json` with restricted file permissions. Those permissions are not encryption. Keep the entire device directory private.
 
-A hosted or offline static copy still supports manual writing, reading, revisions and portable exports. Its AI controls require this local relay. It does not expose a key entry workaround for unsupported browser cross origin transport.
+A hosted or offline static copy still supports manual writing, reading, revisions and portable exports. AI uses either the preferred local relay or explicitly configured browser direct transport. Browser security is never bypassed.
 
 ## Back up and recover
 
@@ -77,7 +87,7 @@ git pull --ff-only origin main
 cozynovel
 ```
 
-If Git reports local edits or a conflict, keep them and resolve the conflict rather than resetting them away. This update migrates IndexedDB additively to physical version 2 while keeping the database name and portable format. Refresh or close other Cozy Novel tabs after saving their visible drafts. Old code cannot reopen version 2, and the updated local service rejects older writers. No database reset is required. The browser offers **Save and refresh** when a new offline shell is ready. Finish or stop generation before refreshing.
+If Git reports local edits or a conflict, keep them and resolve the conflict rather than resetting them away. This update migrates IndexedDB additively to physical version 3 while keeping the database name and portable format. Refresh or close other Cozy Novel tabs after saving their visible drafts. Old code cannot reopen version 3, and the updated local service rejects older writers. No database reset is required. The browser offers **Save and refresh** when a new offline shell is ready. Finish or stop generation before refreshing.
 
 Code rollback and data restore are separate operations. Retain a copy of the previous code before an update. Do not open newer data with code that cannot read its schema. To inspect an older version safely, use a separate checkout, a separate explicit data directory and a different port. The service refuses unsupported device schema versions.
 
@@ -86,3 +96,5 @@ Code rollback and data restore are separate operations. Retain a copy of the pre
 **Backups**, then **Redacted diagnostic**, downloads application version, browser identity, record counts and job states without manuscript text or credentials. Request receipts inside a novel show the model, selected sources, omissions, estimates and actual usage when provided.
 
 Developer checks use Node, Python and Playwright with synthetic stories and a local mock provider. See [verification evidence and limits](docs/VERIFICATION.md), [release handoff](HANDOFF.md), [data and API contract](docs/API.md) and [architecture](SPEC.md). No live provider quality or physical Android and Termux claim follows from desktop tests.
+
+Release 1.2 evidence, screenshots, migration results and limitations are recorded in [the release report](docs/RELEASE_1_2.md). No live model account or physical Android device was tested. Make a full portable backup before updating, finish or stop generation, and save visible input before refreshing older tabs. Do not reset your database.

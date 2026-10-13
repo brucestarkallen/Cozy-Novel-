@@ -1,0 +1,40 @@
+✔ portable validation rejects wrong source ownership and invalid selection ranges (9.081379ms)
+✔ restore rejects cyclic revision ancestry before writing (4.546946ms)
+✔ presets construct explicit endpoints and discovered limits preserve model identity (11.699753ms)
+✔ unset sampling is absent and set decimals, seeds and stop text serialize through compatible capabilities (1.02812ms)
+✔ reasoning maps intentions only into configured levels and discloses models without off (1.388931ms)
+✔ assistant opening, thinking seed and structured output have separate safe transports (1.961003ms)
+✔ native web and Claude cache controls affect only supported serialized requests (0.448493ms)
+✔ structured templates decode hidden headings, bounded words and stop markers without control text (2.092707ms)
+✔ usage retains reported cache boundaries and unknown pricing stays unknown (2.926125ms)
+✔ Hermes, Gemini, Qwen and declared model settings use their distinct explicit protocols (1.164493ms)
+✔ configuration validation rejects invented prices and negative reserves (1.768274ms)
+✔ remote error fields cannot insert arbitrary private strings into diagnostics (5.515776ms)
+✔ earlier knowledge, suspicion, future learning and conditional plans remain distinct in wire payload (12.548198ms)
+✔ flashback excludes later learning and unknown chronology (0.517531ms)
+✔ mandatory author requirements cannot be silently truncated (2.071478ms)
+✔ large synthetic selection retains old promise within 200k and 500k budgets (105.374469ms)
+ℹ {"fixtureCharacters":3069090,"limit":200000,"inputEstimate":999,"selectedSources":8,"elapsedMs":70}
+ℹ {"fixtureCharacters":3069090,"limit":500000,"inputEstimate":999,"selectedSources":8,"elapsedMs":35}
+✔ dense pinned sources respect large budgets, while unpinned irrelevance stays omitted (749.544366ms)
+ℹ {"fixtureCharacters":3069090,"pinned":true,"limit":200000,"inputEstimate":187260,"selectedSources":26,"elapsedMs":265}
+ℹ {"fixtureCharacters":3069090,"pinned":true,"limit":500000,"inputEstimate":466656,"selectedSources":53,"elapsedMs":484}
+✔ author corrections respect their effective fictional time (15.316431ms)
+✔ an exploration inside a scene excludes unbounded knowledge from later in that scene (1.443943ms)
+✔ activation only deletes owned caches and provider requests are never handled (12.160545ms)
+✔ failed new asset installation preserves the earlier shell and foreign caches (4.939345ms)
+✔ Chat streaming preserves split UTF8, comments, empty deltas and usage only chunks (13.087688ms)
+✔ Responses excludes reasoning and requires a valid completion object (1.436288ms)
+✔ Anthropic event dialect keeps usage and output limit (1.5129ms)
+✔ errors after text, refusals, malformed events and disconnect retain honest status (13.525634ms)
+✔ abort preserves partial text (1.520796ms)
+✔ parameters are explicitly gated and requests are stateless (1.253989ms)
+✔ Chat output limit survives the final DONE marker (1.61491ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1046.698036

@@ -18,8 +18,12 @@ Run focused checks for the changed contract. See docs/VERIFICATION.md. Review sc
 
 When changing offline assets, update the owned cache version in sw.js so existing installations can receive a coherent shell. Never delete caches outside the exact Cozy Novel asset prefix.
 
-Browser physical version is 2, portable schema and service protocol remain 1, and the synchronization writer contract is 2. Keep those versions independent. Create absent stores and indexes only during additive upgrades. Old tabs must retain visible drafts and close incompatible connections.
+Browser physical version is 3, portable schema and service protocol remain 1, and the synchronization writer contract is 3. Keep those versions independent. Create absent stores and indexes only during additive upgrades. Old tabs must retain visible drafts and close incompatible connections.
 
 Use the library synchronization lock before the mutation lock. Never acquire them in the reverse order. All committed writers participate in the mutation gate; a durable committing or unknown restore journal fences them. Device restore retires only exact covered IDs after a matching durable acknowledgement. Do not remove the journal or clear the entire outbox to resolve a conflict.
 
 Historical eligibility belongs in context/scope.js and applies to every source surface. Source readers are reversible interpretations, not primary truth. Preserve incomplete coverage, rejected batches and immutable turn boundaries. Request freshness includes deterministic source membership and transaction preconditions; jobs, receipts and usage must not invalidate themselves.
+
+Connections have stable named identities, independent of writer and helper roles. Resolve a fresh assignment snapshot before each request and wait for pending selector changes. Keep relay secrets outside IndexedDB, receipts, portable backups and the repository. Saving is syntactic and must not require DNS or perform a model call; Test is an explicit bounded provider action. Connection file format 2 is separate from all manuscript and device versions.
+
+Creative input drafts are source owned artifacts, never canon. Source reading tasks belong to immutable revisions and coverage, not the current panel. Branch supersession is an ancestry overlay. Undo retracts a derived contribution and preserves subsequent author development. Historical eligibility and author overview scope are separate.

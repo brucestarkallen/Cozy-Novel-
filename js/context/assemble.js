@@ -25,7 +25,7 @@ export function eligible(record, boundary) {
   if (
     record.validUntil != null &&
     boundary != null &&
-    record.validUntil < boundary
+    record.validUntil <= boundary
   )
     return false;
   return true;
@@ -127,7 +127,12 @@ export async function assembleCaptured(
   const system =
     (template?.body || TEMPLATES[kind] || TEMPLATES.write) +
     (kind === "revise" ? "\n" + TEMPLATES.write : "");
-  const selected = range ? text.slice(...range) : text;
+  const selected =
+    exploration && ["rp", "analysis", "eventProposal"].includes(kind)
+      ? text.slice(0, exploration.boundary)
+      : range
+        ? text.slice(...range)
+        : text;
   const mandatory = [
     {
       label: "Writing contract",
@@ -149,6 +154,14 @@ export async function assembleCaptured(
       body: JSON.stringify({
         scene: scene.title,
         fictionalTime: scene.fictionalTime,
+        ...(exploration
+          ? {
+              explorationTime: contextScope.branchFictionalTime,
+              relativeTime: contextScope.branchRelativeTime,
+              baseline:
+                "Novel evidence stays frozen at entry; branch changes belong only to this exploration",
+            }
+          : {}),
         timeLabel: scene.timeLabel,
         summary: safeMeta.summary,
         notes: safeMeta.notes,
@@ -160,19 +173,19 @@ export async function assembleCaptured(
           ? "Current manuscript excerpt, earlier originals retained"
           : "Current manuscript",
       body:
-        kind === "analysis"
-          ? text.slice(-4000)
-          : kind === "rp" && exploration
-            ? text.slice(0, exploration.boundary)
+        exploration && ["rp", "analysis", "eventProposal"].includes(kind)
+          ? text.slice(0, exploration.boundary)
+          : kind === "analysis"
+            ? text.slice(-4000)
             : scope === "selection"
               ? selected
               : text,
       sourceId: revision.id,
       range:
-        kind === "analysis"
-          ? [Math.max(0, text.length - 4000), text.length]
-          : kind === "rp" && exploration
-            ? [0, exploration.boundary]
+        exploration && ["rp", "analysis", "eventProposal"].includes(kind)
+          ? [0, exploration.boundary]
+          : kind === "analysis"
+            ? [Math.max(0, text.length - 4000), text.length]
             : scope === "selection"
               ? range
               : [0, text.length],
@@ -396,6 +409,15 @@ export async function assembleCaptured(
       rank,
     });
   }
+  for (const reference of records.filter(
+    (r) => r.kind === "reference" && (sourceIds.includes(r.id) || r.pinned),
+  ))
+    optional.push({
+      label: "Author reference material, not established fictional events",
+      body: await repo.text(reference.textBlobId),
+      sourceId: reference.id,
+      rank: 1600,
+    });
   const max = Number(connection.contextLimit),
     out = Number(connection.outputLimit),
     reserve = Number(connection.reasoningReserve || 0),
@@ -421,7 +443,7 @@ export async function assembleCaptured(
     direction;
   const count = () =>
     estimateTokens(
-      serialize(connection, { system, user: render(), outputLimit: out }),
+      serialize(connection, { system, user: render(), outputLimit: out, kind }),
     );
   assert(
     count() + out + reserve + margin <= max,
@@ -441,6 +463,7 @@ export async function assembleCaptured(
   const user = render(),
     inputEstimate = count();
   return {
+    kind,
     system,
     user,
     outputLimit: out,
@@ -488,6 +511,20 @@ export async function assembleCaptured(
               "inputPrice",
               "outputPrice",
               "allowLocal",
+              "preset",
+              "transport",
+              "prefill",
+              "prefillMode",
+              "prefillTemplate",
+              "prefillMinChars",
+              "prefillBanned",
+              "reasoningStyle",
+              "reasoningLevels",
+              "thinkingBudget",
+              "thinkingMode",
+              "searchOn",
+              "searchMaxUses",
+              "promptCache",
             ].includes(key),
           ),
         ),
@@ -676,5 +713,19 @@ export function providerIdentity(c) {
     reasoningReserve: c.reasoningReserve || 0,
     capabilities: c.capabilities || {},
     parameters: c.parameters || {},
+    features: [
+      c.transport,
+      c.prefill,
+      c.prefillMode,
+      c.prefillMinChars,
+      c.prefillBanned,
+      c.reasoningStyle,
+      c.reasoningLevels,
+      c.thinkingBudget,
+      c.thinkingMode,
+      c.searchOn,
+      c.searchMaxUses,
+      c.promptCache,
+    ],
   };
 }

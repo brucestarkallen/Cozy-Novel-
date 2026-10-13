@@ -353,7 +353,7 @@ export async function manuscriptAction(app, action, target) {
       throw new Error(
         "Compare the changed source and choose a new placement first.",
       );
-    formPanel(
+    const revisionForm = formPanel(
       "Revise this candidate",
       [field("Revision direction", "direction", "", "textarea")],
       async (v) => {
@@ -385,6 +385,11 @@ export async function manuscriptAction(app, action, target) {
       },
       { submit: "Generate revised alternative" },
     );
+    await app.drafts.bind(revisionForm.elements.direction, {
+      novelId: c.novelId,
+      ownerId: c.id,
+      kind: "candidateInstructions",
+    });
     return true;
   }
   if (action === "compareCandidate") {
@@ -496,7 +501,44 @@ export async function manuscriptAction(app, action, target) {
     return true;
   }
   if (action === "immersive") {
-    document.body.classList.toggle("immersive");
+    await app.flush();
+    await app.drafts.flush();
+    if (document.body.dataset.focus === "writing")
+      delete document.body.dataset.focus;
+    else document.body.dataset.focus = "writing";
+    return true;
+  }
+  if (action === "focusReading") {
+    await app.flush();
+    await app.drafts.flush();
+    app.focusPosition = {
+      selection: [app.editor.selectionStart, app.editor.selectionEnd],
+      scroll: app.editor.scrollTop,
+      surfaceScroll: $("#writingSurface").scrollTop,
+    };
+    if (!app.editor.hidden) {
+      $("#readingView").replaceChildren(readingText(app.editor.value));
+      $("#readingView").hidden = false;
+      app.editor.hidden = true;
+      app.focusMadeReading = true;
+    }
+    document.body.dataset.focus = "reading";
+    return true;
+  }
+  if (action === "exitFocus") {
+    delete document.body.dataset.focus;
+    if (app.focusMadeReading) {
+      $("#readingView").hidden = true;
+      app.editor.hidden = false;
+      app.focusMadeReading = false;
+      app.editor.setSelectionRange(...app.focusPosition.selection);
+      app.editor.scrollTop = app.focusPosition.scroll;
+      $("#writingSurface").scrollTop = app.focusPosition.surfaceScroll;
+    }
+    return true;
+  }
+  if (action === "toggleNavigator") {
+    document.body.classList.toggle("collapsedNavigator");
     return true;
   }
   if (action === "togglePartner") {
@@ -674,9 +716,21 @@ async function read(app, sceneIds) {
   $("#readingView").replaceChildren();
   for (const sid of sceneIds) {
     const { scene, text } = await app.repo.sceneText(sid);
-    $("#readingView").append(el("h2", {}, scene.title), el("div", {}, text));
+    $("#readingView").append(el("h2", {}, scene.title), readingText(text));
   }
   app.editor.hidden = true;
   $("#readingView").hidden = false;
   $("#candidateBox").hidden = true;
+}
+
+function readingText(text) {
+  return el(
+    "div",
+    {},
+    ...text
+      .split(/(?<=\n)/)
+      .map((line) =>
+        el("span", { class: /^\s*[“"]/.test(line) ? "dialogue" : "" }, line),
+      ),
+  );
 }

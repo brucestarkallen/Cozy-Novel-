@@ -21,6 +21,7 @@ import {
 import { id } from "../core/ids.js";
 export async function rpAction(app, action, target) {
   if (action === "quickRP") {
+    if (app.acceptingPassage) await app.acceptingPassage;
     await app.flush();
     if (app.candidateId && !$("#candidateBox").hidden) {
       const c = await app.repo.get(app.candidateId);
@@ -143,10 +144,43 @@ async function openExploration(app, exId) {
       rows: 3,
       placeholder: "Your words, thoughts or attempted action.",
     }),
-    mode = field("Action mode", "mode", "player", "select", [
-      { value: "player", label: "Act as character" },
-      { value: "direct", label: "Direct, author instruction" },
-    ]);
+    mode = field(
+      "Action mode",
+      "mode",
+      ex.lastDraftMode || "player",
+      "select",
+      [
+        { value: "player", label: "Act as character" },
+        { value: "direct", label: "Direct, author instruction" },
+      ],
+    );
+  let rpDraft = await app.drafts.bind(input, {
+    novelId: ex.novelId,
+    ownerId: ex.id,
+    kind: "rp",
+    explorationId: ex.id,
+    branchId: ex.activeBranchId,
+    actorId: ex.playerCharacterId,
+    actionMode: mode.querySelector("select").value,
+  });
+  const rebindDraft = async () => {
+    await rpDraft.release();
+    input.value = "";
+    rpDraft = await app.drafts.bind(input, {
+      novelId: ex.novelId,
+      ownerId: ex.id,
+      kind: "rp",
+      explorationId: ex.id,
+      branchId: ex.activeBranchId,
+      actorId: ex.playerCharacterId,
+      actionMode: mode.querySelector("select").value,
+    });
+  };
+  mode.querySelector("select").addEventListener("change", async (e) => {
+    ex = { ...(await app.repo.get(exId)), lastDraftMode: e.target.value };
+    await app.repo.update(ex, "exploration.draft.mode");
+    await rebindDraft();
+  });
   const retained = await branchTurns(app.repo, ex);
   const firstTurn = field(
     "From turn for events or prose",
@@ -188,6 +222,8 @@ async function openExploration(app, exId) {
       (j) =>
         j.type === "job" &&
         j.explorationId === ex.id &&
+        j.kind === "rp" &&
+        (!j.outputType || j.outputType === "worldResponse") &&
         j.textBlobId &&
         j.state !== "running" &&
         !savedTurns.some((t) => t.jobId === j.id),
@@ -243,6 +279,7 @@ async function openExploration(app, exId) {
     if (app.writer.foreground) return;
     ex = { ...(await app.repo.get(exId)), playerCharacterId: e.target.value };
     await app.repo.update(ex, "exploration.player");
+    await rebindDraft();
     notice("Player changed. Time and character knowledge were not advanced.");
   });
   view.querySelector("input").addEventListener("change", async (e) => {
@@ -252,6 +289,7 @@ async function openExploration(app, exId) {
   branches.querySelector("select").addEventListener("change", async (e) => {
     ex = { ...(await app.repo.get(exId)), activeBranchId: e.target.value };
     await app.repo.update(ex, "exploration.branch.select");
+    await rebindDraft();
     await paint();
   });
   const generate = async (isRetry = false) => {
@@ -284,12 +322,14 @@ async function openExploration(app, exId) {
           input.value,
         );
         input.value = "";
+        rpDraft.mark();
+        await rpDraft.save();
       }
       await paint();
       preview = el("div", { class: "rpturn", "data-role": "world" });
       turns.append(preview);
       const result = await app.writer.run({
-        connection: app.connection(),
+        connection: await app.requestConnection(false, ex.novelId),
         novelId: ex.novelId,
         sceneId: ex.baseSceneId,
         kind: "rp",
@@ -326,11 +366,8 @@ async function openExploration(app, exId) {
           );
       }
     } catch (e) {
-      if (partial)
-        await addTurn(app.repo, ex, "world", partial, {
-          interrupted: true,
-          jobId: e.jobId,
-        }).catch(() => {});
+      // The job owns partial and stale output. Recovery requires a deliberate alternate branch.
+      // Never bypass the original freshness precondition in an error handler.
       notice(e.message, true);
       await paint();
     } finally {
@@ -411,7 +448,7 @@ async function openExploration(app, exId) {
             let proposal, contextSnapshot;
             try {
               const result = await app.writer.run({
-                connection: app.connection(true),
+                connection: await app.requestConnection(true, ex.novelId),
                 novelId: ex.novelId,
                 sceneId: ex.baseSceneId,
                 kind: "eventProposal",
