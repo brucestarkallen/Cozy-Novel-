@@ -58,9 +58,14 @@ function setLight(novelId, state, words) {
 
 /* ----------------------------------------------------------- scheduling */
 
+/* the others who look over the book after a change (the checker) hear of it too */
+const nudgeFns = new Set();
+export function onNudge(fn) { nudgeFns.add(fn); return () => nudgeFns.delete(fn); }
+
 /* A change to the book asks the helper to read it — but never sooner than a
  * reading that just failed said to wait. */
 export function nudge(novelId, ms = 4000) {
+  for (const fn of nudgeFns) { try { fn(novelId, ms); } catch (e) { console.error(e); } }
   const f = failures.get(novelId);
   const wait = f && f.until > Date.now() ? f.until - Date.now() : 0;
   clearTimeout(timers.get(novelId));
@@ -293,12 +298,12 @@ function helperRoom(conn) {
 
 /* how many tokens of the book a helper's request can carry, beside its notes
  * (and beside the reply's room, raised for a model that thinks) */
-function readingRoom(conn, fixed) {
+export function readingRoom(conn, fixed) {
   const reply = thinksOn(conn) ? Math.max(helperRoom(conn), thinkingFloor(conn)) : helperRoom(conn);
   return contextOf(conn) - reply - 1500 - fixed;
 }
 
-async function askJson(conn, system, request, { want } = {}) {
+export async function askJson(conn, system, request, { want } = {}) {
   const room = helperRoom(conn);
   const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: room }), stream: true, worker: true, patient: true });
   if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent };
@@ -332,7 +337,7 @@ export function partsOf(text, words = 9000) {
 
 /* which connection the helper uses, as a fingerprint: a refusal for good is
  * not asked again until it changes */
-function connPrint(conn) {
+export function connPrint(conn) {
   const L = (conn && conn.learned) || {};
   return conn ? hashText(JSON.stringify([conn.url, conn.model, conn.key, conn.shape, conn.maxTokens, conn.context, conn.thinking, L.context, L.maxOut, L.drop, L.completionField])) : '';
 }

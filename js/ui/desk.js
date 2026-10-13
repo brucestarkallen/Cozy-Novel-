@@ -12,6 +12,7 @@ import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../ut
 import { showSent } from './sent.js';
 import { thinkBox as makeThinkBox, updateThinkBox } from './think.js';
 import { paced, follower } from './live.js';
+import { findIn } from '../novel/search.js';
 
 const S = {
   novelId: null, chapterId: null,
@@ -94,7 +95,87 @@ export async function openChapter(novelId, chapterId) {
   drawHead();
   drawPage({ keepScroll: false });
   drawComposer();
-  restoreScroll();
+  /* opened to show something (a word found, a suggestion), or to write some words again */
+  const then = S.then && S.then.chapterId === chapterId ? S.then : null;
+  S.then = null;
+  if (then && then.show) requestAnimationFrame(() => requestAnimationFrame(() => showFound(then.passageId, then.show)));
+  else restoreScroll();
+  if (then && then.rewrite) rewriteSpan(then.rewrite);
+}
+
+/* ------------------------------------------------------------- found */
+
+/* Some words of a passage, shown: the page goes to them, they are marked for
+ * a few seconds (the passage glows where the browser cannot mark words).
+ * spec: {query} — words as they read on the page. Returns whether it could. */
+let foundTimer = 0;
+export function showFound(passageId, spec = {}) {
+  const el = S.els.get(passageId);
+  if (!el) return false;
+  const prose = el.querySelector(':scope > .prose');
+  const range = prose && spec.query ? rangeIn(prose, spec.query) : null;
+  const box = (range || el).getBoundingClientRect();
+  const top = ui.wrap.scrollTop + box.top - ui.wrap.getBoundingClientRect().top - ui.wrap.clientHeight * 0.3;
+  if (busy()) F.stop();
+  setTop(Math.max(0, top));
+  el.classList.remove('found');
+  void el.offsetWidth;
+  el.classList.add('found');
+  clearTimeout(foundTimer);
+  try {
+    if (range && globalThis.CSS && CSS.highlights && typeof Highlight === 'function') CSS.highlights.set('found', new Highlight(range));
+  } catch (_) { /* the glow says where */ }
+  foundTimer = setTimeout(() => { el.classList.remove('found'); try { CSS.highlights.delete('found'); } catch (_) { /* fine */ } }, 6000);
+  return true;
+}
+/* where words stand among a passage's paragraphs on screen, as a range */
+function rangeIn(prose, query) {
+  const nodes = [];
+  let flat = '';
+  const walker = document.createTreeWalker(prose, NodeFilter.SHOW_TEXT);
+  let lastP = null;
+  for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+    const p = t.parentElement && t.parentElement.closest('p');
+    if (lastP && p !== lastP) flat += ' ';
+    lastP = p;
+    nodes.push({ t, at: flat.length });
+    flat += t.data;
+  }
+  const hit = findIn(flat, String(query).replace(/\*+/g, ''), { max: 1 })[0];
+  if (!hit) return null;
+  /* a start falls inside a piece of text; an end may fall at its very end */
+  const pointAt = (i, isEnd) => {
+    for (const n of nodes) {
+      const len = n.t.data.length;
+      if (isEnd ? i > n.at && i <= n.at + len : i >= n.at && i < n.at + len) return { node: n.t, offset: i - n.at };
+    }
+    const last = nodes[nodes.length - 1];
+    return { node: last.t, offset: last.t.data.length };
+  };
+  const a = pointAt(hit.start, false);
+  const b = pointAt(hit.end, true);
+  const r = document.createRange();
+  try { r.setStart(a.node, a.offset); r.setEnd(b.node, b.offset); } catch (_) { return null; }
+  return r;
+}
+/* one thing to do in a chapter once it opens (it is being opened elsewhere) */
+export function thenOnOpen(chapterId, then) { S.then = { chapterId, ...then }; }
+/* go to a chapter and do one thing there once it is open */
+export function whenOpen(chapterId, then) {
+  if (chapterId === S.chapterId && S.els.size) {
+    if (then.show) showFound(then.passageId, then.show);
+    if (then.rewrite) rewriteSpan(then.rewrite);
+    return;
+  }
+  S.then = { chapterId, ...then };
+  hooks.goChapter(chapterId);
+}
+/* some words of a passage written again (a word he never wants) */
+export function rewriteSpan({ chapterId, passageId, start, end, note = '' }) {
+  if (busy()) { toast('The writer is busy — try again once it has finished.'); return; }
+  if (chapterId !== S.chapterId) { whenOpen(chapterId, { rewrite: { chapterId, passageId, start, end, note } }); return; }
+  S.selected = passageId;
+  run(() => writer.rewriteSelection({ novelId: S.novelId, chapterId, passageId, start, end, note }));
 }
 
 function novel() { return store.peek('novel', S.novelId); }
@@ -304,6 +385,7 @@ function controls(p) {
   if (v.how === 'mine' || v.how === 'imported') bits.push(v.how === 'imported' ? 'brought in' : 'your words');
   else if (v.how === 'edit') bits.push('edited by you');
   else if (v.how === 'partner') bits.push(v.why ? `changed by your partner: “${v.why.slice(0, 80)}”` : 'changed by your partner');
+  else if (v.how === 'suggested') bits.push('with the checker’s suggestions');
   if (v.words || v.text) bits.push(plural(v.words || countWords(v.text), 'word'));
   /* the request that wrote it, counted in full: the provider's own count, or the app's (about) */
   if (Number.isFinite(v.tokensIn)) bits.push(`${v.tokensCounted ? '' : 'about '}${v.tokensIn.toLocaleString()} tokens sent`);

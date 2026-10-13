@@ -31,6 +31,16 @@ def answer_for(body):
         if m.get("role") == "user":
             last_user = m.get("content") or ""
             break
+    if "Check these passages from" in last_user:
+        # the checker: a fix for the stand-in's own stock words, wherever they stand
+        edits = []
+        for m in re.finditer(r"\[(\d+\.\d+)\] ([\s\S]*?)(?=\n\n\[\d+\.\d+\] |\n\"\"\"|$)", last_user):
+            num, text = m.group(1), m.group(2)
+            if "patient and unhurried" in text:
+                edits.append({"passage": num, "kind": "humanize", "find": "patient and unhurried", "replace": "patient, unhurried", "why": "lighter without the and"})
+            if "letters anymore" in text:
+                edits.append({"passage": num, "kind": "grammar", "find": "letters anymore", "replace": "letters any more", "why": "two words in British English"})
+        return json.dumps({"edits": edits})
     if "for the writer to read before every page" in last_user:
         return json.dumps({"about": "A lighthouse keeper on a stormy coast and the letter that washed up at her feet.", "style": "Close third person on Mara, past tense; quiet, wry, salt-weathered."})
     if "Update the notes for what this changes" in last_user:
@@ -61,7 +71,11 @@ def answer_for(body):
             return '<changes>[{"passage": "1.1", "find": "Rain hammered the glass", "replace": "Rain lashed the glass", "why": "a harder verb for the storm"}]</changes>\n\nI made the rain harder in the first line.'
         return "Maybe the letter is from her brother — the one who went to sea and never wrote."
     if "playing a scene from it" in system:
-        return "The wind howls along the cliff path. At the bottom of the steps, a stranger waits with his collar turned up against the rain."
+        told = "The wind howls along the cliff path. At the bottom of the steps, a stranger waits with his collar turned up against the rain."
+        if "three different things" in system:
+            # Three choices on: the ways it could go, after the telling
+            told += "\n\n<choices>\n1. Mara asks the stranger his name.\n2. Mara turns back up the steps.\n3. Mara holds out the letter.\n</choices>"
+        return told
     direction = ""
     m = re.search(r"What happens(?: next)?: (.+)", last_user)
     if m:

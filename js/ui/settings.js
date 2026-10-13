@@ -31,6 +31,7 @@ function draw(focus = '') {
   const open = new Set([...sheet.body.querySelectorAll('section.group[data-key]:not(.fold)')].map((g) => g.dataset.key));
   /* asked for by name (the writer chip's Connections…): it opens, however it was left */
   if (focus === 'connections') open.add('set.connections');
+  if (focus === 'roles') open.add('set.roles');
   sheet.body.textContent = '';
   const hs = house();
   sheet.body.append(
@@ -245,10 +246,18 @@ function rolesGroup(hs, open) {
     sel.addEventListener('change', () => changeHouse((x) => { x.roles = x.roles || {}; if (sel.value) x.roles[role] = sel.value; else delete x.roles[role]; }, { now: true }));
     return field(label, sel, hint);
   };
+  /* the checker: the helper's connection unless he picks another — or nobody */
+  const checkSel = h('select');
+  const curCheck = (hs.roles || {}).checker || '';
+  checkSel.append(h('option', { value: '', selected: !curCheck }, 'The same as the helper'));
+  for (const c of conns) checkSel.append(h('option', { value: c.id, selected: curCheck === c.id }, connName(c)));
+  checkSel.append(h('option', { value: 'off', selected: curCheck === 'off' }, 'Nobody — don’t check'));
+  checkSel.addEventListener('change', () => changeHouse((x) => { x.roles = x.roles || {}; if (checkSel.value) x.roles.checker = checkSel.value; else delete x.roles.checker; }, { now: true }));
   g.body.append(
     roleSel('writer', 'The writer', 'Writes the pages, the other takes, the rewrites, and narrates the scenes you play. The writer button under the page switches it too.', false),
     roleSel('partner', 'The partner', 'Talks the book over with you.', true),
-    roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true));
+    roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true),
+    field('The checker', checkSel, 'Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. Writing from before it began is checked only when you ask. A quick, inexpensive model is perfect here.'));
   return g;
 }
 
@@ -297,6 +306,7 @@ function wordsGroup(hs) {
     field('How the partner talks', partner, 'Sent first, word for word, to your partner. Empty: nothing of yours is sent.'),
     back(partner, 'partner'),
     field('A note at the end', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer or narrator is asked. Empty: nothing is sent.'),
+    field('Words to avoid', box('avoid', 4, 'One to a line — for example:\na testament to\nshivers down her spine'), 'Words and phrases you never want in the book. The writer, the narrator and your partner are told them, after your own words; the checker marks any that slip through, with a way to write them again. Empty: nothing is sent.'),
     choose('notesAs', [
       ['system', 'The system message (the default)'],
       ['user', 'A user message — your notes'],

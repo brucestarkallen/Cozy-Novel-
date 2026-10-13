@@ -67,6 +67,8 @@ class H(BaseHTTPRequestHandler):
                 beh = {"text": json.dumps({"summary": "DEFAULT SUMMARY", "name": "Default Name"})}
             elif "for the writer to read before every page" in last_user:
                 beh = {"text": json.dumps({"about": "DEFAULT ABOUT", "style": "DEFAULT STYLE"})}
+            elif "Check these passages from" in last_user:
+                beh = {"text": json.dumps({"edits": []})}
             elif "Update the notes" in last_user or "could not be read as JSON" in last_user or "cut off before it finished" in last_user:
                 beh = {"text": "{}"}
             else:

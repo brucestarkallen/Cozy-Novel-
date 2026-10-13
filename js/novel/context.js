@@ -23,7 +23,7 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine } from './prompts.js';
 
 export const SAFETY = 1500;
 
@@ -200,7 +200,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   else if (purpose === 'play') { own = narratorWords(instr); frame = playFrame(house, novel, play || {}, label, { notesAs }); }
   const about = aboutTheBook(novel, { plans: true });
   const notes = notesText(novel);
-  const head = withHis(own, frame);
+  /* his own words first, then the words he never wants (when he listed any), then the frame */
+  const head = withHis([String(own || '').trim(), avoidLine(avoidList(house))].filter(Boolean).join('\n\n'), frame);
   const opening = notesAs === 'system' ? '' : notesOpening(house, novel, notesAs, purpose);
   const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
   const late = purpose === 'partner' ? '' : String(instr.late || '').trim();

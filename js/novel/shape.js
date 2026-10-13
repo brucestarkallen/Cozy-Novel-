@@ -267,6 +267,43 @@ export const chapterSteps = {
     if (i >= 0) c.passages = c.passages.slice(0, i);
   },
   setPassages: (passages) => (c) => { c.passages = passages; },
+  /* what the checker found in one version of a passage (checker.js) — kept
+   * only while that version still reads as it did when it was checked */
+  setCheck: (pid, vid, entry) => (c) => {
+    const p = findPassage(c, pid);
+    const v = p && findVersion(p, vid);
+    if (!v || hashText(String(v.text || '')) !== entry.sig) return;
+    c.checks = c.checks || {};
+    c.checks[pid] = c.checks[pid] || {};
+    c.checks[pid][vid] = JSON.parse(JSON.stringify(entry));
+  },
+  /* one suggestion let go; one he left as it is (remember) is never offered
+   * for that passage again — the same words, the same change */
+  dropSuggestion: (pid, vid, itemId, { remember = false } = {}) => (c) => {
+    const e = c.checks && c.checks[pid] && c.checks[pid][vid];
+    if (!e) return;
+    const item = (e.items || []).find((x) => x.id === itemId);
+    e.items = (e.items || []).filter((x) => x.id !== itemId);
+    if (!item || !remember) return;
+    c.checksLeft = c.checksLeft || {};
+    const list = (c.checksLeft[pid] = c.checksLeft[pid] || []);
+    const replace = typeof item.replace === 'string' ? item.replace : null;
+    if (!list.some((x) => x.find === item.find && x.replace === replace)) list.push({ find: item.find, replace });
+    if (list.length > 60) list.splice(0, list.length - 60);
+  },
+  /* what was kept for passages and versions no longer in the chapter goes */
+  pruneChecks: () => (c) => {
+    for (const pid of Object.keys(c.checksLeft || {})) if (!findPassage(c, pid)) delete c.checksLeft[pid];
+    if (!c.checks) return;
+    for (const pid of Object.keys(c.checks)) {
+      const p = findPassage(c, pid);
+      if (!p) { delete c.checks[pid]; continue; }
+      for (const vid of Object.keys(c.checks[pid])) if (!findVersion(p, vid)) delete c.checks[pid][vid];
+      if (!Object.keys(c.checks[pid]).length) delete c.checks[pid];
+    }
+  },
+  /* he asked for the whole chapter to be checked, older passages too */
+  checkAll: () => (c) => { c.checkAll = true; },
 };
 
 /* ----------------------------------------------------- turns (talk, play) */

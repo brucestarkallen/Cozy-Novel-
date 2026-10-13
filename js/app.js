@@ -19,6 +19,9 @@ import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from './novel/prom
 import { chapterLabel, novelSteps } from './novel/shape.js';
 import { plural, numberWords } from './util.js';
 import { talkBusy, repairStaleTurns as talkRepair } from './novel/talk.js';
+import { startChecking } from './novel/checker.js';
+import { initChecks, showChecks } from './ui/checks.js';
+import { initSearch, openSearch } from './ui/search.js';
 
 const A = { novelId: null, chapterId: null, booting: true, updateWaiting: false, fromShelf: false, reading: null };
 
@@ -56,8 +59,12 @@ async function boot() {
       instructions: { system: DEFAULT_WRITING, narrator: DEFAULT_NARRATOR, partner: DEFAULT_PARTNER, late: '' },
       look: { ...DEFAULT_LOOK },
       created: Date.now(),
+      checksFrom: Date.now(),
     });
   }
+  /* the checker reads what is written from now on; older writing only when he asks */
+  if (!Number.isFinite(house.checksFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.checksFrom)) x.checksFrom = Date.now(); }, { now: true });
+  startChecking();
   applyLook(house.look);
   /* a change made here is already on screen; one made in another window is drawn */
   store.subscribe('house', 'house', (data, why) => {
@@ -134,12 +141,24 @@ async function showNovel(novelId, chapterId) {
   if (!store.peek('chapter', chapterId)) await store.open('chapter', chapterId);
   await openChapter(novelId, chapterId);
   openPanes(novelId, chapterId);
+  showChecks(novelId, chapterId);
   drawBar();
   document.title = `${novel.meta.title} — Cozy Novel`;
   /* a page or a reply left being written by a window that closed is set right */
   repairNow(novelId);
   /* the helper looks over what it has not read yet */
   archivist.nudge(novelId, 2500);
+  /* opened to show something in it (a search found it in another book) */
+  if (A.then) { const fn = A.then; A.then = null; try { fn(); } catch (e) { console.error(e); } }
+}
+
+/* another book, at a chapter, then one thing to do there — no step in the history */
+async function goBook(novelId, chapterId = null, then = null) {
+  A.then = then;
+  dropOverlays();
+  await afterBacks();
+  const hash = `#/n/${novelId}${chapterId ? `/${chapterId}` : ''}`;
+  if (location.hash === hash) route(); else location.replace(hash);
 }
 
 function openMissing(novelId, novel) {
@@ -216,6 +235,9 @@ function bindChrome() {
   $('#chaptersClose').addEventListener('click', () => closeLeft());
   $('#sideClose').addEventListener('click', () => closeRight());
   $('#notesBtn').addEventListener('click', () => showSide('notes'));
+  $('#searchBtn').addEventListener('click', () => openSearch());
+  initChecks($('#checkBubble'), { openSettings });
+  initSearch({ currentNovel: () => A.novelId, goChapter, goBook, openBook: (id) => openBook(id, { onGone: () => toShelf() }) });
   $('#partnerBtn').addEventListener('click', () => showSide('partner'));
   $('#moreBtn').addEventListener('click', (e) => moreMenu(e.currentTarget));
   /* a phone puts a hidden page away without warning: what waits is saved now */

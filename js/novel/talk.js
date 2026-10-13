@@ -21,7 +21,7 @@ import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText } from './shape.js';
 import { newId, numberWords } from '../util.js';
-import { playOpening, playOnwards, readBack } from './prompts.js';
+import { playOpening, playOnwards, readBack, tellLine, sceneWords } from './prompts.js';
 import { numberedText } from './context.js';
 import { opsOf, readsOf, makeChange, undoChange, outcomeWords, labelOf } from './changes.js';
 import * as archivist from './archivist.js';
@@ -53,13 +53,19 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
   const from = after ? list.findIndex((t) => t.id === after) + 1 : 0;
   /* what came of the partner's changes, told with his next message */
   let told = '';
+  const scene = Boolean(record.who !== undefined || record.chapterId);
   for (const t of list.slice(Math.max(0, from))) {
     if (upto && t.id === upto) break;
     const v = picked(t);
-    const text = String((v && v.text) || '').trim();
-    if (!text) continue;
+    /* in a scene: the narrator's words without the ways it offered, and his
+     * line to the narrator (not his character's) after his own */
+    const raw = String((v && v.text) || '');
+    const text = (scene && t.by !== 'you' ? sceneWords(raw) : raw).trim();
+    const tell = scene && t.by === 'you' && v && v.tell ? tellLine(record.who, v.tell) : '';
+    if (!text && !tell) continue;
     if (t.by === 'you') {
-      out.push({ role: 'user', content: told ? `${told}\n\n${text}` : text });
+      const mine = [text, tell].filter(Boolean).join('\n\n');
+      out.push({ role: 'user', content: told ? `${told}\n\n${mine}` : mine });
       told = '';
     } else {
       out.push({ role: 'assistant', content: text });
@@ -305,13 +311,16 @@ function playArgs(playRec, upto) {
   };
 }
 
-/* His move in the scene (or nothing, to have the narrator begin), and the narrator's answer. */
-export async function playSay({ playId, text }) {
+/* His move in the scene (or nothing, to have the narrator begin), with — or
+ * only — a line for the narrator about how the telling should go, and the
+ * narrator's answer. */
+export async function playSay({ playId, text, tell = '' }) {
   const p = await store.open('play', playId);
   if (!p) return { ok: false, error: 'that scene is not there any more' };
   if (talkBusy('play', playId)) return { ok: false, error: 'a reply is already on its way — Stop it first' };
   const t = String(text || '').trim();
-  const mine = t ? newTurn('you', t) : null;
+  const tl = String(tell || '').trim();
+  const mine = t || tl ? newTurn('you', t, tl ? { tell: tl } : {}) : null;
   if (mine) store.change('play', playId, turnSteps.addTurn(mine));
   const reply = newTurn('ai', '', { streaming: true });
   store.change('play', playId, turnSteps.addTurn(reply), { now: true });
@@ -319,7 +328,7 @@ export async function playSay({ playId, text }) {
     buildArgs: playArgs(p, reply.id) });
   if (!out.ok && mine && !replied('play', playId, reply.id)) {
     try { store.change('play', playId, turnSteps.removeTurn(mine.id), { now: true }); } catch (_) { /* gone */ }
-    return { ...out, giveBack: t };
+    return { ...out, giveBack: t, giveBackTell: tl };
   }
   return out;
 }
@@ -374,7 +383,10 @@ export function transcriptOf(play, { fromStart = false } = {}) {
   const lines = [];
   for (const t of turns.slice(start)) {
     const v = picked(t);
-    const text = String((v && v.text) || '').trim();
+    /* what happened in it: his character's lines and the narrator's telling —
+     * never his lines to the narrator, nor the ways it offered */
+    const raw = String((v && v.text) || '');
+    const text = (t.by === 'you' ? raw : sceneWords(raw)).trim();
     if (!text) continue;
     lines.push(t.by === 'you' ? `${who}: ${text}` : `Narrator: ${text}`);
   }

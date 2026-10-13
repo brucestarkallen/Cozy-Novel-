@@ -15,6 +15,7 @@ import { wordsOf, changesComing } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
 import { paced, follower, streamLines } from './live.js';
 import * as desk from './desk.js';
+import { sceneWords, choicesIn } from '../novel/prompts.js';
 
 let ui = null;
 let hooks = {};
@@ -129,6 +130,33 @@ export function showSide(tab) {
     P.release.right = onBack(() => closeRight(true));
   }
   drawSide();
+}
+/* the side open on a tab, never toggled shut (a search result, a link) */
+function ensureSide(tab) {
+  if (wide() && ui.right.classList.contains('dock') && ui.right.dataset.tab === tab) { P.side = tab; drawSide(); return; }
+  showSide(tab);
+}
+/* a card of the notes, open to read (search) */
+export function showCard(kind, id) {
+  ensureSide('notes');
+  const n = store.peek('novel', P.novelId);
+  if (n && ((n.notes && n.notes[kind]) || []).some((c) => c.id === id)) editCard(kind, id);
+}
+/* a turn of the conversation or of a scene, scrolled to and lit for a moment */
+export function showTurn(kind, id, turnId) {
+  if (kind === 'play') P.playId = id;
+  ensureSide(kind === 'play' ? 'play' : 'partner');
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const el = ui.rightBody.querySelector(`.turn[data-id="${turnId}"]`);
+    if (!el) return;
+    SF.stop();
+    const top = el.getBoundingClientRect().top - ui.rightBody.getBoundingClientRect().top + ui.rightBody.scrollTop;
+    SF.jump(Math.max(0, top - ui.rightBody.clientHeight * 0.25));
+    el.classList.remove('found');
+    void el.offsetWidth;
+    el.classList.add('found');
+    setTimeout(() => el.classList.remove('found'), 4000);
+  }));
 }
 export function closeRight(fromBack = false) {
   if (!P.rightOpen) return;
@@ -261,9 +289,14 @@ const typed = { key: '', value: '', focus: false };
 function keepTyped() {
   const ta = ui.rightFoot.querySelector('textarea');
   if (!ta) return;
-  typed.key = ui.rightFoot.dataset.for || '';
+  const key = ui.rightFoot.dataset.for || '';
+  /* the line to the narrator, and whether its box was open, ride with the scene's own box */
+  const tb = ui.rightFoot.querySelector('textarea.tellbox');
+  if (typed.key !== key) { typed.tell = ''; typed.tellOpen = false; }
+  typed.key = key;
   typed.value = ta.value;
   typed.focus = document.activeElement === ta;
+  if (tb) { typed.tell = tb.value; typed.tellOpen = !tb.hidden; }
 }
 export function restoreTyped(key) {
   ui.rightFoot.dataset.for = key;
@@ -449,7 +482,9 @@ function turnThinkBox(turnId, thinking, live) {
 /* what a reply shows: the partner's words without its blocks — while a
  * block is coming, or it is reading a chapter, a line says so */
 function shownWords(kind, turn, raw, live) {
-  if (kind !== 'talk' || turn.by === 'you') return raw || '';
+  if (turn.by === 'you') return raw || '';
+  /* the narrator's telling, without the ways it offers (they are buttons under it) */
+  if (kind === 'play') return sceneWords(raw);
   const words = wordsOf(raw);
   if (words) return words;
   if (live && live.note) return live.note;
@@ -467,6 +502,8 @@ function drawTurn(kind, id, turn) {
   /* the thinking streams open while it comes, then folds once the words begin */
   if (turn.by !== 'you' && thinking) el.append(turnThinkBox(turn.id, thinking, Boolean(live && !live.text)));
   el.append(h('span.words', shownWords(kind, turn, text, live)));
+  /* his line to the narrator, not his character's */
+  if (kind === 'play' && turn.by === 'you' && v.tell) el.append(h('div.tell', h('b', 'To the narrator: '), v.tell));
   if (live || v.streaming) return el;
   if (kind === 'talk' && v.read && v.read.length) el.append(h('div.turnnote', `It read ${v.read.join(', ')} whole.`));
   if (kind === 'talk' && v.changes && v.changes.length) el.append(changeList(id, turn, v));
@@ -485,7 +522,8 @@ function drawTurn(kind, id, turn) {
     if (kind === 'talk') row.append(h('button', { onclick: async () => { if (!(await desk.useAsDirection(wordsOf(v.text)))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction'));
     if (v.sent) row.append(h('button', { onclick: () => showSent(P.novelId, v.sent) }, 'What was sent'));
   }
-  row.append(h('button', { onclick: async () => toast((await copyText(kind === 'talk' && turn.by !== 'you' ? wordsOf(v.text) : (v.text || ''))) ? 'Copied.' : 'It could not be copied.') }, 'Copy'));
+  const copyWords = turn.by === 'you' ? (v.text || '') : kind === 'talk' ? wordsOf(v.text) : sceneWords(v.text);
+  row.append(h('button', { onclick: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') }, 'Copy'));
   row.append(h('button', { onclick: () => removeTurn(kind, id, turn) }, 'Remove'));
   el.append(row);
   return el;
@@ -709,27 +747,75 @@ function drawOnePlay(p) {
     box.append(drawTurn('play', p.id, t));
     if (i === turnedAt) box.append(h('p.hint', { style: { textAlign: 'center', margin: '0' } }, '— written into the book up to here —'));
   });
+  const working = talk.talkBusy('play', p.id);
+  /* the ways it could go, offered after the narrator's last part: a tap plays one */
+  const last = turns[turns.length - 1];
+  const lv = last && last.by !== 'you' ? picked(last) : null;
+  const offered = lv && !lv.streaming && !working ? choicesIn(lv.text) : [];
+  if (offered.length) {
+    /* a way chosen is his move — with his line to the narrator, when its box is open */
+    box.append(h('div.choices', { role: 'group', 'aria-label': 'Three ways it could go' },
+      ...offered.map((c) => h('button.choice', { onclick: () => {
+        const tb = ui.rightFoot.querySelector('textarea.tellbox');
+        const tell = tb && !tb.hidden ? tb.value.trim() : '';
+        if (tell) { tb.value = ''; typed.tell = ''; }
+        playMove(p, c, tell);
+      } }, c))));
+  }
   ui.rightBody.append(box);
   const ta = h('textarea', { rows: 1, placeholder: `What does ${p.who} say or do?`, 'aria-label': `What ${p.who} says or does` });
-  const working = talk.talkBusy('play', p.id);
+  /* his line to the narrator: how the telling should go, never his character's words */
+  const tellBox = h('textarea.tellbox', { rows: 1, placeholder: `Tell the narrator — not ${p.who}’s words (bring someone in, the storm gets worse…)`, 'aria-label': 'Tell the narrator' });
+  const kept = typed.key === 'play:' + p.id ? typed : null;
+  if (kept && kept.tell) tellBox.value = kept.tell;
+  /* open or closed as he left it: closed, what is in it stays but is not sent */
+  const tellOpen = Boolean(kept && kept.tellOpen);
+  tellBox.hidden = !tellOpen;
+  const tellBtn = h('button.chip.toggle', { 'aria-pressed': String(tellOpen), title: 'A line for the narrator about how the scene should go', onclick: () => {
+    const now = tellBox.hidden;
+    tellBox.hidden = !now;
+    tellBtn.setAttribute('aria-pressed', String(now));
+    typed.key = 'play:' + p.id; typed.tellOpen = now;
+    if (now) tellBox.focus();
+  } }, 'Tell the narrator');
+  const house = store.peek('house', 'house') || {};
+  const choicesBtn = h('button.chip.toggle', { 'aria-pressed': String(Boolean(house.sceneChoices)), title: 'After each part, the narrator offers three things you could do next', onclick: () => {
+    const on = !(store.peek('house', 'house') || {}).sceneChoices;
+    store.change('house', 'house', (x) => { if (on) x.sceneChoices = true; else delete x.sceneChoices; }, { now: true });
+    choicesBtn.setAttribute('aria-pressed', String(on));
+    toast(on ? 'After each part, the narrator offers three ways it could go.' : 'No more choices offered.');
+  } }, 'Three choices');
   const send = h('button.btn.primary.small', { onclick: async () => {
     if (talk.talkBusy('play', p.id)) { talk.stopTalk('play', p.id); return; }
     const text = ta.value.trim();
+    const tell = tellBox.hidden ? '' : tellBox.value.trim();
     ta.value = ''; typed.value = '';
-    const out = await talk.playSay({ playId: p.id, text });
-    if (out && !out.ok && out.error) toast('The narrator did not answer: ' + out.error, 6000);
-    if (out && out.giveBack) giveBack('play:' + p.id, out.giveBack);
+    if (tell) { tellBox.value = ''; typed.tell = ''; }
+    await playMove(p, text, tell);
   } }, working ? 'Stop' : 'Send');
   const fresh = talk.transcriptOf(p).count;
   ui.rightFoot.hidden = false;
-  ui.rightFoot.append(ta, h('div.crow',
+  ui.rightFoot.append(ta, tellBox, h('div.crow.wrap',
     h('button.btn.small', { disabled: working || !fresh || writer.busy(P.novelId), onclick: () => toProse(p, false), title: 'Write what happened into the chapter as prose' }, 'Turn it into prose'),
+    tellBtn, choicesBtn,
     h('span.grow'), send));
-  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
+  for (const box2 of [ta, tellBox]) box2.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
+  tellBox.addEventListener('input', () => { typed.key = 'play:' + p.id; typed.tell = tellBox.value; });
   autoGrow(ta, 0.3);
+  autoGrow(tellBox, 0.2);
   restoreTyped('play:' + p.id);
   P.drawn = 'play:' + p.id + turnsSig(p);
   placeSide();
+}
+
+/* his move — his character's words, a line to the narrator, or both (nothing: it goes on) */
+async function playMove(p, text, tell) {
+  const out = await talk.playSay({ playId: p.id, text, tell });
+  if (out && !out.ok && out.error) toast('The narrator did not answer: ' + out.error, 6000);
+  if (out && (out.giveBack || out.giveBackTell)) {
+    giveBack('play:' + p.id, out.giveBack || '');
+    if (out.giveBackTell) { typed.key = 'play:' + p.id; typed.tell = out.giveBackTell; typed.tellOpen = true; const tb = ui.rightFoot.querySelector('textarea.tellbox'); if (tb && ui.rightFoot.dataset.for === 'play:' + p.id && !tb.value.trim()) { tb.value = out.giveBackTell; tb.hidden = false; } }
+  }
 }
 
 async function toProse(p, fromStart) {

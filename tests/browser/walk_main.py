@@ -8,8 +8,12 @@ def check(name, ok, saw=''):
     RESULTS.append((name, bool(ok), saw))
     print(('  ok   ' if ok else '  FAIL ') + name + ('' if ok else f'   [saw: {str(saw)[:300]}]'), flush=True)
 
+def checking(x):
+    # the checker reads finished passages in the background: its requests are its own
+    return any('Check these passages from' in (m.get('content') or '') for m in (x['body'].get('messages') or []) if isinstance(m.get('content'), str))
+
 def completions():
-    return [x for x in reqs() if x['path'].endswith('/chat/completions')]
+    return [x for x in reqs() if x['path'].endswith('/chat/completions') and not checking(x)]
 
 async def idle(pg, t=10000):
     await pg.wait_for_function("!document.querySelector('.passage.streaming') && document.querySelector('#writeBtn').textContent.trim() !== 'Stop'", timeout=t)
@@ -129,16 +133,42 @@ async def scenario_main(b):
     await pg.click('#sideBody button:has-text("Begin the scene")')
     await pg.wait_for_selector('.turn.ai .tctl', timeout=8000)
     check('the narrator opens the scene', 'stranger waits' in await pg.inner_text('.turn.ai .words'), await pg.inner_text('#sideBody'))
-    await pg.fill('#sideFoot textarea', 'I walk down the steps to meet him.')
+    # a line to the narrator, apart from his character's words
+    check('the line to the narrator starts closed', await pg.locator('#sideFoot textarea.tellbox').is_hidden())
+    await pg.click('#sideFoot button:has-text("Tell the narrator")')
+    check('Tell the narrator opens its own box', await pg.locator('#sideFoot textarea.tellbox').is_visible())
+    await pg.fill('#sideFoot textarea.tellbox', 'Let the rain ease off.')
+    await pg.fill('#sideFoot textarea:not(.tellbox)', 'I walk down the steps to meet him.')
     await pg.click('#sideFoot button:has-text("Send")')
     await pg.wait_for_function("document.querySelectorAll('.turn.ai .tctl').length >= 2", timeout=8000)
+    told = completions()[-1]['body']['messages'][-1]['content']
+    check('the line rides after his move, as not his character\'s', told == 'I walk down the steps to meet him.\n\n(Just for you, not something Mara says or does — Let the rain ease off.)', told)
+    mine = await pg.inner_text('#sideBody .turn.you >> nth=-1')
+    check('his turn shows it apart: To the narrator', 'To the narrator: Let the rain ease off.' in mine and await pg.input_value('#sideFoot textarea.tellbox') == '', mine)
+    # three choices: on, offered as buttons under the narrator's part; a tap is his move
+    await pg.click('#sideFoot button:has-text("Three choices")')
+    await pg.wait_for_timeout(200)
+    check('Three choices turns on', await pg.get_attribute('#sideFoot button:has-text("Three choices")', 'aria-pressed') == 'true')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .choices .choice', timeout=8000)
+    ways = await pg.locator('#sideBody .choices .choice').all_inner_texts()
+    words = await pg.inner_text('#sideBody .turn.ai >> nth=-1')
+    check('the narrator offers three ways, as buttons, never in its words', ways == ['Mara asks the stranger his name.', 'Mara turns back up the steps.', 'Mara holds out the letter.'] and 'choices' not in words and 'asks the stranger' not in words, (ways, words[-160:]))
+    await pg.locator('#sideBody .choices .choice').last.click()
+    await pg.wait_for_function("document.querySelectorAll('.turn.ai .tctl').length >= 4", timeout=8000)
+    moved = completions()[-1]['body']['messages']
+    story = [m for m in moved if m['role'] != 'system']
+    check('a way tapped is his move, and the offers are not sent back as the story', moved[-1]['content'] == 'Mara holds out the letter.' and not any('<choices>' in (m.get('content') or '') or 'turns back up' in (m.get('content') or '') for m in story), [m['content'][-120:] for m in story])
+    await pg.click('#sideFoot button:has-text("Three choices")')
+    await pg.wait_for_timeout(200)
+    check('…and turns off again', await pg.get_attribute('#sideFoot button:has-text("Three choices")', 'aria-pressed') == 'false')
     before = await pg.locator('#passages .passage').count()
     await pg.click('#sideFoot button:has-text("Turn it into prose")')
     await pg.wait_for_function(f"document.querySelectorAll('#passages .passage').length > {before} && !document.querySelector('.passage.streaming')", timeout=10000)
     lastp = await pg.locator('#passages .passage').last.inner_text()
     check('Turn it into prose writes the scene into the chapter', 'You found it' in lastp, lastp[:200])
     req = completions()[-1]['body']['messages'][-1]['content']
-    check('the prose request carries the scene', 'I walk down the steps' in req, req[:300])
+    check('the prose request carries the scene — not his line to the narrator, nor the offers', 'I walk down the steps' in req and 'Mara holds out the letter.' in req and 'rain ease off' not in req and 'turns back up' not in req, req[:400])
     # ---- stop and go on
     await pg.fill('#direction', 'SLOW she climbs the stairs.')
     await pg.click('#writeBtn')

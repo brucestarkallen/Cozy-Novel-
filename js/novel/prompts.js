@@ -307,15 +307,56 @@ export function readBack(rows) {
 
 /* ------------------------------------------------------- the narrator */
 
+/* a line of his that is not his character's — how he'd like the telling to go */
+export const TELL_LEAD = 'Just for you, not something';
+export function tellLine(who, tell) {
+  const w = String(who || '').trim() || 'my character';
+  return `(${TELL_LEAD} ${w} says or does — ${String(tell || '').trim()})`;
+}
+
+/* three ways the scene could go, offered after the narrator's part */
+export const CHOICES_OPEN = '<choices>';
+export const CHOICES_CLOSE = '</choices>';
+const choicesWords = (who) => `After each part you tell, once it stops where ${who} would answer or act, offer me three different things ${who} might say or do next — a short line each, as different from one another as you can make them — between ${CHOICES_OPEN} and ${CHOICES_CLOSE}, one to a line. They’re only offers, outside the scene: nothing ${who} does is decided until I choose.`;
+
 export function playFrame(house, novel, play, chapterLabel, { notesAs = 'system' } = {}) {
   const who = String(play.who || '').trim() || 'my character';
   const from = String(play.from || '').trim();
   return [
     `This is our novel, ${titleLine(novel)}. ${FICTION_TELL}`,
     `We’re playing a scene from it, and I’m taking ${who}’s part. Everything ${who} says, does, thinks and feels comes from me, in my lines; you tell everything else — the place, the other people and what they say and do, what happens. Tell it the way the book is told, in its own voice, point of view and tense: if the book sees through ${who}’s eyes, tell what ${who} sees, hears and meets, never what ${who} does or feels about it; if it sees through someone else’s, it stays theirs. Never put a word, a choice or a feeling in ${who}’s mouth or mind, and stop where ${who} would answer or act — that part is mine.`,
+    `When a line of mine begins “(${TELL_LEAD} ${who} says or does”, it isn’t part of the scene: it’s how I’d like the telling to go from here. Follow it as you tell, and never mention it.`,
+    house && house.sceneChoices ? choicesWords(who) : '',
     `Where the scene starts: ${from || `right where ${chapterLabel} leaves off`}.`,
     notesAs === 'system' ? hereIs('play') : '',
   ].filter(Boolean).join('\n\n');
+}
+
+/* the narrator's words without its offers — and, while they are still
+ * coming, without the part of them that has come so far */
+export function sceneWords(text) {
+  let t = String(text || '');
+  const at = t.toLowerCase().indexOf(CHOICES_OPEN);
+  if (at >= 0) {
+    const end = t.toLowerCase().indexOf(CHOICES_CLOSE, at);
+    t = end >= 0 ? t.slice(0, at) + t.slice(end + CHOICES_CLOSE.length) : t.slice(0, at);
+  } else {
+    /* the first letters of the block, just arrived */
+    const tail = t.match(/<[a-z]*$/i);
+    if (tail && CHOICES_OPEN.startsWith(tail[0].toLowerCase())) t = t.slice(0, tail.index);
+  }
+  return t.replace(/\s+$/, '');
+}
+/* the three ways it could go, as offered (in a finished answer): plain lines, numbering let go */
+export function choicesIn(text) {
+  const t = String(text || '');
+  const at = t.toLowerCase().indexOf(CHOICES_OPEN);
+  if (at < 0) return [];
+  /* a finished answer whose closing tag never came: what follows the opening is the offer */
+  const end = t.toLowerCase().indexOf(CHOICES_CLOSE, at);
+  return t.slice(at + CHOICES_OPEN.length, end >= 0 ? end : undefined).split('\n')
+    .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)]|\(\d+\))\s*/, '').trim())
+    .filter(Boolean).slice(0, 3);
 }
 
 export function playOpening({ who }) {
@@ -326,6 +367,50 @@ export function playOpening({ who }) {
 export function playOnwards({ who }) {
   const w = String(who || '').trim() || 'my character';
   return `Go on with the scene from where the chapter now stands, and stop at the next moment ${w} would answer or act.`;
+}
+
+/* ---------------------------------------------------- words to avoid */
+
+/* his list, one to a line: nothing empty, nothing twice */
+export function avoidList(house) {
+  const raw = String((house && house.instructions && house.instructions.avoid) || '');
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const w = line.replace(/^["“”']+|["“”']+$/g, '').trim();
+    if (w && !out.some((x) => x.toLowerCase() === w.toLowerCase())) out.push(w);
+  }
+  return out;
+}
+export function avoidLine(list) {
+  return list && list.length ? `Words and phrases I never want in the book: ${list.map((w) => `“${w}”`).join(', ')}.` : '';
+}
+
+/* ------------------------------------------------------- the checker */
+
+export const CHECK_KINDS = ['grammar', 'humanize', 'avoid', 'continuity'];
+
+export function checkerFrame(house, novel) {
+  const name = nameOf(house);
+  return `${FICTION_WORK}\n\nYou read ${titled(novel)}, a novel ${name ? `${name} is writing` : 'being written'}, the way a careful copy editor would: each passage once it’s finished, for what is plainly wrong or would plainly read better — never to change what happens, the people in it, or the voice it’s told in.`;
+}
+
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [] }) {
+  const parts = [];
+  const notes = notesText(novel, { forHelper: true });
+  if (notes) parts.push(`The book’s notes, for what is true in it:\n${notes}`);
+  const about = aboutTheBook(novel, { plans: false });
+  if (about) parts.push(about);
+  parts.push(`Check these passages from ${chapterLabel}, each numbered as it is on the page:\n${fence(numbered)}`);
+  parts.push(`Suggest only what is worth changing, each a small fix in place:
+- "grammar": spelling, grammar, punctuation, a word missing or doubled.
+- "humanize": what reads stock or machine-made rather than written — a cliché, filler, the same word twice close together, a phrase the book keeps reaching for — said the way this book would say it.${avoid.length ? `
+- "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
+- "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in.
+
+Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake. Leave what is right alone; a passage that needs nothing gets nothing.
+
+Each fix replaces a stretch of words: "find" is the words exactly as they stand in that passage — copied exactly, enough of them to stand in only one place in it — "replace" the new words, and "why" a few words on why. Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "grammar", "find": "…", "replace": "…", "why": "…"}]} — or {"edits": []} when nothing needs fixing.`);
+  return parts.join('\n\n');
 }
 
 /* ---------------------------------------------------------- the helper */

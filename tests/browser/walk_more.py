@@ -12,8 +12,12 @@ def check(name, ok, saw=''):
     RESULTS.append((name, bool(ok), saw))
     print(('  ok   ' if ok else '  FAIL ') + name + ('' if ok else f'   [saw: {str(saw)[:300]}]'), flush=True)
 
+def checking(x):
+    # the checker reads finished passages in the background: its requests are its own
+    return any('Check these passages from' in (m.get('content') or '') for m in (x['body'].get('messages') or []) if isinstance(m.get('content'), str))
+
 def completions():
-    return [x for x in reqs() if x['path'].endswith('/chat/completions')]
+    return [x for x in reqs() if x['path'].endswith('/chat/completions') and not checking(x)]
 
 async def idle(pg, t=10000):
     await pg.wait_for_function("!document.querySelector('.passage.streaming') && document.querySelector('#writeBtn').textContent.trim() !== 'Stop'", timeout=t)
@@ -559,13 +563,120 @@ async def scenario_made_while_asked(b):
     check('no page errors (made while asked)', not errs, errs[:5])
     await pg.close()
 
+async def scenario_checker(b):
+    """the checker: the bubble, Apply, Leave it, Write it again, words to avoid; search in this book and another"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Other Book')
+    await pg.fill('#direction', 'A heron stood in the shallows, grey as the morning.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(300)
+    other = await pg.evaluate('location.hash')
+    await new_book(pg, title='The Checked Book')
+    await add_conn(pg)
+    # words he never wants, in Your instructions
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    avoid = pg.locator('.sheet.on label.field:has(span:text-is("Words to avoid")) textarea')
+    # (a section stays as he left it, open or folded, in this browser)
+    if not await avoid.is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Your instructions")')
+        await pg.wait_for_timeout(200)
+    check('Your instructions has a box for words to avoid', await avoid.count() == 1)
+    await avoid.fill('tar')
+    await pg.wait_for_timeout(700)
+    await close_sheet(pg)
+    await write(pg, 'The lamp goes out.')
+    sysw = '\n'.join(m['content'] for m in completions()[-1]['body']['messages'] if m['role'] == 'system')
+    check('the writer is told the words he never wants', 'Words and phrases I never want in the book: “tar”.' in sysw, sysw[:200])
+    # the bubble: blue while it checks, then yellow with how many
+    states = []
+    for i in range(60):
+        st = await pg.get_attribute('#checkBubble', 'data-state')
+        if not states or states[-1] != st: states.append(st)
+        if st == 'found': break
+        await pg.wait_for_timeout(250)
+    n = (await pg.inner_text('#checkBubble')).strip()
+    check('the bubble is blue while it checks, then yellow with how many it found', states[-1] == 'found' and states[0] in ('waiting', 'checking') and n == '3', (states, n))
+    await pg.click('#checkBubble')
+    await pg.wait_for_selector('.sheet.on .sug')
+    cards = [c.lower() for c in await pg.locator('.sheet.on .sug').all_inner_texts()]
+    check('Suggestions holds each one: what it changes and why, Apply or Write it again, and Leave it; Apply all counts what it can put in', len(cards) == 3
+          and any('humanize' in c and 'patient, unhurried' in c and 'apply' in c for c in cards)
+          and any('grammar' in c and 'letters any more' in c for c in cards)
+          and any('words to avoid' in c and 'write it again' in c and 'leave it' in c for c in cards)
+          and await pg.locator('.sheet.on button:has-text("Apply all (2)")').count() == 1, cards)
+    await pg.locator('.sheet.on .sug:has-text("patient, unhurried") button:has-text("Apply")').click()
+    await pg.wait_for_timeout(500)
+    prose = await pg.inner_text('#passages .passage >> nth=-1')
+    check('Apply changes the words on the page, takes it off the list and counts the bubble down', 'patient, unhurried' in prose and await pg.locator('.sheet.on .sug').count() == 2 and (await pg.inner_text('#checkBubble')).strip() == '2', prose[:160])
+    await pg.locator('.sheet.on .sug:has-text("letters any more") button:has-text("Leave it")').click()
+    await pg.wait_for_timeout(400)
+    prose = await pg.inner_text('#passages .passage >> nth=-1')
+    check('Leave it takes it off and leaves the words as they are', 'letters anymore' in prose and await pg.locator('.sheet.on .sug').count() == 1, prose[:200])
+    await pg.locator('.sheet.on .sug:has-text("tar") button:has-text("Write it again")').click()
+    await pg.wait_for_timeout(200)
+    await idle(pg)
+    asked = completions()[-1]['body']['messages'][-1]['content']
+    prose = await pg.inner_text('#passages .passage >> nth=-1')
+    check('Write it again rewrites just that sentence, without the word', 'without “tar”' in asked and 'smelled of tar' not in prose and 'amber glow' in prose and 'patient, unhurried' in prose, (asked[-200:], prose[-200:]))
+    states = []
+    for i in range(60):
+        st = await pg.get_attribute('#checkBubble', 'data-state')
+        if not states or states[-1] != st: states.append(st)
+        if st == 'clean' and i > 2: break
+        await pg.wait_for_timeout(250)
+    check('the new words are checked, and what he left is not offered again: green', states[-1] == 'clean', states)
+    ctl = await pg.inner_text('#passages .passage >> nth=-1 >> .pctl')
+    check('each change is a version of its own, the words before one arrow away', '3 / 3' in ctl, ctl)
+    # search: the words, wherever they are written, and a tap goes there
+    await pg.click('#searchBtn')
+    await pg.wait_for_selector('.sheet.on .searchtop')
+    await pg.fill('.sheet.on input[type=search]', 'AMBER  glow')
+    await pg.wait_for_timeout(500)
+    say = await pg.inner_text('.sheet.on .searchsay')
+    hits = await pg.locator('.sheet.on .hit').count()
+    check('search finds the words, however they are typed', say == '1 place.' and hits == 1, (say, hits))
+    await pg.click('.sheet.on .hit')
+    await pg.wait_for_timeout(900)
+    lit = await pg.evaluate("(() => ({ glow: Boolean(document.querySelector('#passages .passage.found')), marked: Boolean(globalThis.CSS && CSS.highlights && CSS.highlights.has('found')), text: CSS.highlights && CSS.highlights.has('found') ? [...CSS.highlights.get('found')][0].toString() : '' }))()")
+    check('a tap goes to the passage and marks the words', lit['glow'] and lit['marked'] and lit['text'].lower() == 'amber glow', lit)
+    # another book: All books, and a tap opens it there
+    await pg.click('#searchBtn')
+    await pg.wait_for_selector('.sheet.on .searchtop')
+    await pg.click('.sheet.on .segmented button:has-text("All books")')
+    await pg.fill('.sheet.on input[type=search]', 'heron')
+    # (the box keeps the last words; the places for the new ones are the ones to read)
+    await pg.wait_for_function("[...document.querySelectorAll('.sheet.on .hit')].some((x) => /heron/i.test(x.textContent))", timeout=5000)
+    books = await pg.locator('.sheet.on .searchbook').all_inner_texts()
+    check('All books says which book each place is in', books == ['The Other Book'], books)
+    await pg.click('.sheet.on .hit')
+    await pg.wait_for_function(f"location.hash.startsWith({json.dumps(other.split('/')[0] + '/' + other.split('/')[1] + '/' + other.split('/')[2])})", timeout=5000)
+    await pg.wait_for_timeout(900)
+    there = await pg.evaluate("(() => ({ title: document.querySelector('#bookTitle') ? document.querySelector('#bookTitle').textContent : '', glow: Boolean(document.querySelector('#passages .passage.found')), marked: CSS.highlights && CSS.highlights.has('found') ? [...CSS.highlights.get('found')][0].toString() : '' }))()")
+    check('a place in another book opens that book at the words', 'The Other Book' in there['title'] and there['glow'] and there['marked'].lower() == 'heron', there)
+    await pg.go_back(); await pg.wait_for_timeout(500)
+    check('Back from there leaves the book for the shelf, as from any book', await pg.evaluate("!document.querySelector('#shelf').hidden"), await pg.evaluate('location.hash'))
+    # the list emptied again, for the walks after
+    await pg.click('#shelfSettings')
+    await pg.wait_for_selector('.sheet.on')
+    avoid = pg.locator('.sheet.on label.field:has(span:text-is("Words to avoid")) textarea')
+    if not await avoid.is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Your instructions")')
+        await pg.wait_for_timeout(200)
+    await avoid.fill('')
+    await pg.wait_for_timeout(700)
+    await close_sheet(pg)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (checker and search)', not errs, errs[:5])
+    await pg.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue
