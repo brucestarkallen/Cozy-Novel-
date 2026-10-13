@@ -523,7 +523,7 @@ function lengthMenu() {
   const cur = (n.prefs && n.prefs.length) || 'scene';
   menu(ui.lengthBtn, [
     { label: 'How much to write', header: true },
-    ...Object.entries(LENGTHS).map(([k, L]) => ({ label: L.label + (L.words[0] ? ` (about ${L.words[0].toLocaleString()}–${L.words[1].toLocaleString()} words)` : ''), checked: k === cur, run: () => { store.change('novel', S.novelId, novelSteps.setPref('length', k)); drawComposer(); } })),
+    ...Object.entries(LENGTHS).map(([k, L]) => ({ label: L.label + (L.hint ? ` (${L.hint})` : L.words[0] ? ` (about ${L.words[0].toLocaleString()}–${L.words[1].toLocaleString()} words)` : ''), checked: k === cur, run: () => { store.change('novel', S.novelId, novelSteps.setPref('length', k)); drawComposer(); } })),
   ]);
 }
 

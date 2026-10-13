@@ -32,7 +32,8 @@ export const SAFETY = 1500;
  * half of what the model holds. */
 export function answerRoom(conn, length = 'scene') {
   const set = Number.isFinite(conn && conn.maxTokens) && conn.maxTokens > 0 ? conn.maxTokens : 0;
-  const wanted = length === 'chapter' ? 12000 : length === 'long' ? 9000 : length === 'paragraphs' ? 2500 : 6000;
+  /* Automatic may run as long as a long stretch */
+  const wanted = length === 'chapter' ? 12000 : length === 'long' || length === 'auto' ? 9000 : length === 'paragraphs' ? 2500 : 6000;
   let room = set || wanted;
   if (thinksOn(conn || {})) room = Math.max(room, thinkingFloor(conn || {}));
   return Math.min(room, Math.floor(contextOf(conn || {}) * 0.5));
@@ -42,7 +43,7 @@ export function answerRoom(conn, length = 'scene') {
  * when he set none. */
 export function requiredLength(conn, length) {
   if (Number.isFinite(conn && conn.maxTokens) && conn.maxTokens > 0) return conn.maxTokens;
-  return { paragraphs: 2048, scene: 4096, long: 8192, chapter: 12000 }[length] || 4096;
+  return { paragraphs: 2048, scene: 4096, long: 8192, auto: 8192, chapter: 12000 }[length] || 4096;
 }
 
 function excerpt(text, n = 900) {

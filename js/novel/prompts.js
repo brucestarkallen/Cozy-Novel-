@@ -163,7 +163,15 @@ export function writerFrame(house, novel, { notesAs = 'system' } = {}) {
   return notesAs === 'system' ? `${lead} ${hereIs('write')}` : lead;
 }
 
-export function lengthWords(length) {
+/* Automatic: how much is the writer's call — enough to carry the story on the
+ * way he'll enjoy it, all of what he asked for, stopping where he'd want to
+ * take the wheel. Between two passages it is as much as the bridge needs. */
+const AUTO_CARRY = 'How much to write is yours to judge, the way a novelist would: as much as this part needs — all of what I asked for, if I said what happens — carrying the story forward the way you think I’ll enjoy it, and stopping where I’d most want to take the wheel: a choice that’s mine to make, a line that waits for an answer, a turn I’d want to steer. A quiet beat can be a few paragraphs; a big scene can run long.';
+const AUTO_OPEN = 'How much of the opening to write is yours to judge, the way a novelist would: enough to set it going the way you think I’ll enjoy it — all of what I asked for, if I said what happens — stopping where I’d most want to take the wheel: a choice that’s mine to make, a line that waits for an answer, a turn I’d want to steer.';
+const AUTO_BETWEEN = 'How much to write is yours to judge: as much as it takes to get naturally from the text before it to the text that follows it — no more.';
+
+export function lengthWords(length, { between = false } = {}) {
+  if (length === 'auto') return between ? AUTO_BETWEEN : AUTO_CARRY;
   const L = LENGTHS[length] || LENGTHS.scene;
   if (length === 'chapter') return 'Write the rest of this chapter, through to a natural chapter ending.';
   if (length === 'paragraphs') return `Write the next few paragraphs — around ${L.words[0]} to ${L.words[1]} words.`;
@@ -173,6 +181,7 @@ export function lengthWords(length) {
 
 /* the same, for a chapter with nothing in it yet */
 export function openingWords(length) {
+  if (length === 'auto') return AUTO_OPEN;
   const L = LENGTHS[length] || LENGTHS.scene;
   if (length === 'chapter') return 'Write the whole chapter, through to a natural chapter ending.';
   if (length === 'paragraphs') return `Write its opening paragraphs — around ${L.words[0]} to ${L.words[1]} words.`;
@@ -197,7 +206,7 @@ export function writeRequest({ chapterLabel, direction, length, empty, firstOfBo
     lines.push(`Carry on with ${chapterLabel} from where it stops.`);
     lines.push(d ? `What happens next: ${d}` : 'Let the story go where it naturally goes next.');
   }
-  lines.push(empty ? openingWords(length) : lengthWords(length));
+  lines.push(empty ? openingWords(length) : lengthWords(length, { between }));
   lines.push(empty ? STORY_ONLY_FIRST : between ? STORY_ONLY_BETWEEN : STORY_ONLY);
   return lines.join('\n\n');
 }

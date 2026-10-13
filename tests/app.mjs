@@ -157,6 +157,27 @@ await test('Write sends his own words first, the book, and his request last — 
   await putAway(b);
 });
 
+await test('How much to write, Automatic: the writer judges it, stops where he would take the wheel; no range is asked; a long reply has room', async () => {
+  const b = await makeBook([['The lamp was cold.', 'The sea came up the steps.']]);
+  store.change('novel', b.novelId, shape.novelSteps.setPref('length', 'auto'), { now: true });
+  await script([{ text: 'Mara struck a match.' }, { text: 'A bridge.' }]);
+  const n = b.novel();
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.', length: n.prefs.length });
+  assert.equal(out.ok, true);
+  const ask = (await requests())[0].body.messages.at(-1).content;
+  assert.ok(ask.includes('yours to judge') && ask.includes('take the wheel') && ask.includes('all of what I asked for'), ask);
+  assert.ok(!/\d[\d,]* to [\d,]+ words/.test(ask), 'no range is asked');
+  /* written into the middle: as much as it takes to reach what follows */
+  const first = store.peek('chapter', b.ids[0]).passages[0].id;
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'auto', after: first });
+  const mid = (await requests())[1].body.messages.at(-1).content;
+  assert.ok(mid.includes('to the text that follows it') && !mid.includes('take the wheel'), mid);
+  /* Claude must be told a reply length: Automatic gets a long stretch's room, or exactly what he set */
+  assert.equal(context.requiredLength({}, 'auto'), context.requiredLength({}, 'long'));
+  assert.equal(context.requiredLength({ maxTokens: 1500 }, 'auto'), 1500);
+  await putAway(b);
+});
+
 await test('what he left empty is not sent; what he set is sent exactly', async () => {
   const b = await makeBook([['The lamp was cold.']]);
   await script([{ text: 'One.' }]);

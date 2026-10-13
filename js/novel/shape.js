@@ -21,7 +21,11 @@
 import { newId, countWords, hashText, numberWords } from '../util.js';
 
 export const COVERS = ['ember', 'moss', 'dusk', 'rose', 'ink', 'sea', 'wine', 'gold'];
+/* how much a Write writes. A size is asked as a range (around x to y words):
+ * a model aims for the middle of a range, where "at most x" is read as a
+ * target to hit or a reason to rush. Automatic leaves it to the writer. */
 export const LENGTHS = {
+  auto: { label: 'Automatic', words: [0, 0], hint: 'the writer judges how much the story needs' },
   paragraphs: { label: 'A few paragraphs', words: [250, 500] },
   scene: { label: 'A scene', words: [1000, 1800] },
   long: { label: 'A long stretch', words: [2500, 4000] },
