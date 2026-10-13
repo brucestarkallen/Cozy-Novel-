@@ -61,6 +61,8 @@ const providers = await import(path.join(ROOT, 'js/model/providers.js'));
 const call = await import(path.join(ROOT, 'js/model/call.js'));
 const checker = await import(path.join(ROOT, 'js/novel/checker.js'));
 const search = await import(path.join(ROOT, 'js/novel/search.js'));
+const modules = await import(path.join(ROOT, 'js/novel/modules.js'));
+const crafts = await import(path.join(ROOT, 'js/novel/crafts.js'));
 const { picked } = shape;
 
 async function script(queue) { await realFetch(PROVIDER + '/script', { method: 'POST', body: JSON.stringify({ queue }) }); }
@@ -77,6 +79,11 @@ async function setHouse(conn = {}, extra = {}) {
   else { store.change('house', 'house', (x) => { for (const k of Object.keys(x)) delete x[k]; Object.assign(x, JSON.parse(JSON.stringify(data))); }, { now: true }); }
   await store.flush('house', 'house');
 }
+
+/* the app's crafts and rules switched off — for a check of how the book fits
+ * a small room, with nothing else in it (the crafts alone are ~17,000 tokens) */
+const CRAFTS_OFF = { modules: Object.fromEntries(['novel-craft', 'scene-craft', 'voice', 'intimate', 'contested'].map((id) => [id, { rides: 'off' }])) };
+const quietHouse = () => ({ ...store.peek('house', 'house'), ...CRAFTS_OFF });
 
 /* a book on the phone: chapters = [[passage, ...], ...]; a passage is a text,
  * '---' for a scene break, or {text, ...version fields} */
@@ -348,7 +355,7 @@ await test('writing from the middle: the request says between, and what follows 
   const after = Array.from({ length: 900 }, (_, i) => `Later line ${i}.`).join(' ');
   const b = await makeBook([['THE FIRST PASSAGE.', 'AFTER STARTS HERE. ' + after]]);
   const first = b.ch().passages[0];
-  await setHouse({ context: 7000 });
+  await setHouse({ context: 7000 }, CRAFTS_OFF);
   await script([{ text: 'In between.' }]);
   const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], after: first.id });
   assert.equal(out.ok, true);
@@ -626,7 +633,7 @@ await test('a finished chapter gets a summary; a summary older than its chapter 
   writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'A line added later. '.repeat(3000) });
   const n = b.novel();
   const chapters = { [b.ids[0]]: b.ch(0), [b.ids[1]]: b.ch(1) };
-  const a = context.assemble({ house: store.peek('house', 'house'), novel: n, chapters, conn: { ...CONN, context: 9000, maxTokens: 500 }, target: { chapterId: b.ids[1] }, request: 'Go.' });
+  const a = context.assemble({ house: quietHouse(), novel: n, chapters, conn: { ...CONN, context: 9000, maxTokens: 500 }, target: { chapterId: b.ids[1] }, request: 'Go.' });
   assert.ok(a.system.includes("(This summary was written before the chapter's latest changes.)\nMara finds the letter."), a.system.slice(0, 2000));
   assert.ok(!a.system.includes('A line added later. A line added later. A line added later. A line added later.'), 'never the chapter both whole and in short');
   await putAway(b);
@@ -822,7 +829,10 @@ await test('a reply that breaks partway is kept as cut, never left "being writte
 });
 
 /* =================================================== what each one reads */
-await test('a scene sends the narrator\'s own words first — his writing words when that box is empty — and says whose part he takes', async () => {
+/* An emptied narrator box sends nothing of his (2.3; it used to send "How
+ * you like it written", which now tells the writer it writes everyone, the
+ * main character too — what the narrator of a scene he plays must never do). */
+await test('a scene sends the narrator\'s own words first — nothing of his when that box is empty — and says whose part he takes', async () => {
   const b = await makeBook([['Mina waited at the gate. Joon was beside her.']]);
   await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', narrator: 'THE NARRATOR\'S OWN WORDS', late: '', partner: '' } });
   const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Joon' });
@@ -839,7 +849,9 @@ await test('a scene sends the narrator\'s own words first — his writing words 
   await script([{ text: 'Rain.' }]);
   await talk.playSay({ playId: id, text: 'I take her hand.' });
   body = (await requests())[0].body;
-  assert.ok(body.messages[0].content.startsWith('HIS OWN WORDS FIRST'), 'the narrator box emptied: his writing words');
+  const emptied = body.messages[0].content;
+  assert.ok(!emptied.includes('HIS OWN WORDS FIRST'), 'the narrator box emptied: not his writing words');
+  assert.ok(emptied.startsWith('## The Telling\nProse is grounded, concrete, literal. You tell the world around my character.'), `nothing of his: the scene craft comes first — ${emptied.slice(0, 120)}`);
   await setHouse();
   await putAway(b);
 });
@@ -1006,7 +1018,7 @@ await test('a book longer than the model holds rides older chapters as summaries
   const b = await makeBook(chs);
   for (let i = 0; i < 5; i++) store.change('chapter', b.ids[i], shape.chapterSteps.setSummary({ text: `SUMMARY-${i + 1}`, fp: shape.chapterPrint(b.ch(i)), at: Date.now() }));
   const chapters = Object.fromEntries(b.ids.map((id, i) => [id, b.ch(i)]));
-  const a = context.assemble({ house: store.peek('house', 'house'), novel: b.novel(), chapters, conn: { ...CONN, context: 8000, maxTokens: 500 }, target: { chapterId: b.ids[5] }, request: 'Go.' });
+  const a = context.assemble({ house: quietHouse(), novel: b.novel(), chapters, conn: { ...CONN, context: 8000, maxTokens: 500 }, target: { chapterId: b.ids[5] }, request: 'Go.' });
   for (let i = 1; i <= 5; i++) {
     const whole = a.system.includes(`CHAPTER-${i}-END`);
     const short = a.system.includes(`SUMMARY-${i}`);
@@ -1024,7 +1036,7 @@ await test('later chapters that do not fit are said to be left out', async () =>
   const b = await makeBook([['Now.'], [para], [para], [para], [para]]);
   for (let i = 1; i < 5; i++) store.change('chapter', b.ids[i], shape.chapterSteps.setSummary({ text: para, fp: shape.chapterPrint(b.ch(i)), at: Date.now() }));
   const chapters = Object.fromEntries(b.ids.map((id, i) => [id, b.ch(i)]));
-  const a = context.assemble({ house: store.peek('house', 'house'), novel: b.novel(), chapters, conn: { ...CONN, context: 9000, maxTokens: 500 }, target: { chapterId: b.ids[0] }, request: 'Go.' });
+  const a = context.assemble({ house: quietHouse(), novel: b.novel(), chapters, conn: { ...CONN, context: 9000, maxTokens: 500 }, target: { chapterId: b.ids[0] }, request: 'Go.' });
   assert.match(a.system, /more chapters? comes? after .*left out here to save room/);
   await putAway(b);
 });
@@ -1032,7 +1044,7 @@ await test('later chapters that do not fit are said to be left out', async () =>
 await test('the chapter being written, too long for the room, keeps its opening and the words right before the point', async () => {
   const filler = Array.from({ length: 400 }, (_, i) => `Line ${i} of a very long chapter.`).join(' ');
   const b = await makeBook([['THE OPENING LINE. ' + filler + ' THE LAST WORDS BEFORE.']]);
-  const a = context.assemble({ house: store.peek('house', 'house'), novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn: { ...CONN, context: 6000, maxTokens: 500 }, target: { chapterId: b.ids[0] }, request: 'Go.' });
+  const a = context.assemble({ house: quietHouse(), novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn: { ...CONN, context: 6000, maxTokens: 500 }, target: { chapterId: b.ids[0] }, request: 'Go.' });
   assert.ok(a.system.includes('THE OPENING LINE.'));
   assert.ok(a.system.includes('THE LAST WORDS BEFORE.'));
   assert.ok(a.system.includes('left out here to save room'));
@@ -1046,6 +1058,7 @@ heading('the model layer');
 await test('"too long" from the model: the book is fitted smaller and sent once more', async () => {
   const para = 'The storm came in off the water like a held breath let go. '.repeat(60);
   const b = await makeBook([[para], [para], [para], ['Now.']]);
+  await setHouse({}, CRAFTS_OFF);
   await script([{ status: 400, message: "This model's maximum context length is 4000 tokens. However, your messages resulted in 9000 tokens." }, { text: 'It fits now.' }]);
   const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[3] });
   assert.equal(out.ok, true);
@@ -1054,6 +1067,33 @@ await test('"too long" from the model: the book is fitted smaller and sent once 
   const size = (x) => JSON.stringify(x.body.messages).length;
   assert.ok(size(r[1]) < size(r[0]) * 0.8, `${size(r[0])} -> ${size(r[1])}`);
   assert.ok(out.notes.some((n) => /fitted to/.test(n)), out.notes.join(' | '));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a model too small for his instructions and the modules is told so in plain words — once it said its size, nothing more is sent', async () => {
+  const b = await makeBook([['Now.']]);
+  /* the crafts ride (the default): about 17,000 tokens before any of the book */
+  await script([{ status: 400, message: "This model's maximum context length is 8000 tokens. However, your messages resulted in 19000 tokens." }, { text: 'Never asked.' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  assert.equal(out.ok, false);
+  assert.equal((await requests()).length, 1, 'the one the model refused, and no other');
+  assert.match(out.error, /holds about 8,000 tokens, and your instructions with the modules for the writer take about [\d,]+ of them/);
+  assert.match(out.error, /Settings → Who does what/);
+  assert.match(out.error, /Settings → Your instructions → Modules/);
+  assert.equal(b.ch().passages.length, 1, 'no empty passage is left on the page');
+  /* a room he set himself is believed at once: nothing is sent at all */
+  await reset();
+  await setHouse({ context: 8000 });
+  const again = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  assert.equal(again.ok, false);
+  assert.equal((await requests()).length, 0);
+  /* with the crafts off, the same small room writes the page */
+  await setHouse({ context: 8000 }, CRAFTS_OFF);
+  await script([{ text: 'She waited.' }]);
+  const fine = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  assert.equal(fine.ok, true, fine.error);
+  await setHouse();
   await putAway(b);
 });
 
@@ -1463,6 +1503,252 @@ await test('a passage longer than the checker\'s model holds at once is read in 
   checker.forTests().blocked.delete(b.novelId);
   checker.forTests().states.delete(b.novelId);
   await setHouse();
+  await putAway(b);
+});
+
+/* =================================================== the crafts and modules */
+heading('the crafts and modules, who decides how it turns out, how it sounds');
+
+const systemOf = (r) => r.body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+const askOf = (r) => r.body.messages.at(-1).content;
+
+await test('the writer reads the novel craft right after his own words, in the part that stays the same; the narrator reads the scene craft; the partner neither', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  await script([{ text: 'A page.' }, { text: 'The gate creaks.' }, { text: 'An answer.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.' });
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+  await talk.playSay({ playId: id, text: '' });
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Thoughts?' });
+  const [w, p, t] = (await requests()).map(systemOf);
+  const novelCraft = modules.builtinOf('novel-craft').text;
+  const sceneCraft = modules.builtinOf('scene-craft').text;
+  assert.ok(w.startsWith(`HIS OWN WORDS FIRST\n\n${novelCraft}`), w.slice(0, 160));
+  assert.ok(!w.includes(sceneCraft.slice(0, 300)), 'not the scene craft');
+  assert.ok(p.startsWith(`${prompts.DEFAULT_NARRATOR}\n\n${sceneCraft}`), p.slice(0, 160));
+  assert.ok(!p.includes(novelCraft.slice(0, 300)), 'not the novel craft');
+  assert.ok(w.includes('## The Sound Law') && p.includes('## The Sound Law') && !t.includes('## The Sound Law'), 'the sound law for the two who tell it');
+  assert.ok(!t.includes('## The Telling'), 'the partner reads neither craft');
+  /* Claude keeps the part with his words and the craft ready */
+  const a = context.assemble({ house: store.peek('house', 'house'), novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn: CONN, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'Go.' });
+  const { body } = providers.buildRequest({ url: 'https://api.anthropic.com/v1', model: 'claude-x', key: 'k' }, { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: 2000 });
+  assert.ok(body.system[0].text.includes(novelCraft) && body.system[0].cache_control, 'the craft is in the kept part');
+  assert.deepEqual(a.stats.modules, ['The novel craft', 'The sound of a voice']);
+  await putAway(b);
+});
+
+await test('a rule that wakes rides only when the moment turns to it — his words, or the page right before the point — nearer the page, never in the kept part', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  await script([{ text: 'Quiet.' }, { text: 'Steel.' }, { text: 'Heat.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.' });
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Jovan fights Kenjaku.' });
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'They make love by the fire.' });
+  const [quiet, fight, heat] = (await requests()).map(systemOf);
+  assert.ok(!quiet.includes('## How A Fight Sounds') && !quiet.includes('## When The Scene Turns Intimate'), 'a quiet page wakes nothing');
+  assert.ok(fight.includes('## How A Fight Sounds') && !fight.includes('## When The Scene Turns Intimate'), 'a fight in his words');
+  assert.ok(!fight.includes("## When Words Won't Carry It"), 'the contest\'s board is the narrator\'s; the writer\'s is in its craft');
+  assert.ok(heat.includes('## When The Scene Turns Intimate') && heat.includes('## How It Sounds') && heat.indexOf('## How It Sounds') > heat.indexOf('## When The Scene Turns Intimate'), 'intimacy: the rule, then how it sounds');
+  /* the page itself wakes it, with no words from him */
+  const b2 = await makeBook([['Kenjaku lunged, and Yuki parried the blow.']]);
+  await reset();
+  await script([{ text: 'More.' }]);
+  await writer.writeNext({ novelId: b2.novelId, chapterId: b2.ids[0] });
+  assert.ok(systemOf((await requests())[0]).includes('## How A Fight Sounds'), 'the page right before the point');
+  /* where it rides: in the part that moves, before the notes and the chapter */
+  store.change('novel', b2.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: 'NOTED PERSON', about: 'x' })), { now: true });
+  const a = context.assemble({ house: store.peek('house', 'house'), novel: b2.novel(), chapters: { [b2.ids[0]]: b2.ch() }, conn: CONN, purpose: 'write', target: { chapterId: b2.ids[0] }, request: 'Go.' });
+  assert.ok(!a.systemParts[0].includes('## How A Fight Sounds'), 'never in the kept part');
+  assert.ok(a.systemParts[1].startsWith('## How A Fight Sounds') && a.systemParts[1].indexOf('NOTED PERSON') > 0, 'woken rules, then the notes');
+  /* the book as his notes: still the system's, as its last part */
+  const a2 = context.assemble({ house: { ...store.peek('house', 'house'), notesAs: 'user' }, novel: b2.novel(), chapters: { [b2.ids[0]]: b2.ch() }, conn: CONN, purpose: 'write', target: { chapterId: b2.ids[0] }, request: 'Go.' });
+  assert.equal(a2.systemParts.length, 2);
+  assert.ok(a2.systemParts[1].startsWith('## How A Fight Sounds') && a2.system.endsWith(a2.systemParts[1]));
+  assert.ok(!a2.messages.some((m) => m.role !== 'system' && m.content.includes('## How A Fight Sounds')), 'a rule never rides as his words');
+  /* a scene: his move wakes the narrator's board and how a fight sounds */
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Jovan' });
+  await reset();
+  await script([{ text: 'The wind.' }, { text: 'Steel rings.' }]);
+  await talk.playSay({ playId: id, text: '' });
+  await talk.playSay({ playId: id, text: 'I draw my sword and attack him.' });
+  const [p0, p1] = (await requests()).map(systemOf);
+  assert.ok(!p0.includes("## When Words Won't Carry It"), 'nothing woke it yet');
+  assert.ok(p1.includes("## When Words Won't Carry It") && p1.includes('## How A Fight Sounds'), 'his move did');
+  await putAway(b); await putAway(b2);
+});
+
+await test('Sound: Comic sends his law with sound effects in asterisks; Novel the same two lanes, the sounds written into the sentences — each book its own, and the checker is told it is the book\'s style', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  const b2 = await makeBook([['Mara climbed to the lamp.']]);
+  store.change('novel', b2.novelId, shape.novelSteps.setPref('sound', 'novel'), { now: true });
+  await script([{ text: 'One.' }, { text: 'Two.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'He draws his sword.' });
+  await writer.writeNext({ novelId: b2.novelId, chapterId: b2.ids[0], direction: 'He draws his sword.' });
+  const [comic, novel] = (await requests()).map(systemOf);
+  assert.ok(comic.includes('Sound As Onomatopoeia') && comic.includes('*CLANG!*') && !comic.includes('Sound In The Prose'), 'Comic');
+  assert.ok(novel.includes('Sound In The Prose') && !/\*[A-Z][A-Za-z!—-]*\*/.test(novel) && !novel.includes('Sound As Onomatopoeia'), 'Novel: no sound effect in asterisks anywhere');
+  assert.equal((await onPhone('novel', b2.novelId)).prefs.sound, 'novel', 'kept on the phone');
+  const told = (n) => prompts.checkRequest({ novel: n, chapterLabel: 'Chapter One', numbered: '[1.1] Words.' });
+  assert.ok(told(b.novel()).includes('sound effects in asterisks'), 'the checker leaves Comic sound effects be');
+  assert.ok(!told(b2.novel()).includes('asterisks') && told(b2.novel()).includes('written out in quotes'), 'and Novel\'s voices');
+  await putAway(b); await putAway(b2);
+});
+
+await test('his own modules ride word for word to whom he chose, after the app\'s, oldest first; Off and empty send nothing; one of the app\'s he changed sends his words, and keeps only what he changed', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  const mine = 'MY PERSONAL MODULE: the rain never stops.';
+  const second = 'MY SECOND MODULE: gulls everywhere.';
+  store.change('house', 'house', modules.moduleSteps.add('m-mine', { at: 1, name: 'Rain', text: mine, to: ['partner', 'narrator'], rides: 'always' }), { now: true });
+  store.change('house', 'house', modules.moduleSteps.add('m-two', { at: 2, name: 'Gulls', text: second, to: ['narrator'], rides: 'always' }), { now: true });
+  store.change('house', 'house', modules.moduleSteps.set('novel-craft', { text: 'MY NOVEL CRAFT.' }), { now: true });
+  store.change('house', 'house', modules.moduleSteps.set('voice', { rides: 'off' }), { now: true });
+  await store.flush('house', 'house');
+  const hs = await onPhone('house', 'house');
+  assert.deepEqual(hs.modules['novel-craft'], { text: 'MY NOVEL CRAFT.' }, 'only his words are kept for it');
+  assert.deepEqual(hs.modules.voice, { rides: 'off' }, 'only when it rides — its words still follow the app\'s');
+  assert.deepEqual(hs.modules['m-mine'].to, ['narrator', 'partner'], 'who reads it, in one order');
+  await script([{ text: 'A page.' }, { text: 'The gate creaks.' }, { text: 'An answer.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+  await talk.playSay({ playId: id, text: '' });
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Thoughts?' });
+  const [w, p, t] = (await requests()).map(systemOf);
+  assert.ok(w.startsWith('HIS OWN WORDS FIRST\n\nMY NOVEL CRAFT.'), w.slice(0, 80));
+  assert.ok(!w.includes(mine) && !w.includes('## The Sound Of A Voice'), 'not his narrator\'s module; the voice rule is off');
+  assert.ok(p.includes(mine) && p.indexOf(mine) > p.indexOf('Role = you handle narration') && p.indexOf(second) > p.indexOf(mine), 'after the app\'s, the oldest first');
+  assert.ok(t.includes(mine) && !t.includes(second), 'and to his partner, as he ticked');
+  /* the app's words again: the row goes; Off and empty: nothing */
+  store.change('house', 'house', modules.moduleSteps.set('novel-craft', { text: modules.builtinOf('novel-craft').text }), { now: true });
+  store.change('house', 'house', modules.moduleSteps.set('voice', { rides: 'always' }), { now: true });
+  store.change('house', 'house', modules.moduleSteps.set('m-mine', { rides: 'off' }), { now: true });
+  store.change('house', 'house', modules.moduleSteps.set('m-two', { text: '   ' }), { now: true });
+  await store.flush('house', 'house');
+  const hs2 = await onPhone('house', 'house');
+  assert.equal(hs2.modules['novel-craft'], undefined);
+  assert.equal(hs2.modules.voice, undefined);
+  await reset();
+  await script([{ text: 'Again.' }, { text: 'Rain.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  await talk.playSay({ playId: id, text: 'I wait.' });
+  const [w2, p2] = (await requests()).map(systemOf);
+  assert.ok(w2.startsWith(`HIS OWN WORDS FIRST\n\n${modules.builtinOf('novel-craft').text}`) && w2.includes('## The Sound Of A Voice'), 'the app\'s again');
+  assert.ok(!p2.includes(mine) && !p2.includes('MY SECOND MODULE'), 'Off and empty send nothing');
+  /* taken out, and put back with Undo */
+  const row = JSON.parse(JSON.stringify(store.peek('house', 'house').modules['m-mine']));
+  store.change('house', 'house', modules.moduleSteps.remove('m-mine'), { now: true });
+  assert.equal(modules.moduleOf(store.peek('house', 'house'), 'm-mine'), null);
+  store.change('house', 'house', modules.moduleSteps.set('m-mine', { rides: 'always' }), { now: true });
+  assert.equal(modules.moduleOf(store.peek('house', 'house'), 'm-mine'), null, 'a step on one taken out does not bring it back');
+  store.change('house', 'house', modules.moduleSteps.restore('m-mine', row), { now: true });
+  assert.equal(modules.moduleOf(store.peek('house', 'house'), 'm-mine').text, mine);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('who decides how it turns out: the writer, or him — said with a new page and with Go on, as the chip says now; never between two passages, nor in a rewrite', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  const b3 = await makeBook([['Mara climbed to the lamp.', { text: 'The storm broke over the', cut: true, ask: { direction: 'Jovan fights Kenjaku.', length: 'scene' } }]]);
+  await script([{ text: 'One.' }, { text: 'Two.' }, { text: 'Three.' }, { text: 'Four.' }, { text: 'rocks.' }, { text: 'Five.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Jovan fights Kenjaku.', length: 'auto' });
+  store.change('novel', b.novelId, shape.novelSteps.setPref('outcome', 'me'), { now: true });
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Jovan fights Kenjaku.', length: 'scene' });
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], after: b.ch().passages[0].id, length: 'scene' });
+  const two = b.ch().passages.find((x) => picked(x).text === 'Two.').id;
+  await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: two });
+  store.change('novel', b3.novelId, shape.novelSteps.setPref('outcome', 'me'), { now: true });
+  await writer.goOn({ novelId: b3.novelId, chapterId: b3.ids[0], passageId: b3.ch().passages[1].id });
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: two, note: 'Kenjaku wins.' });
+  const asks = (await requests()).map(askOf);
+  assert.ok(asks[0].includes('How it turns out is yours to decide') && asks[0].includes('take the wheel again with my next premise') && asks[0].includes('Never begin a new turn'), asks[0]);
+  assert.ok(asks[1].includes('How it turns out is mine to decide') && asks[1].includes('stop on the moment it hangs') && asks[1].includes('shorter is right'), asks[1]);
+  assert.ok(!asks[2].includes('How it turns out'), 'between two passages, what follows settles it');
+  assert.ok(asks[3].includes('How it turns out is mine to decide'), 'another take asks as the chip says now');
+  assert.ok(asks[4].includes('What I asked for in it: Jovan fights Kenjaku.') && asks[4].includes('How it turns out is mine to decide'), asks[4]);
+  assert.ok(!asks[5].includes('How it turns out'), 'a rewrite: his note and the pages settle it');
+  assert.equal(picked(b3.ch().passages[1]).text, 'The storm broke over the rocks.', 'carried on where it stopped');
+  await store.flush();
+  assert.equal((await onPhone('novel', b.novelId)).prefs.outcome, 'me', 'the book keeps it');
+  store.change('novel', b.novelId, shape.novelSteps.setPref('outcome', ''), { now: true });
+  assert.equal(shape.outcomeOf(b.novel()), 'writer', 'and back to the writer');
+  await putAway(b); await putAway(b3);
+});
+
+await test('a rewrite with his note carries the change through — the old words only a reference; the last passage ends where the change takes it, one with more after it leads in, and his change wins', async () => {
+  const b = await makeBook([['Jovan stepped in and said his name.', 'Kenjaku smiled.'], ['A later chapter.']]);
+  const b2 = await makeBook([['Jovan stepped in and said his name.', 'Kenjaku smiled.']]);
+  await script([{ text: 'New one.' }, { text: 'New two.' }, { text: 'New last.' }, { text: 'Fresh.' }]);
+  const [p1, p2] = b.ch().passages.map((p) => p.id);
+  const last = b2.ch().passages[1].id;
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: p1, note: 'Jovan stays silent and saves Yuki without a word.' });
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: p2, note: 'He never says a word.' });
+  await writer.rewrite({ novelId: b2.novelId, chapterId: b2.ids[0], passageId: last, note: 'He never says a word.' });
+  await writer.rewrite({ novelId: b2.novelId, chapterId: b2.ids[0], passageId: last, note: '' });
+  const asks = (await requests()).map(askOf);
+  assert.ok(asks[0].includes('What I want different: Jovan stays silent and saves Yuki without a word.') && asks[0].includes('My change is now what happens') && asks[0].includes('there only for reference'), asks[0]);
+  assert.ok(asks[0].includes('my change wins') && !asks[0].includes('end wherever'), 'more comes after it in its chapter');
+  assert.ok(asks[1].includes('my change wins'), 'a later chapter with words comes after it');
+  assert.ok(asks[2].includes('can end wherever the change takes it') && !asks[2].includes('my change wins'), 'the last passage of the book');
+  assert.ok(asks[3].includes('a fresh take on the same moment') && !asks[3].includes('My change'), 'no note: a fresh take');
+  assert.equal(picked(b.ch().passages[0]).text, 'New one.');
+  assert.equal(b.ch().passages[0].versions.length, 2, 'the old words one arrow away');
+  await putAway(b); await putAway(b2);
+});
+
+/* what a 2.2 house holds in a box he never touched */
+const OLD_WRITING = `You write fiction the way good published novels read: concrete, sensory detail; real feeling under the surface; dialogue that sounds like people actually talking; a pace that gives quiet moments room to breathe and lets big moments land.
+
+Stay true to the characters and to everything already written — never contradict it. Show rather than summarise. Don't rush to wrap things up, don't end on a neat moral, and don't reach for a cliffhanger unless the story calls for one. Avoid stock phrases and repeating yourself.`;
+const OLD_NARRATOR = `You tell the scene the way the book itself is told — its voice, its point of view, its tense — a few paragraphs at a time: the place, the weather of the moment, the other people and what they say and do, what happens next.
+
+The people in it have their own minds. They want things, they push back, they lie, they surprise; nobody waits politely for a turn or exists only to agree. The world keeps moving around the scene. Keep it concrete and alive, let quiet moments breathe and big ones land, and end each telling at a moment that asks for an answer.`;
+
+await test('boxes still holding the starting words of before get today\'s — the master novelist, his preset\'s own opening — and words he wrote stay his', async () => {
+  await setHouse({}, { instructions: { system: OLD_WRITING, narrator: OLD_NARRATOR, partner: 'HIS PARTNER WORDS', late: '' } });
+  assert.equal(prompts.startingIsOld(store.peek('house', 'house')), true);
+  store.change('house', 'house', prompts.freshStarting, { now: true });
+  await store.flush('house', 'house');
+  let ins = (await onPhone('house', 'house')).instructions;
+  assert.equal(ins.system, prompts.DEFAULT_WRITING);
+  assert.ok(ins.system.startsWith('You are a master novelist') && ins.system.includes('New York Times bestseller'), ins.system);
+  assert.equal(ins.narrator, 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.');
+  assert.equal(ins.partner, 'HIS PARTNER WORDS');
+  assert.equal(prompts.startingIsOld(store.peek('house', 'house')), false, 'once is all it takes');
+  /* a box he wrote in — one letter is enough — keeps his words */
+  await setHouse({}, { instructions: { system: OLD_WRITING + ' Mine.', narrator: '', partner: '', late: '' } });
+  assert.equal(prompts.startingIsOld(store.peek('house', 'house')), false);
+  store.change('house', 'house', prompts.freshStarting, { now: true });
+  await store.flush('house', 'house');
+  ins = (await onPhone('house', 'house')).instructions;
+  assert.equal(ins.system, OLD_WRITING + ' Mine.');
+  assert.equal(ins.narrator, '', 'an emptied box stays empty');
+  await setHouse();
+});
+
+await test('every module of the app\'s, woken or not, speaks in words that never name a machine', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  const all = Object.fromEntries(modules.BUILTIN.map((m) => [m.id, { rides: 'always', to: ['writer', 'narrator', 'partner'] }]));
+  for (const sound of ['comic', 'novel']) {
+    store.change('novel', b.novelId, shape.novelSteps.setPref('sound', sound === 'comic' ? '' : sound), { now: true });
+    for (const purpose of ['write', 'play', 'partner']) {
+      const a = context.assemble({ house: { ...store.peek('house', 'house'), modules: all }, novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn: CONN, purpose, target: { chapterId: b.ids[0] },
+        play: { who: 'Mara' }, request: 'Go.', moment: 'He draws his sword. They make love.' });
+      const his = purpose === 'play' ? prompts.DEFAULT_NARRATOR : purpose === 'write' ? 'HIS OWN WORDS FIRST' : '';
+      const words = (his ? a.system.split(his).join('') : a.system).replace(/Mara climbed to the lamp\./g, '');
+      for (const m of modules.BUILTIN) assert.ok(a.system.includes(m.text), `${purpose}: ${m.name} rides`);
+      const hit = words.match(MACHINE);
+      assert.equal(hit, null, `${sound} ${purpose}: "${hit && hit[0]}" in "${hit && words.slice(Math.max(0, hit.index - 80), hit.index + 40)}"`);
+    }
+  }
+  await putAway(b);
+});
+
+await test('a scene with the narrator\'s starting words: his preset\'s opening, then the scene craft — nothing of the writer\'s', async () => {
+  const b = await makeBook([['Mina waited at the gate.']]);
+  await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', late: '', partner: '' } });
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Joon' });
+  await script([{ text: 'The gate creaks.' }]);
+  await talk.playSay({ playId: id, text: '' });
+  const sys = systemOf((await requests())[0]);
+  assert.ok(sys.startsWith('You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.\n\n## The Telling'), sys.slice(0, 140));
+  assert.ok(!sys.includes('HIS OWN WORDS FIRST'));
   await putAway(b);
 });
 

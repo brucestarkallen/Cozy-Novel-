@@ -10,7 +10,9 @@
  *   "prompt", "persona", "role", "the author" or "the character you play",
  *   and nothing here gives the writer a second identity ("You are…"): who
  *   it is, is his to say, in his own instructions, which go first, word for
- *   word. (Cozy Tavern M327, M333.)
+ *   word. (Cozy Tavern M327, M333.) The one place it is said is the starting
+ *   words of his own boxes below — his to change, like anything he writes.
+ *   The same holds for the crafts and rules (crafts.js, modules.js).
  * - The book is fiction for grown readers, said once and plainly to the ones
  *   who tell it (the writer, the narrator, the partner) and to the one who
  *   keeps its notes (the helper): nothing in it is ever softened, skipped or
@@ -20,20 +22,43 @@
  * - His own words (his instructions, his brief, his notes) go word for word.
  */
 
-import { LENGTHS } from './shape.js';
+import { LENGTHS, soundOf } from './shape.js';
 import { numberWords } from '../util.js';
 
 /* ------------------------------------------------- the starting words */
 /* What the boxes in Settings → Your instructions start with, and what
- * "Back to the default" puts back. */
+ * "Back to the default" puts back. They are his words to change: who the
+ * writer is (the role he asked for — a master novelist) is said here, in
+ * his box, never in the app's own words. The craft itself rides after the
+ * box as a module (modules.js). */
 
-export const DEFAULT_WRITING = `You write fiction the way good published novels read: concrete, sensory detail; real feeling under the surface; dialogue that sounds like people actually talking; a pace that gives quiet moments room to breathe and lets big moments land.
+export const DEFAULT_WRITING = `You are a master novelist at the height of your powers — the kind whose books sit at the top of the New York Times bestseller list because nobody can put them down. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too — as an unbiased eye on a world that runs by its own logic.`;
 
-Stay true to the characters and to everything already written — never contradict it. Show rather than summarise. Don't rush to wrap things up, don't end on a neat moral, and don't reach for a cliffhanger unless the story calls for one. Avoid stock phrases and repeating yourself.`;
+/* his preset's own opening (Cozy Tavern's craft) */
+export const DEFAULT_NARRATOR = 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.';
 
-export const DEFAULT_NARRATOR = `You tell the scene the way the book itself is told — its voice, its point of view, its tense — a few paragraphs at a time: the place, the weather of the moment, the other people and what they say and do, what happens next.
+/* What the two boxes started with before 2.3. A box that still holds them
+ * exactly was never touched: it gets today's starting words when the app
+ * starts (app.js). A box he wrote in keeps his words. */
+const STARTING_BEFORE = {
+  system: [`You write fiction the way good published novels read: concrete, sensory detail; real feeling under the surface; dialogue that sounds like people actually talking; a pace that gives quiet moments room to breathe and lets big moments land.
 
-The people in it have their own minds. They want things, they push back, they lie, they surprise; nobody waits politely for a turn or exists only to agree. The world keeps moving around the scene. Keep it concrete and alive, let quiet moments breathe and big ones land, and end each telling at a moment that asks for an answer.`;
+Stay true to the characters and to everything already written — never contradict it. Show rather than summarise. Don't rush to wrap things up, don't end on a neat moral, and don't reach for a cliffhanger unless the story calls for one. Avoid stock phrases and repeating yourself.`],
+  narrator: [`You tell the scene the way the book itself is told — its voice, its point of view, its tense — a few paragraphs at a time: the place, the weather of the moment, the other people and what they say and do, what happens next.
+
+The people in it have their own minds. They want things, they push back, they lie, they surprise; nobody waits politely for a turn or exists only to agree. The world keeps moving around the scene. Keep it concrete and alive, let quiet moments breathe and big ones land, and end each telling at a moment that asks for an answer.`],
+};
+export function startingIsOld(house) {
+  const ins = (house && house.instructions) || {};
+  return STARTING_BEFORE.system.includes(ins.system) || STARTING_BEFORE.narrator.includes(ins.narrator);
+}
+/* a step on the house: the untouched boxes get today's starting words */
+export function freshStarting(house) {
+  const ins = house && house.instructions;
+  if (!ins) return;
+  if (STARTING_BEFORE.system.includes(ins.system)) ins.system = DEFAULT_WRITING;
+  if (STARTING_BEFORE.narrator.includes(ins.narrator)) ins.narrator = DEFAULT_NARRATOR;
+}
 
 export const DEFAULT_PARTNER = `Talk the book over like a seasoned novelist and editor who loves this story and wants it to be as good as it can be: honest, specific and warm. Say what works and what doesn't, and why. When I'm stuck, offer two or three real ways forward rather than a list of ten, and think about what the people in it would truly do. Keep it short when short will do.`;
 
@@ -163,15 +188,40 @@ export function writerFrame(house, novel, { notesAs = 'system' } = {}) {
   return notesAs === 'system' ? `${lead} ${hereIs('write')}` : lead;
 }
 
-/* Automatic: how much is the writer's call — enough to carry the story on the
- * way he'll enjoy it, all of what he asked for, stopping where he'd want to
- * take the wheel. Between two passages it is as much as the bridge needs. */
-const AUTO_CARRY = 'How much to write is yours to judge, the way a novelist would: as much as this part needs — all of what I asked for, if I said what happens — carrying the story forward the way you think I’ll enjoy it, and stopping where I’d most want to take the wheel: a choice that’s mine to make, a line that waits for an answer, a turn I’d want to steer. A quiet beat can be a few paragraphs; a big scene can run long.';
-const AUTO_OPEN = 'How much of the opening to write is yours to judge, the way a novelist would: enough to set it going the way you think I’ll enjoy it — all of what I asked for, if I said what happens — stopping where I’d most want to take the wheel: a choice that’s mine to make, a line that waits for an answer, a turn I’d want to steer.';
+/* Who decides how it turns out (the chip by the box; outcomeOf in shape.js).
+ * The writer: my premise sets it going and the story's own logic settles it.
+ * Me: the writer plays it out and stops on the moment it hangs, and my next
+ * premise settles it. Either way everyone's reactions are the writer's to
+ * write — only what settles it is the outcome. Said with a new passage and
+ * with Go on; never for a passage written between two others (what follows
+ * it settles it), a rewrite (my note and the pages do) or a scene written
+ * into prose (the scene did). */
+const OUTCOME_WORDS = {
+  writer: 'How it turns out is yours to decide. Carry what I asked for through to where it lands — who comes out ahead, what it costs, what it changes — wherever the story’s own logic puts it: never toward the main character for being the main character, never against them to make it hurt. Whatever my words already settle stays as I said it.',
+  me: 'How it turns out is mine to decide. Play everything up to it out in full — the moves, the cost along the way, everyone there and how they take it — and stop on the moment it hangs, before it’s settled: who wins or loses, lives or dies, what comes out, what is chosen for good. Whatever my words already settle stays as I said it; only what they leave open waits for me.',
+};
+const SHORTER = 'If that moment comes before the length I asked for, stop there anyway — shorter is right.';
+export function outcomeWords(outcome, length = 'auto') {
+  if (outcome === 'me') return length === 'auto' ? OUTCOME_WORDS.me : `${OUTCOME_WORDS.me} ${SHORTER}`;
+  return OUTCOME_WORDS.writer;
+}
+
+/* Automatic: how much is the writer's call — all of what he asked for, then
+ * stopping where he would take the wheel again: where the story needs his
+ * next premise (the writer decides), or on the moment it hangs (he does).
+ * Between two passages it is as much as the bridge needs. */
+const AUTO_CARRY = {
+  writer: 'How much to write is yours to judge, the way a novelist would: as much as this part needs — all of what I asked for, if I said what happens — carried through to how it turns out and how everyone takes it, then stopping where I’d take the wheel again with my next premise. Never begin a new turn of the story I didn’t ask for. A quiet beat can be a few paragraphs; a big scene can run long.',
+  me: 'How much to write is yours to judge, the way a novelist would: as much as this part needs — all of what I asked for, if I said what happens — played out in full up to the moment it hangs, and stopping there for me to take the wheel; where nothing in it waits to be settled, stopping once it’s played out, where my next premise comes in. A quiet beat can be a few paragraphs; a big scene can run long.',
+};
+const AUTO_OPEN = {
+  writer: 'How much of the opening to write is yours to judge, the way a novelist would: enough to set it going — all of what I asked for, if I said what happens, carried through to how it turns out — stopping where I’d take the wheel again with my next premise.',
+  me: 'How much of the opening to write is yours to judge, the way a novelist would: enough to set it going — all of what I asked for, if I said what happens, played out up to the moment it hangs — stopping there for me to take the wheel.',
+};
 const AUTO_BETWEEN = 'How much to write is yours to judge: as much as it takes to get naturally from the text before it to the text that follows it — no more.';
 
-export function lengthWords(length, { between = false } = {}) {
-  if (length === 'auto') return between ? AUTO_BETWEEN : AUTO_CARRY;
+export function lengthWords(length, { between = false, outcome = 'writer' } = {}) {
+  if (length === 'auto') return between ? AUTO_BETWEEN : AUTO_CARRY[outcome === 'me' ? 'me' : 'writer'];
   const L = LENGTHS[length] || LENGTHS.scene;
   if (length === 'chapter') return 'Write the rest of this chapter, through to a natural chapter ending.';
   if (length === 'paragraphs') return `Write the next few paragraphs — around ${L.words[0]} to ${L.words[1]} words.`;
@@ -180,8 +230,8 @@ export function lengthWords(length, { between = false } = {}) {
 }
 
 /* the same, for a chapter with nothing in it yet */
-export function openingWords(length) {
-  if (length === 'auto') return AUTO_OPEN;
+export function openingWords(length, { outcome = 'writer' } = {}) {
+  if (length === 'auto') return AUTO_OPEN[outcome === 'me' ? 'me' : 'writer'];
   const L = LENGTHS[length] || LENGTHS.scene;
   if (length === 'chapter') return 'Write the whole chapter, through to a natural chapter ending.';
   if (length === 'paragraphs') return `Write its opening paragraphs — around ${L.words[0]} to ${L.words[1]} words.`;
@@ -193,7 +243,7 @@ const STORY_ONLY = 'Just the story itself — it goes straight onto the page aft
 const STORY_ONLY_FIRST = 'Just the story itself — it goes straight onto the page, so no chapter title, no notes, nothing before or after it.';
 const STORY_ONLY_BETWEEN = 'Just the story itself — it goes straight onto the page between the two, so no chapter title, no notes, nothing before or after it.';
 
-export function writeRequest({ chapterLabel, direction, length, empty, firstOfBook, between }) {
+export function writeRequest({ chapterLabel, direction, length, empty, firstOfBook, between, outcome = 'writer' }) {
   const d = String(direction || '').trim();
   const lines = [];
   if (empty) {
@@ -206,18 +256,37 @@ export function writeRequest({ chapterLabel, direction, length, empty, firstOfBo
     lines.push(`Carry on with ${chapterLabel} from where it stops.`);
     lines.push(d ? `What happens next: ${d}` : 'Let the story go where it naturally goes next.');
   }
-  lines.push(empty ? openingWords(length) : lengthWords(length, { between }));
+  /* between two passages, what follows settles it */
+  if (!between) lines.push(outcomeWords(outcome, length));
+  lines.push(empty ? openingWords(length, { outcome }) : lengthWords(length, { between, outcome }));
   lines.push(empty ? STORY_ONLY_FIRST : between ? STORY_ONLY_BETWEEN : STORY_ONLY);
   return lines.join('\n\n');
 }
 
-export function rewriteRequest({ chapterLabel, note, text }) {
+/* A rewrite with his note: the note is now what happens. The old version is
+ * only what happened before it — a reference, never a draft to patch — so
+ * the change is followed through everything it touches: what each person
+ * does, says, knows and feels, and where the passage ends up. last: nothing
+ * comes after it in the book, so it may end wherever the change takes it;
+ * otherwise it leads into what follows, and where the two can't both stand,
+ * his change wins. */
+export function rewriteRequest({ chapterLabel, note, text, last = false }) {
   const n = String(note || '').trim();
+  if (!n) {
+    return [
+      `I’d like this passage from ${chapterLabel} written again.`,
+      'Write it again — a fresh take on the same moment.',
+      `The passage as it stands now (it sits where the chapter above says it does):\n${fence(text)}`,
+      "Write the new version — just the passage itself. It takes the old one's place on the page, so it has to fit with what comes before and after it.",
+    ].join('\n\n');
+  }
   return [
-    `I’d like this passage from ${chapterLabel} written again.`,
-    n ? `What I want different: ${n}` : 'Write it again — a fresh take on the same moment.',
-    `The passage as it stands now (it sits where the chapter above says it does):\n${fence(text)}`,
-    "Write the new version — just the passage itself. It takes the old one's place on the page, so it has to fit with what comes before and after it.",
+    `I’d like this passage from ${chapterLabel} written again, with a change.`,
+    `What I want different: ${n}`,
+    `The passage as it stands now — what happened before my change, there only for reference (it sits where the chapter above says it does):\n${fence(text)}`,
+    'My change is now what happens. Rethink the moment with it in place — what each person does, says, knows and feels because of it, and where the passage ends up — and carry it through to the passage’s last line. Keep only what still holds once the change is made; never patch the old words around it.',
+    last ? 'Nothing comes after this passage yet, so it can end wherever the change takes it.' : 'What comes after it is already written, so bring the passage to where that picks up — but where my change and what follows can’t both stand, my change wins.',
+    'Write the new version — just the passage itself. It takes the old one’s place on the page.',
   ].join('\n\n');
 }
 
@@ -237,12 +306,20 @@ export function selectionRequest({ chapterLabel, note, marked }) {
 /* "Go on": the model is asked to begin by repeating the passage's last few
  * words, so its continuation can be joined exactly where the passage stops —
  * even in the middle of a word (writer.js joinOn). */
-export function goOnRequest({ chapterLabel, between = false, tail = '' }) {
+/* direction: what he asked for in the passage; change: the change a rewrite
+ * of it carried; outcome: who decides how it turns out — '' when nobody is
+ * to be told (a rewrite, a scene written into prose, a passage between two) */
+export function goOnRequest({ chapterLabel, between = false, tail = '', direction = '', change = '', outcome = 'writer' }) {
+  const d = String(direction || '').trim();
+  const c = String(change || '').trim();
   return [
     `${between ? 'A passage' : 'The last passage'} of ${chapterLabel} stopped partway through${tail ? `. It stops here:\n${fence(`…${tail}`)}` : '.'}`,
+    d ? `What I asked for in it: ${d}` : '',
+    c ? `It was written again with a change, which is now what happens: ${c}` : '',
     `Carry on from exactly where it stops. Begin by repeating its last few words exactly as they stand${tail ? '' : ' (from the start of its last sentence)'}, then go on — the repeated words are taken off again and what follows is joined straight on, so don't start over or retell anything.${between ? ' What comes after the passage is already written, so bring it to where that picks up.' : ''}`,
+    between || !outcome ? '' : outcomeWords(outcome),
     'Just the story itself — no notes, nothing before or after it.',
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
 export function playToProseRequest({ chapterLabel, who, transcript, length }) {
@@ -317,7 +394,7 @@ export function tellLine(who, tell) {
 /* three ways the scene could go, offered after the narrator's part */
 export const CHOICES_OPEN = '<choices>';
 export const CHOICES_CLOSE = '</choices>';
-const choicesWords = (who) => `After each part you tell, once it stops where ${who} would answer or act, offer me three different things ${who} might say or do next — a short line each, as different from one another as you can make them — between ${CHOICES_OPEN} and ${CHOICES_CLOSE}, one to a line. They’re only offers, outside the scene: nothing ${who} does is decided until I choose.`;
+const choicesWords = (who) => `After each part you tell, once it stops where ${who} would answer or act, offer me three different things ${who} might say or do next — a short line each, as different from one another as you can make them — between ${CHOICES_OPEN} and ${CHOICES_CLOSE}, one to a line. This is the one place I want options put in front of me. They’re only offers, outside the scene: nothing ${who} does is decided until I choose.`;
 
 export function playFrame(house, novel, play, chapterLabel, { notesAs = 'system' } = {}) {
   const who = String(play.who || '').trim() || 'my character';
@@ -389,6 +466,13 @@ export function avoidLine(list) {
 
 export const CHECK_KINDS = ['grammar', 'humanize', 'avoid', 'continuity'];
 
+/* how the book writes sound (About this book → Sound), so the checker never
+ * "fixes" it */
+const SOUND_STYLE = {
+  comic: 'So is how it writes sound: the world’s sounds as sound effects in asterisks (*CLANG!*, *thud thud*), and voices — moans, cries, breaths — written out in quotes, stretched and repeated ("Nngh—!", "Ahh—ahh—").',
+  novel: 'So is how it writes sound: voices — moans, cries, breaths — written out in quotes, stretched and repeated ("Nngh—!", "Ahh—ahh—").',
+};
+
 export function checkerFrame(house, novel) {
   const name = nameOf(house);
   return `${FICTION_WORK}\n\nYou read ${titled(novel)}, a novel ${name ? `${name} is writing` : 'being written'}, the way a careful copy editor would: each passage once it’s finished, for what is plainly wrong or would plainly read better — never to change what happens, the people in it, or the voice it’s told in.`;
@@ -407,7 +491,7 @@ export function checkRequest({ novel, chapterLabel, numbered, avoid = [] }) {
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
 - "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in.
 
-Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake. Leave what is right alone; a passage that needs nothing gets nothing.
+Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
 
 Each fix replaces a stretch of words: "find" is the words exactly as they stand in that passage — copied exactly, enough of them to stand in only one place in it — "replace" the new words, and "why" a few words on why. Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "grammar", "find": "…", "replace": "…", "why": "…"}]} — or {"edits": []} when nothing needs fixing.`);
   return parts.join('\n\n');

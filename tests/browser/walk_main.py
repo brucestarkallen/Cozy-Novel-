@@ -356,9 +356,26 @@ async def scenario_small(b):
     reset()
     await write(pg, 'The rain stops.', 20000)
     r = completions()
+    err = await pg.inner_text('.endcard.error') if await pg.locator('.endcard.error').count() else ''
+    check('a model too small for his instructions and the novel craft says so in plain words, after the one request it refused', len(r) == 1 and 'holds about 9,000 tokens' in err and 'Modules' in err and await pg.locator('#passages .passage').count() == 0, (len(r), err[:300]))
+    # the novel craft off, in Settings → Your instructions → Modules
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    row = pg.locator('.sheet.on .modrow[data-id="novel-craft"]')
+    if not await row.is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(200)
+    await row.click(); await pg.wait_for_timeout(300)
+    await pg.select_option('.sheet.on >> nth=-1 >> select', 'off')
+    await close_sheet(pg)
+    said = await pg.inner_text('.sheet.on .modrow[data-id="novel-craft"]')
+    check('the list says the novel craft is off', 'Off — not sent' in said, said)
+    await close_sheet(pg)
+    reset()
+    await write(pg, 'The rain stops.', 20000)
+    r = completions()
     sizes = [sum(len(m.get('content') or '') for m in x['body']['messages']) for x in r]
     ok = await pg.locator('.endcard.error').count() == 0 and await pg.locator('#passages .passage').count() == 1
-    check('a model too small for the whole book still writes the page', ok and sizes and sizes[-1] <= 9000 * 3, sizes)
+    check('with the craft off, a model too small for the whole book still writes the page', ok and sizes and sizes[-1] <= 9000 * 3, sizes)
     sysm = r[-1]['body']['messages'][0]['content'] if r else ''
     check('what was left out is said in the request', 'left out' in sysm or 'in short' in sysm, sysm[:300])
     errs = [l for l in logs if l.startswith('PAGEERROR')]

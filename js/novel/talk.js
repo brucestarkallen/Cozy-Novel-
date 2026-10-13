@@ -123,7 +123,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           const rec = store.peek(kind, id);
           const args = buildArgs(rec, c);
           const a = assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra], length });
-          return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined) };
+          return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse };
         },
         stream: true,
         signal: ctl.signal,

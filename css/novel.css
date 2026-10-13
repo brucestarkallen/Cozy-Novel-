@@ -369,6 +369,10 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .crow .chip { height: 30px; font-size: 12.5px; }
 .crow .chip.mine { color: var(--chrome-ink); }
 .crow .grow { flex: 1; min-width: 0; }
+/* the chips by the box: on a narrow phone, Add as my words goes under them
+   rather than any chip being crushed to nothing */
+.composer .crow { flex-wrap: wrap; row-gap: 6px; }
+.composer .crow .chip.mine { margin-left: auto; }
 .selbar { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 6px 6px 6px 12px; border-radius: 12px; background: rgba(216,150,58,.12); border: 1px solid rgba(216,150,58,.3); font-size: 13.5px; }
 .selbar .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chrome-ink); }
 .selbar .btn.quiet { font-size: 20px; width: 34px; padding: 0; }
@@ -440,6 +444,13 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .turn.you { align-self: flex-end; background: rgba(216,150,58,.16); border: 1px solid rgba(216,150,58,.25); border-bottom-right-radius: 6px; }
 .turn.ai { align-self: flex-start; background: rgba(255,255,255,.05); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
 .turn.ai.prose-turn { font: 15.5px/1.65 var(--serif); }
+/* the narrator's telling drawn as prose: its italics (a thought, a sound) as italics */
+.turn .tprose { white-space: normal; }
+.turn .tprose p { margin: 0 0 .7em; }
+.turn .tprose p:last-child { margin-bottom: 0; }
+.turn .tprose em { font-style: italic; }
+.turn .tprose .brk { text-align: center; color: var(--chrome-soft); letter-spacing: .4em; }
+.turn .tprose .sub { text-align: center; font-style: italic; }
 .turn .tctl { display: flex; gap: 2px; flex-wrap: wrap; margin-top: 8px; white-space: normal; }
 .turn .tctl button { height: 28px; padding: 0 9px; border-radius: 999px; font: 12.5px/1 var(--ui); color: var(--chrome-soft); }
 .turn .tctl button:hover { background: rgba(255,255,255,.07); color: var(--chrome-ink); }
@@ -548,6 +559,20 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .toggle { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
 .toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
 .toggle span { flex: 1; font-size: 14px; }
+/* Settings → Your instructions → Modules: each one a row, opened in a sheet of its own */
+.modlist { display: flex; flex-direction: column; gap: 6px; }
+.modrow { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--chrome-ink); }
+.modrow:hover { background: rgba(255,255,255,.07); }
+[data-theme="day"] .modrow { background: #fff; }
+.modrow .grow { flex: 1; min-width: 0; }
+.modrow b { display: block; font-weight: 600; font-size: 14px; }
+.modrow small { display: block; font-size: 12.5px; color: var(--chrome-soft); margin-top: 2px; line-height: 1.4; }
+.modrow small.about { font-size: 12px; opacity: .85; }
+.modrow[data-rides="off"] b { color: var(--chrome-soft); }
+.modrow .tag { flex: none; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: rgba(216,150,58,.18); color: var(--chrome-ink); }
+.modwho { display: flex; flex-wrap: wrap; gap: 0 18px; }
+.field .modwho input[type="checkbox"] { width: 20px; height: 20px; min-height: 0; padding: 0; border-radius: 4px; flex: none; }
+.field textarea.modtext { min-height: 50vh; font-size: 13.5px; }
 .covers { display: grid; grid-template-columns: repeat(8, minmax(0, 40px)); gap: 6px; }
 .covers button { width: 100%; aspect-ratio: 2 / 3; height: auto; border-radius: 4px 8px 8px 4px; border: 2px solid transparent; }
 .keptitem { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid var(--line); margin: 0 0 8px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; }

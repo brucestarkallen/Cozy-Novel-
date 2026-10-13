@@ -3,11 +3,12 @@
  * everything. Busy sections fold closed until opened. */
 
 import * as store from '../store.js';
-import { h, openSheet, field, group, toast, confirmIt, download, pickFile, menu, icon } from './dom.js';
+import { h, openSheet, field, group, toast, undoToast, confirmIt, download, pickFile, menu, icon } from './dom.js';
 import { PRESETS, LEVELS, spokenAs, describePrefill, learnedFacts, contextOf, alwaysThinks, cannotStopThinking } from '../model/providers.js';
 import { listModels, tryConnection } from '../model/call.js';
 import { connFor, connName } from '../novel/writer.js';
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from '../novel/prompts.js';
+import { listModules, moduleOf, builtinOf, moduleSteps, rideLine, READERS, READER_WORDS, RIDES, RIDES_WORDS } from '../novel/modules.js';
 import { newId, debounce, timeAgo, plural } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
@@ -299,12 +300,13 @@ function wordsGroup(hs) {
   const partner = box('partner', 5, 'A way of talking, or a persona, for your writing partner…');
   g.body.append(
     field('Your name', name, 'How your notes and the helper speak of you (“Bruce here.”, “a novel Bruce is writing”).'),
-    field('How you like it written', sys, 'Sent first, word for word, to the writer — like the main prompt of a SillyTavern preset. Your voice, your rules, a persona if you like.'),
+    field('How you like it written', sys, 'Sent first, word for word, to the writer — like the main prompt of a SillyTavern preset. Who the writer is, your voice, your rules, a persona if you like. The novel craft rides right after it (Modules, below).'),
     back(sys, 'system'),
-    field('How the narrator tells scenes', narr, 'Sent first, word for word, when you play a scene — the narrator’s own voice and rules, a persona if you like. Empty: the narrator reads “How you like it written” instead.'),
+    field('How the narrator tells scenes', narr, 'Sent first, word for word, when you play a scene — the narrator’s own voice and rules, a persona if you like. The scene craft rides right after it. Empty: nothing of yours is sent.'),
     back(narr, 'narrator'),
     field('How the partner talks', partner, 'Sent first, word for word, to your partner. Empty: nothing of yours is sent.'),
     back(partner, 'partner'),
+    modulesField(hs),
     field('A note at the end', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer or narrator is asked. Empty: nothing is sent.'),
     field('Words to avoid', box('avoid', 4, 'One to a line — for example:\na testament to\nshivers down her spine'), 'Words and phrases you never want in the book. The writer, the narrator and your partner are told them, after your own words; the checker marks any that slip through, with a way to write them again. Empty: nothing is sent.'),
     choose('notesAs', [
@@ -317,6 +319,130 @@ function wordsGroup(hs) {
       ['wait', 'When I press Apply'],
     ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.', 'Your partner’s changes land'));
   return g;
+}
+
+/* ------------------------------------------------------------ modules */
+/* The crafts and rules that ride right after his own words (modules.js):
+ * the app's, made from his Cozy Tavern preset, and his own. Each opens in a
+ * sheet of its own: its name, who reads it, when it rides, its words. */
+
+function modulesField(hs) {
+  const list = h('div.modlist');
+  for (const m of listModules(hs)) {
+    list.append(h('button.modrow', { 'data-id': m.id, 'data-rides': m.rides, onclick: () => openModule(m.id) },
+      h('span.grow',
+        h('b', m.name),
+        h('small', rideLine(m)),
+        m.about ? h('small.about', m.about) : null),
+      m.ownWords ? h('span.tag', 'your words') : m.custom ? h('span.tag', 'yours') : null,
+      icon('right', 16)));
+  }
+  return h('div.field',
+    h('span', 'Modules'),
+    list,
+    h('div.btnrow', h('button.btn.small', { onclick: addModule }, icon('plus', 15), 'Add your own module')),
+    h('em', 'They ride right after your own words above — each to the writer, the narrator or your partner, as it says — in this order. The app’s come with it, made from your Cozy Tavern preset: change one and it’s yours, and Back to the default puts it back. Off: not sent at all.'));
+}
+
+function addModule() {
+  const id = newId('m');
+  /* his own is for the scenes he plays unless he ticks otherwise */
+  changeHouse(moduleSteps.add(id, { at: Date.now(), name: '', text: '', to: ['narrator'], rides: 'always' }), { now: true });
+  draw();
+  openModule(id, { fresh: true });
+}
+
+/* one module, in a sheet of its own; what he changes is kept as he goes */
+function openModule(id, { fresh = false } = {}) {
+  const first = moduleOf(house(), id);
+  if (!first) return;
+  const base = builtinOf(id);
+  const now = () => moduleOf(house(), id) || first;
+  /* a save that waits for the typing pause — and goes at once when the
+   * sheet closes, or is let go when the module goes back to the default */
+  const savers = [];
+  const later = (fn, ms = 450) => {
+    let t = null;
+    const flush = () => { if (t) { clearTimeout(t); t = null; fn(); } };
+    savers.push({ flush, cancel: () => { clearTimeout(t); t = null; } });
+    return () => { clearTimeout(t); t = setTimeout(flush, ms); };
+  };
+  const flushAll = () => { for (const x of savers) x.flush(); };
+  const set = (patch, opts) => changeHouse(moduleSteps.set(id, patch), opts);
+  let offHouse = () => {};
+  const s = openSheet(first.name, { onClose: () => { flushAll(); offHouse(); if (sheet) draw(); } });
+  s.box.classList.add('modsheet');
+
+  /* his own, not named yet: the box is empty for him to name it */
+  const named = base ? first.name : String(((house().modules || {})[id] || {}).name || '');
+  const name = h('input', { type: 'text', value: named, placeholder: base ? base.name : 'What to call it' });
+  name.addEventListener('input', later(() => { set({ name: name.value.trim() || undefined }); s.setTitle(name.value.trim() || (base ? base.name : 'A module of your own')); }));
+
+  const say = h('em');
+  const who = h('div.modwho');
+  for (const r of READERS) {
+    const inp = h('input', { type: 'checkbox', checked: first.to.includes(r) });
+    inp.addEventListener('change', () => {
+      const to = READERS.filter((x) => (x === r ? inp.checked : now().to.includes(x)));
+      set({ to }, { now: true });
+      sayNow();
+    });
+    who.append(h('label.toggle', inp, h('span', READER_WORDS[r])));
+  }
+  const rides = h('select');
+  for (const k of RIDES) rides.append(h('option', { value: k, selected: first.rides === k }, RIDES_WORDS[k]));
+  rides.addEventListener('change', () => { set({ rides: rides.value }, { now: true }); sayNow(); });
+
+  const words = h('textarea.tall.modtext', { placeholder: 'The words — sent exactly as you write them.', spellcheck: 'false' });
+  words.value = first.text;
+  /* who reads it and when, as the fields say right now */
+  const sayNow = () => {
+    const to = READERS.filter((r, i) => who.children[i].querySelector('input').checked);
+    say.textContent = rideLine({ ...now(), to, rides: rides.value, text: words.value });
+  };
+  const saveWords = later(() => set({ text: words.value }), 600);
+  words.addEventListener('input', () => { saveWords(); sayNow(); });
+
+  const buttons = h('div.btnrow');
+  const drawButtons = () => {
+    buttons.textContent = '';
+    const m = now();
+    if (base && m.changed) {
+      buttons.append(h('button.btn.quiet.small', { onclick: async () => {
+        if (m.ownWords && !(await confirmIt('Back to the default?', 'Your words for this module go, and the app’s come back — with who reads it and when it rides as they came. (Copy yours first if you want to keep them.)', 'Back to the default'))) return;
+        for (const x of savers) x.cancel();
+        changeHouse(moduleSteps.remove(id), { now: true });
+        const d = now();
+        name.value = d.name; words.value = d.text; rides.value = d.rides;
+        for (const [i, r] of READERS.entries()) who.children[i].querySelector('input').checked = d.to.includes(r);
+        s.setTitle(d.name);
+        sayNow(); drawButtons();
+        toast('The module is as it came.');
+      } }, 'Back to the default'));
+    }
+    if (!base) {
+      buttons.append(h('button.btn.danger.small', { onclick: () => {
+        flushAll();
+        const row = JSON.parse(JSON.stringify((house().modules || {})[id] || {}));
+        changeHouse(moduleSteps.remove(id), { now: true });
+        s.close();
+        undoToast('The module is taken out.', () => { changeHouse(moduleSteps.restore(id, row), { now: true }); if (sheet) draw(); });
+      } }, 'Remove this module'));
+    }
+  };
+  /* what he changes shows its buttons as it lands */
+  offHouse = store.subscribe('house', 'house', () => drawButtons());
+
+  sayNow();
+  drawButtons();
+  if (first.about) s.body.append(h('p.say', first.about));
+  s.body.append(
+    field('Name', name),
+    h('div.field', h('span', 'Who reads it'), who, say),
+    field('When it rides', rides, 'Intimate and fight: it wakes by itself when your words or the page right before the point being written turn to it, and rides nearer the page.'),
+    field('Its words', words, base ? 'The app’s words, from your preset — change anything and they are yours, sent exactly as you leave them. Empty: nothing is sent.' : 'Sent word for word, right after your own instructions. Empty: nothing is sent.'),
+    buttons);
+  if (fresh) name.focus();
 }
 
 /* ------------------------------------------------------------ the look */

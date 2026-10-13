@@ -15,7 +15,7 @@ import { ask, emptyWhy } from '../model/call.js';
 import { wireOf } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, picked, chapterLabel, countBook } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, picked, chapterLabel, countBook, chapterText, outcomeOf } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 
 /* -------------------------------------------------------------- roles */
@@ -210,8 +210,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     const out = await ask(conn, {
       build: (c) => {
         const { novel, chapters } = bookNow(novelId);
-        const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play });
-        return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined) };
+        const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '' });
+        return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse };
       },
       stream: true,
       signal: ctl.signal,
@@ -348,10 +348,21 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
   const empty = !list.slice(0, at >= 0 ? at + 1 : list.length).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
   const passage = newPassage('ai', '', { how: 'write', ask: { direction, length }, streaming: true });
   store.change('chapter', chapterId, chapterSteps.addPassage(passage, at >= 0 ? after : null), { now: true });
-  const request = writeRequest({ house: house(), chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), direction, length, empty,
-    firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between });
+  const request = writeRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), direction, length, empty,
+    firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel) });
   return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length,
-    build: { target: { chapterId, before: passage.id }, request } });
+    build: { target: { chapterId, before: passage.id }, request, moment: direction } });
+}
+
+/* nothing comes after this passage anywhere in the book: no passage with
+ * words after it in its chapter, no later chapter with any */
+function lastInBook(book, chapterId, passageId) {
+  const chapter = book.chapters[chapterId];
+  const list = (chapter && chapter.passages) || [];
+  const i = list.findIndex((x) => x.id === passageId);
+  if (list.slice(i + 1).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim())) return false;
+  const order = book.novel.order || [];
+  return !order.slice(order.indexOf(chapterId) + 1).some((id) => chapterText(book.chapters[id]).trim());
 }
 
 /* What "Another take" does for this passage: whatever made the version on show,
@@ -392,15 +403,19 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const label = chapterLabel(book.novel, chapter, { withName: false });
   let request;
+  let moment;
   if (take.how === 'play') {
-    request = playToProseRequest({ house: house(), chapterLabel: label, who: take.ask.who || 'their character', transcript: take.ask.transcript, length });
+    request = playToProseRequest({ chapterLabel: label, who: take.ask.who || 'their character', transcript: take.ask.transcript, length });
+    moment = take.ask.transcript;
   } else {
     const empty = !list.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
-    request = writeRequest({ house: house(), chapterLabel: label, direction: take.ask.direction || '', length, empty,
-      firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between });
+    /* how it turns out, as the chip says now */
+    request = writeRequest({ chapterLabel: label, direction: take.ask.direction || '', length, empty,
+      firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel) });
+    moment = take.ask.direction || '';
   }
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: version.how, length,
-    build: { target: { chapterId, before: passageId }, request } });
+    build: { target: { chapterId, before: passageId }, request, moment } });
 }
 
 /* A rewrite of a whole passage, with his note. */
@@ -415,11 +430,11 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   const text = String(from.text || '');
   const version = newVersion({ how: 'rewrite', ask: { note }, streaming: true, from: from.id });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
-  const request = rewriteRequest({ house: house(), chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text });
+  const request = rewriteRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text, last: lastInBook(book, chapterId, passageId) });
   const words = countWords(text);
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
     length: words > 2600 ? 'chapter' : words > 1500 ? 'long' : 'scene',
-    build: { target: { chapterId, mark: passageId }, request } });
+    build: { target: { chapterId, mark: passageId }, request, moment: `${note}\n${text}` } });
 }
 
 /* Only the words he selected, rewritten; the rest of the passage untouched. */
@@ -436,10 +451,10 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   const marked = full.slice(0, start) + MARK_OPEN + full.slice(start, end) + MARK_CLOSE + full.slice(end);
   const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
-  const request = selectionRequest({ house: house(), chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
+  const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
     splice: (answer) => spliceSelection(full, start, end, answer),
-    build: { target: { chapterId, mark: passageId }, request } });
+    build: { target: { chapterId, mark: passageId }, request, moment: `${note}\n${full}` } });
 }
 
 /* The words a carried-on passage gets. The model was asked to begin by
@@ -478,10 +493,16 @@ export async function goOn({ novelId, chapterId, passageId }) {
   store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, { streaming: true, cut: undefined, cutWhy: undefined, stopped: undefined }), { now: true });
   /* its last words, from the start of a word */
   const tail = original.text.length > 240 ? original.text.slice(-240).replace(/^\S*\s+/, '') : original.text;
-  const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail });
+  /* what he asked for in it, and who decides how it turns out — as the chip
+   * says now; a rewrite (his note settles it) and a scene written into prose
+   * (the scene did) carry on with neither */
+  const settled = v.how === 'rewrite' || v.how === 'play';
+  const asked = settled ? '' : (v.ask && v.ask.direction) || '';
+  const change = v.how === 'rewrite' ? (v.ask && v.ask.note) || '' : '';
+  const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail, direction: asked, change, outcome: settled ? '' : outcomeOf(book.novel) });
   return runVersion({ novelId, chapterId, passageId, versionId: v.id, original, mode: 'append', how: 'go on', length: (v.ask && v.ask.length) || 'scene',
     splice: (answer) => ({ text: original.text + joinOn(original.text, answer) }),
-    build: { target: { chapterId, through: passageId }, request } });
+    build: { target: { chapterId, through: passageId }, request, moment: [asked, change].filter(Boolean).join('\n') } });
 }
 
 /* A scene he played, written into the chapter as prose. */
@@ -494,9 +515,9 @@ export async function playToProse({ novelId, chapterId, play, transcript, length
   const who = play.who || 'their character';
   const passage = newPassage('ai', '', { how: 'play', ask: { play: play.id, who, transcript, length }, streaming: true });
   store.change('chapter', chapterId, chapterSteps.addPassage(passage), { now: true });
-  const request = playToProseRequest({ house: house(), chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), who, transcript, length });
+  const request = playToProseRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), who, transcript, length });
   return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'play', length,
-    build: { target: { chapterId, before: passage.id }, request } });
+    build: { target: { chapterId, before: passage.id }, request, moment: transcript } });
 }
 
 /* His own words, as a passage. */

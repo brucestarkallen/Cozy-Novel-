@@ -308,9 +308,10 @@ function sleep(ms, signal) {
 
 /* ask(conn, opts) — the whole call, with every lesson applied.
  *
- *   opts.build(conn) -> {system, systemParts?, messages, maxTokens}   built
- *                       again after a lesson that changes the room (a "too
- *                       long" refusal)
+ *   opts.build(conn) -> {system, systemParts?, messages, maxTokens, refuse?}
+ *                       built again after a lesson that changes the room (a
+ *                       "too long" refusal); refuse: the plain reason this
+ *                       request cannot fit that room — then nothing is sent
  *   opts.stream      words as they come (default true)
  *   opts.worker      a helper's call: no prefill, no penalties or stop words
  *   opts.patient     a helper may wait out "slow down" and try again
@@ -339,6 +340,9 @@ export async function ask(conn, opts = {}) {
   for (;;) {
     if (opts.signal && opts.signal.aborted) return { ok: false, stopped: true, text: '', thinking: '', notes, error: 'stopped' };
     const shape = shapeOf(conn);
+    /* a request the builder knows cannot fit this model (its room, as a
+     * lesson may just have taught it) is never sent: the builder's reason is */
+    if (shape && shape.refuse) return { ok: false, text: '', thinking: '', notes, error: shape.refuse, status: lastStatus || 0 };
     const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined });
     if (req.prefill && req.prefill.note && !notes.includes(req.prefill.note)) notes.push(req.prefill.note);
     const sent = { url: req.url, model: req.body && req.body.model, body: snapshotBody(req.body), at: Date.now(), tokens: sizeOf(shape) };
@@ -444,7 +448,16 @@ export async function ask(conn, opts = {}) {
           const next = said && said < now ? said : Math.floor(now * 0.75);
           if (typeof opts.build === 'function' && next >= 2000 && next < now) {
             const trial = { ...conn, learned: { ...((learnedFacts(conn) && conn.learned) || {}), for: learnKey(conn), at: Date.now(), context: next } };
-            const trialSize = sizeOf(shapeOf(trial));
+            const trialShape = shapeOf(trial);
+            /* the size the model said cannot hold even the part that has to go
+             * (his instructions and the modules): its number is kept, and the
+             * builder's reason is said — nothing more is sent */
+            if (said && trialShape && trialShape.refuse) {
+              learn(conn, { context: said });
+              if (opts.onSent) opts.onSent(sent);
+              return { ok: false, text: '', thinking: '', notes, error: trialShape.refuse, status: lastStatus, sent, permanent: true };
+            }
+            const trialSize = sizeOf(trialShape);
             if (trialSize < sizeOf(shape) * 0.97) {
               learn(conn, { context: next });
               notes.push(`The model said the request was longer than it holds, so the book was fitted to ${next.toLocaleString()} tokens and sent again.`);

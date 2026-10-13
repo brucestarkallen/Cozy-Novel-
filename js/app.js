@@ -15,7 +15,7 @@ import { openSettings, redrawSettings } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK } from './ui/look.js';
 import { bringOldBooks } from './legacy.js';
-import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from './novel/prompts.js';
+import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, freshStarting } from './novel/prompts.js';
 import { chapterLabel, novelSteps } from './novel/shape.js';
 import { plural, numberWords } from './util.js';
 import { talkBusy, repairStaleTurns as talkRepair } from './novel/talk.js';
@@ -62,6 +62,10 @@ async function boot() {
       checksFrom: Date.now(),
     });
   }
+  /* a box still holding the starting words of before 2.3 — never touched —
+   * gets today's: the master novelist, his preset's own opening for the
+   * narrator (a box he wrote in keeps his words) */
+  if (startingIsOld(house)) store.change('house', 'house', freshStarting, { now: true });
   /* the checker reads what is written from now on; older writing only when he asks */
   if (!Number.isFinite(house.checksFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.checksFrom)) x.checksFrom = Date.now(); }, { now: true });
   startChecking();
@@ -219,7 +223,7 @@ function bindChrome() {
   $('#shelfSettings').addEventListener('click', () => openSettings());
   initDesk({
     wrap: $('#pageWrap'), passages: $('#passages'), end: $('#pageEnd'), chapnum: $('#chapnum'), chapname: $('#chapname'),
-    direction: $('#direction'), writeBtn: $('#writeBtn'), mineBtn: $('#mineBtn'), lengthBtn: $('#lengthBtn'), writerBtn: $('#writerBtn'),
+    direction: $('#direction'), writeBtn: $('#writeBtn'), mineBtn: $('#mineBtn'), lengthBtn: $('#lengthBtn'), outcomeBtn: $('#outcomeBtn'), writerBtn: $('#writerBtn'),
     followBtn: $('#followBtn'), selBar: $('#selBar'), selWhat: $('#selWhat'), selClear: $('#selClear'),
   }, {
     goChapter, writerMenu, openSettings, drawBar,

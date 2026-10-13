@@ -7,7 +7,7 @@ import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, newPassage, passageNumbers } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers } from '../novel/shape.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
 import { thinkBox as makeThinkBox, updateThinkBox } from './think.js';
@@ -47,6 +47,7 @@ export function initDesk(elements, appHooks) {
   ui.writeBtn.addEventListener('click', onWrite);
   ui.mineBtn.addEventListener('click', onMine);
   ui.lengthBtn.addEventListener('click', () => lengthMenu());
+  ui.outcomeBtn.addEventListener('click', () => outcomeMenu());
   ui.writerBtn.addEventListener('click', () => hooks.writerMenu(ui.writerBtn));
   ui.wrap.addEventListener('scroll', onScroll, { passive: true });
   F = follower(ui.wrap, { tail: () => tailTop(S.followId), onChange: (on) => { ui.followBtn.hidden = on || !busy(); } });
@@ -583,6 +584,8 @@ function drawComposer() {
   const len = (n.prefs && n.prefs.length) || 'scene';
   ui.lengthBtn.textContent = '';
   ui.lengthBtn.append(h('b', LENGTHS[len] ? LENGTHS[len].label : 'A scene'), icon('down', 14));
+  ui.outcomeBtn.textContent = '';
+  ui.outcomeBtn.append(h('b', OUTCOMES[outcomeOf(n)].label), icon('down', 14));
   const house = store.peek('house', 'house') || {};
   const w = writer.connFor(house, 'writer');
   ui.writerBtn.textContent = '';
@@ -606,6 +609,20 @@ function lengthMenu() {
   menu(ui.lengthBtn, [
     { label: 'How much to write', header: true },
     ...Object.entries(LENGTHS).map(([k, L]) => ({ label: L.label + (L.hint ? ` (${L.hint})` : L.words[0] ? ` (about ${L.words[0].toLocaleString()}–${L.words[1].toLocaleString()} words)` : ''), checked: k === cur, run: () => { store.change('novel', S.novelId, novelSteps.setPref('length', k)); drawComposer(); } })),
+  ]);
+}
+
+/* Who decides how what he asks for turns out: the writer, or he does (the
+ * writer then stops on the moment it hangs). Each book keeps its own. */
+function outcomeMenu() {
+  const n = novel();
+  const cur = outcomeOf(n);
+  menu(ui.outcomeBtn, [
+    { label: 'Who decides how it turns out', header: true },
+    ...Object.entries(OUTCOMES).map(([k, o]) => ({ label: `${o.label} — ${o.hint}`, checked: k === cur, run: () => {
+      store.change('novel', S.novelId, novelSteps.setPref('outcome', k === 'writer' ? '' : k), { now: true });
+      drawComposer();
+    } })),
   ]);
 }
 

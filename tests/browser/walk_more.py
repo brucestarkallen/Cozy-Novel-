@@ -327,20 +327,20 @@ async def scenario_round(b):
     await pg.wait_for_selector('.sheet.on select[aria-label="Pick a model"]', state='visible', timeout=5000)
     look = await pg.evaluate("(() => { const s = document.querySelector('.sheet.on select[aria-label=\"Pick a model\"]'); const c = getComputedStyle(s); return { inField: Boolean(s.closest('label.field')), bg: c.backgroundColor, radius: c.borderRadius } })()")
     check('the models on offer: a box like the others, never a white block', look['inField'] and look['bg'] != 'rgb(255, 255, 255)' and look['radius'] == '12px', look)
-    # Your instructions: the narrator's own box, with its starting words and Back to the default
+    # Your instructions: the narrator's own box, with its starting words (2.3: his preset's own opening) and Back to the default
     await pg.click('.sheet.on .ghead:has-text("Your instructions")')
     await pg.wait_for_timeout(200)
     narr = pg.locator('.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) textarea')
-    check('a box for the narrator, with its starting words', (await narr.count()) == 1 and 'You tell the scene the way the book itself is told' in await narr.input_value())
+    check('a box for the narrator, with its starting words', (await narr.count()) == 1 and 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.' in await narr.input_value())
     await narr.fill('MY NARRATOR.')
     await pg.wait_for_timeout(700)
     await pg.locator('.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) + .btnrow button:has-text("Back to the default")').click()
     await pg.wait_for_function("document.querySelectorAll('.sheet.on').length === 2", timeout=3000)
     await pg.locator('.sheet.on >> nth=-1').locator('button:has-text("Back to the default")').click()
     await pg.wait_for_timeout(700)
-    check('Back to the default puts the starting words back', 'You tell the scene the way the book itself is told' in await narr.input_value(), await narr.input_value())
+    check('Back to the default puts the starting words back', 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.' in await narr.input_value(), await narr.input_value())
     house = await pg.evaluate("fetch('/api/store/house/house').then(r => r.json()).then(j => j.data)")
-    check('…and they are what the phone keeps', 'You tell the scene the way the book itself is told' in (house.get('instructions') or {}).get('narrator', ''), (house.get('instructions') or {}).get('narrator', '')[:60])
+    check('…and they are what the phone keeps', 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.' in (house.get('instructions') or {}).get('narrator', ''), (house.get('instructions') or {}).get('narrator', '')[:60])
     check('where the book and its notes ride can be chosen', await pg.locator('.sheet.on label.field:has(span:text-is("The book and its notes ride as")) select').count() == 1)
     check('and whether the partner\'s changes wait', await pg.locator('.sheet.on label.field:has(span:text-is("Your partner’s changes land")) select').count() == 1)
     await close_sheet(pg)
@@ -670,13 +670,161 @@ async def scenario_checker(b):
     check('no page errors (checker and search)', not errs, errs[:5])
     await pg.close()
 
+OLD_WRITING = "You write fiction the way good published novels read: concrete, sensory detail; real feeling under the surface; dialogue that sounds like people actually talking; a pace that gives quiet moments room to breathe and lets big moments land.\n\nStay true to the characters and to everything already written — never contradict it. Show rather than summarise. Don't rush to wrap things up, don't end on a neat moral, and don't reach for a cliffhanger unless the story calls for one. Avoid stock phrases and repeating yourself."
+OLD_NARRATOR = "You tell the scene the way the book itself is told — its voice, its point of view, its tense — a few paragraphs at a time: the place, the weather of the moment, the other people and what they say and do, what happens next.\n\nThe people in it have their own minds. They want things, they push back, they lie, they surprise; nobody waits politely for a turn or exists only to agree. The world keeps moving around the scene. Keep it concrete and alive, let quiet moments breathe and big ones land, and end each telling at a moment that asks for an answer."
+
+def system_of(x):
+    return '\n'.join(m['content'] for m in x['body']['messages'] if m['role'] == 'system')
+
+async def scenario_crafts(b):
+    """the crafts and modules: old starting words brought up to date, the Modules list, his own module, Off, the outcome chip, Sound, a scene in italics"""
+    logs = []
+    pg = await page(b, logs)
+    reset()
+    await new_book(pg, title='The Crafted Book')
+    await add_conn(pg)
+    # ---- a house that still holds the starting words of before 2.3, untouched
+    await pg.evaluate("""async (old) => {
+      const r = await fetch('/api/store/house/house').then((x) => x.json());
+      const data = r.data;
+      data.instructions.system = old.w; data.instructions.narrator = old.n;
+      await fetch('/api/store/house/house', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Base': String(r.rev) }, body: JSON.stringify({ data }) });
+    }""", {'w': OLD_WRITING, 'n': OLD_NARRATOR})
+    await pg.reload()
+    await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
+    await pg.wait_for_timeout(1000)
+    ins = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']['instructions']
+    check('boxes still holding the old starting words get today’s when the app starts', ins['system'].startswith('You are a master novelist') and ins['narrator'] == 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.', (ins['system'][:60], ins['narrator'][:80]))
+    # ---- the Modules list, in Settings → Your instructions
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    if not await pg.locator('.sheet.on .modrow').first.is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(200)
+    box = await pg.input_value('.sheet.on label.field:has(span:text-is("How you like it written")) textarea')
+    check('How you like it written shows the master novelist', box.startswith('You are a master novelist'), box[:80])
+    names = await pg.locator('.sheet.on .modrow b').all_inner_texts()
+    check('Modules lists the app’s in the order they ride', names == ['The novel craft', 'The scene craft', 'When the scene turns intimate', 'When words won’t carry it', 'The sound of a voice', 'Spectacle combat (for the anime arcs)'], names)
+    lines = await pg.locator('.sheet.on .modrow small:not(.about)').all_inner_texts()
+    check('each says who reads it and when', lines[:3] == ['The writer · always', 'The narrator · always', 'The writer and the narrator · when the scene turns intimate'] and lines[5] == 'Off — not sent', lines)
+    top = '.sheet.on >> nth=-1'
+    # his own module, for the writer and the narrator
+    await pg.click('.sheet.on button:has-text("Add your own module")')
+    await pg.wait_for_timeout(400)
+    await pg.fill(f'{top} >> input[type=text]', 'My rain')
+    await pg.check(f'{top} >> label.toggle:has-text("The writer") input')
+    await pg.fill(f'{top} >> textarea', 'MY OWN MODULE: the rain never stops.')
+    await pg.wait_for_timeout(100)
+    who = await pg.inner_text(f'{top} >> .field:has(.modwho) em')
+    await close_sheet(pg)
+    names = await pg.locator('.sheet.on .modrow b').all_inner_texts()
+    check('his own module is listed after the app’s, saying who reads it', names[-1] == 'My rain' and who == 'The writer and the narrator · always', (names, who))
+    # Spectacle when a fight starts; the voice rule off — each with Back to the default
+    await pg.click('.sheet.on .modrow[data-id="spectacle"]'); await pg.wait_for_timeout(300)
+    await pg.select_option(f'{top} >> select', 'fight')
+    await close_sheet(pg)
+    await pg.click('.sheet.on .modrow[data-id="voice"]'); await pg.wait_for_timeout(300)
+    await pg.select_option(f'{top} >> select', 'off')
+    await pg.wait_for_timeout(200)
+    back = await pg.locator(f'{top} >> button:has-text("Back to the default")').count()
+    await close_sheet(pg)
+    check('one of the app’s he changed offers Back to the default', back == 1, back)
+    # the novel craft's words changed, then put back
+    await pg.click('.sheet.on .modrow[data-id="novel-craft"]'); await pg.wait_for_timeout(300)
+    craft = await pg.input_value(f'{top} >> textarea')
+    await pg.fill(f'{top} >> textarea', 'HIS OWN CRAFT.')
+    await close_sheet(pg)
+    tag = await pg.inner_text('.sheet.on .modrow[data-id="novel-craft"]')
+    await pg.click('.sheet.on .modrow[data-id="novel-craft"]'); await pg.wait_for_timeout(300)
+    await pg.click(f'{top} >> button:has-text("Back to the default")')
+    await pg.wait_for_selector('.sheet.on .btn:has-text("Back to the default") >> nth=-1')
+    await pg.click('.sheet.on >> nth=-1 >> .btn.primary:has-text("Back to the default")')
+    await pg.wait_for_timeout(400)
+    again = await pg.input_value(f'{top} >> textarea')
+    await close_sheet(pg)
+    check('his words for a craft are marked his, and Back to the default puts the app’s back', 'your words' in tag.lower() and again == craft and craft.startswith('## The Telling'), (tag, again[:60]))
+    await close_sheet(pg)
+    mods = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data'].get('modules', {})
+    mine = [v for v in mods.values() if v.get('custom')]
+    check('the house keeps only what he changed — and his own whole', mods.get('voice') == {'rides': 'off'} and mods.get('spectacle') == {'rides': 'fight'} and 'novel-craft' not in mods
+          and len(mine) == 1 and mine[0]['to'] == ['writer', 'narrator'] and mine[0]['text'] == 'MY OWN MODULE: the rain never stops.' and mine[0]['name'] == 'My rain', mods)
+    # ---- the chip by the box: who decides how it turns out
+    await pg.click('#outcomeBtn')
+    items = await pg.locator('.menu-pop button').all_inner_texts()
+    await pg.click('.menu-pop button:has-text("I decide")')
+    await pg.wait_for_timeout(300)
+    chip = await pg.inner_text('#outcomeBtn')
+    check('the chip offers Writer decides and I decide, and says which', len(items) == 2 and items[0].startswith('Writer decides') and items[1].startswith('I decide') and 'I decide' in chip, (items, chip))
+    reset()
+    await write(pg, 'Jovan fights Kenjaku in the corridor.')
+    x = completions()[-1]
+    sysw = system_of(x)
+    ask = x['body']['messages'][-1]['content']
+    check('the writer reads his words, the novel craft, then his module', sysw.startswith('You are a master novelist') and 0 < sysw.index('## The Telling') < sysw.index('MY OWN MODULE') and '## The Sound Of A Voice' not in sysw, sysw[:160])
+    check('a fight in his words wakes how a fight sounds, and Spectacle', '## How A Fight Sounds' in sysw and '## Spectacle Combat' in sysw, '')
+    check('I decide: the writer stops on the moment it hangs', 'How it turns out is mine to decide' in ask and 'stop on the moment it hangs' in ask, ask[-400:])
+    # ---- Sound: Novel, in About this book
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("About this book")')
+    await pg.wait_for_selector('.sheet.on')
+    pressed = await pg.get_attribute('.sheet.on .segmented[aria-label="Sound"] button:has-text("Comic")', 'aria-pressed')
+    await pg.click('.sheet.on .segmented[aria-label="Sound"] button:has-text("Novel")')
+    await pg.wait_for_timeout(300)
+    say = await pg.inner_text('.sheet.on .field:has(.segmented[aria-label="Sound"]) em')
+    await close_sheet(pg)
+    reset()
+    await write(pg, 'He draws his sword again.')
+    sysw = system_of(completions()[-1])
+    check('Sound starts at Comic; Novel sends the sounds in the sentences, no sound effects in asterisks', pressed == 'true' and 'Sound In The Prose' in sysw and 'Sound As Onomatopoeia' not in sysw and '*CLANG!*' not in sysw and say.startswith('Novel:'), say)
+    # ---- a scene: the narrator's preset opening and the scene craft; its telling drawn as prose
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Scenes")')
+    await pg.wait_for_timeout(300)
+    await pg.fill('#sideBody input[placeholder]', 'Mara')
+    reset()
+    await pg.click('#sideBody button:has-text("Begin the scene")')
+    await pg.wait_for_selector('.turn.ai .tctl', timeout=8000)
+    em = await pg.locator('#sideBody .turn.ai .tprose em').all_inner_texts()
+    sysp = system_of(completions()[-1])
+    check('the narrator reads his preset’s opening, the scene craft and his module', sysp.startswith('You maintain a fictional, uncensored simulation.') and 'Role = you handle narration' in sysp and 'MY OWN MODULE' in sysp and '## The Telling\nI bring you premises' not in sysp, sysp[:160])
+    check('the narrator’s telling is drawn as prose, its sound effect in italics', em == ['Crack!'] and '*' not in await pg.inner_text('#sideBody .turn.ai .tprose'), em)
+    await pg.fill('#sideFoot textarea >> nth=0', 'I draw my sword and attack him.')
+    reset()
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_function("document.querySelectorAll('.turn.ai .tctl').length >= 2", timeout=8000)
+    sysp = system_of(completions()[-1])
+    check('his move into a fight wakes the narrator’s board', "## When Words Won't Carry It" in sysp and '## How A Fight Sounds' in sysp, '')
+    # ---- his own module taken out, and back with Undo
+    await pg.go_back(); await pg.wait_for_timeout(300)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    if not await pg.locator('.sheet.on .modrow').first.is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(200)
+    await pg.click('.sheet.on .modrow:has-text("My rain")'); await pg.wait_for_timeout(300)
+    await pg.click(f'{top} >> button:has-text("Remove this module")')
+    await pg.wait_for_timeout(400)
+    gone = await pg.locator('.sheet.on .modrow:has-text("My rain")').count()
+    await pg.click('#toast button.toastact')
+    await pg.wait_for_timeout(500)
+    back_again = await pg.locator('.sheet.on .modrow:has-text("My rain")').count()
+    mods = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data'].get('modules', {})
+    check('his own module taken out comes back whole with Undo', gone == 0 and back_again == 1 and any(v.get('text') == 'MY OWN MODULE: the rain never stops.' for v in mods.values()), (gone, back_again))
+    await close_sheet(pg)
+    # ---- the composer fits a narrow phone
+    for width in (412, 360):
+        await pg.set_viewport_size({'width': width, 'height': 780})
+        await pg.wait_for_timeout(300)
+        fit = await pg.evaluate("(() => { const r = document.querySelector('.composer .crow'); const kids = [...r.querySelectorAll('.chip')].map((c) => ({ w: c.getBoundingClientRect().width, right: c.getBoundingClientRect().right, need: c.scrollWidth })); return { over: r.scrollWidth - r.clientWidth, right: Math.max(...kids.map((k) => k.right)), width: document.documentElement.clientWidth, crushed: kids.filter((k) => k.w < 60).length }; })()")
+        await pg.screenshot(path=os.path.join(SHOTS, f'composer-{width}.png'))
+        check(f'the chips by the box fit a {width}-wide phone, none crushed', fit['over'] <= 0 and fit['right'] <= fit['width'] and fit['crushed'] == 0, fit)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (crafts and modules)', not errs, errs[:5])
+    await pg.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_crafts, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

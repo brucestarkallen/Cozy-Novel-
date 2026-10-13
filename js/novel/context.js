@@ -24,6 +24,8 @@ import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
 import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine } from './prompts.js';
+import { ridingFor } from './modules.js';
+import { wakesOn } from './crafts.js';
 
 export const SAFETY = 1500;
 
@@ -173,21 +175,40 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
 }
 
 /* The narrator's own words, from "How the narrator tells scenes": its
- * starting words until he sets his own; emptied, the narrator reads "How you
- * like it written" instead. */
+ * starting words until he sets his own; emptied, nothing of his is sent —
+ * like the partner's box. (Before 2.3 an emptied box sent "How you like it
+ * written"; those words now tell the writer it writes everyone, the main
+ * character too — the one thing the narrator of a scene he plays must never
+ * do.) */
 export function narratorWords(instr) {
-  if (typeof instr.narrator !== 'string') return DEFAULT_NARRATOR;
-  return instr.narrator.trim() ? instr.narrator : String(instr.system || '');
+  return typeof instr.narrator === 'string' ? instr.narrator : DEFAULT_NARRATOR;
+}
+
+/* the words that wake a rule (crafts.js wakesOn): his own for this request,
+ * the last turns of a scene or a talk, and the page right before the point
+ * being written — never the app's own words around them */
+const WAKE_TAIL = 1500;
+function momentOf(current, turns, moment) {
+  const page = current ? String((current.marker ? current.before : current.text) || '').slice(-WAKE_TAIL) : '';
+  const recent = (turns || []).slice(-3).map((t) => String(t.content || '')).join('\n');
+  return [moment, recent, page].filter(Boolean).join('\n');
 }
 
 /* Build what one of them reads. purpose: 'write' | 'partner' | 'play'.
  * target: {chapterId, before?, through?, mark?}. request: his request (the
- * last user message). turns: earlier messages (partner, play).
+ * last user message). turns: earlier messages (partner, play). moment: his
+ * own words for this request (a direction, a note and the passage it is
+ * about, a scene's transcript) — with the page right before the point and a
+ * scene's last turns, what wakes a rule that rides only when the scene turns
+ * intimate or a fight starts.
  * Returns {system, systemParts: [what stays the same page after page, what
- * moves], messages, stats}. With the book riding in a message of its own,
- * that message carries cacheSplit: where the part that stays the same ends
- * (Claude keeps the request ready up to there). */
-export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null }) {
+ * moves], messages, stats}. His modules that always ride sit right after his
+ * own words, in the part that stays the same; the ones this moment woke ride
+ * nearer the page, in the part that moves — always in the system message.
+ * With the book riding in a message of its own, that message carries
+ * cacheSplit: where the part that stays the same ends (Claude keeps the
+ * request ready up to there). */
+export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null, moment = '' }) {
   const instr = (house && house.instructions) || {};
   const notesAs = notesAsOf(house);
   const chapter = chapters[target.chapterId] || chapters[(novel.order || [])[novel.order.length - 1]] || { id: '', passages: [] };
@@ -200,8 +221,12 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   else if (purpose === 'play') { own = narratorWords(instr); frame = playFrame(house, novel, play || {}, label, { notesAs }); }
   const about = aboutTheBook(novel, { plans: true });
   const notes = notesText(novel);
-  /* his own words first, then the words he never wants (when he listed any), then the frame */
-  const head = withHis([String(own || '').trim(), avoidLine(avoidList(house))].filter(Boolean).join('\n\n'), frame);
+  /* the modules (modules.js): the ones that always ride, and the ones this moment woke */
+  const ride = ridingFor(house, novel, purpose, wakesOn(momentOf(current, turns, moment)));
+  const woken = ride.woken.join('\n\n');
+  /* his own words first, then the words he never wants (when he listed any),
+   * then the modules that always ride, then the frame */
+  const head = withHis([String(own || '').trim(), avoidLine(avoidList(house)), ...ride.always].filter(Boolean).join('\n\n'), frame);
   const opening = notesAs === 'system' ? '' : notesOpening(house, novel, notesAs, purpose);
   const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
   const late = purpose === 'partner' ? '' : String(instr.late || '').trim();
@@ -212,8 +237,12 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
 
   const total = contextOf(conn);
   const reserve = answerRoom(conn, length);
-  const fixed = estimateTokens(head) + estimateTokens(about) + estimateTokens(opening) + estimateTokens(notesPart) + currentCost(current)
-    + after.reduce((a, m) => a + estimateTokens(m.content) + 8, 0) + 200;
+  const afterCost = after.reduce((a, m) => a + estimateTokens(m.content) + 8, 0);
+  /* what has to go whatever the book: his words, the modules, the frame, his
+   * request — with no book at all, does the answer still have its room? */
+  const instructions = estimateTokens(head) + estimateTokens(woken);
+  const over = instructions + afterCost + 200 > total - reserve ? { need: instructions, room: total } : null;
+  const fixed = instructions + estimateTokens(about) + estimateTokens(opening) + estimateTokens(notesPart) + currentCost(current) + afterCost + 200;
   let room = total - reserve - SAFETY - fixed;
   let cur = current;
   if (room < 0 && current) {
@@ -231,13 +260,17 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const messages = [];
   if (notesAs === 'system') {
     const stable = joinParts([head, stableBook]);
-    system = joinParts([stable, moving]);
-    systemParts = [stable, moving];
+    /* what this moment woke, before the notes (Cozy Tavern's order: the rules, then the notes, then the story) */
+    const tail = joinParts([woken, moving]);
+    system = joinParts([stable, tail]);
+    systemParts = [stable, tail];
   } else {
-    /* his instructions and the frame stay the system message; the book and
-     * its notes are a message of their own, before his request */
-    system = head;
-    systemParts = [head];
+    /* his instructions, the modules and the frame stay the system message —
+     * what this moment woke as its last part, so the part before it stays
+     * the same; the book and its notes are a message of their own, before
+     * his request */
+    system = joinParts([head, woken]);
+    systemParts = woken.trim() ? [head, woken] : [head];
     const lead = joinParts([opening, stableBook]);
     const body = joinParts([lead, moving]);
     if (body.trim()) {
@@ -250,6 +283,15 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     system,
     systemParts,
     messages,
-    stats: { tokens: estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0), room: total, whole: fit.whole + (chapter.id ? 1 : 0), short: fit.short, omitted: fit.book.omitted },
+    stats: { tokens: estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0), room: total, whole: fit.whole + (chapter.id ? 1 : 0), short: fit.short, omitted: fit.book.omitted, modules: ride.names, over },
+    /* a model whose room cannot hold his instructions and modules with any
+     * of the book is never sent this: the reason, in plain words (call.js) */
+    refuse: over ? tooSmallWords(over, purpose) : '',
   };
+}
+
+const READS = { write: 'the writer', play: 'the narrator', partner: 'your partner' };
+export function tooSmallWords(over, purpose) {
+  const who = READS[purpose] || 'it';
+  return `this model holds about ${over.room.toLocaleString()} tokens, and your instructions with the modules for ${who} take about ${over.need.toLocaleString()} of them before any of the book and the room for its answer — give ${who} a model with more room (Settings → Who does what), or switch off a module it reads (Settings → Your instructions → Modules)`;
 }

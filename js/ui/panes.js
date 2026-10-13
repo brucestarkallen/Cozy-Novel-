@@ -14,6 +14,7 @@ import { thinkBox, updateThinkBox } from './think.js';
 import { wordsOf, changesComing } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
 import { paced, follower, streamLines } from './live.js';
+import { drawProse, growProse } from './prose.js';
 import * as desk from './desk.js';
 import { sceneWords, choicesIn } from '../novel/prompts.js';
 
@@ -501,7 +502,9 @@ function drawTurn(kind, id, turn) {
   const el = h('div.turn.' + (turn.by === 'you' ? 'you' : 'ai') + (kind === 'play' && turn.by !== 'you' ? '.prose-turn' : '') + (live || v.streaming ? '.streaming' : ''), { 'data-id': turn.id });
   /* the thinking streams open while it comes, then folds once the words begin */
   if (turn.by !== 'you' && thinking) el.append(turnThinkBox(turn.id, thinking, Boolean(live && !live.text)));
-  el.append(h('span.words', shownWords(kind, turn, text, live)));
+  /* the narrator's telling is prose — a thought or a sound in italics is drawn in italics */
+  if (kind === 'play' && turn.by !== 'you') { const w = h('div.words.tprose'); drawProse(w, shownWords(kind, turn, text, live)); el.append(w); }
+  else el.append(h('span.words', shownWords(kind, turn, text, live)));
   /* his line to the narrator, not his character's */
   if (kind === 'play' && turn.by === 'you' && v.tell) el.append(h('div.tell', h('b', 'To the narrator: '), v.tell));
   if (live || v.streaming) return el;
@@ -662,7 +665,8 @@ function paintSide() {
       /* a new round (it is reading a chapter): the last round's thinking goes */
       box.remove();
     }
-    streamLines(el, shownWords(ev.kind, { by: 'ai' }, ev.text || '', entry));
+    const words = shownWords(ev.kind, { by: 'ai' }, ev.text || '', entry);
+    if (el.classList.contains('tprose')) growProse(el, words); else streamLines(el, words);
     painted = true;
   }
   sideLive.clear();

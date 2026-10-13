@@ -9,7 +9,9 @@
  *             brief and style are his own words; auto {about, style}: false
  *             when he set that one to Manual (Automatic otherwise); kept
  *             {about, style}: {text, at, by} — what the helper keeps of the
- *             book as it stands (by 'you' once he corrected it)
+ *             book as it stands (by 'you' once he corrected it); prefs
+ *             {length, outcome: 'me' (absent: the writer decides), sound:
+ *             'novel' (absent: Comic), at: the chapter last open}
  *   chapter { id, novelId, name, nameBy, passages:[passage], summary, retired:[] }
  *   passage { id, by:'ai'|'you'|'break', pick, versions:[version] }
  *   version { id, text, at, how, ask, conn, model, thinking, cut, stopped, notes, usage, ms, sent, streaming }
@@ -32,6 +34,18 @@ export const LENGTHS = {
   chapter: { label: 'The rest of the chapter', words: [0, 0] },
 };
 export const NOTE_KINDS = ['people', 'places', 'lore', 'threads'];
+
+/* Who decides how what he asks for turns out (the chip by the box): the
+ * writer, or he does — the writer stops on the moment it hangs. */
+export const OUTCOMES = {
+  writer: { label: 'Writer decides', hint: 'your premise sets it going; the writer decides how it turns out and what it costs' },
+  me: { label: 'I decide', hint: 'the writer plays it out and stops right before it’s settled — your next premise settles it' },
+};
+export function outcomeOf(novel) { return novel && novel.prefs && novel.prefs.outcome === 'me' ? 'me' : 'writer'; }
+/* How the world's sounds are written in this book (About this book → Sound):
+ * Comic — sound effects in asterisks — or Novel — sounds in the sentences. */
+export const SOUNDS = ['comic', 'novel'];
+export function soundOf(novel) { return novel && novel.prefs && SOUNDS.includes(novel.prefs.sound) ? novel.prefs.sound : 'comic'; }
 
 export function coverFor(title) {
   const h = parseInt(hashText(title).slice(0, 6), 36) || 0;

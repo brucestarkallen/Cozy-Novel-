@@ -71,7 +71,7 @@ def answer_for(body):
             return '<changes>[{"passage": "1.1", "find": "Rain hammered the glass", "replace": "Rain lashed the glass", "why": "a harder verb for the storm"}]</changes>\n\nI made the rain harder in the first line.'
         return "Maybe the letter is from her brother — the one who went to sea and never wrote."
     if "playing a scene from it" in system:
-        told = "The wind howls along the cliff path. At the bottom of the steps, a stranger waits with his collar turned up against the rain."
+        told = "The wind howls along the cliff path. *Crack!* A shutter slams somewhere above. At the bottom of the steps, a stranger waits with his collar turned up against the rain."
         if "three different things" in system:
             # Three choices on: the ways it could go, after the telling
             told += "\n\n<choices>\n1. Mara asks the stranger his name.\n2. Mara turns back up the steps.\n3. Mara holds out the letter.\n</choices>"

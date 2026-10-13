@@ -11,7 +11,7 @@
 import * as store from '../store.js';
 import * as archivist from '../novel/archivist.js';
 import { h, openSheet, field, toast, confirmIt, download, group } from './dom.js';
-import { novelSteps, COVERS } from '../novel/shape.js';
+import { novelSteps, COVERS, soundOf } from '../novel/shape.js';
 import { autoOn } from '../novel/prompts.js';
 import { connFor } from '../novel/writer.js';
 import { toMarkdown, toText, toPrintable, toEpub, fileName } from '../novel/files.js';
@@ -116,12 +116,32 @@ export function openBook(novelId, { onGone, onClose } = {}) {
     ownPlaceholder: 'e.g. Third person, past tense, close on Mara. Quiet, wry, a little melancholy. Short chapters.',
     keptPlaceholder: 'Written by the helper from the book: its point of view and tense, its voice, its rhythm.',
   });
+  /* how the world's sounds are written: his sound law as comics have it, or as a printed novel does */
+  const sound = h('div.segmented', { role: 'group', 'aria-label': 'Sound' });
+  const soundSay = h('em');
+  const SOUND_SAY = {
+    comic: 'Comic: the world’s sounds as sound effects in asterisks — *CLANG!* *thud thud* — the way your scenes in Cozy Tavern have them.',
+    novel: 'Novel: the same sounds written into the sentences — steel shrieking off steel, the crack of a rib — the way a printed novel has them.',
+  };
+  const drawSound = () => {
+    const cur = soundOf(store.peek('novel', novelId));
+    for (const b of sound.children) b.setAttribute('aria-pressed', String(b.dataset.v === cur));
+    soundSay.textContent = `${SOUND_SAY[cur]} Voices — moans, cries, war cries — are written out in quotes either way. The writer and the narrator follow it from the next page on.`;
+  };
+  for (const [v, label] of [['comic', 'Comic'], ['novel', 'Novel']]) {
+    sound.append(h('button', { 'data-v': v, 'aria-pressed': 'false', onclick: () => {
+      store.change('novel', novelId, novelSteps.setPref('sound', v === 'comic' ? '' : v), { now: true });
+      drawSound();
+    } }, label));
+  }
+  drawSound();
   const plans = h('textarea', { placeholder: 'What you mean to happen later — the writer reads it as plans, never as things that already happened.' });
   plans.value = n.plans || '';
   plans.addEventListener('input', later(() => save('plans', plans.value)));
   s.body.append(
     about.el,
     reads.el,
+    h('div.field', h('span', 'Sound'), sound, soundSay),
     field('Where it’s headed', plans),
     h('p.say', `${plural(n.meta.words || 0, 'word')} in ${plural((n.order || []).length, 'chapter')}. Everything here saves as you type.`));
   /* what the helper keeps arrives while the sheet is open */
