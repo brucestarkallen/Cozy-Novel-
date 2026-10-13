@@ -100,6 +100,7 @@ def main():
             failed.append("server raised")
             print(out[-3000:])
     run_first_cozynovel()
+    run_update_lands()
     shutil.rmtree(home, ignore_errors=True)
     print("\nserver: %d passed, %d failed" % (len(passed), len(failed)))
     sys.exit(1 if failed else 0)
@@ -362,6 +363,59 @@ def run_first_cozynovel():
         except Exception:
             pass
         for d in (folder, home, prefix):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def run_update_lands():
+    """An update pulled into the app's folder relights the server by itself —
+    even one that changed only the page's own files — and the page it sends
+    says which code it is."""
+    print("an update lands by itself")
+    folder = Path(tempfile.mkdtemp(prefix="cozynovel-git-"))
+    home = Path(tempfile.mkdtemp(prefix="cozynovel-home-"))
+    port = PORT + 7
+    git = lambda *a: subprocess.run(["git", "-C", str(folder), "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True)
+    srv = None
+    try:
+        for item in APP.iterdir():
+            if item.name in (".git", "tests", "__pycache__"):
+                continue
+            (shutil.copytree if item.is_dir() else shutil.copy2)(item, folder / item.name)
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-q", "-m", "one")
+        first = git("rev-parse", "HEAD").stdout.strip()
+        srv = start(home, port=port, app=folder)
+        page = urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=5).read().decode()
+        check("the page says which code it is", '<meta name="cozynovel-commit" content="%s">' % first in page, page[:400])
+        # a pull that changes only the page's own files
+        util = folder / "js" / "util.js"
+        util.write_text(util.read_text() + "\n/* a later version */\n")
+        git("commit", "-q", "-am", "two")
+        second = git("rev-parse", "HEAD").stdout.strip()
+        got = ""
+        for _ in range(60):
+            try:
+                got = json.loads(urllib.request.urlopen("http://127.0.0.1:%d/api/version" % port, timeout=1).read()).get("commit", "")
+            except Exception:
+                got = ""
+            if got == second:
+                break
+            time.sleep(0.25)
+        check("a pull that changed only the page's files relights the server with it", got == second, (first[:7], second[:7], got[:7]))
+    finally:
+        if srv:
+            srv.terminate()
+            try:
+                srv.wait(timeout=5)
+            except Exception:
+                srv.kill()
+        # the relit server is a new process under the same pid; make sure nothing is left on the port
+        for _ in range(20):
+            if free_port(port):
+                break
+            time.sleep(0.25)
+        for d in (folder, home):
             shutil.rmtree(d, ignore_errors=True)
 
 

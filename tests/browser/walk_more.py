@@ -255,13 +255,56 @@ async def scenario_offline(b, env):
     check('what he wrote meanwhile is saved once it answers', any('server was away' in t for t in texts), texts)
     await pg.close()
 
+async def scenario_windows(b):
+    """six windows side by side: one holds the news line for all of them"""
+    import uuid
+    ctx = await b.new_context(viewport={'width': 800, 'height': 700})
+    pages = []
+    for i in range(6):
+        pg = await ctx.new_page()
+        await pg.goto(f'http://127.0.0.1:{PORT}/')
+        await pg.wait_for_selector('#shelf:not([hidden])', timeout=8000)
+        pages.append(pg)
+    await pages[0].wait_for_timeout(800)
+    took = await pages[0].evaluate("""async () => { const t = performance.now(); const c = new AbortController(); setTimeout(() => c.abort(), 8000);
+      try { await (await fetch('/api/store/house/house', { signal: c.signal })).json(); return Math.round(performance.now() - t); } catch (e) { return -1; } }""")
+    check('with six windows open a window still saves and reads at once', 0 <= took < 2000, took)
+    def new_book(title):
+        nid = 'n-' + uuid.uuid4().hex[:10]
+        body = json.dumps({'data': {'id': nid, 'meta': {'title': title, 'subtitle': '', 'cover': 'ember', 'words': 0, 'chapters': 1, 'created': int(time.time() * 1000), 'written': int(time.time() * 1000), 'opened': 0, 'archived': False},
+            'brief': '', 'style': '', 'plans': '', 'order': [], 'notes': {'people': [], 'places': [], 'lore': [], 'threads': []}, 'memory': {'seen': {}, 'removed': [], 'undo': None, 'at': 0}, 'prefs': {}, 'plays': []}}).encode()
+        rq = urllib.request.Request(f'http://127.0.0.1:{PORT}/api/store/novel/{nid}', data=body, method='PUT', headers={'Content-Type': 'application/json', 'X-Base': '0', 'X-Client': 'another-device'})
+        urllib.request.urlopen(rq).read()
+    async def everyone_sees(title, pgs):
+        for pg in pgs:
+            await pg.wait_for_function(f"document.querySelector('#books').textContent.includes({json.dumps(title)})", timeout=8000)
+    new_book('Seen By All Six')
+    try:
+        await everyone_sees('Seen By All Six', pages)
+        check('a book made elsewhere appears in all six windows by itself', True)
+    except Exception as e:
+        check('a book made elsewhere appears in all six windows by itself', False, e)
+    lines = await pages[0].evaluate("navigator.locks.query().then((q) => (q.held || []).filter((l) => l.name === 'cozynovel-news').length)")
+    check('one window holds the news line for all six', lines == 1, lines)
+    await pages[0].close()
+    await pages[1].wait_for_timeout(1200)
+    new_book('After The First Window Closed')
+    try:
+        await everyone_sees('After The First Window Closed', pages[1:])
+        check('when a window closes, the others still hear the news', True)
+    except Exception as e:
+        check('when a window closes, the others still hear the news', False, e)
+    lines = await pages[1].evaluate("navigator.locks.query().then((q) => (q.held || []).filter((l) => l.name === 'cozynovel-news').length)")
+    check('and exactly one window holds the line', lines == 1, lines)
+    await ctx.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, lambda b: scenario_bring_in(b, tmp), scenario_look, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, lambda b: scenario_offline(b, env)):
                 print(getattr(sc, '__doc__', None) or 'scenario')
                 try:
                     await sc(b)

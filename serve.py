@@ -1086,6 +1086,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not target.is_file():
             return self.send_json({"error": "not found"}, 404)
         data = target.read_bytes()
+        if rel == "index.html":
+            # the page says which code it is, so it knows when the server runs newer code
+            data = data.replace(b'<meta name="cozynovel-commit" content="">',
+                                ('<meta name="cozynovel-commit" content="%s">' % re.sub(r"[^0-9a-f]", "", COMMIT)).encode("ascii"), 1)
         self.send_response(200)
         self.send_header("Content-Type", MIME.get(target.suffix, "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
@@ -1330,21 +1334,57 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     request_queue_size = 128   # many tabs saving at once are queued, never refused
 
 
+def _ref_files():
+    """The files git rewrites when the code moves to another commit."""
+    git = ROOT / ".git"
+    if not git.is_dir():
+        return []
+    files = [git / "HEAD", git / "packed-refs"]
+    try:
+        head = (git / "HEAD").read_text().strip()
+        if head.startswith("ref: "):
+            files.append(git / head[5:])
+    except OSError:
+        pass
+    return files
+
+
+def _stamps(paths):
+    out = []
+    for p in paths:
+        try:
+            out.append(p.stat().st_mtime_ns)
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
 def watch_self():
-    """If this file changes (an update), relight with the new code."""
+    """An update relights the server with the new code: this file changing,
+    or the code moving to another commit (a pull that changed only the page's
+    own files) — so every open page hears of it and refreshes by itself."""
     try:
         seen = SELF.stat().st_mtime
     except OSError:
         return
+    refs = _ref_files()
+    seen_refs = _stamps(refs)
     while True:
         time.sleep(2)
         try:
             now = SELF.stat().st_mtime
         except OSError:
             continue
-        if now != seen:
+        moved = False
+        now_refs = _stamps(refs)
+        if now_refs != seen_refs:
+            seen_refs = now_refs
+            refs = _ref_files()
+            seen_refs = _stamps(refs)
+            moved = bool(COMMIT) and _commit() not in ("", COMMIT)
+        if now != seen or moved:
             time.sleep(0.6)  # let the update finish writing
-            print("serve.py changed — relighting", file=sys.stderr)
+            print("Cozy Novel was updated — relighting", file=sys.stderr)
             try:
                 os.execv(sys.executable, [sys.executable, str(SELF)] + sys.argv[1:])
             except OSError:

@@ -15,10 +15,10 @@ window onto the server.
 
 | file | what it does |
 | --- | --- |
-| `serve.py` | the server: the app's files (never cached), the records (one JSON file each, numbered saves, a save from an older copy refused with the newer one), earlier copies, the day's copies, Recently deleted (30 days), the news line to every open page, the relay that carries every model call (keys never leave the phone), the import of the first Cozy Novel, and replacing an older server on the port |
+| `serve.py` | the server: the app's files (never cached), the records (one JSON file each, numbered saves, a save from an older copy refused with the newer one), earlier copies, the day's copies, Recently deleted (30 days), the news line to every open page, the relay that carries every model call (keys never leave the phone), the import of the first Cozy Novel, replacing an older server on the port, and relighting itself when an update lands (its own file changing, or the code moving to a new commit) |
 | `cozynovel.sh`, `install.sh` | the one word `cozynovel`: pull, make sure the running server is this code, wake lock, open the page |
 | `sw.js` | a service worker that caches nothing: it exists so the app sits on the home screen and so the 1.x worker (which served stale copies) is retired |
-| `js/store.js` | records in the page: open, change by *steps* (written by id, so they replay over a newer copy after a refused save), save, the news line, the journal of unsaved work in IndexedDB for when Android closes a tab |
+| `js/store.js` | records in the page: open, change by *steps* (written by id, so they replay over a newer copy after a refused save), save, the news line (one visible window holds it for every window of the browser and hands the news on), the journal of unsaved work in IndexedDB for when Android closes a tab |
 | `js/app.js` | the front door: routes (`#/`, `#/n/<book>/<chapter>`), the bars, reading mode, updates landing by themselves |
 | `js/ui/*` | the screens: `shelf`, `desk` (the page and the box), `panes` (chapters, notes, partner, scenes), `settings`, `book` (About this book), `sent` (what was sent), `dom` (sheets, menus, the Back stack, toasts), `prose`, `look` |
 | `js/novel/shape.js` | what a book is made of, and the steps that change it (pure) |

@@ -411,6 +411,18 @@ await test('a passage changed while it was being read is read again, told what i
   await putAway(b);
 });
 
+await test('a change to an early chapter is read as such: where people are "now" stays as of the end of the book', async () => {
+  const b = await makeBook([['Mara left the island.'], ['Mara came home at last.']]);
+  markAllSeen(b);
+  writer.saveEdit({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch(0).passages[0].id, text: 'Mara left the island in a storm.' });
+  await script([{ text: '{}' }]);
+  await archivist.run(b.novelId);
+  const req = (await requests()).find((x) => x.body.messages.at(-1).content.includes('Update the notes')).body.messages.at(-1).content;
+  assert.ok(req.includes('This part is from Chapter One; the book goes on to Chapter Two.'), req.slice(0, 500));
+  assert.ok(req.includes('It used to read:') && req.includes('Mara left the island.'));
+  await putAway(b);
+});
+
 await test('a chapter split from a passage tells the helper nothing new', async () => {
   const b = await makeBook([['One.', 'Two.', 'Three.']]);
   markAllSeen(b);

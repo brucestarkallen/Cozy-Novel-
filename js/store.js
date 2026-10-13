@@ -20,7 +20,10 @@ export const CLIENT = newId('tab');
 const recs = new Map();            /* 'kind/id' -> rec */
 const statusFns = new Set();
 const updateFns = new Set();
-let bootCommit = null;
+/* the code this page is: the server writes it into the page it sends */
+let bootCommit = (() => {
+  try { const m = globalThis.document && document.querySelector('meta[name="cozynovel-commit"]'); return m && m.content ? m.content : null; } catch (_) { return null; }
+})();
 let generation = null;             /* the library's generation (counted up by each whole copy brought back) */
 let offline = false;
 let lastError = '';
@@ -294,49 +297,86 @@ export function onShelf(fn) { shelfFns.add(fn); return () => shelfFns.delete(fn)
 const reloadFns = new Set();
 export function onReload(fn) { reloadFns.add(fn); return () => reloadFns.delete(fn); }
 
-/* One line of news from the phone per page — and only while the page can be
- * seen: a browser gives one address six lines at most, and every hidden tab
- * holding one would leave the next tab none. A page coming back into view
- * opens it again, and its hello brings it up to date. */
-let source = null;
+/* THE NEWS FROM THE PHONE. A browser gives one address six lines at most,
+ * so one window of Cozy Novel holds the line for all of them in this browser
+ * and hands each piece of news to the others (a lock says which one; a
+ * channel carries the news) — six windows open side by side still leave the
+ * page its lines for saving and writing. Only a window that can be seen
+ * holds it or listens: a hidden one lets go, and coming back into view it
+ * catches up on whatever it missed. Where the browser has no locks, each
+ * window keeps its own line, as before. */
+let source = null;           /* this window's own line, while it holds it */
 let hellos = 0;
-export function listen() {
-  if (source || typeof EventSource === 'undefined') return;
+let listening = 0;           /* which listening this is (0: not listening) */
+let starts = 0;
+let letGo = null;            /* lets the lock go, while this window holds it */
+let caughtUp = true;         /* false: news may have been missed (the line newly held here) */
+const NEWS = typeof BroadcastChannel === 'function' ? new BroadcastChannel('cozynovel-news') : null;
+const LOCKS = Boolean(NEWS && globalThis.navigator && navigator.locks && navigator.locks.request);
+
+function onNews(raw) {
+  let ev;
+  try { ev = JSON.parse(raw); } catch (_) { return; }
+  if (ev.hello) {
+    if (bootCommit === null) bootCommit = ev.hello.commit || '';
+    else if ((ev.hello.commit || '') !== bootCommit) for (const fn of updateFns) fn(ev.hello);
+    if (Number.isFinite(ev.hello.generation)) generation = ev.hello.generation;
+    setOffline(false);
+    /* back after a gap, or the line newly held here: whatever changed
+     * meanwhile is fetched, and work a closed tab left in this browser's
+     * journal is handed over */
+    if (hellos++ > 0 || !caughtUp) { caughtUp = true; recheckAll(); replayJournal().catch(() => {}); }
+    return;
+  }
+  if (ev.resync) { recheckAll(); return; }   /* this page fell behind the news: it reads everything again */
+  if (ev.reload) {
+    /* a whole copy was brought back: nothing waiting from before it is played over it */
+    for (const r of recs.values()) { r.pending = []; r.loaded = false; r.journaled = false; }
+    Journal.clear();
+    for (const fn of reloadFns) fn();
+    for (const fn of shelfFns) fn();
+    return;
+  }
+  if (ev.kind === 'novel') for (const fn of shelfFns) fn(ev);
+  if (ev.by === CLIENT) return;
+  const r = recs.get(keyOf(ev.kind, ev.id));
+  if (!r || !r.loaded) return;
+  if (ev.deleted) { gone(r); return; }
+  /* newer, or back after being deleted (started over, brought back) */
+  if (r.deleted || ev.rev > r.rev) refresh(r);
+}
+
+function openLine(relay) {
   source = new EventSource('/api/events');
   source.onmessage = (e) => {
-    let ev;
-    try { ev = JSON.parse(e.data); } catch (_) { return; }
-    if (ev.hello) {
-      if (bootCommit === null) bootCommit = ev.hello.commit || '';
-      else if ((ev.hello.commit || '') !== bootCommit) for (const fn of updateFns) fn(ev.hello);
-      if (Number.isFinite(ev.hello.generation)) generation = ev.hello.generation;
-      setOffline(false);
-      /* back after a gap: whatever changed meanwhile is fetched, and work a
-       * closed tab left in this browser's journal is handed over */
-      if (hellos++ > 0) { recheckAll(); replayJournal().catch(() => {}); }
-      return;
-    }
-    if (ev.resync) { recheckAll(); return; }   /* this page fell behind the news: it reads everything again */
-    if (ev.reload) {
-      /* a whole copy was brought back: nothing waiting from before it is played over it */
-      for (const r of recs.values()) { r.pending = []; r.loaded = false; r.journaled = false; }
-      Journal.clear();
-      for (const fn of reloadFns) fn();
-      for (const fn of shelfFns) fn();
-      return;
-    }
-    if (ev.kind === 'novel') for (const fn of shelfFns) fn(ev);
-    if (ev.by === CLIENT) return;
-    const r = recs.get(keyOf(ev.kind, ev.id));
-    if (!r || !r.loaded) return;
-    if (ev.deleted) { gone(r); return; }
-    /* newer, or back after being deleted (started over, brought back) */
-    if (r.deleted || ev.rev > r.rev) refresh(r);
+    if (relay && NEWS) { try { NEWS.postMessage(e.data); } catch (_) { /* the others catch up by themselves */ } }
+    onNews(e.data);
   };
   source.onerror = () => { /* EventSource tries again by itself; the next hello rechecks */ };
 }
+
+export function listen() {
+  if (listening || typeof EventSource === 'undefined') return;
+  const me = ++starts;
+  listening = me;
+  /* coming back after letting go: what changed meanwhile is fetched */
+  if (me > 1) { recheckAll(); replayJournal().catch(() => {}); }
+  if (!LOCKS) { openLine(false); return; }
+  NEWS.onmessage = (e) => { if (listening === me && !source) onNews(e.data); };
+  navigator.locks.request('cozynovel-news', (lock) => new Promise((release) => {
+    /* gone quiet (or listening again since) while it waited: not this one */
+    if (!lock || listening !== me || source) { release(); return; }
+    letGo = release;
+    /* news sent between the last holder letting go and this line opening is fetched at its hello */
+    caughtUp = false;
+    openLine(true);
+  })).catch(() => { if (listening === me && !source) openLine(false); });
+}
 export function quiet() {
+  listening = 0;
+  if (NEWS) NEWS.onmessage = null;
   if (source) { source.close(); source = null; }
+  if (letGo) { const r = letGo; letGo = null; r(); }
 }
 
 function gone(r) {
@@ -415,7 +455,7 @@ export function flushOnHide() {
  * elsewhere comes (the news line opens again; its hello fetches it). */
 export function recheck() {
   for (const r of recs.values()) if (r.pending.length && !r.saving) { clearTimeout(r.timer); r.timer = null; saveNow(r); }
-  if (source) recheckAll(); else listen();
+  if (listening) recheckAll(); else listen();
 }
 
 export function hasPending() {
