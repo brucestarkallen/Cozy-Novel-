@@ -255,7 +255,18 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 @keyframes breathe { 50% { transform: scale(.7); opacity: .6; } }
 
 .deskbody { position: relative; flex: 1; min-height: 0; display: flex; }
+/* the page's own column: the page, and beside its right edge the scroller */
+.pagecol { position: relative; flex: 1; min-width: 0; display: flex; }
 .pagewrap { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+/* the scroller: its thumb says which passage is under the eye, and drags the page */
+.scroller { position: absolute; top: 12px; bottom: 12px; right: 3px; width: 40px; z-index: 5; pointer-events: none; }
+.scroller .thumb { position: absolute; right: 0; top: 0; min-width: 32px; height: 32px; padding: 0 7px; border-radius: 16px; display: grid; place-items: center;
+  font: 600 12.5px/1 var(--ui); font-variant-numeric: tabular-nums; background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); box-shadow: var(--shadow);
+  opacity: .45; transition: opacity .3s; cursor: grab; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+.scroller.on .thumb, .scroller .thumb:focus-visible { opacity: 1; }
+.scroller.drag .thumb { cursor: grabbing; opacity: 1; }
+.scroller .tip { position: absolute; right: 44px; top: 0; white-space: nowrap; padding: 7px 11px; border-radius: 10px; background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); box-shadow: var(--shadow); font: 13px/1.2 var(--ui); display: none; }
+.scroller.on .tip, .scroller.drag .tip { display: block; }
 .page {
   position: relative; max-width: var(--page-width); margin: 16px auto 0; min-height: calc(100% - 16px);
   background: var(--paper); color: var(--ink);
@@ -431,6 +442,30 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .turn .tctl button { height: 28px; padding: 0 9px; border-radius: 999px; font: 12.5px/1 var(--ui); color: var(--chrome-soft); }
 .turn .tctl button:hover { background: rgba(255,255,255,.07); color: var(--chrome-ink); }
 .turn.streaming::after { content: '\2026'; color: var(--accent); }
+/* the thinking inside a reply, in the colours beside the page */
+.turn .thinkbox { margin: -2px 0 8px; white-space: normal; background: rgba(255,255,255,.04); border-color: var(--line); color: var(--chrome-soft); font: 13px/1.5 var(--ui); }
+.turn .thinkbox > button, .turn .thinkbox .copy { color: var(--chrome-soft); }
+.turn .thinkbox .words { white-space: pre-wrap; max-height: 30vh; }
+.turn.streaming .thinkbox.live ~ .words:empty { display: none; }
+/* the partner's changes, each with its Undo */
+.turn .turnnote { margin-top: 8px; font-size: 12.5px; color: var(--chrome-soft); white-space: normal; }
+.turn .changes { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; white-space: normal; }
+.turn .change { padding: 8px 10px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255,255,255,.035); font-size: 13px; line-height: 1.45; }
+.turn .change.made { border-color: rgba(143,191,122,.4); }
+.turn .change.refused { border-color: rgba(224,122,95,.45); }
+.turn .change.undone, .turn .change.skipped { opacity: .7; }
+.turn .change .chead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.turn .change .chead b { font-weight: 600; }
+.turn .change .chead small { color: var(--chrome-soft); }
+.turn .change .cwhat { margin-top: 3px; color: var(--chrome-ink); overflow-wrap: anywhere; }
+.turn .change .cwhat del { color: var(--chrome-soft); text-decoration: line-through; }
+.turn .change .cwhat ins { text-decoration: none; color: var(--chrome-ink); background: rgba(143,191,122,.14); border-radius: 4px; padding: 0 2px; }
+.turn .change .cwhy { margin-top: 3px; color: var(--chrome-soft); font-style: italic; }
+.turn .cbtns { display: flex; gap: 4px; margin-top: 6px; }
+.turn .cbtns button { height: 28px; padding: 0 10px; border-radius: 999px; font: 12.5px/1 var(--ui); color: var(--chrome-soft); border: 1px solid var(--line); }
+.turn .cbtns button:hover { color: var(--chrome-ink); background: rgba(255,255,255,.06); }
+.turn .cbtns button.go { color: var(--accent); border-color: rgba(216,150,58,.45); }
+.card .nw.ties { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .talkbox { padding: 10px 12px calc(var(--safe-b) + 10px); border-top: 1px solid var(--line); }
 .talkbox textarea { width: 100%; resize: none; min-height: 44px; max-height: 30vh; border-radius: 14px; padding: 10px 12px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--chrome-ink); font-size: 15px; }
 [data-theme="day"] .talkbox textarea { background: #fff; }
@@ -494,6 +529,20 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .swatch { border-radius: 14px; padding: 10px; border: 2px solid transparent; background: rgba(255,255,255,.04); text-align: left; font-size: 13px; line-height: 1.3; display: flex; flex-direction: column; justify-content: flex-start; gap: 8px; }
 .swatch[aria-pressed="true"] { border-color: var(--accent); }
 .swatch i { display: block; height: 42px; border-radius: 9px; flex: none; }
+/* What it's about / How it reads: Manual or Automatic */
+.keptfield { margin: 0 0 18px; }
+.keptfield textarea { width: 100%; min-height: 110px; border-radius: 12px; padding: 9px 12px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--chrome-ink); resize: vertical; line-height: 1.5; }
+.keptfield textarea.tall { min-height: 160px; }
+[data-theme="day"] .keptfield textarea { background: #fff; }
+.keptfield > em { display: block; font-style: normal; font-size: 12.5px; color: var(--chrome-soft); margin: 5px 0 10px; line-height: 1.45; }
+.keptrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 8px; flex-wrap: wrap; }
+.keptname { font-size: 13px; font-weight: 600; color: var(--chrome-ink); }
+.segmented { display: inline-flex; padding: 3px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.04); }
+.segmented button { height: 30px; padding: 0 14px; border-radius: 999px; font-size: 13px; color: var(--chrome-soft); }
+.segmented button[aria-pressed="true"] { background: rgba(216,150,58,.2); color: var(--chrome-ink); font-weight: 600; }
+.keptbox { padding: 10px 12px 4px; border-radius: 14px; border: 1px dashed rgba(216,150,58,.4); background: rgba(216,150,58,.05); }
+.keptlabel { display: block; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px; }
+.keptbox .say { margin: 6px 0 0; }
 .toggle { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
 .toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
 .toggle span { flex: 1; font-size: 14px; }
@@ -543,6 +592,26 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .sentmsg.open pre { display: block; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* full screen: the writing page with nothing above it */
+body.fullpage .deskbar { display: none; }
+body.fullpage .pane.dock { display: none; }
+body.fullpage #desk .composer { padding-left: 10px; padding-right: 10px; }
+body.fullpage .pagewrap { padding-top: var(--safe-t); }
+.fullexit { position: fixed; right: 10px; top: calc(var(--safe-t) + 10px); z-index: 20; width: 38px; height: 38px; border-radius: 50%; background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); box-shadow: var(--shadow); opacity: .55; transition: opacity .2s; }
+.fullexit:hover, .fullexit:focus-visible { opacity: 1; }
+
+/* a scene over the whole screen: the narrator's words in the book's own type */
+.scenehead { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.pane.right.full, .pane.right.dock.full {
+  position: fixed; inset: 0; width: auto; z-index: 45; transform: none; visibility: visible; transition: none;
+  background: var(--chrome-solid); box-shadow: none; border: 0; padding-top: var(--safe-t);
+}
+.pane.right.full > .panehead { display: none; }
+.pane.right.full .panebody, .pane.right.full .talkbox { padding-left: max(16px, calc((100% - 760px) / 2)); padding-right: max(16px, calc((100% - 760px) / 2)); }
+.pane.right.full .turn { font-size: 16px; }
+.pane.right.full .turn.ai.prose-turn { max-width: 100%; background: none; border: 0; padding: 4px 2px; font: var(--prose-size)/var(--prose-lead) var(--serif); }
+.pane.right.full .turn.you { max-width: 80%; }
 
 /* reading mode: only the page */
 body.reading .composer, body.reading .deskbar, body.reading .pctl, body.reading .nextchapter, body.reading .follow, body.reading .thinkbox, body.reading .endcard { display: none; }

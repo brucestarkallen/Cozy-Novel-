@@ -45,6 +45,8 @@ const ICONS = {
   stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>',
   feather: '<path d="M20 4c-6 0-11 4-12 10l-2 6 6-2c6-1 10-6 8-14z"/><path d="M8 16l6-6"/>',
   book: '<path d="M4 4.5h6a2 2 0 0 1 2 2V20a2 2 0 0 0-2-2H4z"/><path d="M20 4.5h-6a2 2 0 0 0-2 2V20a2 2 0 0 1 2-2h6z"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
 };
 export function icon(name, size = 22) {
   const span = document.createElement('span');

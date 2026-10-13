@@ -4,7 +4,7 @@ A quiet little room for writing a novel with a model beside you — on your phon
 
 You write the book chapter by chapter. Say what happens next and press **Write**, and your writer writes it onto the page; or write the words yourself and press **Add as my words**. Nothing is ever thrown away: another take, a rewrite or your own edit is a new *version* of the passage, and the earlier one is one arrow away.
 
-While you write, a quiet **helper** keeps the book's notes — the people (and where they are now), the places, the things worth remembering, the threads still open — and a summary of every chapter, so a book far longer than your model can read still fits. A **partner** talks the book over with you, and in **Scenes** you step into the story as one of its people while the narrator plays everyone else, then turn what happened into prose.
+While you write, a quiet **helper** keeps the book's notes — the people (who they are, how they stand with each other, where they are now), the places, the things worth remembering, the threads still open — and a summary of every chapter, so a book far longer than your model can read still fits. A **partner** talks the book over with you like a seasoned novelist, and when you ask it makes the change itself, each with its Undo. In **Scenes** you step into the story as one of its people while the narrator plays everyone else, then turn what happened into prose.
 
 Your books live on the phone, in `~/.cozynovel`, never in a browser: close every tab, clear the browser, open another one — the book is exactly where you left it, and every open window shows the same book without a refresh.
 
@@ -49,12 +49,21 @@ and open **http://127.0.0.1:8081**. Another port: `COZYNOVEL_PORT=8091 python3 s
 ## Writing
 
 - **The shelf** is your books, the one you touched last first. **A new book** asks only for a working title; what it's about and how it reads can come later (or paste a whole plot essential).
-- **The page** is the chapter. Tap a passage for its controls: **Another take**, **Rewrite…** (with a note on what should change), **Edit**, and **⋯** for the rest — what the writer was sent, copy, *write from here* (a new passage after this one), a scene break, *start a new chapter from here*, remove.
+- **The page** is the chapter. Tap a passage for its controls: **Another take**, **Rewrite…** (with a note on what should change), **Edit**, and **⋯** for the rest — what the writer was sent, copy, *write from here* (a new passage after this one), a scene break, *start a new chapter from here*, remove. Under the controls a line says the passage's number, its words, how many tokens its request was (*about* when the provider gave no count of its own) and when.
+- **The scroller** at the page's right edge shows the number of the passage under your eye; drag it to move through a long chapter quickly (it says *Passage 12 of 40* while you hold it).
 - **Select a few words** and the one button says **Rewrite**: only those words are written again, the rest of the passage stays exactly as it is.
 - **Stop** keeps what came. A passage that stopped partway says so and offers **Go on**, which carries it on from its last word.
 - **The box at the bottom**: what happens next (or leave it empty, and the story carries on), how much to write (a few paragraphs, a scene, a long stretch, the rest of the chapter), and who writes.
-- **The book's title** at the top opens the chapters; **Notes**, **Partner** and **⋯** (Scenes, About this book, Reading mode, Settings) sit beside it. On a wide screen the chapters and notes stand beside the page.
+- **The book's title** at the top opens the chapters; **Notes**, **Partner** and **⋯** (Scenes, About this book, Full screen, Reading mode, Settings) sit beside it. On a wide screen the chapters and notes stand beside the page.
+- **Full screen** is the writing page with nothing above it — the bars go (and the browser's own, where it allows), the page and the box stay; moving to the next chapter keeps it. **Reading mode** is only the page, for reading. A scene has its own full screen button. Back, or the small button in the corner, brings the bars back.
+- **About this book**: *What it's about* and *How it reads* are each **Manual** (only your words) or **Automatic** (your words, if any, and what the helper keeps of the book as it stands — current as the book goes on). Correct what the helper keeps and your correction stands until you press *Write it from the book again*.
 - The phone's **Back** closes whatever is open — a menu, a sheet, a drawer, the edit box (keeping what you typed) — before it ever leaves the book.
+
+## The notes, the summaries and the partner
+
+- **People** (who they are, *with others* — how they stand with the people who matter to them, and why — and *right now*), **Places**, **Things worth remembering** (objects, facts, secrets and who knows them, rules of the world) and **Threads** (promises, secrets, questions still open) are what the writer reads before every page, so a name, a scar or a promise never drifts. **Chapter summaries** are something else: they stand in for whole chapters once the book is longer than the model can read (the newest chapters always ride whole; a chapter is never sent both whole and in short).
+- The helper writes them the way Summaryception taught: only what changed, a first appearance described when it happens, feelings that carry over, who knows what, each cause kept with what it led to, nothing invented and nothing softened. A card you wrote stays yours: the helper keeps where they are now and how they stand with others, never your words.
+- **The partner** sees every passage numbered as on the page (*Chapter Two, passage 3*). Ask it to change something — a passage, a chapter's name, what the book is about, a card in the notes — and the change shows under its answer with **Undo** (or waits for **Apply**, as you choose in Settings). A passage it changes becomes a new version; your words stay one arrow away. A chapter it only has in short it can ask to read whole.
 
 ## The helper's light
 
@@ -70,7 +79,9 @@ When a model refuses something (a dial it doesn't take, a request longer than it
 
 **Who does what** chooses the writer (who also narrates scenes), the partner and the helper; the partner and helper are the writer unless you choose otherwise. A quick, inexpensive model is perfect for the helper. Keys stay on the phone: every call goes out through the little server.
 
-**Your instructions** are sent first, word for word, to the writer and the narrator — like the main prompt of a SillyTavern preset — and the note at the end rides after your request, like post-history instructions. Everything above your request is the system's.
+**Your instructions** are sent first, word for word — *How you like it written* to the writer, *How the narrator tells scenes* to the narrator (emptied, the narrator reads yours for the writer), *How the partner talks* to the partner — like the main prompt of a SillyTavern preset; every box with starting words has **Back to the default**. The note at the end rides after your request, like post-history instructions. After your instructions, the book and its notes ride in the system message — or, as you choose (**The book and its notes ride as**), as your own notes in a user message or as the writer's notebook in an assistant message, as in Cozy Tavern.
+
+Everything the app itself says is in your voice and plain words ("our novel", "I'm taking Joon's part"), never a machine's — so a writer you made Batman or Light Yagami stays Batman in its thinking — and it says once that the book is fiction for grown readers, written uncensored.
 
 ## Keeping it safe
 

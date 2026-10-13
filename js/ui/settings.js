@@ -7,11 +7,11 @@ import { h, openSheet, field, group, toast, confirmIt, download, pickFile, menu,
 import { PRESETS, LEVELS, spokenAs, describePrefill, learnedFacts, contextOf, alwaysThinks, cannotStopThinking } from '../model/providers.js';
 import { listModels, tryConnection } from '../model/call.js';
 import { connFor, connName } from '../novel/writer.js';
-import { DEFAULT_WRITING } from '../novel/prompts.js';
+import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from '../novel/prompts.js';
 import { newId, debounce, timeAgo, plural } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
-import { applyLook } from './look.js';
+import { applyLook, DEFAULT_LOOK } from './look.js';
 
 let sheet = null;
 let editingId = null;
@@ -130,7 +130,9 @@ function connectionForm(c) {
   box.append(field('Address', text('url', 'https://api.deepseek.com/v1'), 'The provider’s address — the preset fills it in.'));
   box.append(field('Key', text('key', 'Your API key', { type: 'password' })));
   const model = text('model', 'deepseek-chat');
-  const pick = h('select', { hidden: true, 'aria-label': 'Pick a model' });
+  const pick = h('select', { 'aria-label': 'Pick a model' });
+  /* inside a field, so it wears the same look as every other box here */
+  const pickBox = h('label.field', { hidden: true, style: { marginTop: '8px' } }, pick);
   const say = h('p.say', { hidden: true });
   const list = h('button.btn.small', { onclick: async () => {
     list.disabled = true; say.hidden = false; say.className = 'say'; say.textContent = 'Asking which models it offers…';
@@ -142,7 +144,7 @@ function connectionForm(c) {
     pick.textContent = '';
     pick.append(h('option', { value: '' }, `${r.models.length} on offer — pick one`));
     for (const m of r.models) pick.append(h('option', { value: m.id }, m.id + (m.context ? ` (${Math.round(m.context / 1000)}k)` : '')));
-    pick.hidden = false;
+    pickBox.hidden = false;
     pick.onchange = () => {
       const m = r.models.find((x) => x.id === pick.value);
       if (!m) return;
@@ -152,7 +154,7 @@ function connectionForm(c) {
     say.textContent = 'Picking one fills the model name, and keeps what the provider says about it (its room, its thinking levels).';
   } }, 'Show the models on offer');
   model.addEventListener('input', debounce(() => { if (model.value.trim() !== c.model) set({ modelHf: undefined, modelEfforts: undefined, modelContext: undefined }); }, 400));
-  box.append(field('Model', model), h('div.btnrow', list), pick, say);
+  box.append(field('Model', model), h('div.btnrow', list), pickBox, say);
 
   /* thinking */
   const think = h('select');
@@ -252,25 +254,58 @@ function rolesGroup(hs, open) {
 
 /* ------------------------------------------------------------ his words */
 
+/* the starting words of each box, for Back to the default */
+const STARTING = { system: DEFAULT_WRITING, narrator: DEFAULT_NARRATOR, partner: DEFAULT_PARTNER };
+
 function wordsGroup(hs) {
   const ins = hs.instructions || {};
   const g = group('Your instructions', { key: 'set.words' });
   const box = (key, rows, placeholder) => {
     const ta = h('textarea', { rows, placeholder });
-    ta.value = ins[key] || '';
+    /* a box he never touched shows the words that are sent for it: its starting words */
+    ta.value = typeof ins[key] === 'string' ? ins[key] : (STARTING[key] || '');
     ta.addEventListener('input', debounce(() => changeHouse((x) => { x.instructions = x.instructions || {}; x.instructions[key] = ta.value; }), 500));
     return ta;
+  };
+  /* every box with starting words can have them back */
+  const back = (ta, key) => h('div.btnrow', h('button.btn.quiet.small', { onclick: async () => {
+    if (ta.value.trim() && ta.value !== STARTING[key] && !(await confirmIt('Back to the default?', 'The words in the box go, and the starting words come back. (Copy yours first if you want to keep them.)', 'Back to the default'))) return;
+    ta.value = STARTING[key];
+    /* kept on the phone at once, not after the typing pause */
+    changeHouse((x) => { x.instructions = x.instructions || {}; x.instructions[key] = STARTING[key]; }, { now: true });
+    ta.dispatchEvent(new Event('input'));
+    toast('The starting words are back.');
+  } }, 'Back to the default'));
+  const choose = (key, options, cur, hint, label) => {
+    const sel = h('select');
+    for (const [v, l] of options) sel.append(h('option', { value: v, selected: (cur || options[0][0]) === v }, l));
+    sel.addEventListener('change', () => changeHouse((x) => { if (sel.value === options[0][0]) delete x[key]; else x[key] = sel.value; }, { now: true }));
+    return field(label, sel, hint);
   };
   const name = h('input', { type: 'text', value: (hs.you && hs.you.name) || '', placeholder: 'e.g. Bruce' });
   name.addEventListener('input', debounce(() => changeHouse((x) => { x.you = { ...(x.you || {}), name: name.value.trim() }; }), 500));
   const sys = box('system', 9, 'How you like your stories written…');
   sys.classList.add('tall');
+  const narr = box('narrator', 7, 'How the narrator tells the scenes you play…');
+  const partner = box('partner', 5, 'A way of talking, or a persona, for your writing partner…');
   g.body.append(
-    field('Your name', name, 'How the writer, the partner and the helper speak of you (“the novel you and Bruce are writing”).'),
-    field('How you like it written', sys, 'Sent first, word for word, to the writer and the narrator — like the main prompt of a SillyTavern preset. Your voice, your rules, a persona if you like.'),
-    h('div.btnrow', h('button.btn.quiet.small', { onclick: () => { sys.value = DEFAULT_WRITING; sys.dispatchEvent(new Event('input')); } }, 'Use the starting words again')),
+    field('Your name', name, 'How your notes and the helper speak of you (“Bruce here.”, “a novel Bruce is writing”).'),
+    field('How you like it written', sys, 'Sent first, word for word, to the writer — like the main prompt of a SillyTavern preset. Your voice, your rules, a persona if you like.'),
+    back(sys, 'system'),
+    field('How the narrator tells scenes', narr, 'Sent first, word for word, when you play a scene — the narrator’s own voice and rules, a persona if you like. Empty: the narrator reads “How you like it written” instead.'),
+    back(narr, 'narrator'),
+    field('How the partner talks', partner, 'Sent first, word for word, to your partner. Empty: nothing of yours is sent.'),
+    back(partner, 'partner'),
     field('A note at the end', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer or narrator is asked. Empty: nothing is sent.'),
-    field('How the partner talks', box('partner', 4, 'Optional. A persona or a way of talking for your writing partner.'), 'Sent first to the partner. Empty: the partner is simply a friend who knows the book.'));
+    choose('notesAs', [
+      ['system', 'The system message (the default)'],
+      ['user', 'A user message — your notes'],
+      ['assistant', 'An assistant message — a notebook'],
+    ], hs.notesAs, 'What the book is about, its chapters and its notes, after your instructions — for the writer, the narrator and the partner alike, as in Cozy Tavern. As your notes they open “Bruce here. Here’s where our book stands…”; as a notebook they are the writer’s own (“My notebook for…”), before what you ask.', 'The book and its notes ride as'),
+    choose('partnerApplies', [
+      ['now', 'At once, with Undo (the default)'],
+      ['wait', 'When I press Apply'],
+    ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.', 'Your partner’s changes land'));
   return g;
 }
 
@@ -316,7 +351,14 @@ function lookGroup(hs) {
       field('Typeface', sel('font', [['literata', 'Literata (book)'], ['classic', 'Georgia (classic)'], ['sans', 'Plain (sans)']], look.font || 'literata')),
       field('Size', sel('size', [['16', 'Small'], ['18', 'Medium'], ['20', 'Large'], ['22', 'Larger'], ['25', 'Largest']], look.size || '18')),
       field('Line spacing', sel('lead', [['1.5', 'Snug'], ['1.72', 'Comfortable'], ['1.95', 'Airy']], look.lead || '1.72')),
-      field('Page width', sel('width', [['600', 'Narrow'], ['680', 'Book'], ['780', 'Wide']], look.width || '680'))));
+      field('Page width', sel('width', [['600', 'Narrow'], ['680', 'Book'], ['780', 'Wide']], look.width || '680'))),
+    h('div.btnrow', h('button.btn.quiet.small', { onclick: () => {
+      changeHouse((x) => { x.look = { ...DEFAULT_LOOK }; }, { now: true });
+      applyLook(DEFAULT_LOOK);
+      Object.assign(look, DEFAULT_LOOK);
+      toast('It looks the way it began.');
+      draw();
+    } }, 'Back to the default look')));
   return g;
 }
 

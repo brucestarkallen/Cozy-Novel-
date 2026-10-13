@@ -1,7 +1,9 @@
 """More of the app in a real browser: Back through menus and sheets, writing
-from the middle, scene breaks, a chapter split off, thinking, bringing a book
-in, the look kept on the device, chapters removed and brought back, the
-server stopping and starting under an open page."""
+from the middle, scene breaks, a chapter split off, thinking, full screen,
+the scroller and passage numbers, the partner's changes, Automatic, the
+settings' defaults, bringing a book in, the look kept on the device,
+chapters removed and brought back, the server stopping and starting under
+an open page."""
 import asyncio, json, os, sys, time, traceback, subprocess, urllib.request
 from harness import *
 
@@ -308,13 +310,148 @@ async def scenario_windows(b):
     check('and exactly one window holds the line', lines == 1, lines)
     await ctx.close()
 
+async def scenario_round(b):
+    """full screen, the scroller and passage numbers, the scene's thinking, the partner's changes, Automatic, the settings with defaults"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Round')
+    await add_conn(pg)
+    # the models on offer sit in a box like every other box (no white block)
+    await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
+    await pg.wait_for_selector('.sheet.on')
+    await pg.click('.sheet.on button:has-text("Show the models on offer")')
+    await pg.wait_for_selector('.sheet.on select[aria-label="Pick a model"]', state='visible', timeout=5000)
+    look = await pg.evaluate("(() => { const s = document.querySelector('.sheet.on select[aria-label=\"Pick a model\"]'); const c = getComputedStyle(s); return { inField: Boolean(s.closest('label.field')), bg: c.backgroundColor, radius: c.borderRadius } })()")
+    check('the models on offer: a box like the others, never a white block', look['inField'] and look['bg'] != 'rgb(255, 255, 255)' and look['radius'] == '12px', look)
+    # Your instructions: the narrator's own box, with its starting words and Back to the default
+    await pg.click('.sheet.on .ghead:has-text("Your instructions")')
+    await pg.wait_for_timeout(200)
+    narr = pg.locator('.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) textarea')
+    check('a box for the narrator, with its starting words', (await narr.count()) == 1 and 'You tell the scene the way the book itself is told' in await narr.input_value())
+    await narr.fill('MY NARRATOR.')
+    await pg.wait_for_timeout(700)
+    await pg.locator('.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) + .btnrow button:has-text("Back to the default")').click()
+    await pg.wait_for_function("document.querySelectorAll('.sheet.on').length === 2", timeout=3000)
+    await pg.locator('.sheet.on >> nth=-1').locator('button:has-text("Back to the default")').click()
+    await pg.wait_for_timeout(700)
+    check('Back to the default puts the starting words back', 'You tell the scene the way the book itself is told' in await narr.input_value(), await narr.input_value())
+    house = await pg.evaluate("fetch('/api/store/house/house').then(r => r.json()).then(j => j.data)")
+    check('…and they are what the phone keeps', 'You tell the scene the way the book itself is told' in (house.get('instructions') or {}).get('narrator', ''), (house.get('instructions') or {}).get('narrator', '')[:60])
+    check('where the book and its notes ride can be chosen', await pg.locator('.sheet.on label.field:has(span:text-is("The book and its notes ride as")) select').count() == 1)
+    check('and whether the partner\'s changes wait', await pg.locator('.sheet.on label.field:has(span:text-is("Your partner’s changes land")) select').count() == 1)
+    await close_sheet(pg)
+    # a chapter long enough to scroll: passage numbers and the scroller
+    for i in range(4):
+        await write(pg, f'Part {i + 1}.')
+    await pg.click('#passages .passage >> nth=0')
+    await pg.wait_for_timeout(200)
+    line = await pg.inner_text('#passages .passage.selected .pctl .note')
+    check('a passage says its number on the page', line.startswith('Passage 1 ·') and 'tokens sent' in line and 'My connection' not in line, line)
+    await pg.evaluate("document.querySelector('#pageWrap').scrollTop = 0")
+    await pg.wait_for_timeout(300)
+    vis = await pg.evaluate("!document.querySelector('#scroller').hidden")
+    first = await pg.inner_text('#scroller .thumb') if vis else ''
+    check('the scroller stands at the page\'s edge with the passage under the eye', vis and first.strip() == '1', (vis, first))
+    box = await pg.locator('#scroller .thumb').bounding_box()
+    track = await pg.locator('#scroller').bounding_box()
+    await pg.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    await pg.mouse.down()
+    await pg.mouse.move(box['x'] + box['width'] / 2, track['y'] + track['height'] - 4, steps=6)
+    tip = await pg.inner_text('#scroller .tip')
+    await pg.mouse.up()
+    await pg.wait_for_timeout(300)
+    top = await pg.evaluate("(() => { const w = document.querySelector('#pageWrap'); return [w.scrollTop, w.scrollHeight - w.clientHeight] })()")
+    last = await pg.inner_text('#scroller .thumb')
+    check('dragging it moves through the chapter, and says which passage of how many', top[0] > top[1] * 0.9 and tip.startswith('Passage ') and ' of 4' in tip and last.strip() in ('3', '4'), (top, tip, last))
+    # full screen on the page: the bars go, Back brings them back, a new chapter keeps it
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Full screen")')
+    await pg.wait_for_timeout(300)
+    bar = await pg.evaluate("getComputedStyle(document.querySelector('.deskbar')).display")
+    check('Full screen hides the bars above the page and keeps the box', bar == 'none' and await pg.locator('.composer').is_visible() and await pg.locator('.fullexit').count() == 1, bar)
+    await pg.go_back(); await pg.wait_for_timeout(400)
+    check('Back leaves full screen, not the book', await on_desk(pg) and await pg.evaluate("getComputedStyle(document.querySelector('.deskbar')).display") != 'none')
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Full screen")')
+    await pg.wait_for_timeout(300)
+    await pg.evaluate("document.querySelector('#pageWrap').scrollTop = 1e9")
+    await pg.click('#pageEnd button:has-text("Chapter Two")')
+    await pg.wait_for_timeout(900)
+    h2 = await pg.evaluate('location.hash')
+    check('a new chapter keeps the page full', await pg.evaluate("document.body.classList.contains('fullpage')") and await pg.evaluate("document.querySelector('#chapnum').textContent") == 'Chapter Two', h2)
+    await pg.go_back(); await pg.wait_for_timeout(500)
+    check('…and Back leaves full screen there, on the new chapter', not await pg.evaluate("document.body.classList.contains('fullpage')") and await pg.evaluate('location.hash') == h2 and await on_desk(pg))
+    await pg.click('#bookTitle'); await pg.click('#chaptersBody .go >> nth=0'); await pg.wait_for_timeout(600)
+    # the partner changes a passage, and Undo puts it back
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(300)
+    await pg.fill('#sideFoot textarea', 'CHANGE THE PASSAGE, please.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .change.made', timeout=8000)
+    card = await pg.inner_text('#sideBody .change.made')
+    p1 = await pg.evaluate("(() => { const p = document.querySelector('#passages .passage .prose'); return p ? p.textContent : '' })()")
+    words = await pg.inner_text('#sideBody .turn.ai >> nth=-1')
+    check('the partner\'s change shows with its Undo, and the page has it', 'Chapter One, passage 1' in card and 'Rain lashed the glass' in p1 and '<changes>' not in words, (card, p1[:60], words[:120]))
+    await pg.click('#sideBody .change.made button:has-text("Undo")')
+    await pg.wait_for_timeout(500)
+    p1 = await pg.evaluate("(() => { const p = document.querySelector('#passages .passage .prose'); return p ? p.textContent : '' })()")
+    check('Undo puts the passage back', 'Rain hammered the glass' in p1 and await pg.locator('#sideBody .change.undone').count() == 1, p1[:60])
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    # a scene: the thinking streams open first, then folds; full screen over everything
+    await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
+    await pg.fill('.sheet input[placeholder="deepseek-chat"]', 'fake-thinker')
+    await pg.wait_for_timeout(600)
+    await pg.select_option('.sheet.on label.field:has(span:text-is("Thinking")) select', 'high')
+    await pg.wait_for_timeout(600)
+    await close_sheet(pg)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Scenes")')
+    await pg.wait_for_timeout(300)
+    await pg.fill('#sidePane input[list="cn-people"]', 'Mara')
+    await pg.fill('#sidePane input[placeholder="Right where the chapter leaves off"]', 'SLOW at the gate')
+    await pg.click('#sidePane button:has-text("Begin the scene")')
+    await pg.wait_for_selector('#sideBody .turn.ai .thinkbox.live', timeout=6000)
+    live_label = await pg.inner_text('#sideBody .turn.ai .thinkbox.live > button')
+    live_words = await pg.inner_text('#sideBody .turn.ai .thinkbox.live .words')
+    check('the narrator\'s thinking streams open, first', 'Thinking' in live_label and 'Let me' in live_words, (live_label, live_words))
+    await pg.wait_for_selector('#sideBody .turn.ai:not(.streaming)', timeout=15000)
+    folded = await pg.inner_text('#sideBody .turn.ai .thinkbox > button')
+    check('…and folds once its words come', 'The thinking' in folded and await pg.locator('#sideBody .turn.ai .thinkbox.live').count() == 0, folded)
+    await pg.click('#sidePane button[aria-label="Full screen"]')
+    await pg.wait_for_timeout(400)
+    r = await pg.evaluate("(() => { const b = document.querySelector('#sidePane').getBoundingClientRect(); return [b.x, b.y, b.width, b.height, innerWidth, innerHeight] })()")
+    check('a scene goes full screen', r[0] == 0 and r[1] == 0 and r[2] == r[4] and r[3] == r[5], r)
+    await pg.go_back(); await pg.wait_for_timeout(400)
+    check('Back leaves the scene\'s full screen and keeps the scene open', not await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')") and await pg.evaluate("document.querySelector('#sidePane').classList.contains('open')"))
+    await pg.go_back(); await pg.wait_for_timeout(400)
+    # About this book: Manual or Automatic; Automatic keeps what the book is about
+    await pg.wait_for_function("document.querySelector('#notesBtn').dataset.state === 'idle'", timeout=30000)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("About this book")')
+    await pg.wait_for_selector('.sheet.on .keptfield')
+    modes = await pg.locator('.sheet.on .keptfield .segmented button[aria-pressed="true"]').all_inner_texts()
+    check('What it’s about and How it reads start Automatic', modes == ['Automatic', 'Automatic'], modes)
+    kept = await pg.locator('.sheet.on .keptfield >> nth=0').locator('.keptbox textarea').input_value()
+    check('…with what the helper keeps of the book as it stands', 'lighthouse keeper' in kept, kept)
+    await pg.locator('.sheet.on .keptfield >> nth=0').locator('.segmented button:has-text("Manual")').click()
+    await pg.wait_for_timeout(300)
+    check('Manual hides what the helper keeps', await pg.locator('.sheet.on .keptfield >> nth=0').locator('.keptbox').is_hidden())
+    await close_sheet(pg)
+    # a card in the notes has With others
+    await pg.click('#notesBtn'); await pg.wait_for_timeout(300)
+    await pg.click('#sideBody .notesec:has(h3:text-is("People")) .card >> nth=0')
+    await pg.wait_for_selector('.sheet.on')
+    check('a person\'s card keeps how they stand with the others', await pg.locator('.sheet.on label.field:has(span:text-is("With others")) textarea').count() == 1)
+    await close_sheet(pg)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (this round)', not errs, errs[:5])
+    await pg.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, lambda b: scenario_offline(b, env)):
+                # ONLY=words runs just the scenarios whose description holds them
+                if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
+                    continue
                 print(getattr(sc, '__doc__', None) or 'scenario')
                 try:
                     await sc(b)

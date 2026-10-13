@@ -7,9 +7,10 @@ import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack } from './dom.js';
 import { drawProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, newPassage } from '../novel/shape.js';
-import { numberWords, plural, debounce, countWords, timeAgo } from '../util.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, newPassage, passageNumbers } from '../novel/shape.js';
+import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
+import { thinkBox as makeThinkBox, updateThinkBox } from './think.js';
 
 const S = {
   novelId: null, chapterId: null,
@@ -44,6 +45,7 @@ export function initDesk(elements, appHooks) {
   ui.lengthBtn.addEventListener('click', () => lengthMenu());
   ui.writerBtn.addEventListener('click', () => hooks.writerMenu(ui.writerBtn));
   ui.wrap.addEventListener('scroll', onScroll, { passive: true });
+  initScroller();
   ui.followBtn.addEventListener('click', () => { S.follow = true; ui.followBtn.hidden = true; toBottom(); });
   ui.chapname.addEventListener('focus', () => { ui.chapname.dataset.was = ui.chapname.textContent; });
   ui.chapname.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ui.chapname.blur(); } });
@@ -147,6 +149,7 @@ export function drawPage({ keepScroll = true } = {}) {
   }
   if (kept.note !== null) { const inp = ui.passages.querySelector('.rewriterow input'); if (inp) inp.value = kept.note; }
   if (keepScroll) ui.wrap.scrollTop = keep;
+  placeScrollerSoon();
 }
 
 function defaultSelected(list) {
@@ -201,17 +204,7 @@ function drawPassage(p, { tint }) {
 }
 
 function thinkBox(pid, thinking, liveNow) {
-  const open = S.thinkOpen.has(pid);
-  const box = h('div.thinkbox' + (open ? '.open' : '') + (liveNow ? '.live' : ''));
-  const words = h('div.words', thinking);
-  const copy = h('button.copy', { onclick: async () => toast((await copyText(words.textContent || '')) ? 'The thinking is copied.' : 'It could not be copied.') }, 'Copy it');
-  box.append(h('button', { 'aria-expanded': String(open || liveNow), onclick: (e) => {
-    if (S.thinkOpen.has(pid)) S.thinkOpen.delete(pid); else S.thinkOpen.add(pid);
-    box.classList.toggle('open');
-    e.currentTarget.setAttribute('aria-expanded', String(box.classList.contains('open')));
-  } }, h('span.chev', icon('chev', 14)), liveNow ? 'Thinking…' : `The thinking (${plural(countWords(thinking), 'word')})`), words, h('div.thinkcopy', copy));
-  if (liveNow) requestAnimationFrame(() => { words.scrollTop = words.scrollHeight; });
-  return box;
+  return makeThinkBox(thinking, { live: liveNow, open: S.thinkOpen.has(pid), onToggle: (now) => { if (now) S.thinkOpen.add(pid); else S.thinkOpen.delete(pid); } });
 }
 
 function select(pid) {
@@ -247,12 +240,16 @@ function controls(p) {
   row.append(h('button', { disabled: working, onclick: () => { S.rewriting = S.rewriting === p.id ? null : p.id; S.focusNext = 'rewrite'; drawPage(); } }, 'Rewrite…'));
   row.append(h('button', { disabled: working, onclick: () => openEdit(p.id) }, 'Edit'));
   row.append(h('button', { 'aria-label': 'More for this passage', onclick: (e) => passageMenu(e.currentTarget, p) }, icon('more', 18)));
-  /* what to know about this version, in a line */
+  /* what to know about this version, in a line — first, its number on the page */
   const bits = [];
+  const num = passageNumbers(c).get(p.id);
+  if (num) bits.push(`Passage ${num}`);
   if (v.how === 'mine' || v.how === 'imported') bits.push(v.how === 'imported' ? 'brought in' : 'your words');
   else if (v.how === 'edit') bits.push('edited by you');
-  else if (v.conn) bits.push(v.conn);
+  else if (v.how === 'partner') bits.push(v.why ? `changed by your partner: “${v.why.slice(0, 80)}”` : 'changed by your partner');
   if (v.words || v.text) bits.push(plural(v.words || countWords(v.text), 'word'));
+  /* the request that wrote it, counted in full: the provider's own count, or the app's (about) */
+  if (Number.isFinite(v.tokensIn)) bits.push(`${v.tokensCounted ? '' : 'about '}${v.tokensIn.toLocaleString()} tokens sent`);
   if (v.ask && v.ask.note && (v.how === 'rewrite' || v.how === 'selection')) bits.push(`“${v.ask.note.slice(0, 60)}”`);
   if (v.done || v.at) bits.push(timeAgo(v.done || v.at));
   if (bits.length) row.append(h('div.note', bits.join(' · ')));
@@ -611,23 +608,113 @@ function flushLive() {
     el.classList.add('streaming');
     let box = el.querySelector('.thinkbox');
     if (ev.thinking && !box) { box = thinkBox(pid, ev.thinking, !ev.text); el.prepend(box); }
-    else if (box) {
-      box.querySelector('.words').textContent = ev.thinking;
-      box.classList.toggle('live', !ev.text);
-      if (!ev.text) box.querySelector('.words').scrollTop = 1e9;
-      const label = box.querySelector('button');
-      if (label && ev.text && label.lastChild && label.lastChild.nodeType === 3 && /Thinking/.test(label.lastChild.textContent)) label.lastChild.textContent = `The thinking (${plural(countWords(ev.thinking), 'word')})`;
-    }
+    else if (box) updateThinkBox(box, ev.thinking, { live: !ev.text });
     const prose = el.querySelector('.prose');
     if (prose && ev.text) drawProse(prose, ev.text, { tint: look.tint !== 'off' });
   }
   pending.clear();
   if (S.follow) toBottom();
+  placeScrollerSoon();
+}
+
+/* ------------------------------------------------------------ the scroller */
+/* A thumb at the page's right edge: it says which passage is under the eye
+ * (its number on the page) and, dragged, moves through the chapter quickly —
+ * the phone's own scrollbar can't be held. While he scrolls or holds it,
+ * "Passage N of M" shows beside it (Cozy Tavern's "page N of M"). */
+const SC = { bar: null, thumb: null, tip: null, drag: null, idle: 0, frame: 0, self: 0 };
+function initScroller() {
+  SC.bar = document.getElementById('scroller');
+  if (!SC.bar) return;
+  SC.thumb = SC.bar.querySelector('.thumb');
+  SC.tip = SC.bar.querySelector('.tip');
+  const ratioAt = (y) => {
+    const r = SC.bar.getBoundingClientRect();
+    return clamp((y - r.top - SC.drag.offset) / Math.max(1, r.height - SC.thumb.offsetHeight), 0, 1);
+  };
+  SC.thumb.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { SC.thumb.setPointerCapture(e.pointerId); } catch (_) { /* fine */ }
+    SC.drag = { offset: e.clientY - SC.thumb.getBoundingClientRect().top };
+    SC.bar.classList.add('drag', 'on');
+  });
+  SC.thumb.addEventListener('pointermove', (e) => {
+    if (!SC.drag) return;
+    ui.wrap.scrollTop = ratioAt(e.clientY) * Math.max(0, ui.wrap.scrollHeight - ui.wrap.clientHeight);
+    placeScroller();
+  });
+  const done = () => { if (!SC.drag) return; SC.drag = null; SC.bar.classList.remove('drag'); wake(); };
+  SC.thumb.addEventListener('pointerup', done);
+  SC.thumb.addEventListener('pointercancel', done);
+  SC.thumb.addEventListener('keydown', (e) => {
+    const step = { ArrowDown: 1, PageDown: 1, ArrowUp: -1, PageUp: -1, Home: -1e9, End: 1e9 }[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    toPassage(step);
+  });
+  window.addEventListener('resize', placeScrollerSoon);
+}
+function placeScrollerSoon() { if (SC.bar && !SC.frame) SC.frame = requestAnimationFrame(() => { SC.frame = 0; placeScroller(); }); }
+/* the numbered passages on the page, in order, with their numbers */
+function numberedEls() {
+  const c = chapter();
+  const nums = c ? passageNumbers(c) : new Map();
+  const out = [];
+  for (const [pid, el] of S.els) if (nums.has(pid)) out.push({ el, n: nums.get(pid) });
+  return out;
+}
+/* the passage under the eye: the last one that starts above a quarter of the way down */
+function passageUnderEye(list) {
+  if (!list.length) return null;
+  const eye = ui.wrap.getBoundingClientRect().top + ui.wrap.clientHeight * 0.25;
+  let lo = 0, hi = list.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].el.getBoundingClientRect().top <= eye) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+}
+function placeScroller() {
+  if (!SC.bar || !ui) return;
+  const list = numberedEls();
+  const max = ui.wrap.scrollHeight - ui.wrap.clientHeight;
+  const show = list.length > 1 && max > ui.wrap.clientHeight * 0.5;
+  SC.bar.hidden = !show;
+  if (!show) return;
+  const i = passageUnderEye(list);
+  const n = list[i].n;
+  const total = list[list.length - 1].n;
+  const top = Math.round((max > 0 ? ui.wrap.scrollTop / max : 0) * Math.max(0, SC.bar.clientHeight - SC.thumb.offsetHeight));
+  SC.thumb.style.top = `${top}px`;
+  SC.tip.style.top = `${top}px`;
+  SC.thumb.textContent = String(n);
+  SC.thumb.setAttribute('aria-valuemax', String(total));
+  SC.thumb.setAttribute('aria-valuenow', String(n));
+  SC.thumb.setAttribute('aria-valuetext', `Passage ${n} of ${total}`);
+  SC.tip.textContent = `Passage ${n} of ${total}`;
+}
+/* shown in full while the page moves, a little after */
+function wake() {
+  if (!SC.bar) return;
+  SC.bar.classList.add('on');
+  clearTimeout(SC.idle);
+  SC.idle = setTimeout(() => { if (!SC.drag) SC.bar.classList.remove('on'); }, 1500);
+}
+/* the keyboard on the thumb: a passage at a time */
+function toPassage(step) {
+  const list = numberedEls();
+  if (!list.length) return;
+  const i = clamp((passageUnderEye(list) || 0) + step, 0, list.length - 1);
+  ui.wrap.scrollTop += list[i].el.getBoundingClientRect().top - ui.wrap.getBoundingClientRect().top - 12;
+  placeScroller();
+  wake();
 }
 
 /* ------------------------------------------------------------ scrolling */
 
 function onScroll() {
+  placeScrollerSoon();
+  if (Date.now() - (SC.self || 0) > 200) wake();
   const near = ui.wrap.scrollHeight - ui.wrap.scrollTop - ui.wrap.clientHeight < 220;
   if (busy()) {
     if (!near && S.follow) { S.follow = false; ui.followBtn.hidden = false; }
@@ -639,7 +726,8 @@ function toBottom() {
   const p = ui.passages.lastElementChild;
   if (!p) return;
   const target = p.offsetTop + p.offsetHeight - ui.wrap.clientHeight * 0.55;
-  if (target > ui.wrap.scrollTop) ui.wrap.scrollTop = target;
+  /* the page following the writing is not him scrolling: the scroller stays quiet */
+  if (target > ui.wrap.scrollTop) { SC.self = Date.now(); ui.wrap.scrollTop = target; }
 }
 function toBottomSoon() { requestAnimationFrame(() => requestAnimationFrame(toBottom)); }
 

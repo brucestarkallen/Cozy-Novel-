@@ -1,12 +1,21 @@
 /* Cozy Novel — js/ui/book.js — ABOUT THIS BOOK: its title and cover, what
  * it's about, how it reads, where it's headed; taking it out as a file;
- * archiving or removing it. */
+ * archiving or removing it.
+ *
+ * What it's about and How it reads are each Manual (only his words) or
+ * Automatic (his words, if any, and what the helper keeps of the book as it
+ * stands — kept current as the book goes on). What the helper keeps he can
+ * correct; his correction stands until he has it written from the book
+ * again. (Cozy Tavern's brief, Manual / Automatic.) */
 
 import * as store from '../store.js';
+import * as archivist from '../novel/archivist.js';
 import { h, openSheet, field, toast, confirmIt, download, group } from './dom.js';
 import { novelSteps, COVERS } from '../novel/shape.js';
+import { autoOn } from '../novel/prompts.js';
+import { connFor } from '../novel/writer.js';
 import { toMarkdown, toText, toPrintable, toEpub, fileName } from '../novel/files.js';
-import { plural, debounce } from '../util.js';
+import { plural, debounce, timeAgo } from '../util.js';
 
 async function loadChapters(novel) {
   const chapters = {};
@@ -25,10 +34,61 @@ export async function exportBook(novelId, kind) {
   toast('The file is on its way to your downloads.');
 }
 
+/* What it's about / How it reads: Manual or Automatic, his words, and what
+ * the helper keeps (Automatic). Drawn again when the helper keeps something
+ * new — never under his fingers. */
+function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder }) {
+  const wrap = h('div.keptfield');
+  const save = debounce((text) => {
+    /* emptied: given back — the helper writes it again from the book */
+    if (!text.trim()) { archivist.keepAgain(novelId, key); return; }
+    store.change('novel', novelId, novelSteps.setKept(key, { text, at: Date.now(), by: 'you' }));
+  }, 600);
+  const mine = h('textarea.tall', { placeholder: ownPlaceholder });
+  mine.value = own.value();
+  mine.addEventListener('input', debounce(() => own.save(mine.value), 500));
+  const kept = h('textarea', { placeholder: keptPlaceholder, 'aria-label': `${label} — kept by the helper` });
+  kept.addEventListener('input', () => save(kept.value));
+  const say = h('p.say');
+  const again = h('button.btn.quiet.small', { onclick: () => { save.cancel(); archivist.keepAgain(novelId, key); kept.value = ''; draw(); toast('The helper writes it again from the book.'); } }, 'Write it from the book again');
+  const modes = h('div.segmented', { role: 'group', 'aria-label': label });
+  const mode = (on, text) => h('button', { 'aria-pressed': 'false', onclick: () => {
+    store.change('novel', novelId, novelSteps.setAuto(key, on), { now: true });
+    if (on) archivist.nudge(novelId, 500);
+    draw();
+  } }, text);
+  const manual = mode(false, 'Manual');
+  const auto = mode(true, 'Automatic');
+  modes.append(manual, auto);
+  const keptBox = h('div.keptbox', h('span.keptlabel', 'Kept by the helper, as the book stands'), kept, say, h('div.btnrow', again));
+  const ownHint = h('em');
+  wrap.append(h('div.keptrow', h('span.keptname', label), modes), mine, ownHint, keptBox);
+  function draw() {
+    const n = store.peek('novel', novelId);
+    if (!n) return;
+    const on = autoOn(n, key);
+    manual.setAttribute('aria-pressed', String(!on));
+    auto.setAttribute('aria-pressed', String(on));
+    keptBox.hidden = !on;
+    ownHint.textContent = on ? 'Your own words, if you want any — they stand as they are, and win wherever the two differ. The writer, the partner and the narrator read both, every time.' : 'Only your words are sent — the writer, the partner and the narrator read them word for word, every time.';
+    const k = (n.kept && n.kept[key]) || null;
+    if (document.activeElement !== kept) kept.value = (k && k.text) || '';
+    const helper = connFor(store.peek('house', 'house') || {}, 'helper');
+    if (k && k.by === 'you') say.textContent = 'Your corrections stand — the helper leaves this as it is until you have it written from the book again.';
+    else if (!helper) say.textContent = 'No helper is chosen, so nothing is kept here yet. Choose one in Settings → Connections.';
+    else if (k && k.text) say.textContent = `Kept current by the helper as the book goes on — last brought up to date ${timeAgo(k.at)}. Correct anything here and your words stand.`;
+    else say.textContent = 'The helper writes this from the book once there are words in it, and keeps it current from then on.';
+    again.hidden = !(k && (k.text || k.by === 'you'));
+  }
+  draw();
+  return { el: wrap, draw };
+}
+
 export function openBook(novelId, { onGone, onClose } = {}) {
   const n = store.peek('novel', novelId);
   if (!n) return;
-  const s = openSheet('About this book', { onClose });
+  let off = () => {};
+  const s = openSheet('About this book', { onClose: () => { off(); if (onClose) onClose(); } });
   const save = (key, value) => store.change('novel', novelId, key === 'meta' ? novelSteps.setMeta(value) : novelSteps.setField(key, value));
   const later = (fn) => debounce(fn, 500);
 
@@ -44,20 +104,28 @@ export function openBook(novelId, { onGone, onClose } = {}) {
   }
   s.body.append(field('Title', title), field('Under the title', subtitle), h('div.field', h('span', 'Cover'), covers));
 
-  const brief = h('textarea.tall', { placeholder: 'The premise, the world, the people, the plot essentials — as much or as little as you like. Paste a whole plot essential if you have one.' });
-  brief.value = n.brief || '';
-  brief.addEventListener('input', later(() => save('brief', brief.value)));
-  const style = h('textarea', { placeholder: 'e.g. Third person, past tense, close on Mara. Quiet, wry, a little melancholy. Short chapters.' });
-  style.value = n.style || '';
-  style.addEventListener('input', later(() => save('style', style.value)));
+  const about = keptField(novelId, 'about', {
+    label: 'What it’s about',
+    own: { value: () => (store.peek('novel', novelId) || {}).brief || '', save: (v) => save('brief', v) },
+    ownPlaceholder: 'The premise, the world, the people, the plot essentials — as much or as little as you like. Paste a whole plot essential if you have one.',
+    keptPlaceholder: 'Written by the helper from the book: the premise, the people at its heart and what they want, where the story is heading.',
+  });
+  const reads = keptField(novelId, 'style', {
+    label: 'How it reads',
+    own: { value: () => (store.peek('novel', novelId) || {}).style || '', save: (v) => save('style', v) },
+    ownPlaceholder: 'e.g. Third person, past tense, close on Mara. Quiet, wry, a little melancholy. Short chapters.',
+    keptPlaceholder: 'Written by the helper from the book: its point of view and tense, its voice, its rhythm.',
+  });
   const plans = h('textarea', { placeholder: 'What you mean to happen later — the writer reads it as plans, never as things that already happened.' });
   plans.value = n.plans || '';
   plans.addEventListener('input', later(() => save('plans', plans.value)));
   s.body.append(
-    field('What it’s about', brief, 'The writer, the partner and the narrator read this word for word, every time.'),
-    field('How it reads', style),
+    about.el,
+    reads.el,
     field('Where it’s headed', plans),
     h('p.say', `${plural(n.meta.words || 0, 'word')} in ${plural((n.order || []).length, 'chapter')}. Everything here saves as you type.`));
+  /* what the helper keeps arrives while the sheet is open */
+  off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); });
 
   /* what the first Cozy Novel held that has no place of its own here, word for word */
   const kept = (n.migrated && Array.isArray(n.migrated.kept)) ? n.migrated.kept : [];

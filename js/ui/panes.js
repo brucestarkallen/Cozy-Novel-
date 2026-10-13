@@ -10,6 +10,9 @@ import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGro
 import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, NOTE_KINDS, turnSteps } from '../novel/shape.js';
 import { numberWords, plural, timeAgo, nameKey } from '../util.js';
 import { showSent } from './sent.js';
+import { thinkBox, updateThinkBox } from './think.js';
+import { wordsOf, changesComing } from '../novel/changes.js';
+import { enterFull, leaveFull, fullKind } from './full.js';
 import * as desk from './desk.js';
 
 let ui = null;
@@ -122,6 +125,7 @@ export function showSide(tab) {
 }
 export function closeRight(fromBack = false) {
   if (!P.rightOpen) return;
+  if (fullKind() === 'scene') leaveFull();
   P.rightOpen = false;
   ui.right.classList.remove('open');
   if (!P.leftOpen) ui.scrim.classList.remove('on');
@@ -264,6 +268,8 @@ export function restoreTyped(key) {
 
 function drawSide() {
   if (!ui) return;
+  /* full screen belongs to a scene: anything else beside the page goes back to its column */
+  if (fullKind() === 'scene' && !(P.side === 'play' && P.playId)) leaveFull();
   keepTyped();
   /* the notes drawn again (the helper read something) stay where he had scrolled them */
   const scroll = ui.right.dataset.tab === P.side && P.side === 'notes' ? ui.rightBody.scrollTop : 0;
@@ -288,9 +294,9 @@ function drawNotes() {
   const card = h('div.lightcard', l.words);
   const row = h('div.row');
   const u = n.memory && n.memory.undo;
-  if (u && (Array.isArray(u.cards) ? u.cards.length : u.notes)) row.append(h('button.btn.small', { onclick: () => { if (archivist.undoLast(P.novelId)) toast('What that reading changed is put back — anything you edited since stays as you left it.'); drawSide(); } }, 'Undo the last reading'));
+  if (u && ((Array.isArray(u.cards) ? u.cards.length : u.notes) || (u.kept && Object.keys(u.kept).length))) row.append(h('button.btn.small', { onclick: () => { if (archivist.undoLast(P.novelId)) toast('What that reading changed is put back — anything you edited since stays as you left it.'); drawSide(); } }, 'Undo the last reading'));
   row.append(h('button.btn.quiet.small', { onclick: async () => {
-    if (!(await confirmIt('Read the whole book again?', 'The helper reads every chapter from the start and writes the notes and summaries afresh. The notes there now can be put back with Undo.', 'Read it again'))) return;
+    if (!(await confirmIt('Read the whole book again?', 'The helper reads every chapter from the start and writes the notes and summaries afresh — and, for a book set to Automatic, What it’s about and How it reads (never your own words, nor a correction of yours). What is there now can be put back with Undo.', 'Read it again'))) return;
     archivist.readAgain(P.novelId);
     drawSide();
   } }, 'Read the whole book again'));
@@ -314,6 +320,7 @@ function drawNotes() {
         h('div.nm', c.name + (kind === 'threads' && c.open === false ? ' — closed' : '')),
         c.aka && c.aka.length ? h('div.aka', 'also ' + c.aka.join(', ')) : null,
         c.about ? h('div.ab', c.about) : null,
+        kind === 'people' && c.ties ? h('div.nw.ties', h('b', 'With others'), c.ties) : null,
         kind === 'people' && c.now ? h('div.nw', h('b', 'Now'), c.now) : null));
     }
     box.append(h('button.btn.quiet.small', { onclick: () => editCard(kind, null) }, icon('plus', 14), 'Add'));
@@ -331,15 +338,21 @@ function editCard(kind, id) {
   const about = h('textarea', { rows: 5 });
   about.value = c.about || '';
   s.body.append(field('Name', name));
-  let aka = null, now = null, open = null;
+  let aka = null, now = null, ties = null, open = null;
   if (kind === 'people') {
     aka = h('input', { type: 'text', value: (c.aka || []).join(', ') });
     now = h('textarea', { rows: 3 });
     now.value = c.now || '';
+    ties = h('textarea', { rows: 3 });
+    ties.value = c.ties || '';
     s.body.append(field('Also called', aka, 'Other names, separated by commas.'));
   }
-  s.body.append(field(kind === 'people' ? 'Who they are' : kind === 'threads' ? 'What was set up, and where it stands' : 'About it', about));
-  if (kind === 'people') s.body.append(field('Right now', now, 'Where they are and what is going on with them as of the end of the book so far.'));
+  s.body.append(field(kind === 'people' ? 'Who they are' : kind === 'threads' ? 'What was set up, and where it stands' : 'About it', about,
+    kind === 'people' ? 'For good: looks, voice, temperament, how they act under pressure, what they want, what they would never do.' : undefined));
+  if (kind === 'people') {
+    s.body.append(field('With others', ties, 'How they stand with the people who matter to them, and why — where it began, what moved it, where it is now.'));
+    s.body.append(field('Right now', now, 'Where they are and what is going on with them as of the end of the book so far.'));
+  }
   if (kind === 'threads') {
     open = h('input', { type: 'checkbox', checked: c.open !== false });
     s.body.append(h('label.toggle', open, h('span', 'Still open')));
@@ -351,6 +364,7 @@ function editCard(kind, id) {
     const out = { ...c, name: nm, about: about.value.trim(), updated: { by: 'you', at: Date.now() } };
     if (aka) out.aka = aka.value.split(',').map((x) => x.trim()).filter(Boolean);
     if (now) out.now = now.value.trim();
+    if (ties) out.ties = ties.value.trim();
     if (open) out.open = open.checked;
     store.change('novel', P.novelId, novelSteps.putNote(kind, out), { now: true });
     s.close();
@@ -379,7 +393,7 @@ async function drawPartner() {
   ui.rightBody.textContent = '';
   const box = h('div.talk');
   const turns = (t && t.turns) || [];
-  if (!turns.length) box.append(h('p.hint', `Talk the book over — a stuck scene, what someone would really do, where it could go next. Your partner knows the whole book and the notes. Nothing said here goes into the book unless you send it to the page.`));
+  if (!turns.length) box.append(h('p.hint', `Talk the book over — a stuck scene, what someone would really do, where it could go next. Your partner knows the whole book and the notes, and when you ask, it makes the change itself: a passage (by its number on the page, like “Chapter Two, passage 3”), a chapter’s name, what the book is about, a card in the notes. Every change shows here with its Undo.`));
   for (const turn of turns) box.append(drawTurn('talk', novelId, turn));
   ui.rightBody.append(box);
   const ta = h('textarea', { rows: 1, placeholder: 'Ask your partner…', 'aria-label': 'Ask your partner' });
@@ -416,13 +430,35 @@ async function clearTalk() {
   drawSide();
 }
 
+/* which replies' thinking he unfolded, so a redraw keeps them open */
+const thinkOpen = new Set();
+function turnThinkBox(turnId, thinking, live) {
+  return thinkBox(thinking, { live, open: thinkOpen.has(turnId), onToggle: (now) => { if (now) thinkOpen.add(turnId); else thinkOpen.delete(turnId); } });
+}
+/* what a reply shows: the partner's words without its blocks — while a
+ * block is coming, or it is reading a chapter, a line says so */
+function shownWords(kind, turn, raw, live) {
+  if (kind !== 'talk' || turn.by === 'you') return raw || '';
+  const words = wordsOf(raw);
+  if (words) return words;
+  if (live && live.note) return live.note;
+  if (changesComing(raw)) return 'Making the changes…';
+  /* it asked to read more than one answer can be sent */
+  if (/<read>/i.test(String(raw || ''))) return 'It asked to read more of the book than one answer can carry — ask it again, about less at a time.';
+  return '';
+}
 function drawTurn(kind, id, turn) {
   const v = picked(turn) || { text: '' };
   const live = (kind === 'talk' ? partnerLive : playLive).get(turn.id);
   const text = live ? live.text : v.text;
+  const thinking = live ? live.thinking : v.thinking;
   const el = h('div.turn.' + (turn.by === 'you' ? 'you' : 'ai') + (kind === 'play' && turn.by !== 'you' ? '.prose-turn' : '') + (live || v.streaming ? '.streaming' : ''), { 'data-id': turn.id });
-  el.append(h('span.words', text || (live && live.thinking ? 'Thinking…' : '')));
+  /* the thinking streams open while it comes, then folds once the words begin */
+  if (turn.by !== 'you' && thinking) el.append(turnThinkBox(turn.id, thinking, Boolean(live && !live.text)));
+  el.append(h('span.words', shownWords(kind, turn, text, live)));
   if (live || v.streaming) return el;
+  if (kind === 'talk' && v.read && v.read.length) el.append(h('div.turnnote', `It read ${v.read.join(', ')} whole.`));
+  if (kind === 'talk' && v.changes && v.changes.length) el.append(changeList(id, turn, v));
   const row = h('div.tctl');
   if (turn.by !== 'you') {
     if (turn.versions.length > 1) {
@@ -435,14 +471,56 @@ function drawTurn(kind, id, turn) {
       const out = kind === 'talk' ? await talk.partnerAgain({ novelId: id, chapterId: P.chapterId, turnId: turn.id }) : await talk.playAgain({ playId: id, turnId: turn.id });
       if (out && !out.ok && out.error) toast(out.error, 6000);
     } }, 'Another answer'));
-    if (kind === 'talk') row.append(h('button', { onclick: async () => { if (!(await desk.useAsDirection(v.text))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction'));
-    if (v.thinking) row.append(h('button', { onclick: () => { const s = openSheet('The thinking'); s.body.append(h('div', { style: { whiteSpace: 'pre-wrap', fontSize: '14px', lineHeight: '1.55' } }, v.thinking)); } }, 'Thinking'));
+    if (kind === 'talk') row.append(h('button', { onclick: async () => { if (!(await desk.useAsDirection(wordsOf(v.text)))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction'));
     if (v.sent) row.append(h('button', { onclick: () => showSent(P.novelId, v.sent) }, 'What was sent'));
   }
-  row.append(h('button', { onclick: async () => toast((await copyText(v.text || '')) ? 'Copied.' : 'It could not be copied.') }, 'Copy'));
+  row.append(h('button', { onclick: async () => toast((await copyText(kind === 'talk' && turn.by !== 'you' ? wordsOf(v.text) : (v.text || ''))) ? 'Copied.' : 'It could not be copied.') }, 'Copy'));
   row.append(h('button', { onclick: () => removeTurn(kind, id, turn) }, 'Remove'));
   el.append(row);
   return el;
+}
+
+/* The partner's changes under its answer: each with what it changed and
+ * why, and its Undo — or, set to wait, Apply and Leave it. */
+const clip = (t, n = 140) => { const s = String(t || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+function whatChanged(c) {
+  const op = c.op || {};
+  if (op.remove === true) return 'taken out of the notes';
+  if (op.find !== undefined) return h('span', h('del', clip(op.find, 90)), ' → ', h('ins', clip(op.replace !== undefined ? op.replace : op.text, 90) || '(taken out)'));
+  if (op.passage !== undefined && op.text !== undefined) return `written anew (${plural(countWordsLoose(op.text), 'word')})`;
+  if (op.book !== undefined) return op.add !== undefined ? h('span', 'a new paragraph: ', h('ins', clip(op.add))) : h('span', h('ins', clip(op.text)));
+  if (op.chapter !== undefined) return h('span', 'named ', h('ins', clip(op.name, 80)));
+  if (op.note !== undefined) {
+    const bits = ['about', 'ties', 'now'].filter((k) => op[k] !== undefined).map((k) => `${k === 'ties' ? 'with others' : k === 'now' ? 'right now' : 'who they are'}: ${clip(op[k], 80)}`);
+    if (typeof op.open === 'boolean') bits.push(op.open ? 'open again' : 'closed');
+    return bits.join(' · ') || 'brought up to date';
+  }
+  return '';
+}
+const countWordsLoose = (t) => String(t || '').split(/\s+/).filter(Boolean).length;
+function changeList(novelId, turn, v) {
+  const box = h('div.changes');
+  const act = (fn, changeId) => async () => {
+    const out = fn(novelId, turn.id, v.id, changeId);
+    if (out && !out.ok && out.said) toast(`It couldn’t: ${out.said}.`, 5000);
+    drawSideSoon();
+  };
+  for (const c of v.changes) {
+    const mark = { made: '✓', waiting: '•', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
+    const state = { made: '', waiting: 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: 'undone', skipped: 'left as it was' }[c.status] || '';
+    const row = h('div.change.' + c.status,
+      h('div.chead', h('b', `${mark} ${c.label}`), state ? h('small', state) : null),
+      c.status !== 'refused' ? h('div.cwhat', whatChanged(c)) : null,
+      c.why ? h('div.cwhy', c.why) : null);
+    const btns = h('div.cbtns');
+    if (c.status === 'made') btns.append(h('button', { onclick: act(talk.undoOneChange, c.id) }, 'Undo'));
+    if (c.status === 'waiting') btns.append(h('button.go', { onclick: act(talk.applyChange, c.id) }, 'Apply'), h('button', { onclick: act(talk.skipChange, c.id) }, 'Leave it'));
+    if (btns.childNodes.length) row.append(btns);
+    box.append(row);
+  }
+  const waiting = v.changes.filter((c) => c.status === 'waiting');
+  if (waiting.length > 1) box.append(h('div.cbtns', h('button.go', { onclick: async () => { for (const c of waiting) talk.applyChange(novelId, turn.id, v.id, c.id); drawSideSoon(); } }, 'Apply all')));
+  return box;
 }
 
 /* a turn taken out, with a few seconds to change his mind */
@@ -466,10 +544,23 @@ function removeTurn(kind, id, turn) {
 function onTalkLive(ev) {
   const map = ev.kind === 'talk' ? partnerLive : playLive;
   if (ev.done) { map.delete(ev.turnId); if ((ev.kind === 'talk' && P.side === 'partner') || (ev.kind === 'play' && P.side === 'play')) drawSide(); return; }
-  map.set(ev.turnId, { text: ev.text, thinking: ev.thinking });
-  const el = ui.rightBody.querySelector(`.turn[data-id="${ev.turnId}"] .words`);
-  if (el) { el.textContent = ev.text || (ev.thinking ? 'Thinking…' : ''); ui.rightBody.scrollTop = 1e9; }
-  else if ((ev.kind === 'talk' && P.side === 'partner') || (ev.kind === 'play' && P.side === 'play')) drawSide();
+  const entry = { text: ev.text, thinking: ev.thinking, note: ev.note || '' };
+  map.set(ev.turnId, entry);
+  const turnEl = ui.rightBody.querySelector(`.turn[data-id="${ev.turnId}"]`);
+  const el = turnEl && turnEl.querySelector('.words');
+  if (el) {
+    if (ev.thinking) {
+      const box = turnEl.querySelector('.thinkbox');
+      if (box) updateThinkBox(box, ev.thinking, { live: !ev.text });
+      else turnEl.insertBefore(turnThinkBox(ev.turnId, ev.thinking, !ev.text), el);
+    } else if (!ev.text) {
+      /* a new round (it is reading a chapter): the last round's thinking goes */
+      const box = turnEl.querySelector('.thinkbox');
+      if (box) box.remove();
+    }
+    el.textContent = shownWords(ev.kind, { by: 'ai' }, ev.text || '', entry);
+    ui.rightBody.scrollTop = 1e9;
+  } else if ((ev.kind === 'talk' && P.side === 'partner') || (ev.kind === 'play' && P.side === 'play')) drawSide();
 }
 
 /* ----------------------------------------------------------------- play */
@@ -526,9 +617,11 @@ function drawOnePlay(p) {
   talk.repairStaleTurns('play', p.id);
   if (!P.offs['play:' + p.id]) { P.offs.push(store.subscribe('play', p.id, () => { if (P.side === 'play' && P.playId === p.id) drawSideSoon(); })); P.offs['play:' + p.id] = true; }
   const c = store.peek('chapter', p.chapterId);
-  const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' } },
+  const full = fullKind() === 'scene';
+  const head = h('div.scenehead',
     h('button.icon', { 'aria-label': 'All scenes', onclick: () => { P.playId = null; drawSide(); } }, icon('back', 20)),
     h('div', { style: { flex: '1', minWidth: '0' } }, h('b', { style: { font: '600 18px/1.2 var(--display)' } }, `You play ${p.who}`), h('div', { style: { fontSize: '12.5px', color: 'var(--chrome-soft)' } }, c ? `From ${chapterLabel(n, c, { withName: false })}` : '')),
+    h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: () => sceneFull() }, icon(full ? 'shrink' : 'expand', 18)),
     h('button.icon', { 'aria-label': 'More for this scene', onclick: (e) => menu(e.currentTarget, [
       { label: 'Turn it all into prose (from the start)', run: () => toProse(p, true) },
       { label: 'Remove this scene', danger: true, run: async () => {
@@ -582,6 +675,13 @@ async function toProse(p, fromStart) {
     store.change('play', p.id, turnSteps.set({ turned: tr.lastId, updated: Date.now(), ...(out.passageId ? { after: out.passageId, chapterId } : {}) }), { now: true });
     archivist.nudge(P.novelId);
   } else if (out && !out.stopped && out.error) toast('The scene was not written: ' + out.error, 7000);
+}
+
+/* a scene over the whole screen, the narrator's words in the book's own type */
+function sceneFull() {
+  if (fullKind() === 'scene') { leaveFull(); return; }
+  enterFull('scene', () => { ui.right.classList.add('full'); drawSideSoon(); },
+    () => { ui.right.classList.remove('full'); drawSideSoon(); });
 }
 
 export function paneState() { return P; }

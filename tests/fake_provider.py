@@ -31,27 +31,36 @@ def answer_for(body):
         if m.get("role") == "user":
             last_user = m.get("content") or ""
             break
+    if "for the writer to read before every page" in last_user:
+        return json.dumps({"about": "A lighthouse keeper on a stormy coast and the letter that washed up at her feet.", "style": "Close third person on Mara, past tense; quiet, wry, salt-weathered."})
     if "Update the notes for what this changes" in last_user:
-        return json.dumps({
+        kept = {}
+        if '"about": "what the book is about' in last_user:
+            kept["about"] = "A lighthouse keeper on a stormy coast and the letter that washed up at her feet."
+        if '"style": "how the book reads' in last_user:
+            kept["style"] = "Close third person on Mara, past tense; quiet, wry, salt-weathered."
+        return json.dumps({**kept, **{
             "people": [{"name": "Mara Venn", "aka": ["the keeper"], "about": "The lighthouse keeper at Crane Point; dry, solitary, kind to gulls.", "now": "In the lantern room with the letter from the bottle."}],
             "places": [{"name": "Crane Point", "about": "A lighthouse on black rocks above a restless sea."}],
             "lore": [{"name": "The bottle", "about": "Green glass gone milky, a curl of paper inside that smells of tar and oranges."}],
             "threads": [{"name": "Who sent the letter?", "about": "A letter in a bottle washed up at dawn; nobody knows who wrote it.", "open": True}],
             "chapterName": "The Bottle",
-        })
+        }})
     if "Summarise " in last_user and "for the book's notes" in last_user:
         return json.dumps({"summary": "Mara Venn finds a bottle at the tide line with a letter inside that smells of tar and oranges.", "name": "The Bottle"})
     if "⟦" in last_user and "Write only the new words" in last_user:
         return "lit with a slow, amber glow"
-    if "rewritten" in last_user and "The passage as it stands now" in last_user:
+    if "written again" in last_user and "The passage as it stands now" in last_user:
         return "A rewritten passage. Mara steadied the lamp with both hands and listened to the rain."
     if "stopped partway through" in last_user:
         return "and the tide, at last, came in."
-    if "Here's how it went:" in last_user:
+    if "how it went" in last_user and "Narrator:" in last_user:
         return "Mara walked down to the shore, where the stranger stood with his collar up. “You found it,” he said. She did not ask how he knew."
-    if "writing partner" in system:
+    if "talking over our novel" in system:
+        if "CHANGE THE PASSAGE" in last_user:
+            return '<changes>[{"passage": "1.1", "find": "Rain hammered the glass", "replace": "Rain lashed the glass", "why": "a harder verb for the storm"}]</changes>\n\nI made the rain harder in the first line.'
         return "Maybe the letter is from her brother — the one who went to sea and never wrote."
-    if " is playing " in system and "in a scene from" in system:
+    if "playing a scene from it" in system:
         return "The wind howls along the cliff path. At the bottom of the steps, a stranger waits with his collar turned up against the rain."
     direction = ""
     m = re.search(r"What happens(?: next)?: (.+)", last_user)
@@ -136,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
             if think:
                 for piece in ["Let me ", "think about ", "the scene."]:
                     chunk({"reasoning_content": piece})
-                    time.sleep(0.05)
+                    time.sleep(0.5 if slow else 0.05)
             pieces = re.findall(r"\S+\s*", text)
             limit = body.get("max_tokens")
             cut = False

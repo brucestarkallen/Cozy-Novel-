@@ -731,12 +731,25 @@ export function buildRequest(conn, opts = {}) {
     if (parts && parts.length > 1 && /api\.anthropic\.com/i.test(String(conn.url || ''))) {
       body.system = parts.map((text, i) => (i === 0 ? { type: 'text', text, cache_control: { type: 'ephemeral' } } : { type: 'text', text }));
     } else if (system) body.system = system;
-    body.messages = pf.messages.map((m) => ({ role: m.role, content: m.content }));
+    /* the book riding as a message of its own: Claude keeps the part that
+     * stays the same ready too, up to where it ends (cacheSplit) */
+    let cached = false;
+    body.messages = pf.messages.map((m) => {
+      const split = Number.isInteger(m.cacheSplit) ? m.cacheSplit : 0;
+      if (!cached && split > 0 && typeof m.content === 'string' && /api\.anthropic\.com/i.test(String(conn.url || ''))) {
+        cached = true;
+        const head = m.content.slice(0, split);
+        const rest = m.content.slice(split);
+        return { role: m.role, content: [{ type: 'text', text: head, cache_control: { type: 'ephemeral' } }, ...(rest.trim() ? [{ type: 'text', text: rest }] : [])] };
+      }
+      return { role: m.role, content: m.content };
+    });
   } else {
     body.model = conn.model;
     const list = [];
     if (system) list.push({ role: 'system', content: system });
-    for (const m of pf.messages) list.push({ ...m });
+    /* the app's own marks never go out */
+    for (const m of pf.messages) { const { cacheSplit, ...rest } = m; list.push(rest); }
     body.messages = list;
     /* OpenAI's own address names the reply's length max_completion_tokens (its
      * newer models refuse max_tokens); elsewhere, once an address asked for it */

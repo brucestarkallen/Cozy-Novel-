@@ -4,7 +4,8 @@ do next by the test. Never used by the app itself.
 
 POST /script  {"queue": [behaviour, ...]}  replaces the queue.
 Each chat request takes the next behaviour (or a default by its kind):
-  {"text": "...", "finish": "stop"|"length"|"content_filter", "delay": 0.0, "chunk": 7, "think": "..."}
+  {"text": "...", "finish": "stop"|"length"|"content_filter", "delay": 0.0, "chunk": 7, "think": "...",
+   "usage": {"prompt_tokens": n, "completion_tokens": n}}   (usage: sent at the end, as OpenAI does)
   {"status": 429, "message": "..."}         refused before anything
   {"hang_after": "words"}                    those words, then silence until the caller goes
   {"midstream_error": "words", "message": "..."}  words, then an error in the stream
@@ -64,6 +65,8 @@ class H(BaseHTTPRequestHandler):
                 beh = QUEUE.pop(0)
             elif "Summarise " in last_user and "for the book's notes" in last_user:
                 beh = {"text": json.dumps({"summary": "DEFAULT SUMMARY", "name": "Default Name"})}
+            elif "for the writer to read before every page" in last_user:
+                beh = {"text": json.dumps({"about": "DEFAULT ABOUT", "style": "DEFAULT STYLE"})}
             elif "Update the notes" in last_user or "could not be read as JSON" in last_user or "cut off before it finished" in last_user:
                 beh = {"text": "{}"}
             else:
@@ -105,6 +108,8 @@ class H(BaseHTTPRequestHandler):
                 if beh.get("delay"):
                     time.sleep(beh["delay"])
             chunk({}, beh.get("finish", "stop"))
+            if beh.get("usage"):
+                self.wfile.write(("data: " + json.dumps({"choices": [], "usage": beh["usage"]}) + "\n\n").encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):

@@ -6,15 +6,16 @@ import * as store from './store.js';
 import * as writer from './novel/writer.js';
 import * as archivist from './novel/archivist.js';
 import { onLearn, onKey } from './model/call.js';
-import { h, $, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays } from './ui/dom.js';
+import { h, $, icon, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays } from './ui/dom.js';
+import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
 import { initDesk, openChapter, drawComposer, deskState } from './ui/desk.js';
 import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight } from './ui/panes.js';
 import { openSettings, redrawSettings } from './ui/settings.js';
 import { openBook } from './ui/book.js';
-import { applyLook } from './ui/look.js';
+import { applyLook, DEFAULT_LOOK } from './ui/look.js';
 import { bringOldBooks } from './legacy.js';
-import { DEFAULT_WRITING } from './novel/prompts.js';
+import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from './novel/prompts.js';
 import { chapterLabel, novelSteps } from './novel/shape.js';
 import { plural, numberWords } from './util.js';
 import { talkBusy, repairStaleTurns as talkRepair } from './novel/talk.js';
@@ -52,8 +53,8 @@ async function boot() {
   if (!house) {
     house = await store.create('house', 'house', {
       connections: [], roles: {}, you: { name: '' },
-      instructions: { system: DEFAULT_WRITING, late: '', partner: '' },
-      look: { theme: 'study', room: 'on', tint: 'on', indent: 'off', font: 'literata', size: '18', lead: '1.72', width: '680' },
+      instructions: { system: DEFAULT_WRITING, narrator: DEFAULT_NARRATOR, partner: DEFAULT_PARTNER, late: '' },
+      look: { ...DEFAULT_LOOK },
       created: Date.now(),
     });
   }
@@ -180,11 +181,16 @@ async function toShelf() {
 /* chapters are pages of one book, not steps: moving between them takes no step in the history */
 export async function goChapter(chapterId) {
   if (!A.novelId) return;
-  dropOverlays();
-  await afterBacks();
-  const hash = `#/n/${A.novelId}/${chapterId}`;
-  if (location.hash === hash) { route(); return; }
-  location.replace(hash);
+  /* the page full screen goes on in the next chapter */
+  const full = fullKind() === 'page';
+  holdFull(full);
+  try {
+    dropOverlays();
+    await afterBacks();
+    const hash = `#/n/${A.novelId}/${chapterId}`;
+    if (location.hash === hash) route(); else location.replace(hash);
+    if (full) fullPage();
+  } finally { holdFull(false); }
 }
 
 /* ------------------------------------------------------------- the bars */
@@ -257,10 +263,20 @@ function moreMenu(anchor) {
   menu(anchor, [
     { label: 'Scenes', run: () => showSide('play') },
     { label: 'About this book', run: () => openBook(A.novelId, { onGone: () => toShelf() }) },
+    { label: 'Full screen', run: fullPage },
     { label: 'Reading mode', run: readingMode },
     '-',
     { label: 'Settings', run: () => openSettings() },
   ]);
+}
+
+/* Full screen: the writing page with nothing above it — the bars at the top
+ * go (and the browser's own, where it allows), the page and the box he types
+ * in stay. The button in the corner, or Back, brings them back. */
+function fullPage() {
+  const out = h('button.icon.fullexit', { 'aria-label': 'Leave full screen', title: 'Leave full screen', onclick: () => leaveFull() }, icon('shrink', 20));
+  enterFull('page', () => { document.body.classList.add('fullpage'); document.body.append(out); },
+    () => { document.body.classList.remove('fullpage'); out.remove(); });
 }
 
 /* Reading mode: only the page. The phone's Back (or Escape, or Back to

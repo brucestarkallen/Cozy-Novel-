@@ -341,7 +341,7 @@ export async function ask(conn, opts = {}) {
     const shape = shapeOf(conn);
     const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined });
     if (req.prefill && req.prefill.note && !notes.includes(req.prefill.note)) notes.push(req.prefill.note);
-    const sent = { url: req.url, model: req.body && req.body.model, body: snapshotBody(req.body), at: Date.now() };
+    const sent = { url: req.url, model: req.body && req.body.model, body: snapshotBody(req.body), at: Date.now(), tokens: sizeOf(shape) };
     /* the started reply and the started thought are part of what comes back */
     let lead = req.prefill && req.prefill.applied ? String(req.prefill.content || '') : '';
     let thoughtLead = req.prefill && req.prefill.applied ? String(req.prefill.seed || '') : '';

@@ -26,7 +26,9 @@ export async function showSent(novelId, key, purpose = '') {
   /* Claude's system in parts (the first kept ready by its cache) reads as one */
   if (Array.isArray(body.system)) msgs.push({ role: 'system', content: body.system.map((b) => (b && typeof b.text === 'string' ? b.text : '')).filter(Boolean).join('\n\n\n') });
   for (const m of body.messages || []) msgs.push(m);
-  const total = msgs.reduce((a, m) => a + estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)), 0);
+  /* a message in parts (Claude keeping the start of the book ready) reads as one */
+  const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) && c.every((x) => x && typeof x.text === 'string') ? c.map((x) => x.text).join('') : JSON.stringify(c, null, 2));
+  const total = msgs.reduce((a, m) => a + estimateTokens(textOf(m.content)), 0);
   const u = data.usage || {};
   const facts = [
     ['Model', data.model || body.model || ''],
@@ -41,7 +43,7 @@ export async function showSent(novelId, key, purpose = '') {
   if (dials.length) s.body.append(h('p.say', 'With: ' + dials.map(([k, v]) => `${k} ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ')));
   s.body.append(h('h3', { style: { font: '600 18px/1.2 var(--display)', margin: '18px 0 10px' } }, 'The messages, in order'));
   msgs.forEach((m, i) => {
-    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2);
+    const text = textOf(m.content);
     const extra = Object.keys(m).filter((k) => k !== 'role' && k !== 'content');
     const box = h('div.sentmsg' + (i === msgs.length - 1 ? '.open' : ''),
       h('button', { onclick: () => box.classList.toggle('open') }, h('b', m.role === 'system' && i > 0 ? 'system (after the request)' : m.role), extra.length ? h('span', { style: { color: 'var(--chrome-soft)' } }, extra.map((k) => `${k}: ${JSON.stringify(m[k]).slice(0, 60)}`).join(' · ')) : null, h('small', `${plural(estimateTokens(text), 'token')}`)),

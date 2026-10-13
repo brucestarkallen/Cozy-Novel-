@@ -56,17 +56,20 @@
       <div class="panebody" id="chaptersBody"></div>
     </aside>
 
-    <section class="pagewrap" id="pageWrap">
-      <article class="page" id="page">
-        <header class="chapterhead">
-          <p class="chapnum" id="chapnum"></p>
-          <h1 class="chapname" id="chapname" contenteditable="plaintext-only" spellcheck="false" aria-label="The chapter's name"></h1>
-        </header>
-        <div id="passages"></div>
-        <div id="pageEnd"></div>
-      </article>
-      <button class="btn small follow" id="followBtn" hidden>Follow the writing &darr;</button>
-    </section>
+    <div class="pagecol">
+      <section class="pagewrap" id="pageWrap">
+        <article class="page" id="page">
+          <header class="chapterhead">
+            <p class="chapnum" id="chapnum"></p>
+            <h1 class="chapname" id="chapname" contenteditable="plaintext-only" spellcheck="false" aria-label="The chapter's name"></h1>
+          </header>
+          <div id="passages"></div>
+          <div id="pageEnd"></div>
+        </article>
+        <button class="btn small follow" id="followBtn" hidden>Follow the writing &darr;</button>
+      </section>
+      <div class="scroller" id="scroller" hidden><div class="tip" aria-hidden="true"></div><div class="thumb" role="slider" tabindex="0" aria-label="Passage" aria-valuemin="1"></div></div>
+    </div>
 
     <aside class="pane right" id="sidePane" aria-label="Notes, partner and scenes">
       <div class="panehead">

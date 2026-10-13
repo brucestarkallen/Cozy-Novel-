@@ -6,6 +6,9 @@
  * places, the things worth remembering, the threads still open. It also keeps
  * a summary of every chapter, so a long book can ride as summaries once it
  * outgrows the writer's room, and gives a chapter a name when it has none.
+ * For a book whose "What it's about" or "How it reads" is set to Automatic it
+ * keeps those too, as the book stands — beside his own words, never over
+ * them; once he corrects what it keeps, his correction stands.
  *
  * Nothing here ever asks him to do anything. A reading that fails waits a
  * little and tries again by itself; the light says how it stands. What the
@@ -24,7 +27,8 @@ import { connFor, busy as writerBusy } from './writer.js';
 import { parseFirstObject } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, NOTE_KINDS } from './shape.js';
-import { helperFrame, notesRequest, summaryRequest, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook } from './prompts.js';
+import { helperFrame, notesRequest, summaryRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook } from './prompts.js';
+import { fitBook } from './context.js';
 
 const lights = new Map();          /* novelId -> {state, words, at} */
 const timers = new Map();
@@ -227,17 +231,21 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now() } = {
         if (kind === 'people') {
           const nowText = cleanText(row.now);
           if (nowText) card.now = nowText;
+          /* how they stand with the others moves with the story, on his cards too */
+          const ties = cleanText(row.ties);
+          if (ties) card.ties = ties;
           const all = [...(card.aka || []), ...aka];
           card.aka = all.filter((a, i) => all.findIndex((b) => nameKey(b) === nameKey(a)) === i && nameKey(a) !== nameKey(card.name));
         }
         if (kind === 'threads' && typeof row.open === 'boolean') card.open = row.open;
         if (JSON.stringify(card) !== was) {
           if (!touched.has(card.id)) touched.set(card.id, { kind, before });
-          card.updated = { chapterId, at };
+          /* a card he wrote stays his: the helper keeps where they are now, never his words */
+          card.updated = his(before) ? { by: 'you', chapterId, at } : { chapterId, at };
         }
       } else {
         const fresh = { id: newId(kind.slice(0, 2)), name, about, updated: { chapterId, at } };
-        if (kind === 'people') { fresh.aka = aka; fresh.now = cleanText(row.now); }
+        if (kind === 'people') { fresh.aka = aka; fresh.ties = cleanText(row.ties); fresh.now = cleanText(row.now); }
         if (kind === 'threads') fresh.open = row.open !== false;
         out[kind].push(fresh);
         touched.set(fresh.id, { kind, before: null });
@@ -347,6 +355,7 @@ export async function run(novelId) {
     try {
       await readChanges(novelId, conn);
       await summarise(novelId, conn);
+      await keepTheBook(novelId, conn);
       failures.delete(novelId);
       const left = pendingWork(novelId);
       if (left) nudge(novelId, 2000);
@@ -384,6 +393,7 @@ export function pendingWork(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return false;
   if (novel.memory && (novel.memory.removed || []).length) return true;
+  if (toKeep(novel).length) return true;
   for (const id of novel.order || []) {
     const c = store.peek('chapter', id);
     if (!c) continue;
@@ -433,6 +443,9 @@ async function readChanges(novelId, conn) {
     const removed = target ? target.removed : [];
     const firstChanged = changes.length ? chapter.passages.findIndex((p) => p.id === changes[0].pid) : -1;
     const before = chapter && firstChanged > 0 ? chapterText({ passages: chapter.passages.slice(0, firstChanged) }) : '';
+    /* a part written into the middle of a chapter: the chapter goes on after it, already read */
+    const lastChanged = changes.length ? Math.max(...changes.map((c) => chapter.passages.findIndex((p) => p.id === c.pid))) : -1;
+    const goesOn = lastChanged >= 0 && chapter.passages.slice(lastChanged + 1).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
     const beforeTail = before.length > beforeChars ? (beforeChars > 200 ? '[…]\n' + before.slice(-beforeChars) : '') : before;
     const batches = [];
     let batch = [];
@@ -460,19 +473,23 @@ async function readChanges(novelId, conn) {
         changes: batches[b],
         removed: b === 0 ? removed.map((r) => r.text).filter((t) => String(t || '').trim()) : [],
         removedChapters: b === 0 ? removedChapters.map((r) => r.text) : [],
-        at, of: (now.order || []).length,
+        at, of: (now.order || []).length, goesOn,
       });
       const got = await askJson(conn, helperFrame(house, now), request);
       if (!got.ok) throw failed(got);
       const latest = store.peek('novel', novelId);
       const folded = foldNotes(latest.notes, got.obj, { chapterId: chapter ? chapter.id : '', at: Date.now() });
-      if (folded.cards.length) {
+      /* what it keeps of the book as it stands (Automatic), when this part changed it — never over his correction */
+      const kept = keptChanges(latest, got.obj);
+      if (folded.cards.length || Object.keys(kept).length) {
         /* the cards it touched, changed by id — never the whole notes over a change made meanwhile */
-        store.change('novel', novelId, novelSteps.applyCards(folded.cards));
+        if (folded.cards.length) store.change('novel', novelId, novelSteps.applyCards(folded.cards));
+        for (const [key, k] of Object.entries(kept)) store.change('novel', novelId, novelSteps.setKept(key, k.after));
         const u = latest.memory && latest.memory.undo;
         const keep = Boolean(u && u.keep);
         const cards = keep ? mergeUndo(u, folded.cards) : folded.cards;
-        store.change('novel', novelId, novelSteps.setMemory({ undo: { at: keep ? u.at : Date.now(), label: keep ? u.label : label, keep, cards, changed: changedOf(cards).slice(0, 40) } }));
+        const keptUndo = keep ? mergeKeptUndo(u.kept, kept) : kept;
+        store.change('novel', novelId, novelSteps.setMemory({ undo: { at: keep ? u.at : Date.now(), label: keep ? u.label : label, keep, cards, kept: keptUndo, changed: [...changedOf(cards), ...keptChangedOf(keptUndo)].slice(0, 40) } }));
       }
       /* the chapter's name, when it has none, he has not cleared it, and it is long enough to have earned one */
       const cn = cleanName(got.obj.chapterName);
@@ -559,6 +576,78 @@ async function summarise(novelId, conn) {
   }
 }
 
+/* ------------------------------------------- what it's about, how it reads */
+
+const KEPT_WORDS = { about: 'What it’s about', style: 'How it reads' };
+
+/* the kept texts a reading's answer changes: {key: {before, after}} */
+function keptChanges(novel, answer) {
+  const out = {};
+  for (const key of keptByHelper(novel)) {
+    const text = cleanText(answer && answer[key]);
+    const before = (novel.kept && novel.kept[key]) || null;
+    if (text && text !== String((before && before.text) || '').trim()) out[key] = { before: clone(before), after: { text, at: Date.now() } };
+  }
+  return out;
+}
+function mergeKeptUndo(old, kept) {
+  const out = { ...(old || {}) };
+  for (const [key, k] of Object.entries(kept)) out[key] = out[key] ? { before: out[key].before, after: k.after } : k;
+  return out;
+}
+const keptChangedOf = (kept) => Object.keys(kept || {}).map((key) => ({ kind: 'book', name: KEPT_WORDS[key], how: kept[key].before && kept[key].before.text ? 'changed' : 'new' }));
+
+/* the ones to write whole: set to Automatic, his correction not standing,
+ * never tried yet — and only once the book has words */
+function toKeep(novel) {
+  const missing = keptByHelper(novel).filter((key) => !(novel.kept && novel.kept[key]));
+  if (!missing.length) return [];
+  for (const id of novel.order || []) {
+    const c = store.peek('chapter', id);
+    if (c && chapterWords(c) > 0) return missing;
+  }
+  return [];
+}
+
+/* Written whole from the book (the chapters that fit whole, the rest in
+ * short), its notes and his words — once, when there is none yet, or when he
+ * asks for it again from the book. From then on every reading keeps it
+ * current. An answer without it is kept as tried (empty), so it is never
+ * asked again in a loop: the next reading writes it. */
+async function keepTheBook(novelId, conn) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return;
+  const keeps = toKeep(novel);
+  if (!keeps.length) return;
+  const house = store.peek('house', 'house') || {};
+  const chapters = {};
+  for (const id of novel.order || []) { const c = store.peek('chapter', id); if (c) chapters[id] = c; }
+  setLight(novelId, 'reading', `Reading the book for ${keeps.map((k) => KEPT_WORDS[k]).join(' and ')}…`);
+  const frame = helperFrame(house, novel);
+  const fixed = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true })) + estimateTokens(aboutTheBook(novel, { plans: false, kept: false })) + 1200;
+  const room = readingRoom(conn, fixed);
+  const fit = fitBook({ novel, chapters, chapterId: null, current: null, room: Math.max(0, room) });
+  const got = await askJson(conn, frame, keepRequest({ novel, keeps, bookText: bookText(fit.book) }), { want: (o) => keeps.some((k) => typeof o[k] === 'string') });
+  if (!got.ok) throw failed(got);
+  const latest = store.peek('novel', novelId);
+  if (!latest) return;
+  for (const key of keeps) {
+    /* he corrected it, or set it to Manual, while it was being written: his stands */
+    if (!keptByHelper(latest).includes(key) || (latest.kept && latest.kept[key])) continue;
+    store.change('novel', novelId, novelSteps.setKept(key, { text: cleanText(got.obj[key]), at: Date.now() }));
+  }
+  await store.flush('novel', novelId);
+}
+
+/* "Write it from the book again": his correction goes, and the helper writes
+ * it afresh from the book. */
+export function keepAgain(novelId, key) {
+  store.change('novel', novelId, novelSteps.setKept(key, null), { now: true });
+  failures.delete(novelId);
+  blocked.delete(novelId);
+  nudge(novelId, 300);
+}
+
 /* --------------------------------------------------------- his controls */
 
 /* Put back what the helper's last reading changed — only that: a card he
@@ -569,6 +658,11 @@ export function undoLast(novelId) {
   if (!u) return false;
   if (Array.isArray(u.cards)) store.change('novel', novelId, novelSteps.undoCards(u.cards), { now: true });
   else if (u.notes) store.change('novel', novelId, novelSteps.setNotes(clone(u.notes)), { now: true });
+  /* what it keeps of the book goes back too — unless he corrected it since */
+  for (const [key, k] of Object.entries(u.kept || {})) {
+    const cur = (novel.kept && novel.kept[key]) || null;
+    if (JSON.stringify(cur) === JSON.stringify(k.after || null)) store.change('novel', novelId, novelSteps.setKept(key, k.before || null), { now: true });
+  }
   store.change('novel', novelId, novelSteps.setMemory({ undo: null }), { now: true });
   return true;
 }
@@ -580,8 +674,12 @@ export function readAgain(novelId) {
   if (!novel) return;
   const cards = [];
   for (const kind of NOTE_KINDS) for (const c of (novel.notes && novel.notes[kind]) || []) cards.push({ kind, id: c.id, before: clone(c), after: null });
-  store.change('novel', novelId, novelSteps.setMemory({ undo: { at: Date.now(), label: 'the whole book', keep: true, cards, changed: [] }, seen: {}, removed: [] }), { now: true });
+  /* what it keeps of the book (Automatic) is written afresh too — never his correction */
+  const kept = {};
+  for (const key of keptByHelper(novel)) if (novel.kept && novel.kept[key]) kept[key] = { before: clone(novel.kept[key]), after: null };
+  store.change('novel', novelId, novelSteps.setMemory({ undo: { at: Date.now(), label: 'the whole book', keep: true, cards, kept, changed: [] }, seen: {}, removed: [] }), { now: true });
   store.change('novel', novelId, novelSteps.setNotes({ people: [], places: [], lore: [], threads: [] }), { now: true });
+  for (const key of Object.keys(kept)) store.change('novel', novelId, novelSteps.setKept(key, null), { now: true });
   for (const id of novel.order || []) {
     const c = store.peek('chapter', id);
     if (c && c.summary) store.change('chapter', id, chapterSteps.setSummary(null), { now: true });

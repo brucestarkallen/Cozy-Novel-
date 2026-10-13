@@ -5,6 +5,11 @@
  * plays the rest. Both are turns with versions (another reply sits beside the
  * first, one arrow away), streamed as they come; a reply that fails is never
  * asked again by itself — the reason is said and he tries again by hand.
+ *
+ * The partner can change the book too (changes.js): what its answer's block
+ * asks for lands as the answer finishes — or waits for Apply — each with its
+ * Undo. A chapter it only has in short it may ask to read whole: it is sent,
+ * and the same answer goes on (up to three times).
  */
 
 import * as store from '../store.js';
@@ -13,10 +18,13 @@ import { wireOf } from '../model/providers.js';
 import { estimateTokens } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { contextOf } from '../model/providers.js';
-import { connFor, connName } from './writer.js';
-import { turnSteps, newTurn, newVersion, picked, novelSteps } from './shape.js';
-import { newId } from '../util.js';
-import { playOpening, playOnwards } from './prompts.js';
+import { connFor, connName, recount } from './writer.js';
+import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText } from './shape.js';
+import { newId, numberWords } from '../util.js';
+import { playOpening, playOnwards, readBack } from './prompts.js';
+import { numberedText } from './context.js';
+import { opsOf, readsOf, makeChange, undoChange, outcomeWords, labelOf } from './changes.js';
+import * as archivist from './archivist.js';
 
 const running = new Map();        /* 'talk/<id>' | 'play/<id>' -> job */
 const jobFns = new Set();
@@ -43,12 +51,25 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
   const out = [];
   const list = record.turns || [];
   const from = after ? list.findIndex((t) => t.id === after) + 1 : 0;
+  /* what came of the partner's changes, told with his next message */
+  let told = '';
   for (const t of list.slice(Math.max(0, from))) {
     if (upto && t.id === upto) break;
     const v = picked(t);
     const text = String((v && v.text) || '').trim();
     if (!text) continue;
-    out.push({ role: t.by === 'you' ? 'user' : 'assistant', content: text });
+    if (t.by === 'you') {
+      out.push({ role: 'user', content: told ? `${told}\n\n${text}` : text });
+      told = '';
+    } else {
+      out.push({ role: 'assistant', content: text });
+      told = outcomeWords(v.changes);
+    }
+  }
+  if (told && out.length && upto) {
+    /* the answer asked for again: what came of the changes before it still rides */
+    const last = out[out.length - 1];
+    if (last.role === 'user') last.content = `${told}\n\n${last.content}`;
   }
   const cap = Math.floor(contextOf(conn) * 0.25);
   let total = out.reduce((a, m) => a + estimateTokens(m.content), 0);
@@ -63,6 +84,9 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
 }
 
 async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, length = 'scene' }) {
+  /* the chapters the partner asked to read whole, and its words before it asked */
+  const extra = [];
+  const read = [];
   const key = `${kind}/${id}`;
   const house = store.peek('house', 'house') || {};
   const conn = connFor(house, role);
@@ -85,26 +109,39 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     try { store.change(kind, id, turnSteps.setVersion(turnId, versionId, { ...(text ? { text } : {}), ...alive() }), { checkpoint: true, delay: 50 }); } catch (_) { /* gone */ }
   }, 30000);
   try {
-    const out = await ask(conn, {
-      build: (c) => {
-        const { novel, chapters } = bookNow(novelId);
-        const rec = store.peek(kind, id);
-        const a = assemble({ house, novel, chapters, conn: c, ...buildArgs(rec, c) , length });
-        return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined) };
-      },
-      stream: true,
-      signal: ctl.signal,
-      onText: (s) => {
-        text += s;
-        live({ kind, id, turnId, versionId, text, thinking });
-        if (Date.now() - last > 3000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, { text, ...alive() }), { checkpoint: true, delay: 50 }); }
-      },
-      onThinking: (s) => {
-        thinking += s;
-        live({ kind, id, turnId, versionId, text, thinking });
-        if (Date.now() - last > 20000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, alive()), { checkpoint: true, delay: 50 }); }
-      },
-    });
+    let out;
+    for (let round = 0; ; round++) {
+      out = await ask(conn, {
+        build: (c) => {
+          const { novel, chapters } = bookNow(novelId);
+          const rec = store.peek(kind, id);
+          const args = buildArgs(rec, c);
+          const a = assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra], length });
+          return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined) };
+        },
+        stream: true,
+        signal: ctl.signal,
+        onText: (s) => {
+          text += s;
+          live({ kind, id, turnId, versionId, text, thinking });
+          if (Date.now() - last > 3000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, { text, ...alive() }), { checkpoint: true, delay: 50 }); }
+        },
+        onThinking: (s) => {
+          thinking += s;
+          live({ kind, id, turnId, versionId, text, thinking });
+          if (Date.now() - last > 20000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, alive()), { checkpoint: true, delay: 50 }); }
+        },
+      });
+      /* the partner asked to read chapters whole: they are sent, and the same answer goes on */
+      const asked = kind === 'talk' && out.ok && !out.cut && round < 3 ? readsOf(out.text || text) : [];
+      if (!asked.length) break;
+      const rows = readRows(novelId, asked);
+      extra.push({ role: 'assistant', content: String(out.text || text).trim() || '(I asked to read them.)' }, { role: 'user', content: readBack(rows) });
+      read.push(...rows.filter((r) => !r.missing).map((r) => r.label));
+      text = '';
+      thinking = '';
+      live({ kind, id, turnId, versionId, text: '', thinking: '', note: `Reading ${rows.map((r) => r.label).join(', ')} whole…` });
+    }
     if (!String(out.text || text).trim()) {
       undo();
       if (out.stopped) return { ok: false, stopped: true };
@@ -115,7 +152,12 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       text: done, thinking: (out.thinking || thinking) || undefined, streaming: undefined, beat: undefined, tab: undefined, browser: undefined,
       cut: out.cut || out.stopped ? true : undefined, notes: out.notes && out.notes.length ? out.notes : undefined,
       usage: out.usage || undefined, ms: out.sent ? out.sent.ms : undefined, model: conn.model, conn: connName(conn), sent: out.sent ? versionId : undefined, done: Date.now(),
+      tokensIn: out.usage && Number.isFinite(out.usage.in) ? out.usage.in : (out.sent && Number.isFinite(out.sent.tokens) ? out.sent.tokens : undefined),
+      tokensCounted: out.usage && Number.isFinite(out.usage.in) ? true : undefined,
+      read: read.length ? read : undefined,
     }), { checkpoint: true, now: true });
+    /* what the partner's block asks for: made now, or waiting for Apply */
+    if (kind === 'talk') settleChanges(novelId, turnId, versionId, done, store.peek('house', 'house') || house);
     store.change(kind, id, turnSteps.set({ updated: Date.now() }), { now: true });
     if (out.sent) store.api('PUT', `/api/sent/${novelId}/${versionId}`, { body: { ...out.sent, purpose: kind === 'talk' ? 'partner' : 'play' } }).catch(() => {});
     await store.flush(kind, id);
@@ -133,6 +175,58 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     tell(key);
     live({ kind, id, turnId, versionId, done: true });
   }
+}
+
+/* ----------------------------------------------------- the partner's changes */
+
+/* the chapters it asked for, whole and numbered (or said not to be there) */
+function readRows(novelId, numbers) {
+  const novel = store.peek('novel', novelId);
+  return numbers.map((n) => {
+    const chId = ((novel && novel.order) || [])[n - 1];
+    const c = chId && store.peek('chapter', chId);
+    if (!c) return { label: `Chapter ${numberWords(n)}`, text: '(there is no such chapter)', missing: true };
+    return { label: chapterLabel(novel, c), text: numberedText(novel, c) || chapterText(c) || '(nothing written in it yet)' };
+  });
+}
+
+function settleChanges(novelId, turnId, versionId, text, house) {
+  const ops = opsOf(text);
+  if (!ops.length) return;
+  const wait = house && house.partnerApplies === 'wait';
+  const changes = ops.map((op) => (wait ? { id: newId('cg'), op, label: labelOf(op), why: String(op.why || '').trim(), status: 'waiting' } : makeChange(novelId, op)));
+  store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes }), { now: true });
+  if (changes.some((c) => c.status === 'made')) afterChanges(novelId);
+}
+function afterChanges(novelId) {
+  recount(novelId);
+  archivist.nudge(novelId, 3000);
+}
+
+/* one waiting change made, one made change undone, one waiting change left */
+export function applyChange(novelId, turnId, versionId, changeId) { return settleOne(novelId, turnId, versionId, changeId, 'apply'); }
+export function undoOneChange(novelId, turnId, versionId, changeId) { return settleOne(novelId, turnId, versionId, changeId, 'undo'); }
+export function skipChange(novelId, turnId, versionId, changeId) { return settleOne(novelId, turnId, versionId, changeId, 'skip'); }
+function settleOne(novelId, turnId, versionId, changeId, how) {
+  const rec = store.peek('talk', novelId);
+  const t = rec && (rec.turns || []).find((x) => x.id === turnId);
+  const v = t && t.versions.find((x) => x.id === versionId);
+  const list = (v && v.changes) || [];
+  const i = list.findIndex((c) => c.id === changeId);
+  if (i < 0) return { ok: false, said: 'that change is not there any more' };
+  const c = list[i];
+  let next = c;
+  if (how === 'apply' && c.status === 'waiting') next = { ...makeChange(novelId, c.op, { id: c.id }) };
+  else if (how === 'skip' && c.status === 'waiting') next = { ...c, status: 'skipped' };
+  else if (how === 'undo' && c.status === 'made') {
+    const u = undoChange(novelId, c);
+    if (!u.ok) return u;
+    next = { ...c, status: 'undone' };
+  } else return { ok: false, said: 'nothing to do' };
+  const changes = list.map((x, k) => (k === i ? next : x));
+  store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes }), { now: true });
+  if (next.status === 'made' || next.status === 'undone') afterChanges(novelId);
+  return { ok: next.status !== 'refused', said: next.said, change: next };
 }
 
 /* ------------------------------------------------------------- partner */

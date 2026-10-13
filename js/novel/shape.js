@@ -5,7 +5,11 @@
  * when played twice (see store.js), so it can be played again over a newer
  * copy from the phone.
  *
- *   novel   { id, meta, brief, style, plans, order:[chapterId], notes, memory, prefs, plays:[playId] }
+ *   novel   { id, meta, brief, style, plans, auto, kept, order:[chapterId], notes, memory, prefs, plays:[playId] }
+ *             brief and style are his own words; auto {about, style}: false
+ *             when he set that one to Manual (Automatic otherwise); kept
+ *             {about, style}: {text, at, by} — what the helper keeps of the
+ *             book as it stands (by 'you' once he corrected it)
  *   chapter { id, novelId, name, nameBy, passages:[passage], summary, retired:[] }
  *   passage { id, by:'ai'|'you'|'break', pick, versions:[version] }
  *   version { id, text, at, how, ask, conn, model, thinking, cut, stopped, notes, usage, ms, sent, streaming }
@@ -51,6 +55,8 @@ export function newNovel({ title, brief = '', style = '', plans = '' }) {
     meta: { title: String(title || '').trim() || 'Untitled', subtitle: '', cover: coverFor(title), words: 0, chapters: 1,
       created: at, written: at, opened: at, archived: false },
     brief, style, plans,
+    auto: { about: true, style: true },
+    kept: {},
     order: [chapter.id],
     notes: { people: [], places: [], lore: [], threads: [] },
     memory: { seen: {}, removed: [], undo: null, at: 0 },
@@ -89,6 +95,16 @@ export function chapterNumber(novel, chapterId) {
   const i = (novel.order || []).indexOf(chapterId);
   return i < 0 ? 0 : i + 1;
 }
+/* Each passage's number on the page, by id: 1, 2, 3… — a scene break has
+ * none. The page shows them, and the partner changes a passage by its number
+ * ("2.3" is passage 3 of Chapter Two). */
+export function passageNumbers(chapter) {
+  const out = new Map();
+  let n = 0;
+  for (const p of (chapter && chapter.passages) || []) if (p.by !== 'break') out.set(p.id, ++n);
+  return out;
+}
+
 /* "Chapter Three", and its name when it has one */
 export function chapterLabel(novel, chapter, { withName = true } = {}) {
   const n = chapterNumber(novel, chapter.id);
@@ -157,6 +173,9 @@ export const novelSteps = {
     }
   },
   setMemory: (patch) => (n) => { n.memory = { ...(n.memory || {}), ...patch }; },
+  /* What it's about / How it reads: Manual or Automatic, and what the helper keeps */
+  setAuto: (key, on) => (n) => { n.auto = { ...(n.auto || {}), [key]: Boolean(on) }; },
+  setKept: (key, value) => (n) => { n.kept = { ...(n.kept || {}) }; if (value) n.kept[key] = value; else delete n.kept[key]; },
   seen: (chapterId, map) => (n) => { n.memory = n.memory || {}; n.memory.seen = { ...(n.memory.seen || {}), [chapterId]: map }; },
   forgetChapterSeen: (chapterId) => (n) => { if (n.memory && n.memory.seen) delete n.memory.seen[chapterId]; },
   pushRemoved: (entry) => (n) => {
@@ -280,5 +299,5 @@ export function countBook(novel, chapters) {
 
 /* Notes cards */
 export function newCard(kind, fields = {}) {
-  return { id: newId(kind.slice(0, 2)), name: '', about: '', ...(kind === 'people' ? { aka: [], now: '' } : {}), ...(kind === 'threads' ? { open: true } : {}), ...fields };
+  return { id: newId(kind.slice(0, 2)), name: '', about: '', ...(kind === 'people' ? { aka: [], ties: '', now: '' } : {}), ...(kind === 'threads' ? { open: true } : {}), ...fields };
 }

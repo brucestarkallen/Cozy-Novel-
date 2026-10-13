@@ -1,5 +1,9 @@
 /* Cozy Novel — js/ui/look.js — the room, the page and the type, set on the
  * document the moment they change (no refresh). */
+
+/* how it looks to begin with — and with Back to the default look */
+export const DEFAULT_LOOK = { theme: 'study', room: 'on', tint: 'on', indent: 'off', font: 'literata', size: '18', lead: '1.72', width: '680' };
+
 export function applyLook(look = {}) {
   const d = document.documentElement;
   d.dataset.theme = look.theme || 'study';
