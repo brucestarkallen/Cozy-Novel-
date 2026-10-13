@@ -316,6 +316,25 @@ await test('a page left "being written" by a closed window is set right', async 
   await putAway(b); await putAway(b2);
 });
 
+await test('writing from the middle: the request says between, and what follows rides too — trimmed when long', async () => {
+  const after = Array.from({ length: 900 }, (_, i) => `Later line ${i}.`).join(' ');
+  const b = await makeBook([['THE FIRST PASSAGE.', 'AFTER STARTS HERE. ' + after]]);
+  const first = b.ch().passages[0];
+  await setHouse({ context: 7000 });
+  await script([{ text: 'In between.' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], after: first.id });
+  assert.equal(out.ok, true);
+  const body = (await requests())[0].body;
+  assert.match(body.messages.at(-1).content, /between the text before it and the text that follows it/);
+  const sys = body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+  assert.ok(sys.includes('THE FIRST PASSAGE.') && sys.includes('AFTER STARTS HERE.'), 'both sides of the point ride');
+  assert.ok(sys.includes('left out here to save room'), 'what follows is trimmed to fit');
+  assert.ok(JSON.stringify(body.messages).length / 4 < 7000, 'and it fits the room');
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text.slice(0, 12)), ['THE FIRST PA', 'In between.', 'AFTER STARTS']);
+  await setHouse();
+  await putAway(b);
+});
+
 await test('an edit is a new version; the words before stay one arrow away', async () => {
   const b = await makeBook([['The lamp was cold.']]);
   const p = b.ch().passages[0];
@@ -362,6 +381,16 @@ await test('Read the whole book again, then Undo, brings the notes back', async 
   const n = await onPhone('novel', b.novelId);
   assert.deepEqual(n.notes.people.map((c) => c.name), ['Mara Venn']);
   await putAway(b);
+});
+
+await test('the helper keeps his own names, casing and words on a card', () => {
+  const notes = { people: [{ id: 'pe-1', name: 'Mara Venn', aka: [], about: 'HIS OWN WORDS.', now: '', updated: { by: 'you', at: 1 } }], places: [], lore: [], threads: [] };
+  const out = archivist.foldNotes(notes, { people: [{ name: 'mara venn', about: 'The helper would say this.', now: 'In the lantern room.' }] });
+  const card = out.notes.people[0];
+  assert.equal(out.notes.people.length, 1);
+  assert.equal(card.name, 'Mara Venn');
+  assert.equal(card.about, 'HIS OWN WORDS.');
+  assert.equal(card.now, 'In the lantern room.', 'where she is now is still kept current');
 });
 
 await test('a passage changed while it was being read is read again, told what it used to say', async () => {
@@ -633,6 +662,81 @@ await test('a model that wants max_completion_tokens gets his length under that 
   assert.equal(r[0].body.max_tokens, 700);
   assert.equal(r[1].body.max_completion_tokens, 700);
   assert.ok(!('max_tokens' in r[1].body));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('Claude: thinking gets room to think and write, and takes no top-k or other temperature', () => {
+  const conn = { url: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-5', key: 'k', thinking: 'high', topK: 40, temperature: 0.5 };
+  const { body } = providers.buildRequest(conn, { system: 'S', messages: [{ role: 'user', content: 'x' }], maxTokens: 4096 });
+  assert.equal(body.max_tokens, providers.thinkingFloor(conn));
+  assert.ok(body.max_tokens >= 16000);
+  assert.ok(body.thinking && (body.thinking.type === 'adaptive' || body.thinking.type === 'enabled'));
+  assert.ok(!('top_k' in body) && !('top_p' in body));
+  assert.equal(body.temperature, 1);
+});
+
+await test('Claude keeps the start of the request ready: the part that stays the same page after page is cached', async () => {
+  const b = await makeBook([['EARLIER CHAPTER WORDS.'], ['NOW CHAPTER WORDS.']]);
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: 'NOTED PERSON', about: 'x' })), { now: true });
+  const chapters = { [b.ids[0]]: b.ch(0), [b.ids[1]]: b.ch(1) };
+  const a = context.assemble({ house: store.peek('house', 'house'), novel: b.novel(), chapters, conn: CONN, target: { chapterId: b.ids[1] }, request: 'Go.' });
+  assert.ok(a.systemParts[0].includes('HIS OWN WORDS FIRST') && a.systemParts[0].includes('EARLIER CHAPTER WORDS.'));
+  assert.ok(!a.systemParts[0].includes('NOTED PERSON'), 'the notes move, so they come after the cached part');
+  assert.ok(a.systemParts[1].includes('NOTED PERSON') && a.systemParts[1].includes('NOW CHAPTER WORDS.'));
+  const { body } = providers.buildRequest({ url: 'https://api.anthropic.com/v1', model: 'claude-x', key: 'k' }, { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: 2000 });
+  assert.equal(body.system[0].cache_control.type, 'ephemeral');
+  assert.equal(body.system[1].cache_control, undefined);
+  await putAway(b);
+});
+
+await test('the levels a model said it takes reach Claude\'s effort too', () => {
+  const conn = { url: 'https://api.anthropic.com/v1', model: 'claude-x', key: 'k', thinking: 'max' };
+  conn.learned = { for: providers.learnKey(conn), at: Date.now(), efforts: ['low', 'medium'], drop: [] };
+  const { body } = providers.buildRequest(conn, { system: 'S', messages: [{ role: 'user', content: 'x' }], maxTokens: 4096 });
+  assert.ok(body.output_config && ['low', 'medium'].includes(body.output_config.effort), JSON.stringify(body.output_config));
+});
+
+await test('"too long" is read in each provider\'s words, with its number', () => {
+  const cases = [
+    ["This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens.", 8192],
+    ['prompt is too long: 205000 tokens > 200000 maximum', 200000],
+    ['The input token count (1100000) exceeds the maximum number of tokens allowed (1048576).', 1048576],
+    ['Invalid request: exceeded model token limit: 8192', 8192],
+  ];
+  for (const [words, n] of cases) {
+    assert.ok(providers.CONTEXT_REFUSAL.test(words), words);
+    assert.equal(providers.contextFrom(words), n, words);
+  }
+});
+
+await test('each provider\'s usual room, and DeepSeek\'s started reply goes to its beta address', () => {
+  assert.equal(providers.contextOf({ url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' }), 1000000);
+  assert.equal(providers.contextOf({ url: 'https://api.anthropic.com/v1', model: 'claude-x' }), 200000);
+  assert.equal(providers.contextOf({ url: 'https://example.com/v1', model: 'm' }), 128000);
+  assert.equal(providers.contextOf({ url: 'https://example.com/v1', model: 'm', context: 32000 }), 32000, 'his own number first');
+  const { url, body } = providers.buildRequest({ url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', key: 'k', prefill: 'The night', thinking: 'off' }, { system: 'S', messages: [{ role: 'user', content: 'x' }] });
+  assert.equal(url, 'https://api.deepseek.com/beta/chat/completions');
+  assert.equal(body.messages.at(-1).role, 'assistant');
+  assert.equal(body.messages.at(-1).prefix, true);
+});
+
+await test('Off that still thinks is learned — but not when his own <think> seed opened the thinking', async () => {
+  const b = await makeBook([['The lamp was cold.']]);
+  await setHouse({ thinking: 'off' });
+  await script([{ text: 'A page.', think: 'It thought anyway.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  let conn = store.peek('house', 'house').connections[0];
+  assert.equal(Boolean(conn.learned && conn.learned.offThinks), true, 'thinking with Off is learned');
+  await setHouse({ thinking: 'off', prefill: '<think>Let me consider' });
+  await reset();
+  await script([{ text: 'A page.', think: 'the scene carefully.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  conn = store.peek('house', 'house').connections[0];
+  assert.equal(Boolean(conn.learned && conn.learned.offThinks), false, 'his seed opened it: nothing learned about Off');
+  const sent = (await requests())[0].body;
+  assert.equal(sent.messages.at(-1).role, 'assistant');
+  assert.equal(sent.messages.at(-1).reasoning_content, 'Let me consider');
   await setHouse();
   await putAway(b);
 });
