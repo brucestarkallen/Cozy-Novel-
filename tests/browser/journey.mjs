@@ -127,17 +127,55 @@ try {
     () => document.querySelectorAll("#suggestions button").length === 3,
   );
   await page.getByRole("button", { name: "Keep passage", exact: true }).click();
+  await page.locator("#candidateBox").waitFor({ state: "hidden" });
   await page.waitForFunction(() =>
     document.querySelector("#editor").value.includes("Rain tapped"),
   );
   await page.waitForFunction(
     () => document.querySelectorAll("#suggestions button").length === 3,
   );
+  await page.waitForFunction(async () => {
+    const { Repository } = await import("/js/storage/repository.js");
+    const r = await Repository.open();
+    const facts = await r.query("type", "canon");
+    r.dispose();
+    return facts.filter((f) => f.derived).length >= 6;
+  });
+  const automatic = await page.evaluate(async () => {
+    const { Repository } = await import("/js/storage/repository.js");
+    const r = await Repository.open();
+    const facts = await r.query("type", "canon"),
+      people = await r.query("type", "entity");
+    r.dispose();
+    return {
+      kinds: facts.filter((f) => f.derived).map((f) => f.recordKind),
+      people: people.map((p) => p.displayName),
+      sourced: facts
+        .filter((f) => f.derived)
+        .every((f) => f.sourceRefs[0].start != null),
+    };
+  });
+  assert.ok(automatic.people.includes("D") && automatic.sourced);
+  for (const kind of [
+    "condition",
+    "plan",
+    "knowledge",
+    "belief",
+    "relationship",
+    "acceptedEvent",
+  ])
+    assert.ok(automatic.kinds.includes(kind));
+  await page.locator("[data-action=sideTab][data-tab=bible]").click();
+  await page.screenshot({
+    path: new URL("story-brain-desktop.png", artifacts).pathname,
+    fullPage: true,
+  });
   await page.locator("#suggestions button").first().click();
   await page.waitForFunction(
     () => document.querySelector("#candidateState").textContent === "ready",
   );
   await page.getByRole("button", { name: "Keep passage", exact: true }).click();
+  await page.locator("#candidateBox").waitFor({ state: "hidden" });
   await page
     .locator("#direction")
     .fill("The friends decide to get ice cream, without any confrontation.");
@@ -146,11 +184,14 @@ try {
     () => document.querySelector("#candidateState").textContent === "ready",
   );
   await page.getByRole("button", { name: "Keep passage", exact: true }).click();
+  await page.locator("#candidateBox").waitFor({ state: "hidden" });
   await page.waitForFunction(() =>
     document.querySelector("#editor").value.includes("B suggested ice cream"),
   );
   await page.getByRole("button", { name: "Quick RP", exact: true }).click();
-  await page.getByLabel("Or introduce a minimally described person").fill("B");
+  await page
+    .getByLabel("Play as an established person")
+    .selectOption({ label: "B" });
   await page
     .getByRole("button", { name: "Enter exploration", exact: true })
     .click();
@@ -167,6 +208,7 @@ try {
   await page
     .getByRole("button", { name: "Keep exploration", exact: true })
     .click();
+  await page.locator("#modal").waitFor({ state: "hidden" });
   let before = await page.evaluate(async () => {
     const { Repository } = await import("/js/storage/repository.js");
     const r = await Repository.open();
@@ -178,12 +220,6 @@ try {
   });
   assert.doesNotMatch(before.text, /B asked for chocolate/);
   // Switching a minimally described supporting character leaves time and manuscript revision unchanged.
-  await page.locator("[data-action=sideTab][data-tab=bible]").click();
-  await page
-    .getByRole("button", { name: "＋ Person or place", exact: true })
-    .click();
-  await page.getByLabel("Name or label").fill("C");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByRole("button", { name: "Quick RP", exact: true }).click();
   await page.getByRole("button", { name: "B · kept", exact: true }).click();
   await page
@@ -192,6 +228,7 @@ try {
   await page
     .getByRole("button", { name: "Keep exploration", exact: true })
     .click();
+  await page.locator("#modal").waitFor({ state: "hidden" });
   const switched = await page.evaluate(async () => {
     const { Repository } = await import("/js/storage/repository.js");
     const r = await Repository.open();
@@ -210,12 +247,33 @@ try {
   await page.getByRole("button", { name: "Quick RP", exact: true }).click();
   await page.getByRole("button", { name: "C · kept", exact: true }).click();
   await page.getByRole("button", { name: "Keep events", exact: true }).click();
+  assert.match(
+    await page.getByLabel("Author established event record").inputValue(),
+    /B asked for chocolate/,
+  );
+  await page.screenshot({
+    path: new URL("event-review-desktop.png", artifacts).pathname,
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+  );
+  await page.screenshot({
+    path: new URL("event-review-phone.png", artifacts).pathname,
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page
     .getByLabel("Author established event record")
     .fill("B asked for chocolate ice cream. A asked a question and C waited.");
   await page
     .getByRole("button", { name: "Accept event record", exact: true })
     .click();
+  await page.locator("#modal").waitFor({ state: "hidden" });
   const eventState = await page.evaluate(async () => {
     const { Repository } = await import("/js/storage/repository.js");
     const r = await Repository.open();
@@ -226,11 +284,27 @@ try {
     return { events, text: text.text };
   });
   assert.equal(
-    eventState.events.filter((r) => r.recordKind === "acceptedEvent").length,
+    eventState.events.filter(
+      (r) => r.recordKind === "acceptedEvent" && r.explorationId,
+    ).length,
     1,
   );
-  assert.equal(eventState.events[0].proseInserted, false);
+  assert.equal(
+    eventState.events.find(
+      (r) => r.explorationId && r.recordKind === "acceptedEvent",
+    ).proseInserted,
+    false,
+  );
   assert.equal(eventState.text, before.text);
+  assert.ok(
+    eventState.events.some(
+      (r) =>
+        r.recordKind === "knowledge" &&
+        !r.derived &&
+        r.explorationId &&
+        r.proposition.includes("chocolate"),
+    ),
+  );
   await page.getByRole("button", { name: "Quick RP", exact: true }).click();
   await page
     .getByRole("button", { name: "C · eventsKept", exact: true })
@@ -246,6 +320,7 @@ try {
         .textContent.includes("B asked for chocolate"),
   );
   await page.getByRole("button", { name: "Keep passage", exact: true }).click();
+  await page.locator("#candidateBox").waitFor({ state: "hidden" });
   await page.waitForFunction(() =>
     document.querySelector("#editor").value.includes("B asked for chocolate"),
   );
@@ -260,10 +335,17 @@ try {
     return { events, text: text.text, revisions };
   });
   assert.equal(
-    accepted.events.filter((r) => r.recordKind === "acceptedEvent").length,
+    accepted.events.filter(
+      (r) => r.recordKind === "acceptedEvent" && r.explorationId,
+    ).length,
     1,
   );
-  assert.equal(accepted.events[0].proseInserted, true);
+  assert.equal(
+    accepted.events.find(
+      (r) => r.explorationId && r.recordKind === "acceptedEvent",
+    ).proseInserted,
+    true,
+  );
   assert.ok(accepted.revisions.some((r) => r.explorationId));
   assert.ok(accepted.revisions.length >= 5);
   await page.reload();
@@ -283,6 +365,7 @@ try {
     .getByRole("button", { name: "Writing style", exact: true })
     .click();
   await page.getByLabel("Automatic suggestions and source reading").uncheck();
+  await page.getByLabel("Story Brain", { exact: true }).selectOption("off");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   const source =
     "PREFIX ☕\nKeep these spaces.  \nSELECT ME\nSUFFIX 雨\n  unchanged  ";
@@ -309,6 +392,7 @@ try {
     () => document.querySelector("#candidateState").textContent === "ready",
   );
   await page.getByRole("button", { name: "Keep passage", exact: true }).click();
+  await page.locator("#candidateBox").waitFor({ state: "hidden" });
   await page.waitForFunction(() =>
     document.querySelector("#editor").value.includes("雨 lingered"),
   );
@@ -510,7 +594,7 @@ try {
     () =>
       document
         .querySelector("#deviceStatus")
-        .textContent.includes("Saved to browser and device") ||
+        .textContent.includes("Saved to device through checkpoint") ||
       document.querySelector("#deviceStatus").textContent ===
         "Device up to date",
     { timeout: 15000 },

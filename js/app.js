@@ -1,3 +1,4 @@
+import { applyReading, readingMode } from "./story/reading.js";
 import { Repository } from "./storage/repository.js";
 import { DeviceSync } from "./storage/sync.js";
 import { Writer } from "./ai/jobs.js";
@@ -67,6 +68,24 @@ class Studio {
     await renderLibrary(this);
     await this.writer.recoverInterrupted();
     const signal = this.events.signal;
+    window.addEventListener(
+      "cozynovelversionchange",
+      () =>
+        notice(
+          "Cozy Novel was upgraded in another tab. Your visible draft is retained. Copy or download it before refreshing.",
+          true,
+        ),
+      { signal },
+    );
+    const legacy = (await this.repo.query("type", "novel")).filter(
+      (n) => n.storyMode == null && n.autoSuggestions !== false,
+    );
+    if (legacy.length && !(await this.repo.get("storyUpgradeNotice", "meta"))) {
+      notice(
+        "New accepted passages can now update the Story Brain automatically. Your existing text is unchanged. Choose review only or off in Writing style.",
+      );
+      await this.repo.localPut({ id: "storyUpgradeNotice", shown: true });
+    }
     this.root.addEventListener(
       "click",
       (e) => {
@@ -192,8 +211,13 @@ class Studio {
       { signal },
     );
     this.unsubscribe = this.repo.subscribe((op) => {
+      if (["candidate.accept", "selection.replace"].includes(op.kind))
+        this.acceptedWork(op).catch((e) =>
+          notice("Passage saved. Story reading pending: " + e.message),
+        );
       if (op.kind === "library.restore" && op.generation) {
         this.writer.dispose();
+        this.writer = new Writer(this.repo, this.device);
       }
       if (op.novelId === this.novelId && this.sceneId)
         this.checkExternal().catch(() => {});
@@ -422,11 +446,18 @@ class Studio {
       this.connection().model || "No model connected";
   }
   async generate(kind, options = {}) {
-    await this.flush();
-    await this.saveDirection();
     const novelId = this.novelId,
-      sceneId = this.sceneId;
-    const direction = options.direction ?? $("#direction").value;
+      sceneId = this.sceneId,
+      direction = options.direction ?? $("#direction").value;
+    $("#candidateState").textContent = "Preparing";
+    this.root.querySelector("[data-action=acceptCandidate]").disabled = true;
+    if (this.acceptingPassage) await this.acceptingPassage;
+    await this.flush();
+    if (novelId !== this.novelId || sceneId !== this.sceneId)
+      throw new Error(
+        "The workspace changed while preparing the request. Your original input is retained.",
+      );
+    await this.saveDirection();
     if (!direction.trim() && kind === "write")
       throw new Error("Give the writer a glimpse of your scene first.");
     $("#cancelGeneration").hidden = false;
@@ -455,7 +486,10 @@ class Studio {
         await this.showCandidate(result.candidate.id);
         notice("A new passage is ready for your review.");
         const n = await this.repo.get(novelId);
-        if (n.autoSuggestions)
+        if (
+          n.autoSuggestions ||
+          (await readingMode(this.repo, novelId)) === "auto"
+        )
           this.analyze(result.candidate.id).catch((e) =>
             notice("Passage saved. Optional suggestions: " + e.message),
           );
@@ -484,20 +518,132 @@ class Studio {
     keep.disabled = stale || !["ready", "partial"].includes(c.status);
     await this.renderSuggestions();
   }
-  async analyze(candidateId = null) {
+  async analyze(candidateId = null, extra = {}) {
     const novelId = this.novelId,
       sceneId = this.sceneId;
     const artifact = await analyze(this.writer, {
       connection: this.connection(true),
+      libraryGeneration: this.repo.generation,
       novelId,
       sceneId,
       direction:
-        "Suggest three possible next directions and at most three directly sourced observations.",
+        "Read the source with typed story changes, explicit coverage and three calm next possibilities.",
       candidateId,
+      ...extra,
     });
+    const c = candidateId ? await this.repo.get(candidateId) : null;
+    if (
+      c?.status === "kept" &&
+      !artifact.error &&
+      !artifact.coverage.complete &&
+      artifact.coverage.end > 0
+    )
+      this.maintainReading(
+        novelId,
+        sceneId,
+        candidateId,
+        artifact.coverage.end,
+      ).catch((e) => notice("Story reading remains pending: " + e.message));
     if (novelId === this.novelId && sceneId === this.sceneId) {
       await this.renderSuggestions(artifact);
       await showMemoryProposals(this, artifact);
+    }
+  }
+  async maintainReading(novelId, sceneId, candidateId, start) {
+    this.readingTasks ??= new Set();
+    const key = candidateId || sceneId;
+    if (
+      this.readingTasks.has(key) ||
+      (await readingMode(this.repo, novelId)) !== "auto"
+    )
+      return;
+    this.readingTasks.add(key);
+    try {
+      for (let i = 0; i < 2; i++) {
+        if (this.writer.foreground) return;
+        const a = await analyze(this.writer, {
+          connection: this.connection(true),
+          novelId,
+          sceneId,
+          candidateId,
+          readingStart: start,
+        });
+        if (
+          a.error ||
+          a.coverage.complete ||
+          a.coverage.end <= start ||
+          a.freshness === "stale"
+        )
+          break;
+        start = a.coverage.end;
+      }
+    } finally {
+      this.readingTasks.delete(key);
+    }
+  }
+  async analyzeExploration(ex, source, coverage) {
+    let readingStart = 0;
+    const prior = (await this.repo.query("novelId", ex.novelId)).filter(
+      (a) =>
+        a.kind === "analysis" &&
+        a.explorationId === ex.id &&
+        a.branchId === ex.activeBranchId &&
+        a.freshness !== "stale" &&
+        a.textBlobId &&
+        (a.coveredTurnIds || []).every((id) =>
+          coverage.coveredTurnIds.includes(id),
+        ),
+    );
+    for (const a of prior) {
+      const stablePrefix = a.sourceTurnSpans?.length
+        ? a.sourceTurnSpans.every((span, i) => {
+            const current = coverage.sourceTurnSpans[i];
+            return (
+              current?.id === span.id &&
+              current.textBlobId === span.textBlobId &&
+              current.header === span.header
+            );
+          })
+        : source.startsWith(await this.repo.text(a.textBlobId));
+      if (stablePrefix && !a.error)
+        readingStart = Math.max(readingStart, a.coverage?.end || 0);
+    }
+    if (readingStart >= source.length) return;
+    return analyze(this.writer, {
+      connection: this.connection(true),
+      novelId: ex.novelId,
+      sceneId: ex.baseSceneId,
+      exploration: ex,
+      sourceText: source,
+      readingStart,
+      sourceTurnSpans: coverage.sourceTurnSpans,
+      coveredTurnIds: coverage.coveredTurnIds,
+      direction:
+        "Read the next exploration segment. Changes remain exploration only.",
+    });
+  }
+  async acceptedWork(op) {
+    if (op.libraryGeneration !== this.repo.generation) return;
+    const records = await this.repo.query("novelId", op.novelId);
+    const revisions = records.filter(
+      (r) =>
+        op.affectedIds.includes(r.id) && r.type === "revision" && r.candidateId,
+    );
+    for (const revision of revisions) {
+      const readings = records.filter(
+        (r) => r.kind === "analysis" && r.candidateId === revision.candidateId,
+      );
+      for (const a of readings) {
+        await applyReading(this.repo, a.id);
+        if (!a.coverage?.complete && a.coverage?.end > 0)
+          this.maintainReading(
+            op.novelId,
+            revision.ownerId,
+            revision.candidateId,
+            a.coverage.end,
+          ).catch((e) => notice("Story reading remains pending: " + e.message));
+      }
+      if (op.novelId === this.novelId) await renderBible(this);
     }
   }
   async renderSuggestions(artifact = null) {
@@ -513,6 +659,8 @@ class Studio {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     $("#suggestions").replaceChildren();
     if (!artifact || artifact.freshness !== "fresh") return;
+    const novel = await this.repo.get(this.novelId);
+    if (novel.autoSuggestions === false) return;
     const source = artifact.candidateId
       ? await this.repo.get(artifact.candidateId)
       : null;

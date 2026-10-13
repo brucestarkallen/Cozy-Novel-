@@ -1,5 +1,5 @@
 const PREFIX = "cozynovel.assets.";
-const CACHE = PREFIX + "1.0.0";
+const CACHE = PREFIX + "1.1.0";
 const ASSETS = [
   "./",
   "./index.html",
@@ -9,13 +9,16 @@ const ASSETS = [
   "./js/app.js",
   "./js/config.js",
   "./js/core/ids.js",
+  "./js/core/digest.js",
   "./js/core/schema.js",
   "./js/storage/database.js",
+  "./js/storage/coordination.js",
   "./js/storage/repository.js",
   "./js/storage/backup.js",
   "./js/storage/sync.js",
   "./js/novel/operations.js",
   "./js/context/assemble.js",
+  "./js/context/scope.js",
   "./js/context/index.js",
   "./js/ai/providers/adapters.js",
   "./js/ai/prompts/templates.js",
@@ -23,6 +26,7 @@ const ASSETS = [
   "./js/ai/analysis.js",
   "./js/rp/session.js",
   "./js/story/entities.js",
+  "./js/story/reading.js",
   "./js/export/manuscript.js",
   "./js/ui/dom.js",
   "./js/ui/library.js",

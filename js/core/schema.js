@@ -83,6 +83,29 @@ export function validateRecord(r) {
         typeof r.activeBranchId === "string",
       "Invalid exploration.",
     );
+  if (r.coveredTurnIds != null)
+    assert(
+      Array.isArray(r.coveredTurnIds) &&
+        r.coveredTurnIds.every((x) => typeof x === "string"),
+      "Invalid transcript coverage.",
+    );
+  for (const field of ["validFrom", "validUntil", "fictionalTime"])
+    if (r[field] != null)
+      assert(Number.isFinite(r[field]), "Invalid fictional time.");
+  const saved =
+    r.baseContextRecords ||
+    (r.kind === "explorationBase" ? r.body?.records : null);
+  if (saved)
+    assert(
+      Array.isArray(saved) &&
+        saved.every(
+          (x) =>
+            x.novelId === r.novelId &&
+            TYPES.includes(x.type) &&
+            typeof x.id === "string",
+        ),
+      "Invalid exploration baseline ownership.",
+    );
   return r;
 }
 /** Validate the entire graph before any restore transaction opens. */
@@ -142,6 +165,13 @@ export function validateBackup(data) {
     }
     if (r.type === "scene") {
       ref(r.chapterId, "chapter", n.id);
+      const seen = new Set([r.id]);
+      let prior = r.continuationOf;
+      while (prior) {
+        assert(!seen.has(prior), "Cyclic scene continuation.");
+        seen.add(prior);
+        prior = ref(prior, "scene", n.id).continuationOf;
+      }
       assert(
         ref(r.currentRevisionId, "revision", n.id).ownerId === r.id,
         "Wrong revision owner.",
@@ -156,8 +186,10 @@ export function validateBackup(data) {
         );
     }
     if (r.baseRevisionId) ref(r.baseRevisionId, "revision", n.id);
+    if (r.baseContextId) ref(r.baseContextId, "artifact", n.id);
     if (r.sceneId) ref(r.sceneId, "scene", n.id);
-    if (r.baseSceneId)
+    if (r.baseSceneId) ref(r.baseSceneId, "scene", n.id);
+    if (r.baseSceneId && r.baseRevisionId)
       assert(
         ref(r.baseRevisionId, "revision", n.id).ownerId ===
           ref(r.baseSceneId, "scene", n.id).id,

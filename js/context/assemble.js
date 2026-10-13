@@ -1,3 +1,10 @@
+import {
+  makeScope,
+  permitted,
+  metadataAt,
+  profileAt,
+  mappedRange,
+} from "./scope.js";
 import { textBlob } from "../core/ids.js";
 import { terms as tokenize, relevance } from "./index.js";
 import { TEMPLATES, PROMPT_VERSION } from "../ai/prompts/templates.js";
@@ -30,7 +37,7 @@ function score(text, terms) {
   return score;
 }
 /** Selection is independent of provider wire format. All inputs are immutable record snapshots. */
-export async function assemble(
+export async function assembleCaptured(
   repo,
   {
     novelId,
@@ -44,13 +51,29 @@ export async function assemble(
     sourceIds = [],
     candidateId,
     transcript = "",
+    replayBaseRevisionId,
+    sourceText,
+    sourceRecordId,
+    sourceTextBlobId,
+    sourceTurnSpans,
+    readingSegment,
   },
 ) {
-  const n = await repo.get(novelId),
+  if (exploration?.baseContextId && !exploration.baseContextRecords)
+    exploration = {
+      ...exploration,
+      baseContextRecords: (await repo.get(exploration.baseContextId))?.body
+        .records,
+    };
+  let n = await repo.get(novelId),
     current = await repo.sceneText(sceneId),
     lib = await repo.get("library", "meta");
   let { scene, revision, text } = current;
-  if (exploration && kind === "rp") {
+  if (replayBaseRevisionId) {
+    revision = await repo.get(replayBaseRevisionId);
+    text = await repo.text(revision.textBlobId);
+  }
+  if (exploration && ["rp", "analysis", "eventProposal"].includes(kind)) {
     revision = await repo.get(exploration.baseRevisionId);
     text = await repo.text(revision.textBlobId);
     scene = { ...scene, ...exploration.sceneSnapshot };
@@ -59,8 +82,42 @@ export async function assemble(
     scene.novelId === novelId,
     "Context scene belongs to a different novel.",
   );
-  const records = await repo.query("novelId", novelId),
-    byId = new Map(records.map((r) => [r.id, r]));
+  let records = await repo.query("novelId", novelId);
+  if (
+    exploration?.baseContextRecords &&
+    ["rp", "analysis", "eventProposal"].includes(kind)
+  ) {
+    const saved = exploration.baseContextRecords;
+    records = [
+      ...saved,
+      ...records.filter(
+        (r) =>
+          r.explorationId === exploration.id ||
+          r.parentSessionId === exploration.id ||
+          r.id === exploration.id,
+      ),
+    ];
+  }
+  const byId = new Map(records.map((r) => [r.id, r]));
+  if (sourceTextBlobId)
+    assert(
+      byId.get(sourceRecordId)?.textBlobId === sourceTextBlobId,
+      "The reading source changed before its request. Original material remains recoverable.",
+    );
+  if (exploration?.baseContextRecords) {
+    n = byId.get(novelId) || n;
+    scene = { ...(byId.get(sceneId) || scene), ...exploration.sceneSnapshot };
+  }
+  const contextScope = makeScope(
+      scene,
+      revision,
+      text,
+      { kind, exploration, transcriptHeadId: sourceTurnSpans?.at(-1)?.id },
+      records,
+      lib,
+    ),
+    safeMeta = metadataAt(scene, contextScope);
+
   const template = records
     .filter(
       (r) =>
@@ -93,35 +150,49 @@ export async function assemble(
         scene: scene.title,
         fictionalTime: scene.fictionalTime,
         timeLabel: scene.timeLabel,
-        summary: scene.summary,
-        notes: scene.notes,
+        summary: safeMeta.summary,
+        notes: safeMeta.notes,
       }),
     },
     {
-      label: "Current manuscript",
+      label:
+        kind === "analysis"
+          ? "Current manuscript excerpt, earlier originals retained"
+          : "Current manuscript",
       body:
-        kind === "rp" && exploration
-          ? text.slice(0, exploration.boundary)
-          : scope === "selection"
-            ? selected
-            : text,
+        kind === "analysis"
+          ? text.slice(-4000)
+          : kind === "rp" && exploration
+            ? text.slice(0, exploration.boundary)
+            : scope === "selection"
+              ? selected
+              : text,
       sourceId: revision.id,
       range:
-        kind === "rp" && exploration
-          ? [0, exploration.boundary]
-          : scope === "selection"
-            ? range
-            : [0, text.length],
+        kind === "analysis"
+          ? [Math.max(0, text.length - 4000), text.length]
+          : kind === "rp" && exploration
+            ? [0, exploration.boundary]
+            : scope === "selection"
+              ? range
+              : [0, text.length],
     },
   ];
   if (kind === "revise")
     mandatory.push({ label: "Exact selected passage", body: selected });
+  if (sourceText != null)
+    mandatory.push({
+      label: "Source segment for structured reading",
+      body: sourceText,
+      sourceId: sourceRecordId,
+      range: readingSegment,
+    });
   if (transcript)
     mandatory.push({
       label: "Exploration transcript, not novel canon",
       body: transcript,
     });
-  if (candidateId) {
+  if (candidateId && kind !== "analysis") {
     const candidate = byId.get(candidateId);
     assert(candidate?.novelId === novelId, "Wrong candidate context.");
     mandatory.push({
@@ -138,12 +209,32 @@ export async function assemble(
           r.supersededFrom != null &&
           scene.fictionalTime != null &&
           scene.fictionalTime < r.supersededFrom)) &&
-      eligible(r, scene.fictionalTime),
+      permitted(r, contextScope, byId),
   );
   const omitted = [],
     stale = records
       .filter((r) => r.type === "canon" && r.status === "stale")
       .map((r) => r.id);
+  if (contextScope.historical && !safeMeta.summary && scene.summary)
+    omitted.push({
+      id: scene.id,
+      reason: "Whole scene summary has no eligible source coverage",
+    });
+  if (contextScope.historical && !safeMeta.notes && scene.notes)
+    omitted.push({
+      id: scene.id,
+      reason: "Scene notes have no eligible historical scope",
+    });
+  for (const r of records.filter(
+    (r) =>
+      r.type === "canon" &&
+      r.status === "active" &&
+      !permitted(r, contextScope, byId),
+  ))
+    omitted.push({
+      id: r.id,
+      reason: "Story record is outside this temporal or source boundary",
+    });
   const terms = words(
     direction +
       " " +
@@ -151,29 +242,19 @@ export async function assemble(
       " " +
       scene.title +
       " " +
-      (scene.summary || ""),
+      (safeMeta.summary || ""),
   );
   const optional = [];
+  const alreadyInPrimary = (r) =>
+    !contextScope.historical &&
+    r.derived &&
+    (r.sourceRefs || []).some(
+      (ref) =>
+        byId.get(ref.id)?.ownerId === scene.id ||
+        byId.get(ref.id)?.sceneId === scene.id,
+    );
   for (const r of canon) {
-    if (
-      kind === "rp" &&
-      exploration &&
-      exploration.boundary < text.length &&
-      (r.sourceRefs || []).some((ref) => {
-        const source = byId.get(ref.id);
-        return (
-          (source?.ownerId === scene.id || source?.sceneId === scene.id) &&
-          !(ref.end != null && ref.end <= exploration.boundary)
-        );
-      })
-    ) {
-      omitted.push({
-        id: r.id,
-        reason:
-          "Learning source is later than, or not bounded before, this exploration position",
-      });
-      continue;
-    }
+    if (kind !== "analysis" && alreadyInPrimary(r)) continue;
     const body = JSON.stringify({
       id: r.id,
       kind: r.recordKind,
@@ -193,11 +274,13 @@ export async function assemble(
       r.recordKind,
     )
       ? "On their minds"
-      : r.recordKind === "plan"
-        ? "Plans standing"
-        : r.recordKind === "futureIdea"
-          ? "Future author ideas, not events"
-          : "What remains";
+      : ["condition", "relationship", "location"].includes(r.recordKind)
+        ? "The state of things"
+        : r.recordKind === "plan"
+          ? "Plans standing"
+          : r.recordKind === "futureIdea"
+            ? "Future author ideas, not events"
+            : "What remains";
     if (["authorFact", "worldRule"].includes(r.recordKind) && !r.derived)
       mandatory.push({ label: "Story Essentials", body, sourceId: r.id });
     else
@@ -211,7 +294,24 @@ export async function assemble(
           score(body, terms),
       });
   }
-  for (const e of records.filter((r) => r.type === "entity"))
+  for (const e of records.filter(
+    (r) => r.type === "entity" && !r.derivedHidden,
+  )) {
+    if (kind !== "analysis" && alreadyInPrimary(e)) continue;
+    if (!permitted(e, contextScope, byId)) {
+      omitted.push({
+        id: e.id,
+        reason: "Exploration only identity outside this branch",
+      });
+      continue;
+    }
+    const profile = profileAt(e, contextScope, byId);
+    if (e.profile && !profile)
+      omitted.push({
+        id: e.id,
+        reason:
+          "Original freeform profile retained for author review; fictional scope is not established",
+      });
     optional.push({
       label: "People and places",
       body: JSON.stringify({
@@ -219,34 +319,44 @@ export async function assemble(
         name: e.displayName,
         aliases: e.aliases,
         kind: e.kind,
-        profile: e.profile,
+        profile,
       }),
       sourceId: e.id,
       rank:
         (exploration?.playerCharacterId === e.id ? 2000 : 0) +
-        score(e.displayName + " " + e.profile, terms),
+        score(e.displayName + " " + profile, terms),
     });
+  }
+  for (const a of records.filter(
+    (r) =>
+      r.type === "artifact" &&
+      ["storySummary", "branchReading"].includes(r.kind) &&
+      r.freshness !== "stale",
+  ))
+    if (
+      permitted(a, contextScope, byId) &&
+      !(
+        !contextScope.historical &&
+        a.sourceRefs?.some((ref) => byId.get(ref.id)?.ownerId === scene.id)
+      )
+    )
+      optional.push({
+        label:
+          a.scope === "exploration"
+            ? "Branch state, exploration only"
+            : "What remains",
+        body: JSON.stringify(a.body),
+        sourceId: a.id,
+        rank: 500,
+      });
   for (const s of records.filter(
     (r) => r.type === "scene" && r.id !== sceneId,
   )) {
-    if (
-      s.fictionalTime != null &&
-      (scene.fictionalTime == null || s.fictionalTime > scene.fictionalTime)
-    ) {
+    if (!permitted(s, contextScope, byId)) {
       omitted.push({
         id: s.currentRevisionId,
-        reason: "Later or ineligible fictional time",
-      });
-      continue;
-    }
-    // Unknown chronology is not proof of earlier occurrence. Never leak it into RP.
-    if (
-      kind === "rp" &&
-      (s.fictionalTime == null || scene.fictionalTime == null)
-    ) {
-      omitted.push({
-        id: s.currentRevisionId,
-        reason: "Unknown chronology in character exploration",
+        reason:
+          "Original passage has no eligible temporal or continuation evidence",
       });
       continue;
     }
@@ -355,6 +465,51 @@ export async function assemble(
               : { id: s.sourceId, body: JSON.stringify(r) };
         }),
       libraryGeneration: lib.generation,
+      contextEpoch: repo.contextEpoch ?? null,
+      contextScope,
+      selectionOptions: {
+        novelId,
+        sceneId,
+        kind,
+        direction,
+        connection: Object.fromEntries(
+          Object.entries(connection).filter(([key]) =>
+            [
+              "id",
+              "adapter",
+              "endpoint",
+              "model",
+              "contextLimit",
+              "outputLimit",
+              "reasoningReserve",
+              "capabilityConfirmed",
+              "capabilities",
+              "parameters",
+              "inputPrice",
+              "outputPrice",
+              "allowLocal",
+            ].includes(key),
+          ),
+        ),
+        range,
+        scope,
+        sourceIds,
+        candidateId,
+        transcript,
+        readingSegment,
+        sourceText,
+        sourceRecordId,
+        sourceTextBlobId,
+        sourceTurnSpans,
+        exploration: exploration
+          ? {
+              id: exploration.id,
+              activeBranchId: exploration.activeBranchId,
+              playerCharacterId: exploration.playerCharacterId,
+              narrativeViewpoint: exploration.narrativeViewpoint,
+            }
+          : null,
+      },
       kind,
       fictionalTime: scene.fictionalTime,
       playerCharacterId: exploration?.playerCharacterId || null,
@@ -385,25 +540,141 @@ export async function assemble(
   };
 }
 
-export async function snapshotCurrent(repo, snapshot) {
-  const novel = await repo.get(snapshot.novelId);
-  if (
-    !novel ||
-    JSON.stringify({
-      premise: novel.premise,
-      styleProfile: novel.styleProfile,
-    }) !== snapshot.authorContract
-  )
-    return false;
-  for (const version of snapshot.sourceVersions || []) {
-    const r = await repo.get(version.id);
-    if (!r) return false;
-    if (version.ownerId) {
-      if ((await repo.get(version.ownerId))?.currentRevisionId !== version.id)
-        return false;
-    } else if (version.textBlobId) {
-      if (r.textBlobId !== version.textBlobId) return false;
-    } else if (JSON.stringify(r) !== version.body) return false;
+export async function assemble(repo, options) {
+  const captured = repo.captureNovel
+    ? await repo.captureNovel(options.novelId)
+    : repo;
+  return assembleCaptured(captured, options);
+}
+export async function contextCheck(
+  repo,
+  snapshot,
+  { allowAcceptedCandidate = false } = {},
+) {
+  const lib = await repo.get("library", "meta");
+  if (lib.generation !== snapshot.libraryGeneration)
+    return { current: false, reason: "Library generation changed" };
+  if (!snapshot.selectionOptions) {
+    const novel = await repo.get(snapshot.novelId);
+    let current =
+      JSON.stringify({
+        premise: novel?.premise,
+        styleProfile: novel?.styleProfile,
+      }) === snapshot.authorContract;
+    for (const v of snapshot.sourceVersions || []) {
+      const r = await repo.get(v.id);
+      current =
+        current &&
+        !!r &&
+        (v.ownerId
+          ? (await repo.get(v.ownerId))?.currentRevisionId === v.id
+          : v.textBlobId
+            ? r.textBlobId === v.textBlobId
+            : JSON.stringify(r) === v.body);
+    }
+    return { current, precondition: null };
   }
-  return true;
+  const opts = { ...snapshot.selectionOptions };
+  const latestConnection = await repo.get(
+    "connection." + opts.connection.id,
+    "meta",
+  );
+  if (
+    latestConnection?.profile &&
+    JSON.stringify(providerIdentity(latestConnection.profile)) !==
+      JSON.stringify(providerIdentity(opts.connection))
+  )
+    return {
+      current: false,
+      reason: "Provider serialization configuration changed",
+    };
+  let mapping;
+  if (opts.exploration) {
+    const ex = await repo.get(opts.exploration.id);
+    if (
+      !ex ||
+      ex.activeBranchId !== opts.exploration.activeBranchId ||
+      ex.playerCharacterId !== opts.exploration.playerCharacterId ||
+      ex.narrativeViewpoint !== opts.exploration.narrativeViewpoint
+    )
+      return {
+        current: false,
+        reason: "Exploration control or branch changed",
+      };
+    opts.exploration = ex;
+  }
+  if (allowAcceptedCandidate && opts.candidateId) {
+    const c = await repo.get(opts.candidateId),
+      scene = await repo.get(snapshot.sceneId);
+    if (c?.status === "kept") {
+      const records = await repo.query("novelId", snapshot.novelId),
+        mapped =
+          c.acceptedRange &&
+          mappedRange(
+            { start: c.acceptedRange[0], end: c.acceptedRange[1] },
+            c.acceptedRevisionId,
+            scene.currentRevisionId,
+            new Map(records.map((r) => [r.id, r])),
+          );
+      if (
+        mapped &&
+        (await repo.sceneText(scene.id)).text.slice(
+          mapped.start,
+          mapped.end,
+        ) === (await repo.text(c.textBlobId))
+      ) {
+        if (snapshot.revisionId === c.baseRevisionId)
+          opts.replayBaseRevisionId = c.baseRevisionId;
+        mapping = {
+          candidateId: c.id,
+          textBlobId: c.textBlobId,
+          sourceRevisionId: c.acceptedRevisionId,
+          targetRevisionId: scene.currentRevisionId,
+          range: [mapped.start, mapped.end],
+        };
+      }
+    }
+  }
+  const rebuilt = await assemble(repo, opts);
+  const current =
+    rebuilt.snapshot.dependencyFingerprint === snapshot.dependencyFingerprint &&
+    JSON.stringify(rebuilt.snapshot.contextScope.turnIds) ===
+      JSON.stringify(snapshot.contextScope.turnIds) &&
+    rebuilt.snapshot.contextScope.liveTranscriptHead ===
+      snapshot.contextScope.liveTranscriptHead;
+  return {
+    current,
+    reason: current
+      ? null
+      : "Selected story material, metadata or scope changed",
+    precondition: {
+      epoch: rebuilt.snapshot.contextEpoch,
+      generation: lib.generation,
+      mapping,
+      provider: latestConnection?.profile
+        ? {
+            id: latestConnection.id,
+            signature: JSON.stringify(
+              providerIdentity(latestConnection.profile),
+            ),
+          }
+        : null,
+    },
+  };
+}
+export async function snapshotCurrent(repo, snapshot, options) {
+  return (await contextCheck(repo, snapshot, options)).current;
+}
+
+export function providerIdentity(c) {
+  return {
+    adapter: c.adapter,
+    endpoint: c.endpoint,
+    model: c.model,
+    contextLimit: c.contextLimit,
+    outputLimit: c.outputLimit,
+    reasoningReserve: c.reasoningReserve || 0,
+    capabilities: c.capabilities || {},
+    parameters: c.parameters || {},
+  };
 }

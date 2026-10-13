@@ -336,6 +336,22 @@ async function backupPanel(app) {
         {
           onClick: async () => {
             try {
+              await device.recoverRestore();
+              await app.flush();
+              await device.flush();
+              await backupPanel(app);
+            } catch (error) {
+              notice(error.message, true);
+            }
+          },
+        },
+        "Check interrupted device restore",
+      ),
+      el(
+        "button",
+        {
+          onClick: async () => {
+            try {
               const staged = await device.restoreDevice();
               confirmation(
                 "Replace device library?",

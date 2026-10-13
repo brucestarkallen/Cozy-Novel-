@@ -1,3 +1,5 @@
+import { mappedRange } from "../context/scope.js";
+import { contextCheck } from "../context/assemble.js";
 import { indexText } from "../context/index.js";
 import { id, now, textBlob } from "../core/ids.js";
 import { assert } from "../core/schema.js";
@@ -13,6 +15,28 @@ export async function revise(
     n = await repo.get(scene.novelId),
     blob = await textBlob(text),
     op = id("op");
+  const baseRecord = await repo.get(baseRevisionId),
+    beforeText = await repo.text(baseRecord.textBlobId);
+  let start = 0;
+  while (
+    start < beforeText.length &&
+    start < text.length &&
+    beforeText[start] === text[start]
+  )
+    start++;
+  let suffix = 0;
+  while (
+    suffix < beforeText.length - start &&
+    suffix < text.length - start &&
+    beforeText[beforeText.length - 1 - suffix] ===
+      text[text.length - 1 - suffix]
+  )
+    suffix++;
+  const edit = {
+    start,
+    end: beforeText.length - suffix,
+    replacementLength: text.length - start - suffix,
+  };
   const revision = {
     id: id("revision"),
     type: "revision",
@@ -23,6 +47,7 @@ export async function revise(
     sourceKind,
     operationId: op,
     createdAt: now(),
+    edit,
     ...extra.provenance,
   };
   const owned = await repo.query("novelId", n.id),
@@ -49,17 +74,41 @@ export async function revise(
             (sourceIds.has(x.id) || sourceIds.has(x.revisionId))),
       ),
   );
-  const stale = dependents.map((r) => ({
+  const effective = dependents.filter((r) => {
+    const refs = r.liveSourceRefs || r.sourceRefs || [];
+    return refs.some((ref) => {
+      const source = owned.find((x) => x.id === (ref.revisionId || ref.id));
+      if (source?.ownerId !== sceneId && source?.sceneId !== sceneId)
+        return false;
+      if (ref.start == null || ref.end == null) return true;
+      const range =
+        source.id === baseRevisionId
+          ? ref
+          : mappedRange(
+              ref,
+              source.id,
+              baseRevisionId,
+              new Map(owned.map((r) => [r.id, r])),
+            );
+      return !range || (range.end > edit.start && range.start < edit.end);
+    });
+  });
+  const stale = effective.map((r) => ({
     ...r,
     ...(r.type === "canon"
       ? { status: r.derived ? "stale" : r.status }
       : { freshness: "stale" }),
   }));
-  await repo.commit({
+  await (
+    extra.coordinationHeld
+      ? repo.commitLocked.bind(repo)
+      : repo.commit.bind(repo)
+  )({
     novelId: n.id,
     kind: sourceKind,
     expectedScene: { id: sceneId, revisionId: baseRevisionId },
     operationId: op,
+    contextPrecondition: extra.contextPrecondition,
     records: [
       revision,
       {
@@ -68,7 +117,15 @@ export async function revise(
         searchIndex: indexText(text),
       },
       ...stale.filter((r) => !(extra.records || []).some((x) => x.id === r.id)),
-      ...(extra.records || []),
+      ...(extra.records || []).map((r) =>
+        r.type === "candidate" && r.status === "kept"
+          ? {
+              ...r,
+              acceptedRevisionId: revision.id,
+              acceptedRange: extra.acceptedRange,
+            }
+          : r,
+      ),
     ],
     blobs: [blob],
   });
@@ -123,12 +180,25 @@ export async function createCandidate(
   await repo.commit({
     novelId: scene.novelId,
     kind: "candidate.create",
+    generation: c.libraryGeneration,
     records: [c],
     blobs: [blob],
   });
   return c;
 }
-export async function saveCandidate(repo, c, text, status, extra = {}) {
+export async function saveCandidate(
+  repo,
+  c,
+  text,
+  status,
+  extra = {},
+  held = false,
+) {
+  if (!held)
+    return repo.withMutation(() =>
+      saveCandidate(repo, c, text, status, extra, true),
+    );
+  const { contextPrecondition, ...recordExtra } = extra;
   const current = await repo.get(c.id);
   if (!current || ["kept", "discarded"].includes(current.status))
     return current;
@@ -136,20 +206,23 @@ export async function saveCandidate(repo, c, text, status, extra = {}) {
     scene = await repo.get(c.sceneId);
   const record = {
     ...current,
-    ...extra,
+    ...recordExtra,
     textBlobId: blob.id,
     status: scene.currentRevisionId === c.baseRevisionId ? status : "stale",
   };
-  await repo.commit({
+  await repo.commitLocked({
     novelId: c.novelId,
     kind: "candidate.progress",
     records: [record],
     blobs: [blob],
     generation: c.libraryGeneration,
+    contextPrecondition,
   });
-  return record;
+  return repo.get(record.id);
 }
-export async function acceptCandidate(repo, candidateId) {
+export async function acceptCandidate(repo, candidateId, held = false) {
+  if (!held)
+    return repo.withMutation(() => acceptCandidate(repo, candidateId, true));
   const c = await repo.get(candidateId);
   assert(
     c && ["ready", "partial"].includes(c.status),
@@ -160,6 +233,13 @@ export async function acceptCandidate(repo, candidateId) {
     revision.id === c.baseRevisionId &&
       text.slice(...c.insertionRange) === c.originalSelection,
     "The manuscript changed. This candidate is preserved for comparison.",
+  );
+  const check = c.contextSnapshot
+    ? await contextCheck(repo, c.contextSnapshot)
+    : { current: true };
+  assert(
+    check.current,
+    "The story context changed. Compare this preserved candidate and deliberately choose a new placement.",
   );
   const passage = await repo.text(c.textBlobId);
   assert(passage.length > 0, "There is no passage to keep.");
@@ -175,10 +255,32 @@ export async function acceptCandidate(repo, candidateId) {
       (x) =>
         x.type === "canon" &&
         x.explorationId === ex.id &&
-        x.branchId === c.branchId,
+        x.branchId === c.branchId &&
+        (!c.coveredTurnIds ||
+          x.coveredTurnIds?.every((id) => c.coveredTurnIds.includes(id))),
     );
-    for (const event of events) records.push({ ...event, proseInserted: true });
-    if (!events.length)
+    for (const event of events)
+      records.push({ ...event, proseInserted: true, adaptedCandidateId: c.id });
+    const promoted = (await repo.query("novelId", c.novelId))
+      .filter(
+        (r) =>
+          r.type === "entity" &&
+          r.explorationId === ex.id &&
+          r.scope === "exploration" &&
+          (!r.coveredTurnIds ||
+            r.coveredTurnIds.every((id) => c.coveredTurnIds?.includes(id))),
+      )
+      .map((r) => ({ ...r, scope: "novel", promotedBy: c.id }));
+    records.push(...promoted);
+    const alreadyKept = new Set(
+      events
+        .filter((r) => r.recordKind === "acceptedEvent" && !r.derived)
+        .flatMap((r) => r.coveredTurnIds || []),
+    );
+    const uncoveredTurns = (c.coveredTurnIds || []).filter(
+      (id) => !alreadyKept.has(id),
+    );
+    if (!events.length || uncoveredTurns.length)
       records.push({
         id: id("canon"),
         type: "canon",
@@ -189,6 +291,10 @@ export async function acceptCandidate(repo, candidateId) {
         certainty: "established",
         explorationId: ex.id,
         branchId: c.branchId,
+        coveredTurnIds: uncoveredTurns,
+        transcriptHeadId: c.transcriptHeadId || null,
+        entryBoundary: ex.boundary,
+        baseSceneId: ex.baseSceneId,
         proseInserted: true,
         sourceRefs: [{ id: c.id }],
         validFrom: scene.fictionalTime,
@@ -203,6 +309,12 @@ export async function acceptCandidate(repo, candidateId) {
     c.kind === "revise" ? "selection.replace" : "candidate.accept",
     {
       records,
+      coordinationHeld: true,
+      contextPrecondition: check.precondition,
+      acceptedRange: [
+        prefix.length + separator.length,
+        prefix.length + separator.length + passage.length,
+      ],
       provenance: {
         candidateId: c.id,
         explorationId: c.explorationId || null,
@@ -226,6 +338,8 @@ export async function placeCandidate(repo, candidateId, range) {
     originalSelection: text.slice(...range),
     status: "ready",
     repositionedFrom: c.id,
+    sourceContextSnapshot: c.contextSnapshot,
+    contextSnapshot: null,
   };
   await repo.update(placed, "candidate.reposition");
   return placed;
@@ -249,7 +363,12 @@ export async function addChapter(repo, novelId, title) {
   });
   return c;
 }
-export async function addScene(repo, chapterId, title) {
+export async function addScene(
+  repo,
+  chapterId,
+  title,
+  { continuationOf = null } = {},
+) {
   const c = await repo.get(chapterId),
     s = id("scene"),
     r = id("revision"),
@@ -267,6 +386,7 @@ export async function addScene(repo, chapterId, title) {
     status: "draft",
     notes: "",
     summary: "",
+    continuationOf,
   };
   const n = await repo.get(c.novelId);
   await repo.commit({

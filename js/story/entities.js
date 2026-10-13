@@ -16,6 +16,9 @@ export async function saveEntity(repo, entity, changes = {}) {
         aliases: previous.aliases,
         kind: previous.kind,
         profile: previous.profile,
+        invariantProfile: previous.invariantProfile,
+        profileClaims: previous.profileClaims,
+        profileScope: previous.profileScope,
       },
       createdAt: now(),
       sourceRefs: [],
@@ -37,6 +40,9 @@ export async function saveEntity(repo, entity, changes = {}) {
         aliases: next.aliases,
         kind: next.kind,
         profile: next.profile,
+        invariantProfile: next.invariantProfile,
+        profileClaims: next.profileClaims,
+        profileScope: next.profileScope,
       },
       createdAt: now(),
       sourceRefs: [],
@@ -45,6 +51,9 @@ export async function saveEntity(repo, entity, changes = {}) {
   await repo.commit({
     novelId: entity.novelId,
     kind: previous ? "entity.profile" : "entity.create",
+    expectedRecord: previous
+      ? { id: entity.id, version: entity.recordVersion || 0 }
+      : undefined,
     records,
   });
   return records.at(-2);

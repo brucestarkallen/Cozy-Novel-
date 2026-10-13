@@ -39,3 +39,19 @@ The local service checks Host, Origin, JSON content type, body limits and a per 
 Connection secrets live in memory by default. Optional persistence uses a separate restricted local file. Filesystem permissions are not encryption. Secrets never enter the manuscript database, model context or ordinary backups.
 
 Application assets alone are cached. API requests are never cached. Cache cleanup uses the exact owned asset prefix. Updates wait for explicit refresh. Browser and device save states are reported separately. Same hostname and different repository paths are not isolated origins.
+
+## 1.1 preservation and story reading
+
+The original implementation remains in place. Web Locks coordinate the device drain across tabs and serialize every committed mutation. Fresh pending work is read after each exact acknowledgement. Browser and device save states are independent. Content manifests detect unequal copies after legacy outbox loss; recovery never invents missing operations or picks a timestamp winner.
+
+Restore ownership combines a consistent portable snapshot, its SHA256 digest, library generation, local commit sequence, exact included operations, a browser journal and a durable SQLite acknowledgement. A changed preview is rejected. The bounded commit barrier contains no open IndexedDB network transaction. Unknown restore outcomes remain fenced until the exact server journal can reconcile them.
+
+Physical IndexedDB version 2 adds compatibility metadata while retaining stores and records. Portable format and device schema remain 1. Writer contract 2 prevents mixed old writers. Missing legacy temporal metadata means unsupported scope, not timeless truth.
+
+One scene or exploration scope governs profiles, summaries, notes, canon, private information, plans, original excerpts and branch state. Explicit invariant biography is separate from changing profiles. Source ranges can map through nonoverlapping immutable revision edits. Unknown scene order is excluded from historical evidence unless an explicit time or continuation relationship supports it.
+
+Request assembly captures record metadata consistently and reads immutable bodies on demand. Deterministic selection is repeated for freshness, including newly applicable facts and provider serialization. A semantic epoch closes the transaction gap without treating operational bookkeeping as story edits. An exact accepted candidate can transfer its reading through a verified, unchanged source range; stale results keep their original identity and require comparison.
+
+Story Brain defaults to automatic for new novels, preserving older disabled preferences. One bounded auxiliary reader produces approximately three possibilities plus typed identities, facts, knowledge, beliefs, conditions, relationships, plans, events and source summaries. Structural evidence locates quotes; it cannot prove the interpretation. Inference, unresolved identity and conflict remain reviewable. Every derived batch is idempotent and reversible, preserves primary sources, and cannot supersede manual declarations. Undo suppresses the unchanged reading. Coverage and failed tasks remain visible. No full audit runs on opening or upgrade.
+
+Quick RP stores its baseline as an owned immutable artifact rather than resending the catalog with every session update. Temporary state belongs to transcript ancestry and source ranges. Retry excludes abandoned consequences and identities. Switching player changes control only. Long transcripts use bounded original turns and sourced summaries, retain omitted originals, and track partial reading coverage in at most 12000 character source segments. Event proposals and adaptations retain exact branch, turn IDs and transcript head. Continued exploration cannot enlarge accepted provenance.

@@ -1,3 +1,5 @@
+import { readingSource } from "../rp/session.js";
+import { undoReading, applyReading } from "../story/reading.js";
 import { saveEntity } from "../story/entities.js";
 import { $, el, button, field, formPanel, panel, notice } from "./dom.js";
 import { id, now } from "../core/ids.js";
@@ -5,8 +7,15 @@ import { CANON_KINDS } from "../config.js";
 import { acceptMemory } from "../ai/analysis.js";
 export async function renderBible(app) {
   const records = await app.repo.query("novelId", app.novelId);
-  const entities = records.filter((r) => r.type === "entity"),
-    canon = records.filter((r) => r.type === "canon");
+  const entities = records.filter(
+      (r) =>
+        r.type === "entity" &&
+        !r.derivedHidden &&
+        (!r.explorationId || r.scope === "novel"),
+    ),
+    canon = records.filter(
+      (r) => r.type === "canon" && r.scope !== "exploration",
+    );
   $("#storyRecords").replaceChildren(
     ...entities.map((e) =>
       el(
@@ -41,8 +50,140 @@ export async function renderBible(app) {
       ),
     ),
   );
+  await readingDetails(app);
+}
+export async function readingDetails(app) {
+  const records = await app.repo.query("novelId", app.novelId);
+  for (const a of records.filter(
+    (r) =>
+      ["analysis", "readingTask"].includes(r.kind) &&
+      (r.kind !== "readingTask" || r.state !== "completed") &&
+      r.coverage &&
+      !r.coverage.complete &&
+      r.freshness !== "stale",
+  )) {
+    $("#storyRecords").append(
+      el(
+        "details",
+        { class: "storycard" },
+        el("summary", {}, "Story reading has unfinished coverage"),
+        el(
+          "p",
+          {},
+          `Read through ${a.coverage.end} of ${a.coverage.sourceLength} characters. Originals remain available. ${a.error || ""}`,
+        ),
+        button("Read remaining source", "readRemaining", { id: a.id }),
+      ),
+    );
+  }
+  for (const batch of records.filter((r) => r.kind === "readingBatch"))
+    $("#storyRecords").append(
+      el(
+        "details",
+        { class: "storycard" },
+        el("summary", {}, "Story Brain batch, " + batch.state),
+        el(
+          "p",
+          {},
+          batch.body.appliedIds.length +
+            " source linked updates. " +
+            batch.body.reviews.length +
+            " items need review. Source coverage " +
+            (batch.body.coverage?.end || 0) +
+            " of " +
+            (batch.body.coverage?.sourceLength || 0) +
+            " characters.",
+        ),
+        el(
+          "pre",
+          { class: "receipt" },
+          JSON.stringify(batch.body.reviews, null, 2),
+        ),
+        batch.body.reviews.length
+          ? button("Review this source reading", "reviewReading", {
+              id: batch.body.artifactId,
+            })
+          : null,
+        batch.state === "applied"
+          ? button("Undo this derived batch", "undoReading", { id: batch.id })
+          : null,
+      ),
+    );
 }
 export async function storyAction(app, action, target) {
+  if (action === "reviewReading") {
+    const a = await app.repo.get(target.dataset.id),
+      source = await app.repo.get(
+        a.explorationId || a.candidateId || a.baseRevisionId,
+      );
+    formPanel(
+      "Review a derived source reading",
+      [
+        field(
+          "Structured identities and updates, JSON",
+          "reading",
+          JSON.stringify(
+            { entities: a.body.entities || [], updates: a.body.updates || [] },
+            null,
+            2,
+          ),
+          "textarea",
+        ),
+      ],
+      async (v) => {
+        const parsed = JSON.parse(v.reading);
+        if (!Array.isArray(parsed.entities) || !Array.isArray(parsed.updates))
+          throw new Error("Both identities and updates must be arrays.");
+        await app.repo.update(
+          { ...a, body: { ...a.body, ...parsed } },
+          "reading.review",
+        );
+        await applyReading(app.repo, a.id, { reviewed: true });
+        await renderBible(app);
+      },
+      {
+        submit: "Apply reviewed reading",
+        help: "Check meanings and evidence. Original prose and manual declarations remain primary. Unresolved source or identity references still need correction.",
+      },
+    );
+    $("#modalBody").prepend(
+      el(
+        "pre",
+        { class: "receipt" },
+        await app.repo.text(a.explorationId ? a.textBlobId : source.textBlobId),
+      ),
+    );
+    return true;
+  }
+  if (action === "readRemaining") {
+    const a = await app.repo.get(target.dataset.id);
+    const extra = { readingStart: a.coverage.end };
+    if (
+      !a.candidateId &&
+      !a.explorationId &&
+      (await app.repo.get(a.sceneId)).currentRevisionId !== a.baseRevisionId
+    )
+      throw new Error(
+        "This pending source changed. Its original revision remains in History. Read the current scene or compare the earlier version first.",
+      );
+    if (a.explorationId) {
+      const ex = await app.repo.get(a.explorationId);
+      if (ex.activeBranchId !== a.branchId)
+        throw new Error(
+          "Select this reading's original branch in Quick RP before reading its remaining source.",
+        );
+      Object.assign(extra, {
+        exploration: ex,
+        sourceText: await readingSource(app.repo, a),
+        coveredTurnIds: a.coveredTurnIds,
+        sourceTurnSpans: a.sourceTurnSpans,
+      });
+    }
+    await app.analyze(a.candidateId, extra);
+    await renderBible(app);
+    return true;
+  }
+
   if (action === "newEntity" || action === "editEntity") {
     const e =
       action === "editEntity"
@@ -73,6 +214,12 @@ export async function storyAction(app, action, target) {
           "What is established about them",
           "profile",
           e.profile,
+          "textarea",
+        ),
+        field(
+          "Stable biography, explicitly true across fictional times",
+          "invariantProfile",
+          e.invariantProfile || "",
           "textarea",
         ),
       ],
@@ -112,7 +259,12 @@ export async function storyAction(app, action, target) {
   }
   if (action === "newCanon" || action === "editCanon") {
     const records = await app.repo.query("novelId", app.novelId),
-      entities = records.filter((r) => r.type === "entity"),
+      entities = records.filter(
+        (r) =>
+          r.type === "entity" &&
+          !r.derivedHidden &&
+          (!r.explorationId || r.scope === "novel"),
+      ),
       people = [
         { value: "", label: "No specific person" },
         ...entities.map((e) => ({ value: e.id, label: e.displayName })),
@@ -169,6 +321,19 @@ export async function storyAction(app, action, target) {
           "textarea",
         ),
         field("Certainty", "certainty", r.certainty),
+        field(
+          "Historical scope",
+          "temporalScope",
+          r.temporalScope || "source",
+          "select",
+          [
+            { value: "source", label: "At its stated time or source boundary" },
+            {
+              value: "invariant",
+              label: "Author invariant across fictional times",
+            },
+          ],
+        ),
         field(
           "Effective fictional time, numeric and optional",
           "validFrom",
@@ -263,6 +428,24 @@ export async function storyAction(app, action, target) {
     );
     return true;
   }
+  if (action === "undoReading") {
+    await undoReading(app.repo, target.dataset.id);
+    await renderBible(app);
+    notice("Derived batch undone. The same reading will not recreate it.");
+    return true;
+  }
+  if (action === "applyReading") {
+    await applyReading(app.repo, target.dataset.id, { reviewed: true });
+    await renderBible(app);
+    return true;
+  }
+  if (action === "continueReading") {
+    const a = await app.repo.get(target.dataset.id);
+    await app.analyze(a.candidateId || null, {
+      readingStart: Number(target.dataset.start),
+    });
+    return true;
+  }
   if (action === "acceptMemory") {
     await acceptMemory(
       app.repo,
@@ -282,6 +465,22 @@ export async function storyAction(app, action, target) {
 export async function showMemoryProposals(app, artifact) {
   $("#memoryProposals").replaceChildren();
   if (!artifact) return;
+  if (artifact.coverage && !artifact.coverage.complete)
+    $("#memoryProposals").append(
+      el(
+        "p",
+        { class: "help" },
+        "Source reading is pending after character " +
+          artifact.coverage.end +
+          " of " +
+          artifact.coverage.sourceLength +
+          ". Original text remains available.",
+      ),
+      button("Continue source reading", "continueReading", {
+        start: artifact.coverage.end,
+        id: artifact.id,
+      }),
+    );
   for (const [i, m] of (artifact.body.memories || []).entries())
     $("#memoryProposals").append(
       el(

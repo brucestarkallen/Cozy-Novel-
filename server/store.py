@@ -6,6 +6,14 @@ import sqlite3
 import threading
 import time
 import uuid
+
+def stable(value):
+    if isinstance(value,dict):return {k:stable(v) for k,v in sorted(value.items())}
+    if isinstance(value,list):return [stable(v) for v in value]
+    if isinstance(value,float) and value.is_integer():return int(value)
+    return value
+
+def content_digest(value):return "text_"+hashlib.sha256(json.dumps(stable(value),ensure_ascii=False,separators=(",",":")).encode()).hexdigest()
 from pathlib import Path
 
 TYPES = {'novel', 'chapter', 'scene', 'revision', 'candidate', 'entity', 'canon', 'exploration', 'turn', 'artifact', 'job', 'receipt', 'discussion', 'prompt', 'bookmark'}
@@ -61,6 +69,9 @@ def validate_graph(records, get_record, get_blob, library_id):
     for r in records:
         if not isinstance(r.get('id'), str) or len(r['id']) > 160 or r.get('type') not in TYPES:
             raise ValueError('Invalid record shape.')
+        saved=r.get('baseContextRecords') or (r.get('body',{}).get('records') if r.get('kind')=='explorationBase' else None)
+        if saved is not None and (not isinstance(saved,list) or any(x.get('novelId')!=r['novelId'] or x.get('type') not in TYPES for x in saved)):raise ValueError('Invalid exploration baseline ownership.')
+        if r.get('coveredTurnIds') is not None and (not isinstance(r['coveredTurnIds'],list) or any(not isinstance(x,str) for x in r['coveredTurnIds'])):raise ValueError('Invalid transcript coverage.')
         n = ref(r.get('novelId'), 'novel')
         if n.get('libraryId') != library_id: raise ValueError('Wrong library ownership.')
         if r.get('textBlobId') and not get_blob(r['textBlobId']): raise ValueError('Missing text body.')
@@ -72,11 +83,15 @@ def validate_graph(records, get_record, get_blob, library_id):
                 if ref(k, 'scene', n['id'])['chapterId'] != r['id']: raise ValueError('Wrong chapter ownership.')
         if r['type'] == 'scene':
             ref(r['chapterId'], 'chapter', n['id'])
+            seen={r['id']};prior=r.get('continuationOf')
+            while prior:
+                if prior in seen:raise ValueError('Cyclic scene continuation.')
+                seen.add(prior);prior=ref(prior,'scene',n['id']).get('continuationOf')
             if ref(r['currentRevisionId'], 'revision', n['id'])['ownerId'] != r['id']: raise ValueError('Wrong revision ownership.')
         if r['type'] == 'revision':
             ref(r['ownerId'], 'scene', n['id'])
             if r.get('parentRevisionId') and ref(r['parentRevisionId'], 'revision', n['id'])['ownerId'] != r['ownerId']: raise ValueError('Wrong revision ancestry.')
-        for field, kind in [('baseRevisionId','revision'),('sceneId','scene'),('baseSceneId','scene'),('parentSessionId','exploration'),('explorationId','exploration'),('holderId','entity'),('subjectId','entity'),('playerCharacterId','entity'),('actorId','entity')]:
+        for field, kind in [('baseContextId','artifact'),('baseRevisionId','revision'),('sceneId','scene'),('baseSceneId','scene'),('parentSessionId','exploration'),('explorationId','exploration'),('holderId','entity'),('subjectId','entity'),('playerCharacterId','entity'),('actorId','entity')]:
             if r.get(field): ref(r[field],kind,n['id'])
         for s in r.get('sourceRefs',[]):
             ref(s['id'],novel=n['id'])
@@ -97,6 +112,8 @@ class Store:
         self.db=sqlite3.connect(self.path,check_same_thread=False,isolation_level=None)
         self.db.execute('PRAGMA journal_mode=WAL'); self.db.execute('PRAGMA synchronous=FULL')
         self.db.executescript('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, type TEXT NOT NULL, novel TEXT NOT NULL, body TEXT NOT NULL); CREATE INDEX IF NOT EXISTS records_novel ON records(novel); CREATE INDEX IF NOT EXISTS records_type ON records(type); CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, text TEXT NOT NULL); CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, ack TEXT NOT NULL);')
+        self.db.execute('CREATE TABLE IF NOT EXISTS restore_operations (id TEXT PRIMARY KEY, digest TEXT NOT NULL, snapshot TEXT NOT NULL, expected_revision INTEGER NOT NULL, phase TEXT NOT NULL, created_at REAL NOT NULL, ack TEXT)')
+        if 'digest' not in {row[1] for row in self.db.execute('PRAGMA table_info(operations)')}:self.db.execute('ALTER TABLE operations ADD COLUMN digest TEXT')
         os.chmod(self.path,0o600)
         version=self.meta('schemaVersion')
         if version is not None and version!=1: self.db.close(); raise ValueError('Unsupported device schema. Use compatible application code.')
@@ -105,12 +122,13 @@ class Store:
         row=self.db.execute('SELECT value FROM meta WHERE key=?',(key,)).fetchone();return json.loads(row[0]) if row else None
     def set_meta(self,key,value): self.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',(key,json.dumps(value)))
     def identity(self):
-        with self.lock: return {'service':'cozyNovel','protocol':1,'schemaVersion':1,'libraryId':self.meta('libraryId'),'generation':self.meta('generation'),'serverRevision':self.meta('serverRevision') or 0}
+        with self.lock: return {'service':'cozyNovel','protocol':1,'syncVersion':2,'minimumWriter':2,'schemaVersion':1,'libraryId':self.meta('libraryId'),'generation':self.meta('generation'),'serverRevision':self.meta('serverRevision') or 0}
     def record(self,key):
         row=self.db.execute('SELECT body FROM records WHERE id=?',(key,)).fetchone();return json.loads(row[0]) if row else None
     def blob(self,key):
         row=self.db.execute('SELECT text FROM blobs WHERE id=?',(key,)).fetchone();return {'id':key,'text':row[0]} if row else None
     def apply(self,novel_id,op):
+        if op.get("clientProtocol")!=2:raise Conflict("Refresh Cozy Novel before saving to this service. Your local work remains intact.")
         if op.get('novelId')!=novel_id or not all(isinstance(op.get(k),str) and op[k] for k in ['id','libraryId','libraryGeneration']):raise ValueError('Invalid operation ownership.')
         if not isinstance(op.get('records'),list) or not isinstance(op.get('blobs'),list) or op.get('tombstones'):raise ValueError('Invalid operation. Archive records rather than deleting them.')
         with self.lock:
@@ -118,8 +136,10 @@ class Store:
             try:
                 identity=self.identity()
                 if identity['libraryId'] and (identity['libraryId']!=op['libraryId'] or identity['generation']!=op['libraryGeneration']):raise Conflict('Library generation conflict. Both libraries are retained.')
-                prior=self.db.execute('SELECT ack FROM operations WHERE id=?',(op['id'],)).fetchone()
-                if prior: self.db.execute('COMMIT'); return json.loads(prior[0])
+                prior=self.db.execute('SELECT ack,digest FROM operations WHERE id=?',(op['id'],)).fetchone()
+                if prior:
+                    if prior[1] and prior[1]!=content_digest(op):raise Conflict('Operation identity was reused with different contents.')
+                    ack=json.loads(prior[0]);ack.update({'libraryId':op['libraryId'],'expectedServerRevision':ack['serverRevision']-1});self.db.execute('COMMIT');return ack
                 if op.get('expectedServerRevision')!=identity['serverRevision']:raise Conflict('Device revision conflict. Your local version is retained.')
                 rm={r['id']:r for r in op['records']};bm={b['id']:b for b in op['blobs']}
                 if len(rm)!=len(op['records']) or len(bm)!=len(op['blobs']):raise ValueError('Duplicate operation records.')
@@ -134,8 +154,8 @@ class Store:
                 for r in op['records']:self.db.execute('INSERT OR REPLACE INTO records VALUES (?,?,?,?)',(r['id'],r['type'],r['novelId'],json.dumps(r,ensure_ascii=False)))
                 revision=identity['serverRevision']+1
                 self.set_meta('libraryId',op['libraryId']);self.set_meta('generation',op['libraryGeneration']);self.set_meta('serverRevision',revision)
-                ack={'operationId':op['id'],'serverRevision':revision,'libraryGeneration':op['libraryGeneration']}
-                self.db.execute('INSERT INTO operations VALUES (?,?)',(op['id'],json.dumps(ack)));self.db.execute('COMMIT');return ack
+                ack={'operationId':op['id'],'serverRevision':revision,'libraryGeneration':op['libraryGeneration'],'libraryId':op['libraryId'],'expectedServerRevision':identity['serverRevision']}
+                self.db.execute('INSERT INTO operations (id,ack,digest) VALUES (?,?,?)',(op['id'],json.dumps(ack),content_digest(op)));self.db.execute('COMMIT');return ack
             except BaseException:self.db.execute('ROLLBACK');raise
     def projects(self,cursor=0):
         with self.lock:
@@ -151,17 +171,49 @@ class Store:
             folder=self.directory/'backups';folder.mkdir(exist_ok=True,mode=0o700)
             path=folder/('snapshot_'+str(time.time_ns())+'.sqlite3')
             target=sqlite3.connect(path);self.db.backup(target);target.close();os.chmod(path,0o600);return path.name
-    def restore(self,data,expected_revision):
-        validate_backup(data)
+    def manifest(self,cursor=0):
         with self.lock:
-            if (self.meta('serverRevision') or 0)!=expected_revision:raise Conflict('Device changed after the restore preview.')
-            snapshot=self.backup()
+            rows=self.db.execute('SELECT body FROM records ORDER BY id LIMIT 200 OFFSET ?',(cursor,)).fetchall()
+            return {'serverRevision':self.meta('serverRevision') or 0,'records':[{'id':json.loads(r[0])['id'],'hash':content_digest(json.loads(r[0]))} for r in rows],'nextCursor':cursor+200 if len(rows)==200 else None}
+    def prepare_restore(self,operation_id,snapshot_digest,snapshot_json):
+        if not isinstance(operation_id,str) or not operation_id.startswith('restore_'):raise ValueError('Missing stable restore identity.')
+        if 'text_'+hashlib.sha256(snapshot_json.encode()).hexdigest()!=snapshot_digest:raise ValueError('Restore digest mismatch.')
+        data=validate_backup(json.loads(snapshot_json))
+        with self.lock:
+            prior=self.db.execute('SELECT digest,expected_revision,phase FROM restore_operations WHERE id=?',(operation_id,)).fetchone()
+            if prior:
+                if prior[0]!=snapshot_digest:raise Conflict('Restore identity was reused with different contents.')
+                return {'previewId':operation_id,'restoreOperationId':operation_id,'snapshotDigest':snapshot_digest,'serverRevision':prior[1],'phase':prior[2],'titles':[r['title'] for r in data['records'] if r['type']=='novel']}
+            expected=self.meta('serverRevision') or 0
+            self.db.execute('INSERT INTO restore_operations VALUES (?,?,?,?,?,?,?)',(operation_id,snapshot_digest,snapshot_json,expected,'prepared',time.time(),None))
+            return {'previewId':operation_id,'restoreOperationId':operation_id,'snapshotDigest':snapshot_digest,'serverRevision':expected,'titles':[r['title'] for r in data['records'] if r['type']=='novel']}
+    def restore_outcome(self,operation_id):
+        with self.lock:
+            row=self.db.execute('SELECT phase,created_at,ack FROM restore_operations WHERE id=?',(operation_id,)).fetchone()
+            if not row:return {'phase':'unknown'}
+            return {'phase':'expired' if row[0]=='prepared' and time.time()-row[1]>600 else row[0],'ack':json.loads(row[2]) if row[2] else None}
+    def commit_restore(self,operation_id,snapshot_digest,expected_revision):
+        with self.lock:
+            row=self.db.execute('SELECT digest,snapshot,expected_revision,phase,created_at,ack FROM restore_operations WHERE id=?',(operation_id,)).fetchone()
+            if not row:raise ValueError('Unknown restore preview. No replacement was performed.')
+            if row[0]!=snapshot_digest:raise Conflict('Restore identity was reused with different contents.')
+            if row[3]=='committed':return json.loads(row[5])
+            if time.time()-row[4]>600:raise ValueError('Restore preview expired.')
+            if row[2]!=expected_revision or (self.meta('serverRevision') or 0)!=expected_revision:raise Conflict('Device changed after the restore preview.')
+            data=validate_backup(json.loads(row[1]));snapshot=self.backup()
             self.db.execute('BEGIN IMMEDIATE')
             try:
+                # SQLite also fences another process that may share this explicitly configured directory.
+                if (self.meta('serverRevision') or 0)!=expected_revision:raise Conflict('Device changed before restore commit.')
                 for table in ['records','blobs','operations']:self.db.execute('DELETE FROM '+table)
                 for b in data['blobs']:self.db.execute('INSERT INTO blobs VALUES (?,?)',(b['id'],b['text']))
                 for r in data['records']:self.db.execute('INSERT INTO records VALUES (?,?,?,?)',(r['id'],r['type'],r['novelId'],json.dumps(r,ensure_ascii=False)))
                 self.set_meta('libraryId',data['library']['id']);self.set_meta('generation',data['library']['generation']);self.set_meta('serverRevision',expected_revision+1)
-                self.db.execute('COMMIT');return {'serverRevision':expected_revision+1,'recoverySnapshot':snapshot}
+                ack={'restoreOperationId':operation_id,'snapshotDigest':snapshot_digest,'libraryId':data['library']['id'],'libraryGeneration':data['library']['generation'],'serverRevision':expected_revision+1,'recoverySnapshot':snapshot}
+                self.db.execute('UPDATE restore_operations SET phase=?,ack=? WHERE id=?',('committed',json.dumps(ack),operation_id))
+                self.db.execute('COMMIT');return ack
             except BaseException:self.db.execute('ROLLBACK');raise
+    def restore(self,data,expected_revision):
+        wire=json.dumps(data,ensure_ascii=False);key='restore_'+str(uuid.uuid4());digest='text_'+hashlib.sha256(wire.encode()).hexdigest()
+        self.prepare_restore(key,digest,wire);return self.commit_restore(key,digest,expected_revision)
     def close(self):self.db.close()

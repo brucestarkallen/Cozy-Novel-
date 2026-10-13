@@ -1,0 +1,20 @@
+{
+  "coordinated": {
+    "pending": 0,
+    "serverRevision": 2,
+    "local": "revision_56a267e9-07b5-499d-93f7-eb57bf9a52c7"
+  },
+  "requests": 6,
+  "resend": {
+    "retained": 1,
+    "sameOperationId": "op_2cee1413-aa36-4c8b-a211-28e11752e9f1",
+    "serverRevision": 3,
+    "notReapplied": true,
+    "pending": 0
+  },
+  "disposal": {
+    "retained": 1,
+    "statusUnchanged": true,
+    "recovered": true
+  }
+}

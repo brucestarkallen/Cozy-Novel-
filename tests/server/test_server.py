@@ -14,7 +14,7 @@ from serve import NovelServer
 
 def operation(op_id='op1',expected=0,text='Exact 雨 ☕\n  spaces  '):
     blob={'id':'text_'+hashlib.sha256(text.encode()).hexdigest(),'text':text}
-    return {'id':op_id,'novelId':'n','libraryId':'lib','libraryGeneration':'g1','expectedServerRevision':expected,'records':[{'id':'n','type':'novel','novelId':'n','libraryId':'lib','title':'Synthetic novel','contentVersion':1,'orderedChapterIds':['c']},{'id':'c','type':'chapter','novelId':'n','orderedSceneIds':['s']},{'id':'s','type':'scene','novelId':'n','chapterId':'c','currentRevisionId':'r'},{'id':'r','type':'revision','novelId':'n','ownerId':'s','parentRevisionId':None,'textBlobId':blob['id']}],'blobs':[blob],'tombstones':[]}
+    return {'clientProtocol':2,'id':op_id,'novelId':'n','libraryId':'lib','libraryGeneration':'g1','expectedServerRevision':expected,'records':[{'id':'n','type':'novel','novelId':'n','libraryId':'lib','title':'Synthetic novel','contentVersion':1,'orderedChapterIds':['c']},{'id':'c','type':'chapter','novelId':'n','orderedSceneIds':['s']},{'id':'s','type':'scene','novelId':'n','chapterId':'c','currentRevisionId':'r'},{'id':'r','type':'revision','novelId':'n','ownerId':'s','parentRevisionId':None,'textBlobId':blob['id']}],'blobs':[blob],'tombstones':[]}
 
 class StoreTests(unittest.TestCase):
     def setUp(self):self.temp=tempfile.TemporaryDirectory();self.store=Store(self.temp.name)
@@ -41,6 +41,40 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.identity()['serverRevision'],1)
     def test_writes_confined_to_owned_directory(self):
         self.store.apply('n',operation());self.store.backup();paths=list(pathlib.Path(self.temp.name).rglob('*'));self.assertTrue(paths);self.assertTrue(all(p.resolve().is_relative_to(pathlib.Path(self.temp.name)) for p in paths))
+
+    def prepared(self, key='restore_durable'):
+        import uuid
+        backup={'format':'cozyNovel.backup','schemaVersion':1,**self.store.snapshot()}
+        wire=json.dumps(backup,ensure_ascii=False);digest='text_'+hashlib.sha256(wire.encode()).hexdigest()
+        return self.store.prepare_restore(key,digest,wire),digest,wire
+    def test_restore_ack_survives_restart_and_cannot_change_identity(self):
+        self.store.apply('n',operation())
+        preview,digest,wire=self.prepared();ack=self.store.commit_restore('restore_durable',digest,1)
+        self.store.close();self.store=Store(self.temp.name)
+        self.assertEqual(self.store.restore_outcome('restore_durable'),{'phase':'committed','ack':ack})
+        self.assertEqual(self.store.commit_restore('restore_durable',digest,1),ack)
+        self.assertEqual(len(list((pathlib.Path(self.temp.name)/'backups').glob('*.sqlite3'))),1)
+        changed=json.loads(wire);changed['library']['generation']='different';new_wire=json.dumps(changed);new_digest='text_'+hashlib.sha256(new_wire.encode()).hexdigest()
+        with self.assertRaises(Conflict):self.store.prepare_restore('restore_durable',new_digest,new_wire)
+        with self.assertRaises(Conflict):self.store.commit_restore('restore_durable',new_digest,1)
+        self.assertEqual(self.store.identity()['serverRevision'],2)
+    def test_restore_expiry_and_independent_device_change(self):
+        self.store.apply('n',operation());preview,digest,_=self.prepared('restore_expired')
+        self.store.db.execute('UPDATE restore_operations SET created_at=0 WHERE id=?',('restore_expired',))
+        self.assertEqual(self.store.restore_outcome('restore_expired')['phase'],'expired')
+        with self.assertRaises(ValueError):self.store.commit_restore('restore_expired',digest,1)
+        preview,digest,_=self.prepared('restore_conflict')
+        other=operation('other',1);other['records']=other['records'][:1]
+        self.store.apply('n',other)
+        with self.assertRaises(Conflict):self.store.commit_restore('restore_conflict',digest,1)
+        self.assertEqual(self.store.identity()['serverRevision'],2)
+        self.assertFalse((pathlib.Path(self.temp.name)/'backups').exists())
+    def test_old_writer_and_reused_operation_are_rejected(self):
+        old=operation();old.pop('clientProtocol')
+        with self.assertRaises(Conflict):self.store.apply('n',old)
+        self.store.apply('n',operation());changed=operation();changed['records'][0]['title']='changed'
+        with self.assertRaises(Conflict):self.store.apply('n',changed)
+        self.assertEqual(self.store.identity()['serverRevision'],1)
 
 class HTTPTests(unittest.TestCase):
     @classmethod

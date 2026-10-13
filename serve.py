@@ -64,17 +64,14 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts)==2 and not mutation:self.send(200,self.server.store.snapshot(max(0,int(query.get('cursor',['0'])[0])),parts[1]));return
                 if route=='connections' and mutation:self.send(200,self.server.profiles.save(data));return
                 if route=='backups' and mutation:self.send(200,{'snapshot':self.server.store.backup()});return
+                if route=='manifest' and not mutation:self.send(200,self.server.store.manifest(max(0,int(query.get('cursor',['0'])[0]))));return
+                if route.startswith('restore/operations/') and not mutation:self.send(200,self.server.store.restore_outcome(route.split('/')[-1]));return
                 if route=='restore/preview' and mutation:
-                    backup=validate_backup(data['backup']);key=secrets.token_urlsafe(24)
-                    with self.server.guard:
-                        self.server.previews={k:v for k,v in self.server.previews.items() if time.monotonic()-v[0]<600}
-                        if len(self.server.previews)>=3:raise ValueError('Too many pending restore previews.')
-                        self.server.previews[key]=(time.monotonic(),backup)
-                    self.send(200,{'previewId':key,'titles':[r['title'] for r in backup['records'] if r['type']=='novel'],'serverRevision':self.server.store.identity()['serverRevision']});return
+                    if data.get('clientProtocol')!=2:raise Conflict('Refresh Cozy Novel for safe restore coordination.')
+                    self.send(200,self.server.store.prepare_restore(data['restoreOperationId'],data['snapshotDigest'],data['snapshotJson']));return
                 if route=='restore/commit' and mutation:
-                    with self.server.guard:preview=self.server.previews.pop(data['previewId'],None)
-                    if not preview or time.monotonic()-preview[0]>600:raise ValueError('Restore preview expired.')
-                    self.send(200,self.server.store.restore(preview[1],data['expectedServerRevision']));return
+                    if data.get('clientProtocol')!=2:raise Conflict('Refresh Cozy Novel for safe restore coordination.')
+                    self.send(200,self.server.store.commit_restore(data['restoreOperationId'],data['snapshotDigest'],data['expectedServerRevision']));return
                 if route=='cancel' and mutation:
                     with self.server.guard:conn=self.server.active.get(data.get('requestId'))
                     if conn:

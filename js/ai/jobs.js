@@ -1,6 +1,10 @@
 import { branchTurns } from "../rp/session.js";
 import { id, now, textBlob } from "../core/ids.js";
-import { assemble, snapshotCurrent } from "../context/assemble.js";
+import {
+  assemble,
+  snapshotCurrent,
+  contextCheck,
+} from "../context/assemble.js";
 import {
   serialize,
   validateConnection,
@@ -11,6 +15,7 @@ import { assert } from "../core/schema.js";
 export class Writer {
   constructor(repo, device) {
     this.repo = repo;
+    this.disposed = false;
     this.device = device;
     this.foreground = null;
     this.helper = null;
@@ -26,6 +31,10 @@ export class Writer {
         .catch(() => {});
   }
   async run(options) {
+    assert(
+      !this.disposed,
+      "This writer belongs to a closed library session. Original results are retained.",
+    );
     if (globalThis.navigator?.locks && !options.lockHeld) {
       const lane = options.auxiliary ? "helper" : "foreground";
       return navigator.locks.request(
@@ -71,7 +80,12 @@ export class Writer {
       lastSave = 0;
     try {
       const context = await assemble(this.repo, options),
-        library = await this.repo.get("library", "meta");
+        library = { generation: context.snapshot.libraryGeneration };
+      assert(
+        !options.libraryGeneration ||
+          options.libraryGeneration === library.generation,
+        "This request belongs to an earlier library generation.",
+      );
       job = {
         id: id("job"),
         type: "job",
@@ -104,6 +118,7 @@ export class Writer {
           requestId: job.requestId,
           extra: {
             libraryGeneration: library.generation,
+            contextSnapshot: context.snapshot,
             dependencyFingerprint: context.snapshot.dependencyFingerprint,
             ...options.candidateExtra,
           },
@@ -122,10 +137,21 @@ export class Writer {
         retries: 0,
         exactWireRetained: false,
       };
-      await this.repo.commit({
-        novelId,
-        kind: "job.start",
-        records: [job, receipt],
+      await this.repo.withMutation(async () => {
+        const initial = await contextCheck(this.repo, context.snapshot, {
+          allowAcceptedCandidate: kind === "analysis",
+        });
+        assert(
+          initial.current,
+          "The request source changed before sending. The original work is retained.",
+        );
+        await this.repo.commitLocked({
+          novelId,
+          kind: "job.start",
+          generation: library.generation,
+          contextPrecondition: initial.precondition,
+          records: [job, receipt],
+        });
       });
       const response = await fetch(
         new URL("api/novel/generate", document.baseURI),
@@ -174,22 +200,37 @@ export class Writer {
         },
         controller.signal,
       );
-      const current = await this.repo.get(sceneId),
-        stale =
-          current.currentRevisionId !== context.snapshot.revisionId ||
-          !(await snapshotCurrent(this.repo, context.snapshot));
-      if (candidate)
-        candidate = await saveCandidate(
-          this.repo,
-          candidate,
-          text,
-          stale
-            ? "stale"
-            : result.finishReason === "stop" ||
-                result.finishReason === "end_turn"
-              ? "ready"
-              : "partial",
-        );
+      const check = await contextCheck(this.repo, context.snapshot, {
+        allowAcceptedCandidate: kind === "analysis",
+      });
+      const current = await this.repo.get(sceneId);
+      let stale =
+        (!options.exploration &&
+          current.currentRevisionId !== context.snapshot.revisionId) ||
+        !check.current;
+      if (candidate) {
+        const status = stale
+          ? "stale"
+          : ["stop", "end_turn"].includes(result.finishReason)
+            ? "ready"
+            : "partial";
+        try {
+          candidate = await saveCandidate(this.repo, candidate, text, status, {
+            ...(stale ? {} : { contextPrecondition: check.precondition }),
+          });
+        } catch (error) {
+          if (
+            !/context changed|configuration changed|passage changed/.test(
+              error.message,
+            )
+          )
+            throw error;
+          candidate = await saveCandidate(this.repo, candidate, text, "stale", {
+            staleReason: error.message,
+          });
+        }
+      }
+      stale = stale || candidate?.status === "stale";
       const body = await textBlob(text);
       await this.repo.commit({
         novelId,
@@ -216,9 +257,12 @@ export class Writer {
       });
       return {
         text,
+        snapshot: context.snapshot,
+        contextPrecondition: check.precondition,
+        finishReason: result.finishReason,
         candidate,
         receiptId: receipt.id,
-        stale,
+        stale: stale || candidate?.status === "stale",
         sourceRevisionId: context.snapshot.revisionId,
         jobId: job.id,
       };
@@ -241,7 +285,7 @@ export class Writer {
           this.repo,
           candidate,
           text,
-          text ? "partial" : "failed",
+          candidate.status === "stale" ? "stale" : text ? "partial" : "failed",
           { error: e.message },
         ).catch(() => {});
       if (job)
@@ -331,6 +375,7 @@ export class Writer {
     }
   }
   dispose() {
+    this.disposed = true;
     this.foreground?.abort();
     this.helper?.abort();
   }

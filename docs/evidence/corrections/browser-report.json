@@ -1,0 +1,32 @@
+{
+  "passes": [
+    "Complete café journey, explicit event acceptance, adaptation, ownership, provenance and reopening",
+    "Selection replacement preserves the exact unselected Unicode prefix and suffix",
+    "A late streamed candidate cannot replace a changed manuscript",
+    "Restoring history retains later versions for recovery",
+    "Portable backup roundtrip preserves exact records, text, branches and provenance; invalid imports are harmless",
+    "Malicious text stays inert and foreign browser resources survive service worker activation",
+    "Desktop and phone layout, draft preservation and synthetic composition events",
+    "Actual local relay and SQLite device persistence with a deterministic mock upstream",
+    "Alternate candidate remains recoverable after stale insertion is rejected",
+    "Candidate creation stays attached to the assembled source even after intervening edits",
+    "Entity rename retains identity and immutable profile history",
+    "Retry branches from the correct prior turn",
+    "Earlier exploration continuation remains recoverable",
+    "Discarded branches and unaccepted candidates never become ordinary writing context",
+    "Source edits stale candidate linked derived memories and retain explicit author facts",
+    "Late analysis cannot replace the newer story state",
+    "Ignored suggestions and stale memory are excluded from novel truth",
+    "Minimally described people do not trigger an audit or paid job loop",
+    "Import as a copy remaps ownership while retaining exploration branches",
+    "Old generation jobs cannot write into a restored library",
+    "Cross novel writes are rejected atomically",
+    "Cancelled exploration output is checkpointed with its original branch ownership",
+    "Reopening exposes interrupted jobs and preserves their partial text without retrying",
+    "Moving a scene updates both chapter orders atomically without changing text or chronology",
+    "Offline shell reopens and manual writing persists without any AI connection"
+  ],
+  "errors": [],
+  "requests": 214,
+  "browser": "153.0.8010.0"
+}

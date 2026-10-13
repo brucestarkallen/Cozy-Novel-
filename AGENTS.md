@@ -17,3 +17,9 @@ Use synthetic data and temporary device directories for verification. Never make
 Run focused checks for the changed contract. See docs/VERIFICATION.md. Review scope and credentials before committing. Refresh origin/main before a normal authorized push. Never force push, rewrite history, deploy, or discard another contributor's work.
 
 When changing offline assets, update the owned cache version in sw.js so existing installations can receive a coherent shell. Never delete caches outside the exact Cozy Novel asset prefix.
+
+Browser physical version is 2, portable schema and service protocol remain 1, and the synchronization writer contract is 2. Keep those versions independent. Create absent stores and indexes only during additive upgrades. Old tabs must retain visible drafts and close incompatible connections.
+
+Use the library synchronization lock before the mutation lock. Never acquire them in the reverse order. All committed writers participate in the mutation gate; a durable committing or unknown restore journal fences them. Device restore retires only exact covered IDs after a matching durable acknowledgement. Do not remove the journal or clear the entire outbox to resolve a conflict.
+
+Historical eligibility belongs in context/scope.js and applies to every source surface. Source readers are reversible interpretations, not primary truth. Preserve incomplete coverage, rejected batches and immutable turn boundaries. Request freshness includes deterministic source membership and transaction preconditions; jobs, receipts and usage must not invalidate themselves.

@@ -1,0 +1,18 @@
+test_destination_restrictions (test_server.HTTPTests.test_destination_restrictions) ... ok
+test_secret_separate_from_device_records (test_server.HTTPTests.test_secret_separate_from_device_records) ... ok
+test_security_boundaries (test_server.HTTPTests.test_security_boundaries) ... ok
+test_installer_owns_only_its_launcher_and_preserves_foreign_files (test_server.InstallerTests.test_installer_owns_only_its_launcher_and_preserves_foreign_files) ... ok
+test_all_four_real_relay_serializations_against_mock_upstream (test_server.RelayTests.test_all_four_real_relay_serializations_against_mock_upstream) ... ok
+test_source_directory_cannot_hold_device_secrets (test_server.RelayTests.test_source_directory_cannot_hold_device_secrets) ... ok
+test_conflict_and_lost_ack (test_server.StoreTests.test_conflict_and_lost_ack) ... ok
+test_corrupt_foreign_cross_novel_and_immutable_revision (test_server.StoreTests.test_corrupt_foreign_cross_novel_and_immutable_revision) ... ok
+test_old_writer_and_reused_operation_are_rejected (test_server.StoreTests.test_old_writer_and_reused_operation_are_rejected) ... ok
+test_restore_ack_survives_restart_and_cannot_change_identity (test_server.StoreTests.test_restore_ack_survives_restart_and_cannot_change_identity) ... ok
+test_restore_expiry_and_independent_device_change (test_server.StoreTests.test_restore_expiry_and_independent_device_change) ... ok
+test_restore_snapshot_and_old_generation (test_server.StoreTests.test_restore_snapshot_and_old_generation) ... ok
+test_writes_confined_to_owned_directory (test_server.StoreTests.test_writes_confined_to_owned_directory) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 1.275s
+
+OK

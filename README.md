@@ -37,21 +37,21 @@ If the port is occupied, the launcher leaves that process alone. Choose an expli
 3. Read the separate candidate. **Keep passage** inserts it with a recoverable revision. **Try another** preserves the earlier candidate.
 4. Use a suggestion or your own direction to continue. A suggestion that also keeps a candidate says so explicitly.
 5. Select exact manuscript text before **Revise selection**. Everything outside that range stays unchanged.
-6. Use **Quick RP** to choose a person and explore the scene. **Keep exploration** saves only the exploration. **Keep events** asks you to review an event declaration. **Turn into prose** creates a candidate to compare before insertion.
+6. Use **Quick RP** to choose a person and explore the scene. **Keep exploration** saves only the exploration. **Keep events** prepares a sourced event proposal for you to accept or edit, with optional knowledge and state details. **Turn into prose** creates a candidate to compare before insertion.
 
-Chapters and scenes can be renamed, annotated and reordered. Use arrow controls with a keyboard or drag scenes within a chapter. Fictional time is independent of manuscript order. History preserves later versions when you restore an earlier one. The Story Bible distinguishes author facts, plans, beliefs, secrets, future ideas and derived memories.
+Chapters and scenes can be renamed, annotated and reordered. Use arrow controls with a keyboard or drag scenes within a chapter. Fictional time is independent of manuscript order. History preserves later versions when you restore an earlier one. The Story Bible distinguishes author facts, plans, beliefs, secrets, future ideas and derived memories. Automatic source readings create reversible typed records from accepted passages, without requiring biographies or forms for ordinary use. Review and undo are secondary Story Bible details. Unfinished or failed readings remain visible; they never block writing. Historical Quick RP excludes unscoped profile developments, whole scene summaries and unsupported future information. Original profiles stay available with their history; explicitly stable biography can be declared separately.
 
 ## Connect a model
 
 Open **Connections**, choose the exact adapter, enter the model identifier and its complete API endpoint, then enter your key. **Validate and save connection** checks configuration without a paid model call. The local relay keeps the key outside the manuscript database. It remains in memory unless you explicitly choose local persistence.
 
-One writing connection supports all workflows. An optional helper connection can handle suggestions and source readings. Disable automatic suggestions in **Writing style** if you prefer. Supported adapters are OpenAI Responses, compatible Chat Completions, Anthropic Messages and OpenRouter. See [provider details](docs/PROVIDERS.md).
+One writing connection supports all workflows. An optional helper connection can handle suggestions and source readings. In **Writing style**, choose automatic, review only or disabled **Story Brain**, and separately control recommendation bubbles. New novels enable quiet source reading. Existing explicit disabled preferences stay disabled. Supported adapters are OpenAI Responses, compatible Chat Completions, Anthropic Messages and OpenRouter. See [provider details](docs/PROVIDERS.md).
 
 ## Where your writing is saved
 
 The browser saves in the independent `cozynovel.v1` IndexedDB database. **Saved in browser** appears after the transaction completes. This is your immediate working copy. Browser persistent storage is useful but is not an independent backup.
 
-The local server saves changed records to `~/.cozynovel/library.sqlite3`. **Saved to browser and device** confirms a device acknowledgement. A browser only or conflict message means you should not assume the device copy is current. Browser changes remain local when the server is unavailable.
+The local server saves changed records to `~/.cozynovel/library.sqlite3`. **Saved to device through checkpoint N** confirms acknowledged work. **Device save pending** means newer browser work is still queued. A browser only or conflict message means you should not assume the device copy is current. Browser changes remain local when the server is unavailable.
 
 Device snapshots live under `~/.cozynovel/backups`. Optional saved connection profiles live in `~/.cozynovel/connections.json` with restricted file permissions. Those permissions are not encryption. Keep the entire device directory private.
 
@@ -63,7 +63,7 @@ Use **Backups**, then **Download full backup**. This portable JSON file includes
 
 To restore, select a valid Cozy Novel backup and review its titles and counts. **Import as separate copies** gives the records new identities. **Restore browser library** saves a recovery snapshot first and then replaces the browser library with a new generation. Invalid or RP backups are rejected without changing your work.
 
-Device replacement is a separate **Preview device restore** step. It creates a device recovery snapshot before replacement. If browser and device disagree, download both versions before choosing a restore. A conflict never silently chooses the newer timestamp.
+Device replacement is a separate **Preview device restore** step. A preview captures a specific committed browser snapshot. If you write after preparing it, prepare a fresh preview. Other tabs may keep visible unsaved drafts, which are not part of that snapshot. It creates a device recovery snapshot before replacement. If browser and device disagree, download both versions before choosing a restore. A conflict never silently chooses the newer timestamp. If a restore response is lost, use **Check interrupted device restore**. The app checks the exact durable operation before reconciling pending saves. Unknown outcomes retain both copies and keep committed writers fenced; visible drafts can still be copied or downloaded.
 
 Archive is the normal removal action. Include archived work in the library to recover it. Discarded candidates and explorations also remain recoverable. History and backups are never automatically pruned.
 
@@ -77,7 +77,7 @@ git pull --ff-only origin main
 cozynovel
 ```
 
-If Git reports local edits or a conflict, keep them and resolve the conflict rather than resetting them away. The browser offers **Save and refresh** when a new offline shell is ready. Finish or stop generation before refreshing.
+If Git reports local edits or a conflict, keep them and resolve the conflict rather than resetting them away. This update migrates IndexedDB additively to physical version 2 while keeping the database name and portable format. Refresh or close other Cozy Novel tabs after saving their visible drafts. Old code cannot reopen version 2, and the updated local service rejects older writers. No database reset is required. The browser offers **Save and refresh** when a new offline shell is ready. Finish or stop generation before refreshing.
 
 Code rollback and data restore are separate operations. Retain a copy of the previous code before an update. Do not open newer data with code that cannot read its schema. To inspect an older version safely, use a separate checkout, a separate explicit data directory and a different port. The service refuses unsupported device schema versions.
 

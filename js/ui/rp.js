@@ -1,4 +1,3 @@
-import { saveEntity } from "../story/entities.js";
 import {
   $,
   el,
@@ -17,14 +16,45 @@ import {
   addTurn,
   retryBranch,
   keepEvents,
+  explorationCoverage,
 } from "../rp/session.js";
 import { id } from "../core/ids.js";
 export async function rpAction(app, action, target) {
   if (action === "quickRP") {
     await app.flush();
+    if (app.candidateId && !$("#candidateBox").hidden) {
+      const c = await app.repo.get(app.candidateId);
+      if (["ready", "partial"].includes(c?.status)) {
+        panel(
+          "Keep this passage and enter Quick RP",
+          el(
+            "p",
+            {},
+            "Quick RP will begin from this visible passage after you keep it.",
+          ),
+          el(
+            "button",
+            {
+              class: "primary",
+              onClick: async () => {
+                await app.action("acceptCandidate", {});
+                closePanel();
+                await rpAction(app, "quickRP", {});
+              },
+            },
+            "Keep passage and enter Quick RP",
+          ),
+        );
+        return true;
+      }
+    }
     const records = await app.repo.query("novelId", app.novelId),
       people = records.filter(
-        (r) => r.type === "entity" && r.kind === "person",
+        (r) =>
+          r.type === "entity" &&
+          r.kind === "person" &&
+          !r.derivedHidden &&
+          (!r.explorationId || r.scope === "novel"),
       ),
       sessions = records.filter((r) => r.type === "exploration");
     const form = formPanel(
@@ -46,23 +76,11 @@ export async function rpAction(app, action, target) {
       ],
       async (v) => {
         let person = v.playerCharacterId;
-        if (v.newPerson.trim()) {
-          const e = {
-            id: id("entity"),
-            type: "entity",
-            novelId: app.novelId,
-            kind: "person",
-            displayName: v.newPerson,
-            aliases: [],
-            profile: "",
-            sourceRefs: [],
-          };
-          await saveEntity(app.repo, e);
-          person = e.id;
-        }
-        if (!person) throw new Error("Choose a person or enter a name.");
+        if (!person && !v.newPerson.trim())
+          throw new Error("Choose a person or enter a name.");
         const ex = await createExploration(app.repo, {
           sceneId: app.sceneId,
+          newPerson: v.newPerson.trim() || null,
           playerCharacterId: person,
           boundary: app.selection?.[1] ?? app.editor.value.length,
           narrativeViewpoint: v.narrativeViewpoint,
@@ -99,7 +117,10 @@ export async function rpAction(app, action, target) {
 async function openExploration(app, exId) {
   let ex = await app.repo.get(exId);
   const people = (await app.repo.query("novelId", ex.novelId)).filter(
-    (r) => r.type === "entity" && r.kind === "person",
+    (r) =>
+      r.type === "entity" &&
+      r.kind === "person" &&
+      (!r.explorationId || r.explorationId === exId || r.scope === "novel"),
   );
   const player = field(
       "You control",
@@ -126,6 +147,26 @@ async function openExploration(app, exId) {
       { value: "player", label: "Act as character" },
       { value: "direct", label: "Direct, author instruction" },
     ]);
+  const retained = await branchTurns(app.repo, ex);
+  const firstTurn = field(
+    "From turn for events or prose",
+    "fromSequence",
+    "1",
+    "number",
+  );
+  const lastTurn = field(
+    "Through turn, blank means current ending",
+    "toSequence",
+    "",
+    "number",
+  );
+  const selectedBounds = () => ({
+    fromSequence: Math.max(
+      1,
+      Number(firstTurn.querySelector("input").value) || 1,
+    ),
+    toSequence: Number(lastTurn.querySelector("input").value) || Infinity,
+  });
   const send = el("button", { class: "primary" }, "Act"),
     retry = el("button", {}, "Retry response"),
     stop = el("button", { onClick: () => app.writer.cancel() }, "Stop");
@@ -262,10 +303,28 @@ async function openExploration(app, exId) {
           turns.scrollTop = turns.scrollHeight;
         },
       });
+      if (result.stale)
+        throw new Error(
+          "The exploration source changed during the response. It remains recoverable as a separate branch.",
+        );
       await addTurn(app.repo, ex, "world", result.text, {
+        contextPrecondition: result.contextPrecondition,
         jobId: result.jobId,
       });
       await paint();
+      const n = await app.repo.get(ex.novelId);
+      if (
+        n.storyMode === "auto" ||
+        (n.storyMode == null && n.autoSuggestions !== false)
+      ) {
+        const captured = await explorationCoverage(app.repo, ex),
+          source = await transcript(app.repo, ex, { full: true });
+        app
+          .analyzeExploration?.(ex, source, captured)
+          .catch((e) =>
+            notice("Exploration saved. Branch reading pending: " + e.message),
+          );
+      }
     } catch (e) {
       if (partial)
         await addTurn(app.repo, ex, "world", partial, {
@@ -283,6 +342,13 @@ async function openExploration(app, exId) {
   };
   send.addEventListener("click", () => generate());
   retry.addEventListener("click", () => generate(true));
+  const liveScene = await app.repo.get(ex.baseSceneId);
+  const baselineNotice =
+    liveScene.currentRevisionId !== ex.baseRevisionId
+      ? "The main scene changed. This exploration keeps its saved baseline. Compare before placing an adaptation."
+      : !ex.baseContextId && !ex.baseContextRecords
+        ? "This older exploration has no archived story catalog. Its original manuscript and transcript are retained; historical context excludes claims without supported scope."
+        : "";
   panel(
     "Quick RP",
     el(
@@ -290,11 +356,19 @@ async function openExploration(app, exId) {
       { class: "help" },
       "Exploration only. Changing the player never changes who knows a secret. Direct gives an author instruction; an in character action is an attempt.",
     ),
+    baselineNotice ? el("p", { class: "help" }, baselineNotice) : null,
     el("div", { class: "inlinefields" }, player, view, branches),
     turns,
     mode,
     input,
     el("div", { class: "actions" }, send, retry, stop),
+    el(
+      "details",
+      {},
+      el("summary", {}, "Select transcript turns to keep or adapt"),
+      firstTurn,
+      lastTurn,
+    ),
     el(
       "div",
       { class: "actions" },
@@ -315,35 +389,118 @@ async function openExploration(app, exId) {
         {
           onClick: async () => {
             ex = await app.repo.get(exId);
+            const bounds = selectedBounds(),
+              coverage = await explorationCoverage(
+                app.repo,
+                ex,
+                bounds.fromSequence,
+                bounds.toSequence,
+              ),
+              original = await transcript(app.repo, ex, {
+                full: true,
+                ...bounds,
+              });
+            panel(
+              "Reading selected exploration events",
+              el(
+                "p",
+                {},
+                "Preparing an event record. Your original transcript remains saved.",
+              ),
+            );
+            let proposal, contextSnapshot;
+            try {
+              const result = await app.writer.run({
+                connection: app.connection(true),
+                novelId: ex.novelId,
+                sceneId: ex.baseSceneId,
+                kind: "eventProposal",
+                exploration: ex,
+                transcript: original,
+                direction:
+                  "Propose events through transcript head " +
+                  coverage.transcriptHeadId,
+              });
+              if (result.stale)
+                throw new Error(
+                  "The source changed while reading. Its response is recoverable, but prepare a fresh event proposal.",
+                );
+              contextSnapshot = result.snapshot;
+              proposal = JSON.parse(result.text);
+            } catch (error) {
+              notice(
+                "Event proposal unavailable. The transcript is still available for your review. " +
+                  error.message,
+                true,
+              );
+              proposal = { summary: "", events: [] };
+            }
             formPanel(
               "Review events to keep",
               [
                 field(
                   "Author established event record",
                   "proposition",
-                  "",
+                  proposal.summary ||
+                    proposal.events?.map((e) => e.proposition).join("\n") ||
+                    "",
                   "textarea",
                 ),
               ],
               async (v) => {
-                await keepEvents(app.repo, ex, v.proposition);
+                await keepEvents(app.repo, ex, v.proposition, {
+                  coverage,
+                  proposal: {
+                    ...proposal,
+                    stateChanges: JSON.parse(v.stateChanges || "[]"),
+                  },
+                  contextSnapshot,
+                });
                 notice(
                   "Events kept with transcript provenance. No manuscript prose has been inserted.",
                 );
               },
               {
                 submit: "Accept event record",
-                help: "Write or paste the meaningful events you are establishing. Keeping this record is an explicit author declaration.",
+                help: "Review the proposed record beside the original transcript. Edit any interpretation before establishing these events.",
               },
             );
-            $("#modalBody").prepend(
-              el("pre", { class: "receipt" }, await transcript(app.repo, ex)),
+            $("#modalBody form").append(
+              el(
+                "details",
+                {},
+                el("summary", {}, "Review or edit structured state changes"),
+                field(
+                  "Structured state changes, JSON",
+                  "stateChanges",
+                  JSON.stringify(proposal.stateChanges || [], null, 2),
+                  "textarea",
+                ),
+              ),
             );
+            $("#modalBody").prepend(el("pre", { class: "receipt" }, original));
+            if (proposal.stateChanges?.length)
+              $("#modalBody").append(
+                el(
+                  "details",
+                  {},
+                  el("summary", {}, "Proposed knowledge and state changes"),
+                  el(
+                    "pre",
+                    { class: "receipt" },
+                    JSON.stringify(proposal.stateChanges, null, 2),
+                  ),
+                ),
+              );
           },
         },
         "Keep events",
       ),
-      el("button", { onClick: () => adapt(app, exId) }, "Turn into prose"),
+      el(
+        "button",
+        { onClick: () => adapt(app, exId, selectedBounds()) },
+        "Turn into prose",
+      ),
       el(
         "button",
         {
@@ -364,11 +521,17 @@ async function openExploration(app, exId) {
   );
   await paint();
 }
-async function adapt(app, exId) {
+async function adapt(app, exId, bounds = {}) {
   try {
     const ex = await app.repo.get(exId),
       scene = await app.repo.get(ex.baseSceneId);
-    const source = await transcript(app.repo, ex);
+    const source = await transcript(app.repo, ex, { full: true, ...bounds });
+    const coverage = await explorationCoverage(
+      app.repo,
+      ex,
+      bounds.fromSequence,
+      bounds.toSequence,
+    );
     const proceed = async (range) => {
       closePanel();
       if (app.sceneId !== ex.baseSceneId) await app.openScene(ex.baseSceneId);
@@ -382,6 +545,7 @@ async function adapt(app, exId) {
           explorationId: ex.id,
           branchId: ex.activeBranchId,
           transcriptSource: source,
+          ...coverage,
         },
       });
     };

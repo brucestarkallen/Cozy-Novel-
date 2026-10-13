@@ -3,12 +3,19 @@ import { validateBackup, assert } from "../core/schema.js";
 import { complete, request } from "./database.js";
 import { APP } from "../config.js";
 export async function exportBackup(repo, novelId = null) {
-  const tx = repo.db.transaction(["records", "blobs", "meta", "operations"]);
-  const [records, blobs, lib, operations] = await Promise.all([
+  const tx = repo.db.transaction([
+    "records",
+    "blobs",
+    "meta",
+    "operations",
+    "outbox",
+  ]);
+  const [records, blobs, lib, operations, outbox] = await Promise.all([
     request(tx.objectStore("records").getAll()),
     request(tx.objectStore("blobs").getAll()),
     request(tx.objectStore("meta").get("library")),
     request(tx.objectStore("operations").getAll()),
+    request(tx.objectStore("outbox").getAll()),
   ]);
   const selected = novelId
     ? records.filter((r) => r.novelId === novelId)
@@ -27,6 +34,14 @@ export async function exportBackup(repo, novelId = null) {
     },
     records: selected,
     blobs: blobs.filter((b) => used.has(b.id)),
+    coverage: {
+      libraryId: lib.libraryId,
+      generation: lib.generation,
+      localCommitSequence: lib.commitSequence || 0,
+      operationIds: outbox
+        .filter((o) => o.libraryGeneration === lib.generation)
+        .map((o) => o.id),
+    },
     operations: operations.filter((o) => !novelId || o.novelId === novelId),
   };
 }
@@ -44,8 +59,25 @@ export async function inspectBackup(data) {
     revisions: data.records.filter((r) => r.type === "revision").length,
   };
 }
-export async function restoreBackup(repo, data, { copy = false } = {}) {
+export async function restoreBackup(
+  repo,
+  data,
+  { copy = false, locked = false } = {},
+) {
+  if (!locked)
+    return repo.withSync(
+      () =>
+        repo.withMutation(() =>
+          restoreBackup(repo, data, { copy, locked: true }),
+        ),
+      true,
+    );
   await inspectBackup(data);
+  const pendingRestore = await repo.get("restoreIntent", "meta");
+  assert(
+    !["committing", "unknown"].includes(pendingRestore?.phase),
+    "Reconcile the pending device restore before replacing this browser library.",
+  );
   const recovery = await exportBackup(repo),
     lib = await repo.get("library", "meta");
   if (copy) {
@@ -54,17 +86,77 @@ export async function restoreBackup(repo, data, { copy = false } = {}) {
       for (const branch of record.branches || [])
         map.set(branch.id, id("branch"));
     map.set(data.library.id, lib.libraryId);
-    const remap = (v) =>
-      typeof v === "string"
-        ? map.get(v) || v
-        : Array.isArray(v)
-          ? v.map(remap)
-          : v && typeof v === "object"
+    map.set(data.library.generation, lib.generation);
+    const referenceKeys = new Set([
+      "id",
+      "novelId",
+      "libraryId",
+      "libraryGeneration",
+      "generation",
+      "chapterId",
+      "sceneId",
+      "ownerId",
+      "baseSceneId",
+      "baseRevisionId",
+      "baseContextId",
+      "currentRevisionId",
+      "parentRevisionId",
+      "playerCharacterId",
+      "actorId",
+      "subjectId",
+      "holderId",
+      "profileRevisionId",
+      "parentProfileRevisionId",
+      "explorationId",
+      "parentSessionId",
+      "entityId",
+      "activeBranchId",
+      "branchId",
+      "parentId",
+      "priorStateRef",
+      "resultingStateRef",
+      "supersedes",
+      "supersededBy",
+      "supersededReadingBatch",
+      "readingBatchId",
+      "sourceId",
+      "candidateId",
+      "acceptedRevisionId",
+      "templateId",
+      "transcriptHeadId",
+      "transcriptHead",
+      "acceptedEventId",
+      "promotedBy",
+      "artifactId",
+      "orderedChapterIds",
+      "orderedSceneIds",
+      "sourceIds",
+      "coveredTurnIds",
+      "fullyReadTurnIds",
+      "turnIds",
+      "unreadTurnIds",
+      "appliedIds",
+      "resultRefs",
+      "affectedIds",
+      "operationId",
+      "jobId",
+      "adaptedCandidateId",
+      "acceptedCandidateId",
+      "continuationOf",
+    ]);
+    const remap = (value, key = "") =>
+      typeof value === "string"
+        ? referenceKeys.has(key)
+          ? map.get(value) || value
+          : value
+        : Array.isArray(value)
+          ? value.map((v) => remap(v, key))
+          : value && typeof value === "object"
             ? Object.fromEntries(
-                Object.entries(v).map(([k, x]) => [k, remap(x)]),
+                Object.entries(value).map(([k, v]) => [k, remap(v, k)]),
               )
-            : v;
-    const records = data.records.map(remap);
+            : value;
+    const records = data.records.map((r) => remap(r));
     for (const n of records.filter((r) => r.type === "novel")) {
       n.title += " (copy)";
       n.contentVersion = 0;
@@ -79,7 +171,7 @@ export async function restoreBackup(repo, data, { copy = false } = {}) {
       };
       const owned = records.filter((r) => r.novelId === n.id);
       const keys = new Set(owned.map((r) => r.textBlobId));
-      await repo.commit({
+      await repo.commitLocked({
         novelId: n.id,
         kind: "novel.import",
         expectedVersion: 0,
@@ -119,6 +211,8 @@ export async function restoreBackup(repo, data, { copy = false } = {}) {
     ...lib,
     libraryId: data.library.id,
     generation,
+    minimumWriter: 2,
+    commitSequence: (lib.commitSequence || 0) + 1,
     activeProjectId: data.records.some(
       (r) => r.id === data.library.activeProjectId,
     )
@@ -130,8 +224,10 @@ export async function restoreBackup(repo, data, { copy = false } = {}) {
     serverRevision: 0,
     queuedRevision: 0,
     needsRestore: true,
+    reconciledProtocol: 0,
   });
   await done;
+  repo.generation = generation;
   repo.emit({ kind: "library.restore", generation });
   repo.channel?.postMessage({ kind: "library.restore", generation });
   return generation;

@@ -1,0 +1,19 @@
+✔ earlier knowledge, suspicion, future learning and conditional plans remain distinct in wire payload (9.915494ms)
+✔ flashback excludes later learning and unknown chronology (0.413538ms)
+✔ mandatory author requirements cannot be silently truncated (1.606091ms)
+✔ large synthetic selection retains old promise within 200k and 500k budgets (71.398461ms)
+ℹ {"fixtureCharacters":3069090,"limit":200000,"inputEstimate":999,"selectedSources":8,"elapsedMs":39}
+ℹ {"fixtureCharacters":3069090,"limit":500000,"inputEstimate":999,"selectedSources":8,"elapsedMs":32}
+✔ dense pinned sources respect large budgets, while unpinned irrelevance stays omitted (817.849099ms)
+ℹ {"fixtureCharacters":3069090,"pinned":true,"limit":200000,"inputEstimate":187260,"selectedSources":26,"elapsedMs":305}
+ℹ {"fixtureCharacters":3069090,"pinned":true,"limit":500000,"inputEstimate":466656,"selectedSources":53,"elapsedMs":512}
+✔ author corrections respect their effective fictional time (9.945621ms)
+✔ an exploration inside a scene excludes unbounded knowledge from later in that scene (1.801354ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1023.945857

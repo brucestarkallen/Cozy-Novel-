@@ -85,10 +85,20 @@ export async function manuscriptAction(app, action, target) {
     await app.flush();
     formPanel(
       "A new chapter",
-      [field("Chapter title", "title", "New chapter")],
+      [
+        field("Chapter title", "title", "New chapter"),
+        field(
+          "Continue from the current scene in fictional time",
+          "continues",
+          true,
+          "checkbox",
+        ),
+      ],
       async (v) => {
         const c = await addChapter(repo, app.novelId, v.title);
-        const s = await addScene(repo, c.id, "A new scene");
+        const s = await addScene(repo, c.id, "A new scene", {
+          continuationOf: v.continues ? app.sceneId : null,
+        });
         await app.openScene(s.id);
       },
     );
@@ -106,6 +116,12 @@ export async function manuscriptAction(app, action, target) {
       [
         field("Scene title", "title", "A new scene"),
         field(
+          "Continue from the current scene in fictional time",
+          "continues",
+          true,
+          "checkbox",
+        ),
+        field(
           "Chapter",
           "chapterId",
           scene.chapterId,
@@ -114,7 +130,9 @@ export async function manuscriptAction(app, action, target) {
         ),
       ],
       async (v) => {
-        const s = await addScene(repo, v.chapterId, v.title);
+        const s = await addScene(repo, v.chapterId, v.title, {
+          continuationOf: v.continues ? scene.id : null,
+        });
         await app.openScene(s.id);
       },
     );
@@ -170,6 +188,18 @@ export async function manuscriptAction(app, action, target) {
           chapters.map((c) => ({ value: c.id, label: c.title })),
         ),
         field("Viewpoint", "viewpoint", s.viewpoint),
+        field(
+          "Continues an earlier scene",
+          "continuationOf",
+          s.continuationOf || "",
+          "select",
+          [
+            { value: "", label: "No stated continuation" },
+            ...(await repo.query("novelId", app.novelId))
+              .filter((r) => r.type === "scene" && r.id !== s.id)
+              .map((r) => ({ value: r.id, label: r.title })),
+          ],
+        ),
         field("Time label", "timeLabel", s.timeLabel),
         field(
           "Fictional time order, optional number",
@@ -189,8 +219,17 @@ export async function manuscriptAction(app, action, target) {
       async (v) => {
         await updateScene(repo, await repo.get(s.id), {
           ...v,
+          continuationOf: v.continuationOf || null,
           fictionalTime:
             v.fictionalTime === "" ? null : Number(v.fictionalTime),
+          summaryCoverage: {
+            revisionId: s.currentRevisionId,
+            end: (await repo.sceneText(s.id)).text.length,
+          },
+          notesCoverage: {
+            revisionId: s.currentRevisionId,
+            end: (await repo.sceneText(s.id)).text.length,
+          },
         });
         await app.renderNav();
         $("#sceneTitle").textContent = v.title;
@@ -202,6 +241,36 @@ export async function manuscriptAction(app, action, target) {
     return true;
   }
   if (action === "write" || action === "continue") {
+    if (
+      action === "continue" &&
+      app.candidateId &&
+      !$("#candidateBox").hidden
+    ) {
+      const c = await repo.get(app.candidateId);
+      if (["ready", "partial"].includes(c.status)) {
+        panel(
+          "Keep this passage and continue",
+          el(
+            "p",
+            {},
+            "The next passage will follow the visible candidate after you keep it.",
+          ),
+          el(
+            "button",
+            {
+              class: "primary",
+              onClick: async () => {
+                await app.action("acceptCandidate", {});
+                closePanel();
+                await app.generate("continue");
+              },
+            },
+            "Keep passage and continue",
+          ),
+        );
+        return true;
+      }
+    }
     await app.generate(action);
     return true;
   }
@@ -235,9 +304,13 @@ export async function manuscriptAction(app, action, target) {
       return true;
     app.editor.readOnly = true;
     try {
-      await acceptCandidate(repo, c.id);
-      await app.loadScene(app.sceneId);
+      app.acceptingPassage = (async () => {
+        await acceptCandidate(repo, c.id);
+        await app.loadScene(app.sceneId);
+      })();
+      await app.acceptingPassage;
     } finally {
+      app.acceptingPassage = null;
       app.editor.readOnly = false;
     }
     notice("Passage kept. The earlier revision is preserved.");

@@ -1,0 +1,26 @@
+{
+  "deferred": {
+    "blocked": true,
+    "pending": 2,
+    "expected": 3,
+    "revisionSequence": [
+      3,
+      4
+    ],
+    "serverRevision": 3
+  },
+  "recovery": {
+    "lost": true,
+    "unknown": "unknown",
+    "fenced": true,
+    "recovered": "acknowledged",
+    "sameAck": true
+  },
+  "reconciliation": {
+    "status": "Device content differs from browser. Both copies retained. Open Backups to compare and repair.",
+    "text": "Missing legacy outbox payload"
+  },
+  "disposed": {
+    "unchanged": true
+  }
+}

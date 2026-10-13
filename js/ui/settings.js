@@ -79,11 +79,30 @@ export async function settingsAction(app, action) {
             n.autoSuggestions,
             "checkbox",
           ),
+          field(
+            "Story Brain",
+            "storyMode",
+            n.storyMode ?? (n.autoSuggestions === false ? "off" : "auto"),
+            "select",
+            [
+              {
+                value: "auto",
+                label: "Maintain clear derived state automatically",
+              },
+              { value: "review", label: "Review proposals before applying" },
+              { value: "off", label: "Off" },
+            ],
+          ),
         ),
       async (v) => {
-        const { autoSuggestions, ...styleProfile } = v;
+        const { autoSuggestions, storyMode, ...styleProfile } = v;
         await app.repo.update(
-          { ...(await app.repo.get(n.id)), styleProfile, autoSuggestions },
+          {
+            ...(await app.repo.get(n.id)),
+            styleProfile,
+            autoSuggestions,
+            storyMode,
+          },
           "style.update",
         );
       },
@@ -328,6 +347,7 @@ async function connectionPanel(app, slot) {
         .filter((x) => x.id !== slot)
         .concat(saved);
       app.updateModel();
+      await app.repo.localPut({ id: "connection." + slot, profile: saved });
       notice("Connection configured. No paid model call was made.");
     },
     {

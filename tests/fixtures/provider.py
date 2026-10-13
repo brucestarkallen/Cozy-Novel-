@@ -10,15 +10,32 @@ class Handler(BaseHTTPRequestHandler):
         messages=body.get('messages',[]);user=messages[-1]['content'] if messages else body['input'][-1]['content'][0]['text'];system=body.get('system',body.get('instructions',messages[0]['content'] if messages else ''))
         kind=re.search(r'"operation":"([^"]+)"',user);kind=kind.group(1) if kind else 'write'
         if kind=='analysis':
-            source=re.findall(r'Unaccepted candidate, not canon \| source ([^\]]+)',user)
-            if not source:source=re.findall(r'Current manuscript \| source ([^\]]+)',user)
-            text=json.dumps({'suggestions':['Let B ask about the rain','Stay with C’s quiet moment','Walk to the ice cream shop'],'memories':[{'proposition':'The friends shared a rainy afternoon.','sourceId':source[-1] if source else '', 'quote':'Rain tapped against the café window.','recordKind':'memory'}]})
-        elif kind=='rp':text='A smiled at B. "Chocolate, then?" C set the umbrella beside the door and waited for B to answer.'
-        elif kind=='adapt':text='B asked for chocolate ice cream. A smiled. "Chocolate, then?" C set the umbrella beside the door and waited.'
+            segment=re.search(r'\[Source segment for structured reading[^\]]*\]\n(.*?)(?:\n\n\[|$)',user,re.S)
+            source_text=segment.group(1) if segment else ''
+            span=re.search(r'Segment starts at (\d+), ends at (\d+)',user);coverage=int(span.group(2)) if span else len(source_text)
+            people={}
+            for raw in re.findall(r'\[People and places[^\]]*\]\n([^\n]+)',user):
+                try:
+                    entry=json.loads(raw);people[entry['name']]=entry['id']
+                except (KeyError,ValueError):pass
+            quotes={'A':'A rested tired hands','B':'B smiled at the familiar street','C':'C listened without a word','D':'D arrived with a newspaper.'}
+            entities=[{'key':name,'name':name,'kind':'person','quote':quote,**({'existingId':people[name]} if name in people else {})} for name,quote in quotes.items() if quote in source_text]
+            definitions=[('condition','A was tired.','A','A rested tired hands around a warm cup.'),('plan','B promised to bring an umbrella if the rain continued.','B','B promised to bring an umbrella if the rain continued.'),('knowledge','C learned that the letter was missing.','C','A told C that the letter was missing.'),('belief','D suspected the letter contained coins.','D','D suspected the letter contained coins.'),('relationship','A trusted B to help.','A','A said he trusted B to help.'),('acceptedEvent','B finished ordering the drinks.','B','B finished ordering the drinks.'),('condition','C waited beside the door.','C','C set the umbrella beside the door and waited for B to answer. A told C that chocolate was available.')]
+            updates=[{'recordKind':kind,'holderRef':people.get(person,person) if kind in ('knowledge','belief','plan') else '', 'subjectRef':people.get(person,person),'proposition':prop,'quote':quote,'support':'explicit','certainty':'suspicion' if kind=='belief' else 'known'} for kind,prop,person,quote in definitions if quote in source_text]
+            text=json.dumps({'suggestions':['Let B ask about the rain','Stay with C’s quiet moment','Walk to the ice cream shop'],'entities':entities,'updates':updates,'summary':'The friends met on a rainy afternoon.','coverageEnd':coverage})
+        elif kind=='eventProposal':
+            people={}
+            for raw in re.findall(r'\[People and places[^\]]*\]\n([^\n]+)',user):
+                try:
+                    entry=json.loads(raw);people[entry['name']]=entry['id']
+                except (KeyError,ValueError):pass
+            text=json.dumps({'summary':'B asked for chocolate ice cream. A asked a question and told C that chocolate was available. C waited.','events':[{'recordKind':'acceptedEvent','proposition':'B asked for chocolate ice cream.','quote':'B asked for chocolate ice cream.'}],'stateChanges':[{'recordKind':'knowledge','proposition':'C learned that chocolate was available.','quote':'A told C that chocolate was available.','holderId':people.get('C'),'certainty':'known'}] if people.get('C') else []})
+        elif kind=='rp':text='A smiled at B. "Chocolate, then?" C set the umbrella beside the door and waited for B to answer. A told C that chocolate was available.'
+        elif kind=='adapt':text='B asked for chocolate ice cream. A smiled. "Chocolate, then?" C set the umbrella beside the door and waited. A told C that chocolate was available.'
         elif kind=='revise':text='雨 lingered against the glass.\n"A quieter afternoon," she said. ☕'
         elif kind=='discuss':text='Established: C is quiet in this passage. Inference: C may be distracted. Possibility: let a small question reveal what holds C’s attention.'
         elif 'ice cream' in user.lower().split('[author direction]')[-1]:text='B suggested ice cream. A folded the newspaper, and C reached for the umbrella.'
-        else:text='Rain tapped against the café window. A rested tired hands around a warm cup. B smiled at the familiar street, while C listened without a word.'
+        else:text='Rain tapped against the café window. A rested tired hands around a warm cup. B smiled at the familiar street, while C listened without a word. D arrived with a newspaper. B promised to bring an umbrella if the rain continued. A told C that the letter was missing. D suspected the letter contained coins. A said he trusted B to help. B finished ordering the drinks.'
         if 'SLOW_TEST' in user:time.sleep(.7)
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
         try:
