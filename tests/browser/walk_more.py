@@ -408,8 +408,10 @@ async def scenario_round(b):
     await pg.click('#sidePane button:has-text("Begin the scene")')
     await pg.wait_for_selector('#sideBody .turn.ai .thinkbox.live', timeout=6000)
     live_label = await pg.inner_text('#sideBody .turn.ai .thinkbox.live > button')
-    live_words = await pg.inner_text('#sideBody .turn.ai .thinkbox.live .words')
-    check('the narrator\'s thinking streams open, first', 'Thinking' in live_label and 'Let me' in live_words, (live_label, live_words))
+    # a second piece of thinking has come by now: the words keep growing in the box, never wiped
+    await pg.wait_for_timeout(1200)
+    live_words = await pg.evaluate("(() => { const w = document.querySelector('#sideBody .turn.ai .thinkbox .words'); return w ? w.textContent : '' })()")
+    check('the narrator\'s thinking streams open, first, and keeps growing', 'Thinking' in live_label and 'think about' in live_words, (live_label, live_words))
     await pg.wait_for_selector('#sideBody .turn.ai:not(.streaming)', timeout=15000)
     folded = await pg.inner_text('#sideBody .turn.ai .thinkbox > button')
     check('…and folds once its words come', 'The thinking' in folded and await pg.locator('#sideBody .turn.ai .thinkbox.live').count() == 0, folded)

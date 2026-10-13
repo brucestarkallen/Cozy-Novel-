@@ -547,7 +547,8 @@ function onTalkLive(ev) {
   const entry = { text: ev.text, thinking: ev.thinking, note: ev.note || '' };
   map.set(ev.turnId, entry);
   const turnEl = ui.rightBody.querySelector(`.turn[data-id="${ev.turnId}"]`);
-  const el = turnEl && turnEl.querySelector('.words');
+  /* the reply's own words — never the thinking box's, which sits before them */
+  const el = turnEl && turnEl.querySelector(':scope > span.words');
   if (el) {
     if (ev.thinking) {
       const box = turnEl.querySelector('.thinkbox');
