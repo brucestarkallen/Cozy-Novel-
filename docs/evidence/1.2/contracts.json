@@ -19,8 +19,8 @@
   ],
   "performance": {
     "fixtureCharacters": 200000,
-    "sceneOpenMs": 1.4,
-    "revisionSaveMs": 18.1,
+    "sceneOpenMs": 1.1,
+    "revisionSaveMs": 21.8,
     "setupAndChecksMs": 48
   }
 }

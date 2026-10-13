@@ -334,3 +334,49 @@ test("an exploration inside a scene excludes unbounded knowledge from later in t
   assert.doesNotMatch(c.user, /LATER_WITHIN_SCENE_SECRET/);
   assert.ok(c.snapshot.omitted.some((x) => x.id === "revelation"));
 });
+
+test("a known baseline expiry advances with branch time while later main canon stays outside the saved history", async () => {
+  const { permitted } = await import("../../js/context/scope.js");
+  const scope = {
+    novelId: "n",
+    sceneId: "s",
+    revisionId: "r",
+    fictionalTime: 1,
+    branchFictionalTime: 10,
+    explorationId: "e",
+    historical: true,
+    boundary: 10,
+    fullLength: 10,
+    turnIds: [],
+  };
+  const refs = new Map([
+    ["s", { id: "s", type: "scene", fictionalTime: 1 }],
+    ["r", { id: "r", type: "revision", ownerId: "s" }],
+  ]);
+  const base = {
+    type: "canon",
+    validFrom: 1,
+    sourceRefs: [{ id: "r", start: 0, end: 5 }],
+  };
+  assert.equal(permitted({ ...base, validUntil: 5 }, scope, refs), false);
+  assert.equal(
+    permitted(
+      { ...base, validFrom: 20 },
+      { ...scope, branchFictionalTime: 30 },
+      refs,
+    ),
+    false,
+  );
+  assert.equal(
+    permitted(
+      {
+        ...base,
+        recordKind: "plan",
+        proposition: "If it rains tomorrow, bring an umbrella",
+      },
+      scope,
+      refs,
+    ),
+    true,
+  );
+});

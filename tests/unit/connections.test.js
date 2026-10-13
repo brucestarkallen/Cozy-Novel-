@@ -4,6 +4,7 @@ import {
   presetProfile,
   endpointFor,
   normalizeModels,
+  configurationIdentity,
 } from "../../js/connections/presets.js";
 import { serialize } from "../../js/ai/providers/adapters.js";
 import {
@@ -43,6 +44,19 @@ test("presets construct explicit endpoints and discovered limits preserve model 
   assert.deepEqual(
     models.map((m) => m.id),
     ["a", "z"],
+  );
+  const restoreProfile = {
+    ...presetProfile("openai", "stable"),
+    model: "fixture",
+    contextLimit: 200000,
+  };
+  assert.notEqual(
+    configurationIdentity(restoreProfile),
+    configurationIdentity({ ...restoreProfile, contextLimit: 500000 }),
+  );
+  assert.notEqual(
+    configurationIdentity(restoreProfile),
+    configurationIdentity({ ...restoreProfile, inputPrice: 2 }),
   );
   assert.equal(models[1].contextLimit, 500000);
   assert.deepEqual(models[1].reasoningLevels, ["low", "high", "max"]);

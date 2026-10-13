@@ -9,8 +9,8 @@
     "pending": 1,
     "browser": "Important edit AFTER preview",
     "device": [
-      "B while upload held",
-      "Before preview"
+      "Before preview",
+      "B while upload held"
     ],
     "status": "Device save pending"
   },

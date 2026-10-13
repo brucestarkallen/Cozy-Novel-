@@ -10,6 +10,33 @@ export class ReadingQueue {
     this.busy = false;
     this.requested = false;
   }
+  async recoverOnOpen() {
+    const held = await globalThis.navigator?.locks?.query();
+    if (held?.held.some((lock) => lock.name === "cozynovel.helper")) return;
+    const tasks = (await this.repo.query("type", "artifact")).filter(
+      (a) =>
+        ["readingQueue", "readingTask"].includes(a.kind) &&
+        ["queued", "running"].includes(a.state),
+    );
+    for (const a of tasks)
+      await this.repo.withMutation(async () => {
+        const latest = await this.repo.get(a.id);
+        if (!["queued", "running"].includes(latest?.state)) return;
+        await this.repo.commitLocked({
+          novelId: a.novelId,
+          kind: "reading.recover",
+          expectedRecord: { id: a.id, version: latest.recordVersion || 0 },
+          records: [
+            {
+              ...latest,
+              state: "pending",
+              error:
+                "Library reopened. Resume this exact source reading when ready. No paid request was restarted.",
+            },
+          ],
+        });
+      });
+  }
   async enqueue(op) {
     if (op.libraryGeneration !== this.repo.generation) return;
     const owned = await this.repo.query("novelId", op.novelId);
@@ -28,7 +55,7 @@ export class ReadingQueue {
       )
         continue;
       const key = "artifact_readqueue_" + r.id;
-      if (await this.repo.get(key)) continue;
+      const existing = await this.repo.get(key);
       const prior = owned.filter(
         (a) =>
           a.kind === "analysis" &&
@@ -38,6 +65,7 @@ export class ReadingQueue {
             : a.baseRevisionId === r.id),
       );
       for (const a of prior) await applyReading(this.repo, a.id);
+      if (existing) continue;
       const end = Math.max(0, ...prior.map((a) => a.coverage?.end || 0));
       const sourceRecord = r.candidateId
         ? await this.repo.get(r.candidateId)
@@ -138,7 +166,7 @@ export class ReadingQueue {
               candidateId: task.candidateId,
               sourceRevisionId: task.baseRevisionId,
               readingStart: start,
-              connection,
+              connection: await this.app.requestConnection(true, task.novelId),
             });
             task = {
               ...(await this.repo.get(task.id)),
@@ -178,7 +206,12 @@ export class ReadingQueue {
   async resume(a) {
     if (a.kind === "readingQueue") {
       await this.repo.update(
-        { ...a, state: "queued", error: null },
+        {
+          ...a,
+          state: "queued",
+          libraryGeneration: this.repo.generation,
+          error: null,
+        },
         "reading.queue.resume",
       );
       this.schedule();
@@ -199,7 +232,7 @@ export class ReadingQueue {
       sourceRevisionId: a.baseRevisionId,
       candidateId: a.candidateId,
       readingStart: a.coverage.end || 0,
-      connection: this.app.connection(true, a.novelId),
+      connection: await this.app.requestConnection(true, a.novelId),
     });
   }
   dispose() {

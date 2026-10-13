@@ -133,11 +133,11 @@ class RelayTests(unittest.TestCase):
         for adapter in ['responses','chat','anthropic','openrouter']:
             with self.subTest(adapter=adapter):
                 profile={'id':'primary','adapter':adapter,'model':'fixture','endpoint':f'http://127.0.0.1:{self.provider_port}/v1/chat/completions','allowLocal':True,'outputLimit':100,'secret':'SYNTHETIC_RELAY_KEY','capabilities':{'usage':True}}
-                self.server.profiles.save(profile)
+                saved_profile=self.server.profiles.save(profile)
                 if adapter=='responses':payload={'model':'fixture','stream':True,'instructions':'Write prose','input':[{'role':'user','content':[{'type':'input_text','text':'A café'}]}],'max_output_tokens':100,'store':False}
                 elif adapter=='anthropic':payload={'model':'fixture','stream':True,'system':'Write prose','messages':[{'role':'user','content':'A café'}],'max_tokens':100}
                 else:payload={'model':'fixture','stream':True,'messages':[{'role':'system','content':'Write prose'},{'role':'user','content':'A café'}],'max_tokens':100,'stream_options':{'include_usage':True}}
-                c=http.client.HTTPConnection('127.0.0.1',self.server.server_port);c.request('POST','/api/novel/generate',json.dumps({'connectionId':'primary','adapter':adapter,'requestId':'request_'+adapter,'request':payload}),{'Origin':f'http://127.0.0.1:{self.server.server_port}','Content-Type':'application/json','X-CozyNovel-Session':self.server.token});r=c.getresponse();data=r.read();self.assertEqual(r.status,200);self.assertIn(b'Rain tapped',data);self.assertNotIn(b'SYNTHETIC_RELAY_KEY',data);c.close()
+                c=http.client.HTTPConnection('127.0.0.1',self.server.server_port);c.request('POST','/api/novel/generate',json.dumps({'connectionId':'primary','profileVersion':saved_profile['profileVersion'],'endpointIdentity':profile['endpoint'],'adapter':adapter,'requestId':'request_'+adapter,'request':payload}),{'Origin':f'http://127.0.0.1:{self.server.server_port}','Content-Type':'application/json','X-CozyNovel-Session':self.server.token});r=c.getresponse();data=r.read();self.assertEqual(r.status,200);self.assertIn(b'Rain tapped',data);self.assertNotIn(b'SYNTHETIC_RELAY_KEY',data);c.close()
     def test_source_directory_cannot_hold_device_secrets(self):
         with self.assertRaises(ValueError):NovelServer(('127.0.0.1',0),pathlib.Path('js/device-data'))
 

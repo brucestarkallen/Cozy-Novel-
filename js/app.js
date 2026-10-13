@@ -80,6 +80,7 @@ class Studio {
     await applyAppearance(await this.repo.get("appearance", "meta"));
     await renderLibrary(this);
     await this.writer.recoverInterrupted();
+    await this.readingQueue.recoverOnOpen();
     const signal = this.events.signal;
     $("#connectionPicker")?.addEventListener(
       "change",

@@ -192,6 +192,21 @@ function positive(...values) {
 
 export function configurationIdentity(c) {
   return JSON.stringify([
+    c.displayName,
+    c.preset,
+    c.baseUrl,
+    c.transport,
+    c.contextLimit,
+    c.reasoningReserve,
+    c.capabilityConfirmed,
+    c.contextOverride,
+    c.outputOverride,
+    c.persistSecret,
+    c.inputPrice,
+    c.outputPrice,
+    c.cachedPrice,
+    c.cacheWritePrice,
+    c.searchMaxUses,
     c.adapter,
     c.endpoint,
     c.model,

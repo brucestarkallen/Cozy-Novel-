@@ -178,10 +178,13 @@ export function permitted(record, scope, byId) {
       : record.validFrom > effectiveTime)
   )
     return false;
+  const expiryTime = scope.explorationId
+    ? (scope.branchFictionalTime ?? scope.fictionalTime)
+    : effectiveTime;
   if (
     record.validUntil != null &&
-    effectiveTime != null &&
-    record.validUntil <= effectiveTime
+    expiryTime != null &&
+    record.validUntil <= expiryTime
   )
     return false;
   if (record.scope === "exploration") return true;

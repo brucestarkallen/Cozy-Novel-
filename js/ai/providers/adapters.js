@@ -11,6 +11,7 @@ const SAFE_CODES = new Set([
   "invalid_request",
   "provider_error",
   "connection_unavailable",
+  "connection_changed",
   "local_service_unavailable",
   "dns_failure",
   "tls_failure",

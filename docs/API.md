@@ -16,7 +16,7 @@ Every path begins with `/api/novel/`. This service binds to loopback and does no
 
 A Test uses the ordinary protected `POST generate` path with the exact selected model and transport, a small explicit output allowance and a 20 second browser deadline. It is separate from Save. Browser direct uses fetch against the configured endpoint, CORS, TLS and exact origin bound page memory credentials. It never sends the local session token upstream.
 
-`POST generate` accepts connectionId, requestId, adapter and the adapter's serialized stateless request. The profile fixes destination and model. Unsupported top level parameters, arbitrary tools and provider conversation references are rejected. Explicit native web tool shapes, prompt cache fields and configured compatible reasoning or prefill extensions are narrowly allowlisted. The response relays the provider's event stream. Provider HTTP error bodies are not copied into local errors.
+`POST generate` accepts connectionId, captured profileVersion, endpointIdentity, requestId, adapter and the adapter's serialized stateless request. The profile fixes destination and model. The captured version and endpoint must still match inside the relay profile lock before forwarding; a mismatch makes no upstream request. Unsupported top level parameters, arbitrary tools and provider conversation references are rejected. Explicit native web tool shapes, prompt cache fields and configured compatible reasoning or prefill extensions are narrowly allowlisted. The response relays the provider's event stream. Provider HTTP error bodies are not copied into local errors.
 
 `POST cancel` requests cancellation of a running requestId by closing its upstream connection. It cannot guarantee cancellation of provider billing.
 

@@ -39,6 +39,10 @@ def endpoint(value,allow_local=False,own_port=8081):
     if u.scheme!='https' and not all(ipaddress.ip_address(a[4][0]).is_loopback for a in addresses): raise ValueError('Remote providers require verified HTTPS.')
     return u,addresses
 
+def provider_origin(value):
+    u=urlsplit(value)
+    return (u.scheme,u.hostname,u.port or (443 if u.scheme=='https' else 80))
+
 def public_profile(p,secrets):
     return {k:copy.deepcopy(v) for k,v in p.items() if k not in {'secret','secretFromId'}} | {'profileVersion':p.get('profileVersion',0),'hasSecret':bool(secrets.get(p.get('secretReference'),{}).get('value'))}
 
@@ -135,10 +139,10 @@ class Profiles:
             items=copy.deepcopy(self.items);secrets=copy.deepcopy(self.secrets);old=items.get(p['id'],{})
             if old and p.get('profileVersion') is not None and p['profileVersion']!=old.get('profileVersion',0):raise ValueError('This connection changed in another client. Your form is retained. Reopen the current profile or save a separate copy.')
             clean['profileVersion']=old.get('profileVersion',0)+1
-            ref=old.get('secretReference') if urlsplit(old.get('endpoint','')).netloc==urlsplit(p['endpoint']).netloc else None
+            ref=old.get('secretReference') if provider_origin(old.get('endpoint',''))==provider_origin(p['endpoint']) else None
             if p.get('secretFromId'):
                 origin=items.get(p['secretFromId'],{})
-                if urlsplit(origin.get('endpoint','')).netloc!=urlsplit(p['endpoint']).netloc: raise ValueError('A shared credential requires the same provider origin.')
+                if provider_origin(origin.get('endpoint',''))!=provider_origin(p['endpoint']): raise ValueError('A shared credential requires the same provider origin.')
                 ref=origin.get('secretReference')
             if not ref: ref='secret_'+uuid.uuid4().hex
             if p.get('secret'):
@@ -233,11 +237,12 @@ class Profiles:
             if not isinstance(models,list): raise ValueError('Malformed model list.')
             return {'models':models,'endpoint':p['endpoint'],'fetchedAt':time.time()}
         finally: conn.close()
-    def request(self,connection_id,adapter,payload):
+    def request(self,connection_id,adapter,payload,profile_version=None,endpoint_identity=None):
         with self.guard:
             p=copy.deepcopy(self.items.get(connection_id))
             if p:p['_secret']=self.secrets.get(p.get('secretReference'),{}).get('value','')
         if not p or p['adapter']!=adapter: raise ValueError('Configure and save this connection first.')
+        if not isinstance(profile_version,int) or isinstance(profile_version,bool) or profile_version!=p.get('profileVersion',0) or endpoint_identity!=p['endpoint']:raise ProviderError('The saved connection changed before sending. Reopen or save its current configuration before trying again. No request was forwarded.','connection_changed')
         if payload.get('model')!=p['model'] or payload.get('stream') is not True: raise ValueError('Request does not match the configured profile.')
         caps=p.get('capabilities',{});common={'model','stream'}
         common|={k for k in ('temperature','top_p','top_k','min_p','presence_penalty','frequency_penalty','repetition_penalty','seed','stop') if caps.get(k)}

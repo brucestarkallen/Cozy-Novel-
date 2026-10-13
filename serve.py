@@ -105,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.active[request_id]=None
         conn=None
         try:
-            conn,response=self.server.profiles.request(data.get('connectionId'),data.get('adapter'),data.get('request',{}))
+            conn,response=self.server.profiles.request(data.get('connectionId'),data.get('adapter'),data.get('request',{}),data.get('profileVersion'),data.get('endpointIdentity'))
             with self.server.guard:self.server.active[request_id]=conn
             self.send_response(200);self.send_header('Content-Type','text/event-stream');self.send_header('Cache-Control','no-store');self.send_header('Connection','close');self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.close_connection=True
             try:

@@ -96,6 +96,8 @@ export async function providerFetch(
     },
     body: JSON.stringify({
       connectionId: c.id,
+      profileVersion: c.profileVersion,
+      endpointIdentity: c.endpoint,
       adapter: c.adapter,
       requestId,
       request: payload,

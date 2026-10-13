@@ -616,6 +616,41 @@ try {
         body: JSON.stringify({ id: c.id }),
       });
     }
+    const captured = await save({
+      ...presetProfile("custom", "captured_snapshot"),
+      endpoint: endpoint + "/v1/chat/completions",
+      model: "synthetic-fixture",
+      allowLocal: true,
+      secret: "SYNTHETIC_SNAPSHOT_KEY",
+    });
+    await save({
+      ...captured,
+      endpoint: endpoint + "/v1/chat/completions/changed",
+    });
+    const beforeForward = (await (await fetch(endpoint + "/requests")).json())
+      .requests.length;
+    let snapshotError;
+    try {
+      await testConnection(device, captured);
+    } catch (e) {
+      snapshotError = e;
+    }
+    if (
+      snapshotError?.code !== "connection_changed" ||
+      (await (await fetch(endpoint + "/requests")).json()).requests.length !==
+        beforeForward
+    )
+      throw new Error(
+        "A changed relay profile retargeted an original request snapshot",
+      );
+    await fetch("/api/novel/connections/remove", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CozyNovel-Session": device.token,
+      },
+      body: JSON.stringify({ id: captured.id }),
+    });
     const direct = {
       ...presetProfile("custom", "direct_test"),
       endpoint: endpoint + "/v1/chat/completions",
@@ -725,6 +760,12 @@ try {
     } finally {
       crypto.subtle.digest = digest;
     }
+    const durableRevision = (await r.get(scene.id)).currentRevisionId;
+    check(
+      (await r.get("artifact_readqueue_" + durableRevision))?.baseRevisionId ===
+        durableRevision,
+      "Accepted text and its reading task commit atomically without a visible workspace or subscriber",
+    );
     check(
       (await r.get(scene.id)).notes === "New notes from second client" &&
         (await r.sceneText(scene.id)).text === "NEW PROSE",
@@ -1038,6 +1079,76 @@ try {
         "CN08 predecessor eligibility preserved outside child",
       );
     }
+    const clockText = "At time 10, everyone waits.";
+    const clockEx = await r.get(ex.id),
+      clockTurn = await addTurn(r, clockEx, "world", clockText),
+      clockBlob = await textBlob(clockText);
+    const clockReading = {
+      ...rpRead,
+      id: id("artifact"),
+      branchId: child,
+      textBlobId: clockBlob.id,
+      coveredTurnIds: [clockTurn.id],
+      body: {
+        updates: [],
+        frame: {
+          relativeTime: "Later on this branch",
+          fictionalTime: 10,
+          quote: clockText,
+          support: "explicit",
+        },
+      },
+      coverage: { start: 0, end: clockText.length, complete: true },
+    };
+    await r.commit({
+      novelId: n,
+      kind: "test.clock",
+      records: [clockReading],
+      blobs: [clockBlob],
+    });
+    await applyReading(r, clockReading.id);
+    const atTen = await branchState(
+      r,
+      await r.get(ex.id),
+      await branchTurns(r, await r.get(ex.id)),
+    );
+    check(
+      atTen.currentFictionalTime === 10 &&
+        !atTen.claims.some((c) => c.proposition === "Temporary injury"),
+      "Known entry condition expires as the branch clock advances without admitting later manuscript revelations",
+    );
+    const { ConnectionLibrary } = await import("/js/connections/library.js"),
+      { presetProfile } = await import("/js/connections/presets.js");
+    const deviceProfile = {
+        ...presetProfile("openai", "restored_profile"),
+        model: "fixture",
+        contextLimit: 500000,
+      },
+      localProfile = {
+        ...deviceProfile,
+        contextLimit: 200000,
+        inputPrice: 1.23,
+        relaySaved: false,
+        hasSecret: false,
+      };
+    await r.localPut({
+      id: "connectionLibrary",
+      profiles: [localProfile],
+      defaults: { writerId: localProfile.id, helperId: null },
+    });
+    const restoredConnections = new ConnectionLibrary({
+      repo: r,
+      novelId: n,
+      device: { token: null },
+      updateModel() {},
+    });
+    await restoredConnections.load([deviceProfile]);
+    check(
+      restoredConnections.resolve().contextLimit === 200000 &&
+        restoredConnections.resolve().inputPrice === 1.23 &&
+        restoredConnections.profiles[0].deviceProfile.contextLimit === 500000,
+      "Restored connection limits and pricing remain owned locally while a differing device profile stays available for comparison",
+    );
     const backup = await exportBackup(r);
     const restored = await Repository.open("cozynovel.release.restore");
     await restoreBackup(restored, backup);
@@ -1046,6 +1157,16 @@ try {
         JSON.stringify(await r.get(expiryRecord)),
       "CN09 expiry and provenance survive complete backup and fresh database restore",
     );
+    const { ReadingQueue } = await import("/js/ai/reading-queue.js"),
+      queue = new ReadingQueue({ repo: r });
+    await queue.recoverOnOpen();
+    check(
+      (await r.query("type", "artifact"))
+        .filter((a) => a.kind === "readingQueue")
+        .every((a) => !["queued", "running"].includes(a.state)),
+      "Opening leaves unfinished source tasks explicitly resumable instead of automatically making paid requests",
+    );
+    queue.dispose();
     r.dispose();
     r2.dispose();
     restored.dispose();

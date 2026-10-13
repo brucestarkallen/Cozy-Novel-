@@ -41,6 +41,10 @@ class ConnectionTests(unittest.TestCase):
     def test_host_change_does_not_forward_existing_credential_and_destinations_are_checked_on_use(self):
         self.p.save(profile('a',secret='SYNTHETIC',persistSecret=True));a=self.p.save(profile('a',endpoint='https://different.example/v1/chat/completions'))
         self.assertFalse(a['hasSecret'])
+        self.p.save(profile('secure_local',endpoint='https://localhost/v1/chat/completions',allowLocal=True,secret='SYNTHETIC_LOCAL',persistSecret=True))
+        changed=self.p.save(profile('secure_local',endpoint='http://localhost/v1/chat/completions',allowLocal=True))
+        self.assertFalse(changed['hasSecret'])
+        with self.assertRaises(ValueError):self.p.save(profile('cross_scheme',endpoint='https://localhost/v1/chat/completions',allowLocal=True,secretFromId='secure_local'))
         with self.assertRaises(ValueError):self.p.save(profile('b',endpoint='http://192.168.0.1/v1/chat/completions',allowLocal=True))
         with patch('server.relay.socket.getaddrinfo',side_effect=OSError('offline')):
             with self.assertRaises(OSError):endpoint('https://offline.example/v1/chat/completions')
@@ -57,6 +61,8 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(next(iter(b['compatibilityHistory'].values()))['observations']['code'],'provider_refusal');self.assertNotIn('observations',b)
         with self.assertRaises(ValueError):self.p.save(dict(a,model='stale'))
         self.assertEqual(self.p.items['a']['model'],'newer');self.assertGreater(b['profileVersion'],a['profileVersion'])
+        with self.assertRaises(ProviderError) as error:self.p.request('a','chat',{'model':'newer','stream':True},a['profileVersion'],a['endpoint'])
+        self.assertEqual(error.exception.code,'connection_changed')
     def test_retention_changes_do_not_revoke_an_independent_profile_and_invalid_key_is_redacted(self):
         a=self.p.save(profile('a',secret='SYNTHETIC_RETENTION_KEY',persistSecret=True));b=self.p.save(profile('b',secretFromId='a',persistSecret=False))
         self.assertNotEqual(a['secretReference'],b['secretReference'])

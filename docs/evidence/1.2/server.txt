@@ -24,6 +24,6 @@ test_upgrade_resend_recognizes_legacy_digest_but_blocks_new_old_writer_operation
 test_writes_confined_to_owned_directory (test_server.StoreTests.test_writes_confined_to_owned_directory) ... ok
 
 ----------------------------------------------------------------------
-Ran 24 tests in 1.311s
+Ran 24 tests in 1.291s
 
 OK

@@ -21,3 +21,6 @@ Reopened release 1.1 against the supplied parity and preservation audit. Added r
 Integrated the supplied crisp room and portrait artwork as owned decorative assets beneath real HTML controls. Added distinct reading and writing focus, phone workspace panels, creative draft recovery, reusable styles, deliberate references, optional Director and Literary Editor guidance and explicit source ID recall.
 
 Repaired CN03 through CN12: metadata merging, creative draft persistence, dependency aware undo, stale RP rejection, typed recovery, branch overlays, expiry, helper entry boundaries, author scope and durable source reading. Retained the synchronization drain, exact acknowledgements, restore journals and source freshness fences. Physical database and writer versions advance independently to 3; portable and service formats remain 1. Evidence and limits are in docs/RELEASE_1_2.md and docs/VERIFICATION.md. No paid account call, RP data access or deployment was performed.
+
+
+Final prepublication checks extended expiry to known entry conditions as RP time advances, made the first reading task atomic with accepted text, and made unfinished startup work explicitly resumable. The complete journey and preservation suites were rerun before publication. No 1.2 code had been pushed before these checks.

@@ -116,6 +116,43 @@ export async function revise(
           : { freshness: "stale" }),
       });
     }
+    const latestNovel = await repo.get(n.id),
+      library = await repo.get("library", "meta"),
+      readTask = [];
+    if (
+      [
+        "author",
+        "candidate.accept",
+        "selection.replace",
+        "revision.restore",
+      ].includes(sourceKind) &&
+      (latestNovel.storyMode ??
+        (latestNovel.autoSuggestions === false ? "off" : "auto")) !== "off"
+    ) {
+      const candidateId = revision.candidateId || null,
+        sourceBody = candidateId ? await repo.get(candidateId) : null;
+      readTask.push({
+        id: "artifact_readqueue_" + revision.id,
+        type: "artifact",
+        novelId: n.id,
+        sceneId,
+        kind: "readingQueue",
+        libraryGeneration: library.generation,
+        state: "queued",
+        baseRevisionId: revision.id,
+        candidateId,
+        coverage: {
+          start: 0,
+          end: 0,
+          sourceLength: sourceBody
+            ? (await repo.text(sourceBody.textBlobId)).length
+            : text.length,
+          complete: false,
+        },
+        sourceRefs: [{ id: revision.id }],
+        createdAt: now(),
+      });
+    }
     await repo.commitLocked({
       novelId: n.id,
       kind: sourceKind,
@@ -130,6 +167,7 @@ export async function revise(
           currentRevisionId: revision.id,
           searchIndex: indexText(text),
         },
+        ...readTask,
         ...liveStale.filter(
           (r) => !(extra.records || []).some((x) => x.id === r.id),
         ),
