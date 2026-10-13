@@ -29,6 +29,8 @@ function draw(focus = '') {
   const scroll = sheet.body.scrollTop;
   /* what is open stays open when the sheet is drawn again */
   const open = new Set([...sheet.body.querySelectorAll('section.group[data-key]:not(.fold)')].map((g) => g.dataset.key));
+  /* asked for by name (the writer chip's Connections…): it opens, however it was left */
+  if (focus === 'connections') open.add('set.connections');
   sheet.body.textContent = '';
   const hs = house();
   sheet.body.append(

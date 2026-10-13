@@ -61,6 +61,16 @@ async def scenario_back(b):
     check('and Back again closes the settings, still in the book', await pg.locator('.sheet.on').count() == 0 and await on_desk(pg), '')
     hs = await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())")
     check('the connection was not removed', len(hs['data']['connections']) == 1, len(hs['data']['connections']))
+    # Connections… opens on the connections, even when he folded them before
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    if await pg.locator('.sheet .group[data-key="set.connections"]:not(.fold)').count():
+        await pg.click('.sheet .group button.ghead:has-text("Connections")')
+    await close_sheet(pg)
+    await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
+    await pg.wait_for_selector('.sheet.on')
+    check('Connections… opens the connections even after they were folded', await pg.locator('.sheet .group[data-key="set.connections"]:not(.fold)').count() == 1, '')
+    await close_sheet(pg)
     # a passage menu then a drawer
     await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
     await pg.go_back(); await pg.wait_for_timeout(300)
