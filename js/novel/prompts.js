@@ -591,12 +591,24 @@ function stockLine(stock) {
 
 /* before: the story right before the passages — of their own chapter, or
  * (the chapter's first passages) the end of the chapter before */
-export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {} }) {
+/* what the checker and the judge are told the writer is told: his own words
+ * for how it is written (and his note at the end), so nothing he asked for is
+ * ever "fixed" or held against a page; and the story so far, chapter by
+ * chapter, for what is true in it beyond the notes */
+function writerSees({ his = '', sofar = '' }) {
+  const out = [];
+  if (his && his.trim()) out.push(`How I want the book written — what the writer is told; nothing it asks for is ever a fault:\n${fence(his)}`);
+  if (sofar && sofar.trim()) out.push(`The story so far, chapter by chapter:\n${fence(sofar)}`);
+  return out;
+}
+
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, his = '', sofar = '' }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true });
   if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
+  parts.push(...writerSees({ his, sofar }));
   if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to these passages, for what has just happened:\n${fence(before)}`);
   parts.push(`Check these passages from ${chapterLabel}, each numbered as it is on the page:\n${fence(numbered)}`);
   const allowed = judge ? allowedFails(judge.target) : 0;
@@ -606,7 +618,7 @@ export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
 - "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. And the seams: this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
 
-Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
+Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake${his && his.trim() ? ', and nothing I ask the writer for (above) is one' : ''}. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
 
 Each fix replaces a stretch of words: "find" is the words exactly as they stand in that passage — copied exactly, enough of them to stand in only one place in it — "replace" the new words, and "why" a few words on why.${judge ? `
 
@@ -625,12 +637,13 @@ Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kin
  * the first or the second cancels out). Asking which of two is better is the
  * judging that agrees with readers most (LitBench, arXiv 2507.00769; EQ-Bench
  * ranks its writers the same way). */
-export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false }) {
+export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false, his = '', sofar = '' }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true });
   if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
+  parts.push(...writerSees({ his, sofar }));
   if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to this passage, for what has just happened:\n${fence(before)}`);
   if (asked && asked.trim()) parts.push(`What I asked for here:\n${fence(asked)}`);
   parts.push(`Two writers each wrote this passage of ${chapterLabel}, for the same moment.\n\nPage A:\n${fence(first)}\n\nPage B:\n${fence(second)}`);

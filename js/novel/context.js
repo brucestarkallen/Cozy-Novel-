@@ -58,7 +58,7 @@ function excerpt(text, n = 900) {
 
 /* The chapter's summary — said to be older than the chapter when the chapter
  * has changed since — or, with none yet, the chapter's opening and close. */
-function shortOf(chapter) {
+export function shortOf(chapter) {
   const s = chapter && chapter.summary;
   const text = chapterText(chapter);
   if (!text.trim()) return '(nothing written in it yet)';

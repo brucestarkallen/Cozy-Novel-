@@ -23,8 +23,8 @@ import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain } from './writer.js';
 import * as archivist from './archivist.js';
 import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, chapterText } from './shape.js';
-import { numberedText } from './context.js';
-import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, CHECK_KINDS, JUDGE_CHECKS } from './prompts.js';
+import { numberedText, shortOf } from './context.js';
+import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS } from './prompts.js';
 import { locate } from './changes.js';
 import { findIn } from './search.js';
 import { stockIn } from './stock.js';
@@ -217,7 +217,38 @@ function retryLater(novelId) {
 function fixedOf(house, novel) {
   const avoid = avoidList(house);
   const system = [checkerFrame(house, novel), avoidLine(avoid)].filter(Boolean).join('\n\n');
-  return estimateTokens(system) + estimateTokens(checkRequest({ novel, chapterLabel: 'Chapter Twenty-Two', numbered: '', avoid, judge: judgeOf(house) })) + 150;
+  return estimateTokens(system) + estimateTokens(checkRequest({ novel, chapterLabel: 'Chapter Twenty-Two', numbered: '', avoid, judge: judgeOf(house), his: hisWords(house) })) + 150;
+}
+
+/* What the writer is told of how to write — his own box, and his note at the
+ * end for the book — word for word, for the checker and the judge to hold
+ * the page to the book he asked for (a box past 6,000 tokens, its opening
+ * and close: a quick checker's room is for the pages). */
+function hisWords(house) {
+  const instr = (house && house.instructions) || {};
+  const t = [String(instr.system || '').trim(), lateFor(instr, 'write')].filter(Boolean).join('\n\n');
+  if (estimateTokens(t) <= 6000) return t;
+  const n = 9000;
+  return `${t.slice(0, n).trim()}\n[…]\n${t.slice(-n).trim()}`;
+}
+
+/* The chapters before this one as the writer is told them past its room —
+ * each by its summary (or, not summarised yet, its opening and close) — as
+ * many of the nearest as the room holds. */
+function storySoFar(novel, chapterId, budget) {
+  const order = novel.order || [];
+  const rows = [];
+  let used = 0;
+  for (let i = order.indexOf(chapterId) - 1; i >= 0; i--) {
+    const c = store.peek('chapter', order[i]);
+    if (!c) continue;
+    const row = `${chapterLabel(novel, c)}:\n${shortOf(c)}`;
+    const t = estimateTokens(row);
+    if (used + t > budget) break;
+    rows.unshift(row);
+    used += t;
+  }
+  return rows.join('\n\n');
 }
 
 /* how many words one checking carries: about as many as a careful read takes
@@ -463,6 +494,9 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   const spare = archivist.readingRoom(conn, fixedOf(house, novel)) - Math.max(...numbered.map((x) => estimateTokens(x)));
   const keep = Math.max(0, Math.min(lead.from === 'last' ? 2500 : 6000, Math.floor(spare * 0.4 * 3.5)));
   const before = tailOf(lead.text, keep);
+  /* what the writer is told too: his words for how it is written, and the chapters before as their summaries */
+  const his = hisWords(house);
+  const sofar = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
   const edits = [];
   const grades = [];
   const judge = judgeOf(house);
@@ -473,7 +507,7 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
       const here = [...new Set(a.stock.map((h) => h.words))].filter((w) => words.includes(w)).slice(0, 8);
       if (here.length) stock[n] = here;
     }
-    const got = await archivist.askJson(conn, system, checkRequest({ novel, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, beforeFrom: lead.from, judge, stock }), { want: (o) => Array.isArray(o.edits) });
+    const got = await archivist.askJson(conn, system, checkRequest({ novel, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, beforeFrom: lead.from, judge, stock, his, sofar }), { want: (o) => Array.isArray(o.edits) });
     if (!got.ok) throw failed(got);
     edits.push(...got.obj.edits);
     if (Array.isArray(got.obj.grades)) grades.push(...got.obj.grades);
@@ -681,11 +715,14 @@ async function duel(novelId, conn, d) {
   const system = checkerFrame(house, novel);
   const lead = storyBefore(novel, chapter, p.id);
   const label = chapterLabel(novel, chapter);
-  const build = (first, second, before) => duelRequest({ novel, chapterLabel: label, before, beforeFrom: lead.from, asked: askedOf(vx), first, second, cut: pages.cut });
+  const his = hisWords(house);
+  let sofar = '';
+  const build = (first, second, before) => duelRequest({ novel, chapterLabel: label, before, beforeFrom: lead.from, asked: askedOf(vx), first, second, cut: pages.cut, his, sofar });
   const spare = archivist.readingRoom(conn, estimateTokens(system) + estimateTokens(build(pages.x, pages.y, '')));
   /* two pages that do not fit beside the notes are not read */
   if (spare < 0) return null;
   const before = tailOf(lead.text, Math.max(0, Math.min(lead.from === 'last' ? 2500 : 6000, Math.floor(spare * 0.4 * 3.5))));
+  sofar = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
   const said = (o) => { const b = String(o.better || '').trim().toUpperCase(); return b === 'A' || b === 'B' ? b : 'same'; };
   const one = await archivist.askJson(conn, system, build(pages.x, pages.y, before), { want: (o) => typeof o.better === 'string' });
   if (!one.ok) return one.permanent ? { stop: failed(one) } : null;

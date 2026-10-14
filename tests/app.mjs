@@ -2624,6 +2624,7 @@ await test('two versions of one passage by two writers for the same moment are r
   const at = (c, t) => c.indexOf(t);
   assert.ok(at(duels[0], 'Mara looked at the lamp') < at(duels[0], 'Mara lit the lamp.') && at(duels[1], 'Mara lit the lamp.') < at(duels[1], 'Mara looked at the lamp'), 'both ways round');
   assert.ok(duels[0].includes('What I asked for here:\n"""\nShe lights it.\n"""'), 'what he asked for that moment');
+  assert.ok(duels[0].includes('How I want the book written') && duels[0].includes('HIS OWN WORDS FIRST'), 'what the writer is told');
   let g = checker.gradesOf(b.novelId);
   const rec = (m) => { const r = g.models.find((x) => x.model === m) || {}; return [r.win, r.loss, r.tie]; };
   assert.deepEqual([rec('writer-a'), rec('writer-b'), g.duels], [[1, 0, 0], [0, 1, 0], 1]);
@@ -2761,6 +2762,21 @@ await test('never written again by itself: his own words, a grade he left, writi
   await setHouse();
   await putAway(b);
   await putAway(b2);
+});
+
+await test('the checker and the judge are told what the writer is told: his words for how it is written, his note at the end, the chapters before by their summaries', async () => {
+  await setHouse({}, { checksFrom: 0, instructions: { system: 'Short punchy fragments. Present tense.', late: 'Keep Mara quiet.', partner: '' } });
+  const b = await makeBook([['The storm broke.'], ['Morning came.']]);
+  store.change('chapter', b.ids[0], shape.chapterSteps.setSummary({ text: 'CHAPTER ONE SUMMARY: the storm, the bottle.', fp: shape.chapterPrint(b.ch(0)) }), { now: true });
+  await checker.runCheck(b.novelId);
+  const asks = (await requests()).map((x) => x.body.messages.at(-1).content);
+  const two = asks.find((a) => a.includes('Check these passages from Chapter Two'));
+  assert.ok(two.includes('How I want the book written — what the writer is told; nothing it asks for is ever a fault:\n"""\nShort punchy fragments. Present tense.\n\nKeep Mara quiet.\n"""'), two.slice(0, 600));
+  assert.ok(two.includes('The story so far, chapter by chapter:') && two.includes('CHAPTER ONE SUMMARY: the storm, the bottle.'), 'the chapters before');
+  assert.ok(two.includes('nothing I ask the writer for (above) is one'));
+  assert.ok(!asks.find((a) => a.includes('Check these passages from Chapter One')).includes('The story so far'), 'the first chapter has none before it');
+  await setHouse();
+  await putAway(b);
 });
 
 await test('the checker and the judge speak in words that never name a machine', async () => {
