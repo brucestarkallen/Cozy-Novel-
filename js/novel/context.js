@@ -24,8 +24,8 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, standingNotes, macroNames, withMacros } from './prompts.js';
-import { notesAtPoint, unread } from './readings.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, asideWords, standingNotes, macroNames, withMacros } from './prompts.js';
+import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
 
@@ -160,10 +160,13 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
   const later = at >= 0 ? order.slice(at + 1) : [];
   const ch = (id) => chapters[id] || { id, passages: [] };
   const labelOf = (id) => chapterLabel(novel, ch(id));
-  const wholeOf = (id) => (numbered ? numberedText(novel, ch(id)) : chapterText(ch(id)));
+  /* a chapter not in hand is never told as empty: said to be unread just now */
+  const UNREAD = '(this chapter could not be read just now)';
+  const wholeOf = (id) => (!chapters[id] ? UNREAD : numbered ? numberedText(novel, ch(id)) : chapterText(ch(id)));
   const wholeCost = earlier.map((id) => estimateTokens(wholeOf(id)) + 12);
-  const shortCost = earlier.map((id) => estimateTokens(shortOf(ch(id))) + 12);
-  const laterRows = later.map((id) => ({ label: labelOf(id), text: shortOf(ch(id)) }));
+  const shortText = (id) => (!chapters[id] ? UNREAD : shortOf(ch(id)));
+  const shortCost = earlier.map((id) => estimateTokens(shortText(id)) + 12);
+  const laterRows = later.map((id) => ({ label: labelOf(id), text: shortText(id) }));
   let laterCost = laterRows.reduce((a, r) => a + estimateTokens(r.text) + 12, 0);
   let laterOmitted = 0;
   while (laterRows.length && laterCost > room * 0.25) { const r = laterRows.pop(); laterCost -= estimateTokens(r.text) + 12; laterOmitted++; }
@@ -182,7 +185,7 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
   while (cost > left && omitted < k) { cost -= shortCost[omitted]; omitted++; }
   const book = {
     omitted,
-    summaries: earlier.slice(omitted, k).map((id) => ({ id, label: labelOf(id), text: shortOf(ch(id)) })),
+    summaries: earlier.slice(omitted, k).map((id) => ({ id, label: labelOf(id), text: shortText(id) })),
     whole: earlier.slice(k).map((id) => ({ id, label: labelOf(id), text: wholeOf(id) || '(nothing written in it yet)' })),
     current,
     later: laterRows,
@@ -229,13 +232,18 @@ export function notesBehind(novel, chapters, chapter, target = {}, purpose = 'wr
     const order = novel.order || [];
     rows.sort((a, b) => order.indexOf(a.chapterId) - order.indexOf(b.chapterId) || a.n - b.n);
   }
-  const groups = [];
-  for (const r of rows) {
-    const label = chapterLabel(novel, chapters[r.chapterId], { withName: false });
-    const g = groups[groups.length - 1];
-    if (g && g.id === r.chapterId) g.ns.push(r.n); else groups.push({ id: r.chapterId, label, ns: [r.n] });
-  }
-  return notReadWords(groups);
+  const grouped = (list) => {
+    const groups = [];
+    for (const r of list) {
+      const label = chapterLabel(novel, chapters[r.chapterId], { withName: false });
+      const g = groups[groups.length - 1];
+      if (g && g.id === r.chapterId) g.ns.push(r.n); else groups.push({ id: r.chapterId, label, ns: [r.n] });
+    }
+    return groups;
+  };
+  /* and the passages set aside — their model would not read them — said too, never silently missing (S04-G8) */
+  const aside = asideRows(novel, chapters, point);
+  return [notReadWords(grouped(rows)), asideWords(grouped(aside))].filter(Boolean).join('\n');
 }
 
 /* The narrator's own words, from "How the narrator tells scenes": its

@@ -231,6 +231,9 @@ export function spliceSelection(fullText, start, end, answer) {
  * (context.js). archivist.js sets this. */
 let notesWait = null;
 export function setNotesWait(fn) { notesWait = fn; }
+/* the helper keeps the words it read of a version about to grow in place (Go on), so it reads what is added as a change — never the whole again as new (archivist.js retireIfSeen) */
+let beforeGrow = null;
+export function setBeforeGrow(fn) { beforeGrow = fn; }
 
 /* -------------------------------------------------------- the one loop */
 
@@ -686,6 +689,7 @@ export async function goOn({ novelId, chapterId, passageId }) {
   const moment = momentOf(chapter, p);
   const i = chapter.passages.indexOf(p);
   const between = chapter.passages.slice(i + 1).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
+  if (beforeGrow) { try { beforeGrow(novelId, chapterId, passageId, v.id); } catch (_) { /* the helper reads it whole, as before */ } }
   store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, { streaming: true, cut: undefined, cutWhy: undefined, stopped: undefined, endCut: undefined }), { now: true });
   /* its last words, from the start of a word */
   const tail = original.text.length > 240 ? original.text.slice(-240).replace(/^\S*\s+/, '') : original.text;

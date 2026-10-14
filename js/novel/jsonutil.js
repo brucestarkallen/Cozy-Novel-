@@ -102,6 +102,31 @@ export function parseLenient(candidate) {
 }
 
 /* The object that answers, or null. want(obj) picks among several. */
+/* whether the answer's first object closes — a reply cut off inside it holds
+ * only inner objects, never the answer (Cozy Tavern's M685) */
+export function closesWhole(raw) {
+  const text = String(raw || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/```(?:json|JSON)?/g, '');
+  const start = text.indexOf('{');
+  if (start < 0) return false;
+  const first = balancedCandidates(text.slice(start), 1)[0];
+  return Boolean(first) && text.slice(start).startsWith(first);
+}
+
+/* the last object in words that may hold drafts of it before (a model's thinking) */
+export function parseLastObject(raw, want = null) {
+  try {
+    const text = String(raw || '').replace(/```(?:json|JSON)?/g, '');
+    const all = balancedCandidates(text, 40);
+    for (let k = all.length - 1; k >= 0; k--) {
+      const parsed = parseLenient(all[k]);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (typeof want !== 'function' || want(parsed))) return parsed;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
 export function parseFirstObject(raw, want = null) {
   try {
     let text = String(raw || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/```(?:json|JSON)?/g, '');

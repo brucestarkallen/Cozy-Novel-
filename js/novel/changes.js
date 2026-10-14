@@ -16,7 +16,7 @@
 
 import * as store from '../store.js';
 import { chapterSteps, novelSteps, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp } from './shape.js';
-import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText } from '../util.js';
+import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE } from './prompts.js';
 import { listModules, moduleSteps } from './modules.js';
@@ -682,6 +682,7 @@ function replaceEverywhere(novelId, novel, items, put, why) {
  * made takes the others of its group with it, said, so a swap is never made
  * by half. The first holds the Undo for all; the others say they went with
  * it. Returns one change per op, in order. */
+const REREADING = 'the whole book is being read again for the notes just now — ask for this once that is done';
 export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
   const put = dry ? () => {} : (...a) => store.change(...a);
   const at = Date.now();
@@ -689,6 +690,8 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
   const novel = store.peek('novel', novelId);
   if (!novel) return bases.map((b) => ({ ...b, status: 'refused', said: 'the book is not open' }));
   const names = ops[0] && ops[0].rename && typeof ops[0].rename === 'object';
+  /* while the whole book is read again, the notes stand half built beside the ones everyone reads: a name changed now would miss one of them (S04-G2) */
+  if (names && archivist.rereading(novelId)) return bases.map((b) => ({ ...b, status: 'refused', said: REREADING }));
   const items = ops.map((op) => (names ? renameOf(novel, op) : replaceAllOf(novel, op)));
   const bad = items.findIndex((x) => x.why);
   if (bad >= 0) return bases.map((b, i) => ({ ...b, status: 'refused', said: i === bad ? items[i].why : `it goes together with ${bases[bad].label}, which could not be made: ${items[bad].why}` }));
@@ -767,7 +770,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     if (next === old) return refuse('it would change nothing');
     const before = m.builtin && !m.ownWords ? undefined : old;
     put('house', 'house', moduleSteps.set(m.id, { text: next }), { now: true });
-    return { ...base, label: `The module “${m.name}”`, status: 'made', undo: { what: 'module', id: m.id, before, after: next }, before: old.slice(0, 400), after: next.slice(0, 400) };
+    return { ...base, label: `The module “${m.name}”`, status: 'made', undo: { what: 'module', id: m.id, before, after: next }, before: cutWords(old, 400), after: cutWords(next, 400) };
   }
 
   /* a chapter's summary, his from then on (until the chapter itself changes) */
@@ -917,6 +920,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     return { ...base, status: 'made', undo: { what: 'book', field, meta, before: old, after: next }, before: old, after: next };
   }
 
+  if (op.note !== undefined && archivist.rereading(novelId)) return refuse(REREADING);
   if (op.note !== undefined) {
     const kind = op.note;
     if (!NOTE_KINDS.includes(kind)) return refuse(`“${kind}” is not a part of the notes`);
@@ -963,6 +967,8 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const words = op[key] === undefined ? '' : archivist.cleanText(op[key]);
       if (words) next[key] = words;
     }
+    /* a "now" it writes is as of the end of the book so far */
+    if (kind === 'people' && next.now !== (card ? card.now : undefined) && String(next.now || '').trim() && (novel.order || []).length) { next.nowAt = novel.order[novel.order.length - 1]; delete next.nowPid; }
     /* "aka" adds names it goes by; "dropAka" takes them off */
     const names = (v) => (v === undefined || v === null ? [] : Array.isArray(v) ? v : String(v).split(',')).map(archivist.cleanName).filter(Boolean);
     const more = names(op.aka);
@@ -1150,10 +1156,13 @@ export function undoChange(novelId, change) {
       const still = mine.filter((k) => JSON.stringify(cur[k]) === JSON.stringify(u.after[k]));
       if (!still.length) return { ok: false, said: 'the card has been changed since' };
       const back = clone(cur);
-      for (const k of still) { if (u.before[k] === undefined) delete back[k]; else back[k] = clone(u.before[k]); }
+      /* where someone is now goes back with when it was as of */
+      const withIt = (k) => (k === 'now' ? ['now', 'nowAt', 'nowPid'] : [k]);
+      for (const k of still.flatMap(withIt)) { if (u.before[k] === undefined) delete back[k]; else back[k] = clone(u.before[k]); }
       if (still.length === mine.length) back.updated = clone(u.before.updated);
       store.change('novel', novelId, novelSteps.putNote(u.kind, back), { now: true });
-      return still.length === mine.length ? { ok: true } : { ok: true, said: `${mine.filter((k) => !still.includes(k)).join(', ')} changed since, kept as they are` };
+      const PART = { name: 'its name', aka: 'the other names', about: 'what it says', ties: 'with others', now: 'right now', open: 'open or closed' };
+      return still.length === mine.length ? { ok: true } : { ok: true, said: `${mine.filter((k) => !still.includes(k)).map((k) => PART[k] || k).join(', ')} changed since, kept as ${mine.length - still.length === 1 ? 'it is' : 'they are'}` };
     }
     if (u.after && cur && u.fields && !u.before) {
       /* a card it made: taken out again (what the helper added to it since goes with it) */

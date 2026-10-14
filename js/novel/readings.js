@@ -242,6 +242,29 @@ export function sigOf(v) {
  * book (before: a passage id in chapterId; with no point, the whole book):
  * [{chapterId, pid, n}] in book order, n its number on the page. A passage
  * being written, or the one being written again (skip), is not counted. */
+/* The passages set aside (their model would not read them) up to a point:
+ * marked read with nothing taken from them, so never "not read yet" — but
+ * never in the notes either (Cozy Tavern's M675-7: what was passed by is said) */
+export function asideRows(novel, chapters, { chapterId = null, before = null, skip = null } = {}) {
+  const aside = (novel && novel.memory && novel.memory.aside) || {};
+  if (!Object.keys(aside).length) return [];
+  const out = [];
+  for (const id of (novel && novel.order) || []) {
+    const c = chapters[id];
+    if (!c) continue;
+    let n = 0;
+    for (const p of c.passages || []) {
+      if (id === chapterId && before && p.id === before) return out;
+      if (p.by === 'break') continue;
+      n++;
+      if (p.id === skip || !aside[p.id]) continue;
+      const v = picked(p);
+      if (v && !v.streaming && aside[p.id].sig === sigOf(v)) out.push({ chapterId: id, pid: p.id, n });
+    }
+  }
+  return out;
+}
+
 export function unread(novel, chapters, { chapterId = null, before = null, skip = null } = {}) {
   const seen = (novel && novel.memory && novel.memory.seen) || {};
   const out = [];

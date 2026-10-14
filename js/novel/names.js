@@ -185,7 +185,13 @@ export function nameInText(folded, name, { words = true } = {}) {
   const f = typeof folded === 'string' ? foldedText(folded) : folded;
   const present = (w) => Boolean(w) && (f.loose.includes(' ' + w + ' ') || f.tight.includes(' ' + w + ' '));
   /* with the capitals kept, a lone word of the name stands only where the book writes it as a name */
-  const capitalised = (w) => !f.cased || new RegExp(`(?<![\\p{L}\\p{N}])${w.charAt(0).toUpperCase()}${w.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'u').test(f.cased);
+  const capitalised = (w) => {
+    if (!f.cased) return true;
+    /* any casing after its first letter ("McAllister", "DuBois"): only the first letter has to be a capital */
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'giu');
+    for (const m of f.cased.matchAll(re)) if (m[0][0] !== m[0][0].toLowerCase()) return true;
+    return false;
+  };
   const has = present;
   const raw = String(name || '');
   const P = parseName(raw);
@@ -196,6 +202,20 @@ export function nameInText(folded, name, { words = true } = {}) {
   let distinct = ws.filter((w) => w.length >= 3);
   if (!distinct.length) distinct = ws.filter((w) => w.length >= 2);
   return distinct.some((w) => present(w) && capitalised(w));
+}
+
+/* A place's or a thing's name in other words — one name's telling words all
+ * in the other's ("the letter" and "Claire's letter", "the Barracks" and "the
+ * 10th Division Barracks"): it may be the same, or another; never written on
+ * as the same (Cozy Tavern M752 — the notes' check folds what is) */
+export function namesNear(a, b) {
+  const words = (x) => new Set(plainName(x).replace(/\b(\p{L}+) s\b/gu, '$1').split(' ').filter((w) => w.length >= 3 && !['the', 'and', 'of', 'for', 'with', 'from'].includes(w)));
+  const x = words(a);
+  const y = words(b);
+  const [short, long] = x.size <= y.size ? [x, y] : [y, x];
+  if (!short.size || short.size === long.size) return false;
+  for (const w of short) if (!long.has(w)) return false;
+  return true;
 }
 
 /* a place's or a thing's name, a leading "the" or "a" set aside ("The Wells

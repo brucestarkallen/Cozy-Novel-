@@ -42,7 +42,7 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder }
   const wrap = h('div.keptfield');
   const save = debounce((text) => {
     /* emptied: given back — the helper writes it again from the book */
-    if (!text.trim()) { archivist.keepAgain(novelId, key); return; }
+    if (!text.trim()) { archivist.keepAgain(novelId, key, { keepWords: false }); return; }
     store.change('novel', novelId, novelSteps.setKept(key, { text, at: Date.now(), by: 'you' }));
   }, 600);
   const mine = h('textarea.tall', { placeholder: ownPlaceholder });
@@ -52,7 +52,13 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder }
   const kept = h('textarea', { placeholder: keptPlaceholder, 'aria-label': `${label} — kept by the helper` });
   kept.addEventListener('input', () => save(kept.value));
   const say = h('p.say');
-  const again = h('button.btn.quiet.small', { onclick: () => { save.cancel(); archivist.keepAgain(novelId, key); kept.value = ''; draw(); toast('The helper writes it again from the book.'); } }, 'Write it from the book again');
+  const again = h('button.btn.quiet.small', { title: 'The helper writes this afresh from the book; what stands here is used until its new words land.', onclick: () => {
+    if (!connFor(store.peek('house', 'house') || {}, 'helper')) { toast('No helper is chosen, so nothing can be written from the book — choose one in Settings → Connections. What stands here stays.', 6000); return; }
+    save.cancel();
+    archivist.keepAgain(novelId, key);
+    draw();
+    toast('The helper writes it again from the book — what stands is used until then.');
+  } }, 'Write it from the book again');
   const modes = h('div.segmented', { role: 'group', 'aria-label': label });
   const mode = (on, text) => h('button', { 'aria-pressed': 'false', onclick: () => {
     store.change('novel', novelId, novelSteps.setAuto(key, on), { now: true });
@@ -78,9 +84,10 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder }
     const helper = connFor(store.peek('house', 'house') || {}, 'helper');
     if (k && k.by === 'you') say.textContent = 'Your corrections stand — the helper leaves this as it is until you have it written from the book again.';
     else if (!helper) say.textContent = 'No helper is chosen, so nothing is kept here yet. Choose one in Settings → Connections.';
+    else if (k && k.again) say.textContent = k.text ? 'Being written again from the book — what stands here is used until the new words land.' : 'Being written again from the book.';
     else if (k && k.text) say.textContent = `Kept current by the helper as the book goes on — last brought up to date ${timeAgo(k.at)}. Correct anything here and your words stand.`;
     else say.textContent = 'The helper writes this from the book once there are words in it, and keeps it current from then on.';
-    again.hidden = !(k && (k.text || k.by === 'you'));
+    again.hidden = !(k && (k.text || k.by === 'you')) || Boolean(k && k.again);
   }
   draw();
   return { el: wrap, draw };

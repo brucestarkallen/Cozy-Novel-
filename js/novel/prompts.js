@@ -22,7 +22,7 @@
  * - His own words (his instructions, his brief, his notes) go word for word.
  */
 
-import { LENGTHS, soundOf, hisField } from './shape.js';
+import { LENGTHS, soundOf, hisField, NOTE_KINDS } from './shape.js';
 import { numberWords, estimateTokens } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
 
@@ -153,34 +153,65 @@ export function notesText(novel, { forHelper = false, fit = 0, focus = '', only 
   /* what the book added to a card he wrote, beside his words (never over them) */
   const since = (c, short) => (c.since && String(c.since).trim() ? `\n  Since then: ${short ? firstOf(c.since) : String(c.since).trim()}` : '');
   /* where someone was last told to be, and when: a "now" from an earlier chapter says so (Cozy Tavern's M294/M541) */
-  const seenMap = (novel.memory && novel.memory.seen) || {};
-  const order = novel.order || [];
-  let newest = '';
-  for (const id of order) if (Object.keys(seenMap[id] || {}).length) newest = id;
-  const nowLabel = (c) => (c.nowAt && newest && c.nowAt !== newest && order.includes(c.nowAt) && order.indexOf(c.nowAt) < order.indexOf(newest) ? `Last seen (Chapter ${numberWords(order.indexOf(c.nowAt) + 1)})` : 'Right now');
-  const line = (c, short) => `- ${c.name}${c.aka && c.aka.length ? ` (also ${c.aka.join(', ')})` : ''}${c.about ? ` — ${short ? firstOf(c.about) : c.about.trim()}` : ''}${forHelper && c.about && hisField(c, 'about') ? ' (my words)' : ''}${since(c, short)}`;
-  const person = (c, short) => line(c, short) + (short
+  const nowLabel = (c) => nowLabelOf(novel, c, 'Right now');
+  /* a card at a level: 0 whole, 1 by its first line, 2 by its name, 3 left out */
+  const named = (c) => `- ${c.name}${c.aka && c.aka.length ? ` (also ${c.aka.join(', ')})` : ''}`;
+  const line = (c, lv) => (lv >= 2 ? named(c) : `${named(c)}${c.about ? ` — ${lv ? firstOf(c.about) : c.about.trim()}` : ''}${forHelper && c.about && hisField(c, 'about') ? ' (my words)' : ''}${since(c, lv)}`);
+  const person = (c, lv) => line(c, lv) + (lv >= 2 ? '' : lv
     ? (c.now ? `\n  ${nowLabel(c)}: ${firstOf(c.now)}` : '')
     : `${c.ties ? `\n  With others: ${c.ties.trim()}` : ''}${c.now ? `\n  ${nowLabel(c)}: ${c.now.trim()}` : ''}`);
-  const render = (short) => {
+  const render = (level) => {
     const out = [];
-    if ((n.people || []).length) out.push('People\n' + n.people.map((c) => person(c, short('people', c))).join('\n'));
-    if ((n.places || []).length) out.push('Places\n' + n.places.map((c) => line(c, short('places', c))).join('\n'));
-    if ((n.lore || []).length) out.push((forHelper ? 'Things and facts' : 'Things worth remembering') + '\n' + n.lore.map((c) => line(c, short('lore', c))).join('\n'));
-    const open = (n.threads || []).filter((t) => t.open !== false);
-    const shut = (n.threads || []).filter((t) => t.open === false);
-    if (open.length) out.push('Threads still open\n' + open.map((c) => line(c, short('threads', c))).join('\n'));
-    if (shut.length) out.push('Threads that have closed\n' + shut.map((c) => line(c, short('threads', c))).join('\n'));
+    const rows = (list, kind, fn) => list.map((c) => [c, Number(level(kind, c)) || 0]).filter(([, lv]) => lv < 3).map(([c, lv]) => fn(c, lv));
+    const section = (head, list) => { if (list.length) out.push(head + '\n' + list.join('\n')); };
+    section('People', rows(n.people || [], 'people', person));
+    section('Places', rows(n.places || [], 'places', line));
+    section(forHelper ? 'Things and facts' : 'Things worth remembering', rows(n.lore || [], 'lore', line));
+    section('Threads still open', rows((n.threads || []).filter((t) => t.open !== false), 'threads', line));
+    section('Threads that have closed', rows((n.threads || []).filter((t) => t.open === false), 'threads', line));
     return out.join('\n\n');
   };
-  const full = render(() => false);
+  const full = render(() => 0);
   /* fitted to a model's room (Cozy Tavern's M664): his own cards and the
-   * ones the words they go with name, whole; the rest by their first line */
+   * ones the words they go with name, whole; the rest by their first line —
+   * and when even that is more than the room, by their names, and past that
+   * the ones that matter least are left out, said so (S01-G7: the notes never
+   * crowd out the chapter) */
   if (!fit || estimateTokens(full) <= fit) return full;
   const folded = focus ? foldedText(focus) : null;
   const whole = (kind, c) => Boolean(c.updated && c.updated.by === 'you') || Boolean(folded && [c.name, ...(c.aka || [])].some((nm) => nm && nameInText(folded, nm, { words: kind === 'people' })));
   /* which cards rode short (shortIds, a Set to fill): one of them is never written whole from its first line */
-  return `${render((kind, c) => { const short = !whole(kind, c); if (short && shortIds) shortIds.add(c.id); return short; })}\n\n(To fit, the cards the words below do not name are shown by their first line.)`;
+  /* (a Map is told how each rode: 1 its first line, 2 its name, 3 left out) */
+  const mark = (level) => { if (!shortIds) return; for (const k of NOTE_KINDS) for (const c of n[k] || []) { const lv = level(k, c); if (lv) { if (shortIds instanceof Map) shortIds.set(c.id, lv); else shortIds.add(c.id); } } };
+  const at = (lv, out = null) => (kind, c) => (whole(kind, c) ? 0 : out && out.has(c.id) ? 3 : lv);
+  let text = render(at(1));
+  if (estimateTokens(text) <= fit) { mark(at(1)); return `${text}\n\n(To fit, the cards the words below do not name are shown by their first line.)`; }
+  text = render(at(2));
+  if (estimateTokens(text) <= fit) { mark(at(2)); return `${text}\n\n(To fit, the cards the words below do not name are shown by their names only.)`; }
+  /* left out, the ones that matter least first: closed threads, then things, places, open threads, people — the longest untouched first */
+  const rank = { threads: 2, lore: 1, places: 1, people: 3 };
+  const order = NOTE_KINDS.flatMap((k) => (n[k] || []).filter((c) => !whole(k, c)).map((c) => ({ c, w: k === 'threads' && c.open === false ? 0 : rank[k] || 1 })))
+    .sort((a, b) => a.w - b.w || ((a.c.updated && a.c.updated.at) || 0) - ((b.c.updated && b.c.updated.at) || 0));
+  const out = new Set();
+  for (const x of order) {
+    out.add(x.c.id);
+    text = render(at(2, out));
+    if (estimateTokens(text) <= fit) break;
+  }
+  mark(at(2, out));
+  return `${text}\n\n(To fit, the cards the words below do not name are shown by their names only, and ${out.size === 1 ? 'one more is' : `${out.size} more are`} left out here.)`;
+}
+
+/* "Right now" for a person's "now" as of the newest chapter read — or "Last
+ * seen (Chapter Three)" for one from an earlier chapter, so an old note is
+ * never worn as now (Cozy Tavern's M294) */
+export function nowLabelOf(novel, c, current = 'Right now') {
+  const seenMap = (novel && novel.memory && novel.memory.seen) || {};
+  const order = (novel && novel.order) || [];
+  let newest = '';
+  for (const id of order) if (Object.keys(seenMap[id] || {}).length) newest = id;
+  const at = c && c.nowAt ? order.indexOf(c.nowAt) : -1;
+  return at >= 0 && newest && at < order.indexOf(newest) ? `Last seen (Chapter ${numberWords(at + 1)})` : current;
 }
 
 /* The notes have not read the newest passages yet (he wrote on while the
@@ -198,6 +229,17 @@ export function notReadWords(groups) {
     ? `the newest ${count} passages, from ${all[0].label}, passage ${all[0].ns[0]} on`
     : all.map((g) => `${g.label}, ${nums(g.ns)}`).join('; ');
   return `Not in these notes yet: ${which} — written after the notes were last brought up to date. Where ${one ? 'that passage shows' : 'those passages show'} a change (who is where, the time, what someone has, knows or feels), ${one ? 'the passage is' : 'the passages are'} right.`;
+}
+
+/* The passages the helper's model would not read (set aside): in the book,
+ * never in its notes — said, so a reader takes them from the passages */
+export function asideWords(groups) {
+  const all = (groups || []).filter((g) => g.ns && g.ns.length);
+  const count = all.reduce((a, g) => a + g.ns.length, 0);
+  if (!count) return '';
+  const nums = (ns) => (ns.length === 1 ? `passage ${ns[0]}` : ns.length === 2 ? `passages ${ns[0]} and ${ns[1]}` : `passages ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`);
+  const which = count > 8 ? `${count} passages, from ${all[0].label}, passage ${all[0].ns[0]} on` : all.map((g) => `${g.label}, ${nums(g.ns)}`).join('; ');
+  return `Never in these notes: ${which} — ${count === 1 ? 'it' : 'they'} could not be read for them. Wherever ${count === 1 ? 'that passage says' : 'those passages say'} something the notes don’t, the passage is right.`;
 }
 
 /* While the whole book is read again, everyone else goes on with the notes
@@ -774,7 +816,7 @@ const VERDICT_ASK = 'a sentence or two for me, plainly: whether the notes, with 
 /* the request's own words for what a field holds: an answer that gives them
  * back as the field says nothing (Cozy Tavern's M656 — the prompt's own
  * placeholder kept as a fact) */
-export const ASKED_WORDS = [ABOUT_ASK, TIES_ASK, NOW_ASK, PLACE_ASK, LORE_ASK, THREAD_ASK, VERDICT_ASK, 'other names they go by', 'a short name for', 'the whole of it again'];
+export const ASKED_WORDS = [ABOUT_ASK, TIES_ASK, NOW_ASK, PLACE_ASK, LORE_ASK, THREAD_ASK, VERDICT_ASK, 'other names they go by', 'every other name they go by', 'a short name for', 'the whole of it again'];
 
 const NOTE_RULES = `Include only entries that are new or changed, and in each only the fields that changed — a field you give replaces the old one, so give it whole. Keep every fact that's still true.
 - Someone, somewhere or something new: write down how they're described the first time they appear — looks, features, voice, what they wear or carry. It can't be found again later.
@@ -791,9 +833,9 @@ const NOTE_RULES = `Include only entries that are new or changed, and in each on
 - Use "gone" only for an entry that no longer belongs in the book at all (it was only ever in text that's been taken out). Mark a thread "open": false once the story resolves it — by what happens after it was set up, never by the words that set it up (an oath sworn, a plan made, a promise given is open) and never just because time passed.
 - Write only what the book actually says — never invent, never guess.`;
 
-export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0 }) {
+export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null }) {
   const parts = [];
-  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n') });
+  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n'), shortIds });
   parts.push(`The notes as they stand:\n${notes ? notes : '(none yet — this is the start)'}`);
   const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(about);
@@ -835,29 +877,34 @@ ${NOTE_RULES}${keeps.length ? `
  * whatever the notes still hold from words since rewritten or taken out, or
  * have drifted on, is put right. His own cards keep his words. */
 export const AUDIT_ASK = 'Check every card against the book as it stands';
-export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [] }) {
+export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false }) {
   const parts = [];
   parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
   if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);
   const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(about);
+  /* what it keeps of the book (Automatic), held against the book too (S10-G1) */
+  const keeps = only ? [] : keptByHelper(novel).filter((k) => String(((novel.kept || {})[k] || {}).text || '').trim());
+  for (const k of keeps) parts.push(keptPart(novel, k, k === 'about' ? KEEP_ABOUT : KEEP_STYLE));
   parts.push(`The book as it stands now — only what these words say happens. Anything the notes hold from words that have since been rewritten or taken out no longer happens:\n\n${text || '(nothing written yet)'}`);
   const one = his.length === 1;
   parts.push(`${AUDIT_ASK}, the way an editor checks a continuity bible:
 - A fact, a line someone said, a name, an event or a secret no passage says any more (it came from words since rewritten or taken out): correct the card to what the book says now, or take the card out with "gone" when nothing of it is in the book.
 - A detail that differs from the book — a name, a look, an age, who said what, who knows what: put it right.
-- Where each person is "now", as of the end of the book.
+- Where each person is "now", as of the end of the book.${endShort ? ' (The end of the book is given here only in short, so where someone is now can’t be told from it: give a "now" only for someone who has none.)' : ''}
 - A thread the book has resolved — by what happens after it was set up, never by the words that set it up: "open": false. One it opened that the notes miss: add it.
 - Whose and who: whose thing it is, who did a deed, who said a line — held against the passages in their order.
 - Someone or something that matters and is missing: add it, described as the book first describes them.
-- Cards that say the same thing: each fact belongs on one card — the person it is about, or the thing, place or thread itself. Where several cards repeat it (a limit, a rule, a name kept back, a secret), keep it on the card it belongs to and take it off the others, giving each of them whole without it. Two cards for one person, place or thing become one: give the one to keep whole, with whatever the other held that it lacks (for a person, the other's names among the others they go by), and put the other in "gone". Nothing true is lost in the folding.${his.length ? `
-- ${his.join(', ')} — ${one ? 'this card is' : 'these cards are'} mine, written or changed by me: never change what I wrote about ${one ? 'it' : 'them'}, never take ${one ? 'it' : 'them'} out; only "now" and "ties" may move. Where another card repeats what ${one ? 'it says' : 'one of mine says'}, the other card gives way.` : ''}${partial ? `
+${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it’s about, how it reads)' : keeps[0] === 'about' ? 'What you keep of what the book is about' : 'What you keep of how the book reads'}: where it has drifted from the book as it stands, give ${keeps.length === 2 ? '"about" or "style"' : `"${keeps[0]}"`} whole again, put right.
+` : ''}- Cards that say the same thing: each fact belongs on one card — the person it is about, or the thing, place or thread itself. Where several cards repeat it (a limit, a rule, a name kept back, a secret), keep it on the card it belongs to and take it off the others, giving each of them whole without it. Two cards for one person, place or thing become one: give the one to keep whole, with whatever the other held that it lacks (for a person, the other's names among the others they go by), and put the other in "gone". Nothing true is lost in the folding.
+- A name a person is noted as going by that isn't theirs (it is someone else's, or a slip): give their "aka" whole without it. Leave "aka" out wherever their names are right.${his.length ? `
+- ${his.join(', ')} — ${one ? 'this card is' : 'these cards are'} mine, written or changed by me: never change what I wrote about ${one ? 'it' : 'them'}, never take ${one ? 'it' : 'them'} out; only "now" and "ties" may move, and what the book has told since my words (shown as "Since then") may be put right — give that in "about", never repeating mine. Where another card repeats what ${one ? 'it says' : 'one of mine says'}, the other card gives way.` : ''}${partial ? `
 - Some chapters are given here in short, or left out to save room: a detail a chapter in short leaves out may still be in the book. Change or take out only what the words here contradict — never what they merely leave unsaid.` : ''}
 
 Answer with one JSON object and nothing else — only the cards that need a change, each field you give whole, each with "why": what was wrong, in a few plain words:
 
 {
-  "people": [{"name": "…", "aka": ["…"], ${PEOPLE_FIELDS}, "why": "…"}],
+  "people": [{"name": "…", "aka": ["every other name they go by"], ${PEOPLE_FIELDS}, "why": "…"}],
   "places": [{"name": "…", "about": "…", "why": "…"}],
   "lore": [{"name": "…", "about": "…", "why": "…"}],
   "threads": [{"name": "…", "about": "…", "open": true, "why": "…"}],

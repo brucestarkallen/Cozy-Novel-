@@ -85,6 +85,18 @@ export function debounce(fn, ms) {
 
 export function clone(x) { return x === undefined ? undefined : JSON.parse(JSON.stringify(x)); }
 
+/* Words cut to fit, never mid-word (Cozy Tavern's M752): at the last end of a
+ * sentence or a clause in the second half, else at the last space, with "…". */
+export function cutWords(text, max) {
+  const t = String(text ?? '');
+  if (t.length <= max) return t;
+  const room = t.slice(0, Math.max(1, max - 1));
+  const at = Math.max(room.lastIndexOf('. '), room.lastIndexOf('.\n'), room.lastIndexOf('; '), room.lastIndexOf('! '), room.lastIndexOf('? '));
+  if (at > max / 2) return room.slice(0, at + 1) + '…';
+  const sp = room.search(/\s\S*$/);
+  return (sp > max / 2 ? room.slice(0, sp) : room).trimEnd() + '…';
+}
+
 /* A yes or a no as a model writes it (Cozy Tavern's M654/M659): true and
  * false, and the same in words — "true", "yes", "1", "false", "no", "0" —
  * read as such; anything else is no answer (undefined). */
@@ -92,7 +104,7 @@ export function truthOf(v) {
   if (typeof v === 'boolean') return v;
   if (typeof v === 'number') return v === 1 ? true : v === 0 ? false : undefined;
   if (typeof v !== 'string') return undefined;
-  const t = v.trim().toLowerCase();
+  const t = v.trim().toLowerCase().replace(/[.!]+$/, '');
   if (/^(?:true|yes|y|1)$/.test(t)) return true;
   if (/^(?:false|no|n|0)$/.test(t)) return false;
   return undefined;

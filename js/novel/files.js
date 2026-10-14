@@ -426,6 +426,11 @@ export function fromLegacy({ records = [], blobs = [] } = {}) {
     for (const [k, lines] of Object.entries(facts)) novel.notes.lore.push({ id: vid(old.id) + '-' + slug(k, 20), name: k, about: lines.join('\n') });
     /* his notes on chapters and scenes ride as notes of their own */
     for (const card of chapterNotes) novel.notes.lore.push(card);
+    /* all of it his — his Story Bible, the facts he kept, his notes — so a
+     * reading or Read the whole book again never writes over or drops it;
+     * what the book adds rides beside his words (S12-G1) */
+    const mark = { by: 'you', at: Date.now() };
+    for (const kind of Object.keys(novel.notes)) for (const card of novel.notes[kind] || []) card.updated = { ...mark };
     if (plans.length) novel.plans = plans.join('\n');
     /* its partner talk */
     const talkTurns = mine.filter((r) => r.type === 'discussion').sort((a, b) => when(a.createdAt, 0) - when(b.createdAt, 0))

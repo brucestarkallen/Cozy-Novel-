@@ -17,7 +17,7 @@ import { enterFull, leaveFull, fullKind } from './full.js';
 import { paced, follower, streamLines } from './live.js';
 import { drawProse, growProse } from './prose.js';
 import * as desk from './desk.js';
-import { sceneWords, choicesIn } from '../novel/prompts.js';
+import { sceneWords, choicesIn, nowLabelOf } from '../novel/prompts.js';
 
 let ui = null;
 let hooks = {};
@@ -384,7 +384,9 @@ function drawNotes() {
     drawSide();
   } }, asked && !off && cards > 0 ? 'Checking the notes…' : 'Check the notes against the book'));
   row.append(h('button.btn.quiet.small', { title: 'The helper reads every chapter from the start and writes its notes and summaries afresh — your own cards and summaries stay. Until it is done, everything goes on with the notes as they are now.', disabled: again, onclick: async () => {
-    if (!(await confirmIt('Read the whole book again?', 'The helper reads every chapter from the start and writes its notes and summaries afresh — and, for a book set to Automatic, What it’s about and How it reads. Your own cards, your own summaries and your corrections stay as they are. Until it is done, the writer and the rest go on with the notes as they are now; Undo puts back what is there now.', 'Read it again'))) return;
+    /* never begun with no helper to finish it: the notes it would rebuild are never left half gone */
+    if (off) { toast('No helper is chosen, so the book cannot be read again. Choose one in Settings → Connections.', 6000); return; }
+    if (!(await confirmIt('Read the whole book again?', 'The helper reads every chapter from the start and writes its notes and summaries afresh — and, for a book set to Automatic, What it’s about and How it reads. Your own cards, your own summaries and your corrections stay as they are; a card you took out comes back if the book still tells of them. Until it is done, the writer and the rest go on with the notes as they are now; Undo puts back what is there now.', 'Read it again'))) return;
     archivist.readAgain(novelId);
     drawSide();
   } }, again ? 'Reading the whole book again…' : 'Read the whole book again'));
@@ -392,19 +394,25 @@ function drawNotes() {
   ui.rightBody.append(card);
   /* the last check, for him to read: whether everything holds and he can carry on, and why for each change */
   ui.rightBody.append(checkReport(n, { asked, off, cards }));
-  /* what its model would not read, set aside — each with Read it again */
-  const aside = Object.entries(m.aside || {});
+  /* what its model would not read, set aside — each with Read it again, labelled where it stands now */
+  const aside = archivist.asideNow(n);
   if (aside.length) {
     const box = h('div.lightcard.aside', h('b', aside.length === 1 ? 'Not in the notes: one part its model would not read' : `Not in the notes: ${aside.length} parts its model would not read`));
-    for (const [key, a] of aside.slice(0, 12)) {
-      /* words taken out are gone from the book: nothing to read again — the notes' check puts right what they may still say */
-      const out = key.startsWith('out:');
-      box.append(h('div.asiderow', h('div', h('b', a.label || 'A passage'), a.why ? ` — ${a.why}` : '', a.at ? ` (${timeAgo(a.at)})` : '', out ? '. The notes may still hold what it said — the next check against the book puts that right.' : ''),
-        out
-          ? h('button.btn.quiet.small', { title: 'It is no longer shown here.', onclick: () => { archivist.readAside(novelId, key); drawSide(); } }, 'Let it go')
-          : h('button.btn.quiet.small', { title: 'The helper reads it afresh — set aside again only if its model still will not read it.', onclick: () => { if (archivist.readAside(novelId, key)) toast('The helper reads it again in a moment.'); drawSide(); } }, 'Read it again')));
-    }
-    if (aside.length > 12) box.append(h('p.notekey', `And ${aside.length - 12} more.`));
+    const rows = h('div');
+    const drawRows = (all) => {
+      rows.textContent = '';
+      for (const a of all ? aside : aside.slice(0, 12)) {
+        /* words taken out are gone from the book: nothing to read again — the notes' check puts right what they may still say */
+        rows.append(h('div.asiderow', h('div', h('b', a.label || 'A passage'), a.why ? ` — ${a.why}` : '', a.at ? ` (${timeAgo(a.at)})` : '', a.out ? '. The notes may still hold what it said — the next check against the book puts that right.' : ''),
+          a.out
+            ? h('button.btn.quiet.small', { title: 'It is no longer shown here.', onclick: () => { archivist.readAside(novelId, a.key); drawSide(); } }, 'Let it go')
+            : h('button.btn.quiet.small', { title: 'The helper reads it afresh — set aside again only if its model still will not read it.', onclick: () => { if (archivist.readAside(novelId, a.key)) toast('The helper reads it again in a moment.'); drawSide(); } }, 'Read it again')));
+      }
+      if (!all && aside.length > 12) rows.append(h('button.btn.quiet.small', { title: `Shows all ${aside.length}.`, onclick: () => drawRows(true) }, `Show all ${aside.length}`));
+    };
+    drawRows(false);
+    box.append(rows);
+    if (aside.length > 1) box.append(h('div.btnrow', h('button.btn.quiet.small', { title: 'Every part here read afresh by the helper — set aside again only where its model still will not read it. What was taken out is let go.', onclick: () => { const k = archivist.readAllAside(novelId); if (k) toast(`The helper reads ${k === 1 ? 'it' : `all ${k}`} again in a moment.`); drawSide(); } }, 'Read them all again')));
     ui.rightBody.append(box);
   }
   /* what the light on a card means — every card is sent, lit or not */
@@ -436,8 +444,9 @@ function drawNotes() {
         c.aka && c.aka.length ? h('div.aka', 'also ' + c.aka.join(', ')) : null,
         state && whyOf.get(kind + ':' + nameKey(c.name)) ? h('div.why', 'Why: ' + whyOf.get(kind + ':' + nameKey(c.name))) : null,
         c.about ? h('div.ab', c.about) : null,
+        c.since && String(c.since).trim() ? h('div.nw.since', { title: 'What the book has told of them since your words — kept beside them, never over them.' }, h('b', 'Since then'), c.since) : null,
         kind === 'people' && c.ties ? h('div.nw.ties', h('b', 'With others'), c.ties) : null,
-        kind === 'people' && c.now ? h('div.nw', h('b', 'Now'), c.now) : null));
+        kind === 'people' && c.now ? h('div.nw', h('b', nowLabelOf(n, c, 'Now')), c.now) : null));
     }
     box.append(h('button.btn.quiet.small', { onclick: () => editCard(kind, null) }, icon('plus', 14), 'Add'));
     sec.append(head, box);
@@ -466,19 +475,42 @@ function checkReport(n, { asked, off, cards }) {
   if (!a.checked) { box.append(h('b', 'Not checked against the book yet.'), ` ${next} Check the notes against the book does it now.`); return box; }
   if (a.failed) { box.append(h('b', `The last check could not be made (${timeAgo(a.at)}).`), ` It could not check them: ${a.failed}. ${next}`); return box; }
   const changes = a.changes || [];
+  /* counted from what it changed, never from the list kept to show */
+  const fixed = Number.isFinite(a.fixed) ? a.fixed : changes.length;
+  const refused = a.refused || [];
+  const earlier = (a.earlier || []).filter((x) => x && (x.verdict || (x.refused || []).length));
+  /* "you can carry on" only for the whole notes, checked and clear (a group checked says how many) */
+  const whose = a.some ? `${a.some.checked} of the ${a.some.all} cards` : '';
   const head = a.clear === false
-    ? `Checked ${timeAgo(a.at)} — something is worth a look:`
-    : changes.length ? `Checked ${timeAgo(a.at)} — ${plural(changes.length, 'card')} put right, the rest hold true to the book. You can carry on.`
+    ? `Checked ${timeAgo(a.at)}${whose ? ` (${whose})` : ''} — something is worth a look:`
+    : a.some ? `Checked ${timeAgo(a.at)} — ${whose}${fixed ? `: ${plural(fixed, 'card')} put right, the rest hold true to the book` : ', and they hold true to the book'}.`
+    : fixed ? `Checked ${timeAgo(a.at)} — ${plural(fixed, 'card')} put right, the rest hold true to the book. You can carry on.`
     : `Checked ${timeAgo(a.at)} — every card holds true to the book. You can carry on.`;
   box.append(h('b', head));
   if (a.verdict) box.append(h('p.verdict', a.verdict));
   if (changes.length) {
     const ul = h('ul.checklist');
     for (const c of changes.slice(0, 20)) ul.append(h('li', h('b', c.name), ` — ${c.how === 'new' ? 'added' : c.how === 'gone' ? 'taken out' : 'put right'}${c.why ? ': ' + c.why : ''}`));
-    if (changes.length > 20) ul.append(h('li', `and ${changes.length - 20} more`));
+    if (fixed > 20) ul.append(h('li', `and ${fixed - 20} more`));
     box.append(ul);
     const u = m.undo;
     if (u && u.label === 'the notes checked against the book' && (u.at || 0) >= (a.at || 0) - 5000) box.append(h('p.notekey', 'Undo the last reading, above, puts back what it changed.'));
+  }
+  /* what it would have changed and did not (Cozy Tavern M259-6): never certified as put right */
+  if (refused.length) {
+    box.append(h('p.notekey', 'Seen, and left as it is — worth a look:'));
+    const ul = h('ul.checklist');
+    for (const r of refused.slice(0, 20)) ul.append(h('li', h('b', r.name), ` — ${r.why}`));
+    const all = Number.isFinite(a.refusedAll) ? a.refusedAll : refused.length;
+    if (all > 20) ul.append(h('li', `and ${all - 20} more`));
+    box.append(ul);
+  }
+  /* what the earlier groups of this round left open, until the round comes back to the start */
+  if (earlier.length) {
+    box.append(h('p.notekey', 'From the cards checked before these:'));
+    const ul = h('ul.checklist');
+    for (const x of earlier) ul.append(h('li', `${timeAgo(x.at)}: ${x.verdict || 'something was worth a look'}${(x.refused || []).length ? ` (left as it is: ${x.refused.slice(0, 4).map((r) => r.name).join(', ')}${x.refused.length > 4 ? '…' : ''})` : ''}`));
+    box.append(ul);
   }
   if (a.some) box.append(h('p.notekey', `The notes are longer than its model holds, so ${a.some.checked} of the ${a.some.all} cards were checked this time — the rest in turn, at the next checks.`));
   if (a.partial) box.append(h('p.notekey', 'The book is longer than its model holds, so its oldest chapters were checked by their summaries — a card was changed only where the words it saw say otherwise.'));
@@ -549,6 +581,13 @@ function editCard(kind, id) {
   }
   s.body.append(field(kind === 'people' ? 'Who they are' : kind === 'threads' ? 'What was set up, and where it stands' : 'About it', about,
     kind === 'people' ? 'For good: looks, voice, temperament, how they act under pressure, what they want, what they would never do.' : undefined));
+  /* what the book told after his words, kept beside them: his to correct or clear */
+  let since = null;
+  if (c.since && String(c.since).trim()) {
+    since = h('textarea', { rows: 3 });
+    since.value = c.since;
+    s.body.append(field('Since then', since, 'What the book has told since your words, kept beside them by the helper. Correct it or clear it here; move what matters into your own words above if you like.'));
+  }
   if (kind === 'people') {
     s.body.append(field('With others', ties, 'How they stand with the people who matter to them, and why — where it began, what moved it, where it is now.'));
     s.body.append(field('Right now', now, 'Where they are and what is going on with them as of the end of the book so far.'));
@@ -558,7 +597,7 @@ function editCard(kind, id) {
     s.body.append(h('label.toggle', open, h('span', 'Still open')));
   }
   /* the boxes, what each held when it opened, and which he has typed in */
-  const boxes = { name, about, aka, ...(now ? { now } : {}), ...(ties ? { ties } : {}) };
+  const boxes = { name, about, aka, ...(now ? { now } : {}), ...(ties ? { ties } : {}), ...(since ? { since } : {}) };
   const valueOf = (k) => (k === 'open' ? open.checked : boxes[k].value);
   const opened = Object.fromEntries([...Object.keys(boxes), ...(open ? ['open'] : [])].map((k) => [k, valueOf(k)]));
   if (draft) for (const [k, v] of Object.entries(draft)) { if (k === 'open' && open) open.checked = v; else if (boxes[k]) boxes[k].value = v; }
@@ -586,7 +625,13 @@ function editCard(kind, id) {
     }
     if (t.about !== undefined || !cur) out.about = about.value.trim();
     if (out.aka) out.aka = out.aka.filter((a, i) => out.aka.findIndex((b) => nameKey(b) === nameKey(a)) === i && nameKey(a) !== nameKey(out.name));
-    if (now && (t.now !== undefined || !cur)) out.now = now.value.trim();
+    if (now && (t.now !== undefined || !cur)) {
+      out.now = now.value.trim();
+      /* his "now" is as of the end of the book so far */
+      const ord = store.peek('novel', novelId).order || [];
+      if (out.now && ord.length) { out.nowAt = ord[ord.length - 1]; delete out.nowPid; }
+    }
+    if (since && t.since !== undefined) { const v = since.value.trim(); if (v) out.since = v; else delete out.since; }
     if (ties && (t.ties !== undefined || !cur)) out.ties = ties.value.trim();
     if (open && (t.open !== undefined || !cur)) out.open = open.checked;
     if (cur && !Object.keys(t).length) { done = true; cardDrafts.delete(draftKey); s.close(); return; }

@@ -617,6 +617,8 @@ const THREAD_STOP = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this'
 function titleWords(t) {
   const all = new Set();
   const common = new Set();
+  /* the names, in the order the title gives them (whose vow, to whom) */
+  const caps = [];
   const tokens = String(t || '').replace(/[‘’´`]/g, "'").replace(/'s\b/gi, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/);
   for (const raw of tokens) {
     const low = raw.toLowerCase();
@@ -626,8 +628,24 @@ function titleWords(t) {
     if (w.length > 4) w = w.replace(/e$/, '');
     all.add(w);
     if (raw[0] === raw[0].toLowerCase()) common.add(w);
+    else if (!caps.includes(w)) caps.push(w);
   }
-  return { all, common };
+  return { all, common, caps };
+}
+/* Two titles are one thread when the shorter's telling words all stand in the
+ * longer and cover four-fifths of it at least (Cozy Tavern M522: "Who killed
+ * the king" is not "Who killed the king's guard"), and the people both name
+ * come in the same order (M738: "Jovan's vow to protect Yuki" is not "Yuki's
+ * vow to protect Jovan"). */
+/* one title's telling words all in the other's, at any coverage: it may be
+ * the same thread, or a narrower or wider one — never written on as the same */
+export function threadsNear(a, b) {
+  const x = titleWords(a);
+  const y = titleWords(b);
+  const [short, long] = x.all.size <= y.all.size ? [x, y] : [y, x];
+  if (short.all.size < 2) return false;
+  for (const w of short.all) if (!long.all.has(w)) return false;
+  return true;
 }
 export function sameThreadTitle(a, b) {
   const x = titleWords(a);
@@ -635,6 +653,9 @@ export function sameThreadTitle(a, b) {
   const [short, long] = x.all.size <= y.all.size ? [x, y] : [y, x];
   if (short.all.size < 2) return false;
   for (const w of short.all) if (!long.all.has(w)) return false;
+  if (short.all.size < long.all.size * 0.8) return false;
+  const shared = x.caps.filter((w) => y.caps.includes(w));
+  if (shared.length >= 2 && shared.join(' ') !== y.caps.filter((w) => shared.includes(w)).join(' ')) return false;
   if (!short.common.size) return short.all.size === long.all.size;
   return true;
 }
@@ -650,13 +671,13 @@ const sameWords = (a, b) => { const x = titleWords(a).all; const y = titleWords(
  * leading "the", and last a person's name with a slip of the pen in it.
  * Past the first, a name two cards answer to means neither: `ambiguous`, and
  * nothing is written. */
-export function matchCard(cards, name, aka = [], { kind = '', near = true } = {}) {
+export function matchCard(cards, name, aka = [], { kind = '', near = true, slip: slipOk = true } = {}) {
   const k = nameKey(name);
   if (!k) return { card: null, ambiguous: false };
   const list = cards || [];
   const exact = list.find((c) => nameKey(c.name) === k);
   if (exact) return { card: exact, ambiguous: false };
-  const one = (found, how = '') => (found.length === 1 ? { card: found[0], ambiguous: false, ...(how ? { how } : {}) } : found.length > 1 ? { card: null, ambiguous: true } : null);
+  const one = (found, how = '') => (found.length === 1 ? { card: found[0], ambiguous: false, ...(how ? { how } : {}) } : found.length > 1 ? { card: null, ambiguous: true, among: found } : null);
   /* for a reading's row about a person (Cozy Tavern M752): a description a
    * card was once known by is the record of how it was named, never a name a
    * new row answers to — another courier forty pages on is another courier;
@@ -664,7 +685,8 @@ export function matchCard(cards, name, aka = [], { kind = '', near = true } = {}
    * to it by its own name too */
   const loose = near && kind === 'people';
   const byAkaList = list.filter((c) => (c.aka || []).some((a) => nameKey(a) === k && !(loose && isDescriptorName(a))));
-  if (loose && byAkaList.length === 1 && !isDescriptorName(name) && list.some((c) => c !== byAkaList[0] && (samePersonName(c.name, name) || nearName(c.name, name)))) return { card: null, ambiguous: true };
+  const alsoOwn = loose && byAkaList.length === 1 && !isDescriptorName(name) ? list.filter((c) => c !== byAkaList[0] && (samePersonName(c.name, name) || nearName(c.name, name))) : [];
+  if (alsoOwn.length) return { card: null, ambiguous: true, among: [byAkaList[0], ...alsoOwn] };
   const byAka = one(byAkaList);
   if (byAka) return byAka;
   const others = (aka || []).map(nameKey).filter(Boolean);
@@ -688,13 +710,13 @@ export function matchCard(cards, name, aka = [], { kind = '', near = true } = {}
       const very = hits.filter((c) => sameWords(c.name, name));
       if (very.length === 1) return { card: very[0], ambiguous: false };
       if (hits.every((a) => hits.every((b) => a === b || sameThreadTitle(a.name, b.name)))) return { card: hits[0], ambiguous: false };
-      return { card: null, ambiguous: true };
+      return { card: null, ambiguous: true, among: hits };
     }
   }
   /* a slip of the pen, for a person only: one long word of the name a letter
    * off (Cozy Tavern M646) — `how: 'slip'`, so the slip is never kept as a
    * name the card goes by */
-  const slip = loose && forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => nearName(n, f)))), 'slip') : null;
+  const slip = loose && slipOk && forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => nearName(n, f)))), 'slip') : null;
   return slip || { card: null, ambiguous: false };
 }
 export function findCard(cards, name, aka = [], opts = {}) { return matchCard(cards, name, aka, opts).card; }
@@ -714,9 +736,12 @@ export function cardStands(kind, card, folded) {
   if (!card || !folded) return false;
   if (kind === 'people') return !isDescriptorName(card.name) && nameInText(folded, card.name);
   if (kind === 'places') return nameInText(folded, card.name, { words: false });
+  /* a thing with a name of its own (the Batwing, the Hollow Crown) stands while the book names it (Cozy Tavern M752) — a description ("the letter") never */
+  if (kind === 'lore') { const bare = String(card.name || '').trim().replace(/^(?:the|a|an)\s+/i, ''); return /\p{Lu}/u.test(bare) && nameInText(folded, bare, { words: false }); }
   return false;
 }
-/* Whether another card carries a card's name — the one it was folded into */
-export function carriedBy(kind, card, cards) {
-  return (cards || []).some((o) => o.id !== card.id && [o.name, ...(o.aka || [])].some((n) => (kind === 'people' ? samePersonName(n, card.name) : plainName(n) === plainName(card.name))));
+/* The cards that carry a card's name — the one it was folded into */
+export function carriersOf(kind, card, cards) {
+  return (cards || []).filter((o) => o.id !== card.id && [o.name, ...(o.aka || [])].some((n) => (kind === 'people' ? samePersonName(n, card.name) : plainName(n) === plainName(card.name))));
 }
+export function carriedBy(kind, card, cards) { return carriersOf(kind, card, cards).length > 0; }
