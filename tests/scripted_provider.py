@@ -61,8 +61,11 @@ class H(BaseHTTPRequestHandler):
                 break
         with LOCK:
             REQUESTS.append({"path": self.path, "body": body, "at": time.time()})
-            if QUEUE:
+            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")):
                 beh = QUEUE.pop(0)
+            elif 'Answer with {"ok": true} and nothing else.' in last_user:
+                # the helper making sure its model is there: yes, unless the test says otherwise ({"probe": ...})
+                beh = {"text": '{"ok": true}'}
             elif "Summarise " in last_user and "for the book's notes" in last_user:
                 beh = {"text": json.dumps({"summary": "DEFAULT SUMMARY", "name": "Default Name"})}
             elif "for the writer to read before every page" in last_user:

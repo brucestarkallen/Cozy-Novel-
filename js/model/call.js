@@ -723,7 +723,10 @@ export function plainError(detail, status, { transport = false, phone = false } 
   }
   s = s.replace(/\s+/g, ' ').slice(0, 400);
   const keyWords = /api[ _-]?key not valid|invalid api[ _-]?key|incorrect api key|invalid x-api-key|invalid authentication|unauthori[sz]ed|authentication fail/i;
-  const why = status === 401 || status === 403 || keyWords.test(s) ? 'the key was refused'
+  /* a 403 for what was asked (OpenRouter's moderation flag), not for the key (Tavern M316) */
+  const flagged = /moderat|flagged|content (?:policy|filter|management)|violat|not allowed to (?:generate|produce)|safety/i;
+  const why = status === 403 && flagged.test(s) && !keyWords.test(s) ? 'the provider’s moderation turned it away'
+    : status === 401 || status === 403 || keyWords.test(s) ? 'the key was refused'
     : status === 402 ? 'the account is out of credit'
       : status === 413 ? 'the request was too big for the provider to take'
       : status === 404 ? 'that model or address was not found'

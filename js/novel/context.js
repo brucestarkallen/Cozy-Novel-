@@ -24,7 +24,7 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, standingNotes } from './prompts.js';
 import { notesBefore, unread } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
@@ -239,15 +239,18 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   if (purpose === 'write') { own = instr.system; frame = writerFrame(house, novel, { notesAs }); }
   else if (purpose === 'partner') { own = instr.partner; frame = partnerFrame(house, novel, { notesAs }); }
   else if (purpose === 'play') { own = narratorWords(instr); frame = playFrame(house, novel, play || {}, label, { notesAs }); }
-  const about = aboutTheBook(novel, { plans: true });
+  /* while the whole book is read again, the notes as they stood before it */
+  const shown = standingNotes(novel);
+  const rebuilt = shown !== novel;
+  const about = aboutTheBook(shown, { plans: true });
   /* the notes as they stood at the point being written (readings.js): a
    * passage written again — another take, a rewrite, his selected words — is
    * never handed the notes its old version made */
-  const again = purpose === 'write' && chapter.id ? (target.mark || target.before || '') : '';
-  const notesNow = again ? { ...novel, notes: notesBefore(novel, chapter.id, again) } : novel;
+  const again = purpose === 'write' && chapter.id && !rebuilt ? (target.mark || target.before || '') : '';
+  const notesNow = again ? { ...novel, notes: notesBefore(novel, chapter.id, again) } : shown;
   /* and which passages up to that point they have not read yet, said at their top */
   const kept = notesText(notesNow);
-  const notes = kept ? [notesBehind(novel, chapters, chapter, target, purpose), kept].filter(Boolean).join('\n\n') : '';
+  const notes = kept ? [rebuilt ? '' : notesBehind(novel, chapters, chapter, target, purpose), kept].filter(Boolean).join('\n\n') : '';
   /* the modules (modules.js): the ones that always ride, and the ones his words woke */
   const ride = ridingFor(house, novel, purpose, wakesOn(moment));
   const woken = ride.woken.join('\n\n');

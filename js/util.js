@@ -85,6 +85,19 @@ export function debounce(fn, ms) {
 
 export function clone(x) { return x === undefined ? undefined : JSON.parse(JSON.stringify(x)); }
 
+/* A yes or a no as a model writes it (Cozy Tavern's M654/M659): true and
+ * false, and the same in words — "true", "yes", "1", "false", "no", "0" —
+ * read as such; anything else is no answer (undefined). */
+export function truthOf(v) {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v === 1 ? true : v === 0 ? false : undefined;
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim().toLowerCase();
+  if (/^(?:true|yes|y|1)$/.test(t)) return true;
+  if (/^(?:false|no|n|0)$/.test(t)) return false;
+  return undefined;
+}
+
 /* A name compared the way a person would: case, accents and spacing aside. */
 export function nameKey(s) {
   return String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();

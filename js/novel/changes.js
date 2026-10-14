@@ -413,7 +413,10 @@ export function makeChange(novelId, op, { id = newId('cg') } = {}) {
     const was = chapter.summary ? clone(chapter.summary) : null;
     const after = { text: next, fp: chapterPrint(chapter), at, by: 'you' };
     store.change('chapter', chapterId, chapterSteps.setSummary(after), { now: true });
-    return { ...base, status: 'made', undo: { what: 'summary', chapterId, before: was, after: clone(after) }, before: old, after: next };
+    /* kept for the chapter as it reads, so a version brought back brings his back too (Cozy Tavern's M680-9) */
+    const keptBefore = clone((chapter.summaries || []).find((x) => x.fp === after.fp) || null);
+    store.change('chapter', chapterId, chapterSteps.keepSummary(after), { now: true });
+    return { ...base, status: 'made', undo: { what: 'summary', chapterId, before: was, after: clone(after), keptBefore }, before: old, after: next };
   }
 
   if (op.passage !== undefined) {
@@ -634,6 +637,11 @@ export function undoChange(novelId, change) {
     if (!c) return { ok: false, said: 'that chapter is not there any more' };
     if (JSON.stringify(c.summary || null) !== JSON.stringify(u.after)) return { ok: false, said: 'the summary has been written again since' };
     store.change('chapter', u.chapterId, chapterSteps.setSummary(u.before), { now: true });
+    /* and the one kept for the chapter as it read goes back to what it was */
+    if (u.after && u.after.fp) {
+      const kept = (c.summaries || []).find((x) => x.fp === u.after.fp);
+      if (kept && JSON.stringify(kept) === JSON.stringify(u.after)) store.change('chapter', u.chapterId, u.keptBefore ? chapterSteps.keepSummary(u.keptBefore) : chapterSteps.dropSummary(u.after.fp), { now: true });
+    }
     return { ok: true };
   }
   if (u.what === 'passage') {

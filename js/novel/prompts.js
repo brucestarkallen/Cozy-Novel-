@@ -23,7 +23,8 @@
  */
 
 import { LENGTHS, soundOf } from './shape.js';
-import { numberWords } from '../util.js';
+import { numberWords, estimateTokens } from '../util.js';
+import { foldedText, nameInText } from './names.js';
 
 /* ------------------------------------------------- the starting words */
 /* What the boxes in Settings → Your instructions start with, and what
@@ -121,19 +122,34 @@ function titleLine(novel) { return `${titled(novel)}${novel.meta && novel.meta.s
 
 /* ---------------------------------------------------- the book, described */
 
-export function notesText(novel, { forHelper = false } = {}) {
-  const n = novel.notes || {};
-  const out = [];
-  const line = (c, extra) => `- ${c.name}${c.aka && c.aka.length ? ` (also ${c.aka.join(', ')})` : ''}${c.about ? ` — ${c.about.trim()}` : ''}${extra || ''}`;
-  const person = (c) => line(c, `${c.ties ? `\n  With others: ${c.ties.trim()}` : ''}${c.now ? `\n  Right now: ${c.now.trim()}` : ''}`);
-  if ((n.people || []).length) out.push('People\n' + n.people.map(person).join('\n'));
-  if ((n.places || []).length) out.push('Places\n' + n.places.map((c) => line(c)).join('\n'));
-  if ((n.lore || []).length) out.push((forHelper ? 'Things and facts' : 'Things worth remembering') + '\n' + n.lore.map((c) => line(c)).join('\n'));
-  const open = (n.threads || []).filter((t) => t.open !== false);
-  const shut = (n.threads || []).filter((t) => t.open === false);
-  if (open.length) out.push('Threads still open\n' + open.map((c) => line(c)).join('\n'));
-  if (shut.length) out.push('Threads that have closed\n' + shut.map((c) => line(c)).join('\n'));
-  return out.join('\n\n');
+export function notesText(novel, { forHelper = false, fit = 0, focus = '', only = null } = {}) {
+  const all = novel.notes || {};
+  /* only some cards (the notes' check, a group at a time when they outgrow its model) */
+  const n = only ? Object.fromEntries(Object.entries(all).map(([k, list]) => [k, Array.isArray(list) ? list.filter((c) => only.has(c.id)) : list])) : all;
+  /* the first sentence of a card's words, for a card shown short */
+  const firstOf = (t) => { const x = String(t || '').trim(); const m = x.match(/^[\s\S]{20,}?[.!?…](?=\s|$)/); const f = (m ? m[0] : x).slice(0, 220); return f.length < x.length ? f + ' …' : f; };
+  const line = (c, short) => `- ${c.name}${c.aka && c.aka.length ? ` (also ${c.aka.join(', ')})` : ''}${c.about ? ` — ${short ? firstOf(c.about) : c.about.trim()}` : ''}`;
+  const person = (c, short) => line(c, short) + (short
+    ? (c.now ? `\n  Right now: ${firstOf(c.now)}` : '')
+    : `${c.ties ? `\n  With others: ${c.ties.trim()}` : ''}${c.now ? `\n  Right now: ${c.now.trim()}` : ''}`);
+  const render = (short) => {
+    const out = [];
+    if ((n.people || []).length) out.push('People\n' + n.people.map((c) => person(c, short('people', c))).join('\n'));
+    if ((n.places || []).length) out.push('Places\n' + n.places.map((c) => line(c, short('places', c))).join('\n'));
+    if ((n.lore || []).length) out.push((forHelper ? 'Things and facts' : 'Things worth remembering') + '\n' + n.lore.map((c) => line(c, short('lore', c))).join('\n'));
+    const open = (n.threads || []).filter((t) => t.open !== false);
+    const shut = (n.threads || []).filter((t) => t.open === false);
+    if (open.length) out.push('Threads still open\n' + open.map((c) => line(c, short('threads', c))).join('\n'));
+    if (shut.length) out.push('Threads that have closed\n' + shut.map((c) => line(c, short('threads', c))).join('\n'));
+    return out.join('\n\n');
+  };
+  const full = render(() => false);
+  /* fitted to a model's room (Cozy Tavern's M664): his own cards and the
+   * ones the words they go with name, whole; the rest by their first line */
+  if (!fit || estimateTokens(full) <= fit) return full;
+  const folded = focus ? foldedText(focus) : null;
+  const whole = (kind, c) => Boolean(c.updated && c.updated.by === 'you') || Boolean(folded && [c.name, ...(c.aka || [])].some((nm) => nm && nameInText(folded, nm, { words: kind === 'people' })));
+  return `${render((kind, c) => !whole(kind, c))}\n\n(To fit, the cards the words below do not name are shown by their first line.)`;
 }
 
 /* The notes have not read the newest passages yet (he wrote on while the
@@ -153,6 +169,16 @@ export function notReadWords(groups) {
   return `Not in these notes yet: ${which} — written after the notes were last brought up to date. Where ${one ? 'that passage shows' : 'those passages show'} a change (who is where, the time, what someone has, knows or feels), ${one ? 'the passage is' : 'the passages are'} right.`;
 }
 
+/* While the whole book is read again, everyone else goes on with the notes
+ * and the Automatic texts as they stood before it (Cozy Tavern's M262: built
+ * beside them, swapped in whole at the end — archivist.js readAgain). */
+export function rebuilding(novel) { const m = (novel && novel.memory) || {}; return Boolean(m.rereadFrom && m.undo && m.undo.keep); }
+export function standingNotes(novel) {
+  if (!rebuilding(novel)) return novel;
+  const from = novel.memory.rereadFrom;
+  return { ...novel, notes: from.notes || {}, kept: { ...(from.kept || {}), ...(novel.kept || {}) } };
+}
+
 /* What it's about and how it reads: his own words, set by hand ("Manual"),
  * or — set to Automatic — his words (if he wrote any) and what the helper
  * keeps of the book as it stands. */
@@ -163,16 +189,21 @@ export function keptText(novel, key) {
 }
 
 /* The brief, the style and the plans. The helper is shown its own kept
- * words on their own (it keeps them), so for it kept: false. */
+ * words on their own (it keeps them), so for it kept: 'his' — only a kept
+ * text he corrected himself rides, as his own words (Cozy Tavern's M283: a
+ * worker never got his word). Said in words true in every voice — the notes
+ * ride as his or as the writer's notebook too (M510-60). */
 export function aboutTheBook(novel, { plans = true, kept = true } = {}) {
   const parts = [];
+  const keptOf = (key) => (kept === true ? keptText(novel, key)
+    : kept === 'his' && novel.kept && novel.kept[key] && novel.kept[key].by === 'you' ? keptText(novel, key) : '');
   const own = String(novel.brief || '').trim();
-  const about = kept ? keptText(novel, 'about') : '';
-  if (own && about) parts.push(`What it's about:\n${own}\n\nAnd as the book stands now (my words above win wherever the two differ):\n${about}`);
+  const about = keptOf('about');
+  if (own && about) parts.push(`What it's about:\n${own}\n\nAnd as the book stands now (the words above are right wherever the two differ):\n${about}`);
   else if (own || about) parts.push(`What it's about:\n${own || about}`);
   const voice = String(novel.style || '').trim();
-  const reads = kept ? keptText(novel, 'style') : '';
-  if (voice && reads) parts.push(`How it reads:\n${voice}\n\nAnd as it reads so far (my words above win wherever the two differ):\n${reads}`);
+  const reads = keptOf('style');
+  if (voice && reads) parts.push(`How it reads:\n${voice}\n\nAnd as it reads so far (the words above are right wherever the two differ):\n${reads}`);
   else if (voice || reads) parts.push(`How it reads:\n${voice || reads}`);
   if (plans && String(novel.plans || '').trim()) parts.push(`Where it's headed — plans for later, none of this has happened yet:\n${novel.plans.trim()}`);
   return parts.join('\n\n');
@@ -441,7 +472,7 @@ ${CHANGES_OPEN}[
 
 export function partnerFrame(house, novel, { notesAs = 'system' } = {}) {
   return [
-    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner: you know the book inside out (it’s all below) and the craft as well as anyone. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
+    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner: you know the book inside out (it’s all below) and the craft as well as anyone. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. The notes keep themselves — every new page is read into them, and every few readings each card is checked against the book and cards that repeat each other are folded into one — so leave their upkeep to that: change a card when I ask, or when one is plainly wrong about the book, and never offer to tidy them. You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
     partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now'),
     notesAs === 'system' ? hereIs('partner') : '',
   ].filter(Boolean).join('\n\n');
@@ -602,9 +633,9 @@ function writerSees({ his = '', sofar = '' }) {
   return out;
 }
 
-export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, his = '', sofar = '' }) {
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, his = '', sofar = '', notesFit = 0 }) {
   const parts = [];
-  const notes = notesText(novel, { forHelper: true });
+  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });
   if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
@@ -637,9 +668,9 @@ Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kin
  * the first or the second cancels out). Asking which of two is better is the
  * judging that agrees with readers most (LitBench, arXiv 2507.00769; EQ-Bench
  * ranks its writers the same way). */
-export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false, his = '', sofar = '' }) {
+export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false, his = '', sofar = '', notesFit = 0 }) {
   const parts = [];
-  const notes = notesText(novel, { forHelper: true });
+  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${first}\n${second}` });
   if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
@@ -667,7 +698,7 @@ const KEEP_STYLE = 'how the book reads — its point of view and tense, its voic
 function keptPart(novel, key, what) {
   const k = (novel.kept && novel.kept[key]) || {};
   const own = String((key === 'about' ? novel.brief : novel.style) || '').trim();
-  const mine = own ? ' (the author’s own words above stand beside it: never repeat them — keep only what they don’t say)' : '';
+  const mine = own ? ' (my own words above stand beside it: never repeat them — keep only what they don’t say)' : '';
   return `You also keep ${what}${mine}. As you keep it now:\n${String(k.text || '').trim() ? fence(k.text) : '(not written yet)'}`;
 }
 /* which of the two the helper keeps for this book (set to Automatic, not corrected by him) */
@@ -688,14 +719,17 @@ const NOTE_RULES = `Include only entries that are new or changed, and in each on
 - "now" leads with where they are and what they're doing. Feelings carry over — a shock, a slight, a warmth set earlier still colours them until the story changes it. A plan is never "now": it's a thread.
 - "ties": add the newest turn and keep the older ones short; say why each tie moved.
 - Who knows what: a secret, or something only some of them saw or were told, says who knows it — and nobody knows what they had no way to learn.
-- Use "gone" only for an entry that no longer belongs in the book at all (it was only ever in text that's been taken out). Mark a thread "open": false once the story resolves it — never just because time passed.
+- Whose and who: a thing someone holds, a deed someone did, a line someone said is written with whose it is and who did or said it, as the book has it.
+- Each fact is written once, on the card it belongs to — the person it is about, or the thing, place or thread itself. Before you add a card or a line, look for the card that already holds it and change that one; never repeat on another card what one already says.
+- Use a card's name exactly as the notes show it. Someone known only by a description ("the courier") is carded by it until the book gives a name — then the name leads and the description goes among the others they go by. A crowd or a passer-by is not a person: no card for "the onlookers".
+- Use "gone" only for an entry that no longer belongs in the book at all (it was only ever in text that's been taken out). Mark a thread "open": false once the story resolves it — by what happens after it was set up, never by the words that set it up (an oath sworn, a plan made, a promise given is open) and never just because time passed.
 - Write only what the book actually says — never invent, never guess.`;
 
-export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, goesOn = false }) {
+export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, goesOn = false, notesFit = 0 }) {
   const parts = [];
-  const notes = notesText(novel, { forHelper: true });
+  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n') });
   parts.push(`The notes as they stand:\n${notes ? notes : '(none yet — this is the start)'}`);
-  const about = aboutTheBook(novel, { plans: false, kept: false });
+  const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(about);
   const keeps = keptByHelper(novel);
   if (keeps.includes('about')) parts.push(keptPart(novel, 'about', KEEP_ABOUT));
@@ -735,43 +769,50 @@ ${NOTE_RULES}${keeps.length ? `
  * whatever the notes still hold from words since rewritten or taken out, or
  * have drifted on, is put right. His own cards keep his words. */
 export const AUDIT_ASK = 'Check every card against the book as it stands';
-export function auditRequest({ novel, bookText: text, his = [] }) {
+export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [] }) {
   const parts = [];
-  parts.push(`The notes as they stand:\n${notesText(novel, { forHelper: true }) || '(none)'}`);
-  const about = aboutTheBook(novel, { plans: false, kept: false });
+  parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
+  if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);
+  const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(about);
   parts.push(`The book as it stands now — only what these words say happens. Anything the notes hold from words that have since been rewritten or taken out no longer happens:\n\n${text || '(nothing written yet)'}`);
+  const one = his.length === 1;
   parts.push(`${AUDIT_ASK}, the way an editor checks a continuity bible:
 - A fact, a line someone said, a name, an event or a secret no passage says any more (it came from words since rewritten or taken out): correct the card to what the book says now, or take the card out with "gone" when nothing of it is in the book.
 - A detail that differs from the book — a name, a look, an age, who said what, who knows what: put it right.
 - Where each person is "now", as of the end of the book.
-- A thread the book has resolved: "open": false. One it opened that the notes miss: add it.
-- Someone or something that matters and is missing: add it, described as the book first describes them.${his.length ? `
-- ${his.join(', ')} — ${his.length === 1 ? 'this card is' : 'these cards are'} mine, written or changed by me: never change what I wrote about ${his.length === 1 ? 'it' : 'them'}, never take ${his.length === 1 ? 'it' : 'them'} out; only "now" and "ties" may move.` : ''}
+- A thread the book has resolved — by what happens after it was set up, never by the words that set it up: "open": false. One it opened that the notes miss: add it.
+- Whose and who: whose thing it is, who did a deed, who said a line — held against the passages in their order.
+- Someone or something that matters and is missing: add it, described as the book first describes them.
+- Cards that say the same thing: each fact belongs on one card — the person it is about, or the thing, place or thread itself. Where several cards repeat it (a limit, a rule, a name kept back, a secret), keep it on the card it belongs to and take it off the others, giving each of them whole without it. Two cards for one person, place or thing become one: give the one to keep whole, with whatever the other held that it lacks (for a person, the other's names among the others they go by), and put the other in "gone". Nothing true is lost in the folding.${his.length ? `
+- ${his.join(', ')} — ${one ? 'this card is' : 'these cards are'} mine, written or changed by me: never change what I wrote about ${one ? 'it' : 'them'}, never take ${one ? 'it' : 'them'} out; only "now" and "ties" may move. Where another card repeats what ${one ? 'it says' : 'one of mine says'}, the other card gives way.` : ''}${partial ? `
+- Some chapters are given here in short, or left out to save room: a detail a chapter in short leaves out may still be in the book. Change or take out only what the words here contradict — never what they merely leave unsaid.` : ''}
 
-Answer with one JSON object and nothing else — only the cards that need a change, each field you give whole:
+Answer with one JSON object and nothing else — only the cards that need a change, each field you give whole, each with "why": what was wrong, in a few plain words:
 
 {
-  "people": [{"name": "…", "aka": ["…"], ${PEOPLE_FIELDS}}],
-  "places": [{"name": "…", "about": "…"}],
-  "lore": [{"name": "…", "about": "…"}],
-  "threads": [{"name": "…", "about": "…", "open": true}],
-  "gone": [{"kind": "lore", "name": "…"}]
+  "people": [{"name": "…", "aka": ["…"], ${PEOPLE_FIELDS}, "why": "…"}],
+  "places": [{"name": "…", "about": "…", "why": "…"}],
+  "lore": [{"name": "…", "about": "…", "why": "…"}],
+  "threads": [{"name": "…", "about": "…", "open": true, "why": "…"}],
+  "gone": [{"kind": "lore", "name": "…", "why": "…"}],
+  "clear": true,
+  "verdict": "a sentence or two for me, plainly: whether the notes, with these changes, hold true to the book — and anything they can't settle because the book disagrees with itself"
 }
 
-When every card checks out, answer {}. Write only what the book actually says — never invent, never guess.`);
+"clear" is false only when something is left for me to look at. When every card checks out, answer only {"clear": true, "verdict": "…"}. Write only what the book actually says — never invent, never guess.`);
   return parts.join('\n\n');
 }
 
 /* Written whole, for a book set to Automatic (when it has none yet, or he
  * asked for it again from the book): from the book itself, its notes and his
  * words. */
-export function keepRequest({ novel, keeps, bookText: text }) {
+export function keepRequest({ novel, keeps, bookText: text, notesFit = 0 }) {
   const parts = [];
-  const notes = notesText(novel, { forHelper: true });
+  const notes = notesText(novel, { forHelper: true, fit: notesFit });
   if (notes) parts.push(`The notes as they stand:\n${notes}`);
-  const about = aboutTheBook(novel, { plans: false, kept: false });
-  if (about) parts.push(`The author’s own words (they stand as they are — never repeat them; keep only what they don’t say):\n\n${about}`);
+  const about = aboutTheBook(novel, { plans: false, kept: 'his' });
+  if (about) parts.push(`My own words (they stand as they are — never repeat them; keep only what they don’t say):\n\n${about}`);
   parts.push(`The book as it stands:\n\n${text || '(nothing written yet)'}`);
   const fields = [
     keeps.includes('about') ? `"about": "${KEEP_ABOUT}"` : '',
@@ -785,7 +826,7 @@ export function keepRequest({ novel, keeps, bookText: text }) {
  * each part's summary carried into the next. What to keep is Summaryception's
  * hard-won list, for a novel: causes kept with what they led to, first
  * appearances described, who learns what, the exact words that will matter. */
-export function summaryRequest({ novel, chapterLabel, text, needsName, words, part = 0, parts = 0, soFar = '' }) {
+export function summaryRequest({ novel, chapterLabel, text, needsName, words, part = 0, parts = 0, soFar = '', known = [] }) {
   const size = Math.max(120, Math.min(450, Math.round(words / 12)));
   const lines = [];
   if (part) {
@@ -796,11 +837,12 @@ export function summaryRequest({ novel, chapterLabel, text, needsName, words, pa
   lines.push(`Summarise ${part ? `the chapter so far — ${soFar ? 'the summary above and this part together' : 'this part'} —` : 'it'} for the book's notes, so the writer can carry on from it without the chapter itself:
 - what happens, in order, and why — keep each cause with what it led to;
 - who's in it and what changes for them, inside and out;
-- anyone or anything appearing for the first time, with how they're described;
+- anyone or anything appearing in the book for the first time, with how they're described${known.length ? ` (already known from earlier: ${known.join(', ')})` : ''};
 - who learns what — and who doesn't;
 - anything set up for later — a promise, a secret, an object, a question left open — with the exact words of any promise, oath or threat that will matter (a short quote);
-- the day, date or time, where the chapter gives one.
-Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words.${needsName ? ' The chapter has no name yet, so give it a short one.' : ''}`);
+- where it happens, and the day, date or time where the chapter gives one;
+- numbers, ages, amounts and distances exactly as the chapter gives them.
+Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the chapter is dense: nothing that matters left out to keep it short.${needsName ? ' The chapter has no name yet, so give it a short one.' : ''}`);
   lines.push(`Answer with one JSON object and nothing else: {"summary": "…"${needsName ? ', "name": "…"' : ''}}`);
   return lines.join('\n\n');
 }

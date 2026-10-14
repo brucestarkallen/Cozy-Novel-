@@ -70,8 +70,10 @@ def answer_for(body):
         return json.dumps({"better": better, "why": "the lamp is lit on that page"})
     if "for the writer to read before every page" in last_user:
         return json.dumps({"about": "A lighthouse keeper on a stormy coast and the letter that washed up at her feet.", "style": "Close third person on Mara, past tense; quiet, wry, salt-weathered."})
+    if 'Answer with {"ok": true} and nothing else.' in last_user:
+        return '{"ok": true}'
     if "Check every card against the book as it stands" in last_user:
-        return "{}"
+        return json.dumps({"clear": True, "verdict": "Every card holds true to the book."})
     if "Update the notes for what this changes" in last_user:
         kept = {}
         if '"about": "what the book is about' in last_user:

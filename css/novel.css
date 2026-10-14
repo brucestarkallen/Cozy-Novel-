@@ -716,6 +716,19 @@ body.reading .scroller { bottom: 12px; }
 .choice:hover { background: rgba(216,150,58,.16); }
 
 
+/* the notes' last check against the book, and what its model would not read */
+.lightcard.checkbox b, .lightcard.aside > b { display: block; }
+.lightcard .verdict { margin: 8px 0 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: rgba(255,255,255,.03); color: var(--chrome-ink); white-space: pre-wrap; }
+.lightcard ul.checklist { margin: 8px 0 0; padding-left: 18px; }
+.lightcard ul.checklist li { margin: 4px 0; }
+.lightcard ul.checklist li b { display: inline; }
+.lightcard.aside .asiderow { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; margin-top: 8px; }
+.lightcard.aside .asiderow > div { flex: 1; }
+.lightcard.aside .asiderow b { display: inline; }
+.lightcard.keycard { padding: 0 2px; background: none; border: 0; margin-bottom: 8px; }
+.lightcard.keycard .notekey { margin: 0; }
+.card .why { font-size: 12.5px; line-height: 1.4; margin-top: 4px; color: #e3a85a; }
+[data-theme="day"] .card .why { color: #8a5310; }
 /* the notes' key: what a lit card means, and a card of his */
 .notekey { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--chrome-soft); }
 .notekey b.lit { color: #e3a85a; font-weight: 600; }

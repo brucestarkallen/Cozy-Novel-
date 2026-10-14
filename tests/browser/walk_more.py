@@ -868,7 +868,7 @@ async def scenario_versions(b):
     check('the helper read the first take', lore(n) == ['The bottle'], lore(n))
     # the notes say what lit and yours mean, and that every card goes to the writer
     await pg.click('#notesBtn'); await pg.wait_for_timeout(400)
-    key = await pg.inner_text('#sidePane .notekey >> nth=0') if await pg.locator('#sidePane .notekey').count() else ''
+    key = await pg.inner_text('#sidePane .keycard .notekey') if await pg.locator('#sidePane .keycard .notekey').count() else ''
     lit = await pg.locator('#sidePane .card .ctag.lit').count()
     check('the notes say every card goes to the writer, lit or not, and what lit means', 'Every card here goes to the writer before every page, lit or not' in key and 'changed by the helper last' in key, key[:200])
     check('the cards the last reading changed are marked new', lit >= 3, lit)
@@ -956,8 +956,84 @@ async def scenario_versions(b):
     await pg.click('#partnerBtn'); await pg.wait_for_timeout(400)
     await pg.click('#sideFoot button:has-text("Quick asks")'); await pg.wait_for_timeout(200)
     items = await pg.locator('.menu-pop button .mlabel').all_inner_texts()
-    check('the partner’s quick asks, each with its line', 'Check the notes against the book' in items and 'Tidy the notes' in items and await pg.locator('.menu-pop button .mhint').count() == len(items), items)
-    await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
+    check('the partner’s quick asks, each with its line — the notes’ check the same as the notes’ own, no second way to tidy them', 'Check the notes against the book' in items and 'Tidy the notes' not in items and await pg.locator('.menu-pop button .mhint').count() == len(items), items)
+    # the quick ask asks the helper's check — no message to the partner
+    async def talk_turns():
+        t = await pg.evaluate(f"fetch('/api/store/talk/{nid}').then((r) => r.ok ? r.json() : null)")
+        return len(((t or {}).get('data') or {}).get('turns') or [])
+    before_turns = await talk_turns()
+    await pg.click('.menu-pop button:has-text("Check the notes against the book")'); await pg.wait_for_timeout(600)
+    n = await novel()
+    after_turns = await talk_turns()
+    check('the quick ask is the helper’s check, the same as the notes’ button — nothing sent to the partner', ((n.get('memory') or {}).get('auditAsked') is True or ((n.get('memory') or {}).get('audit') or {}).get('checked')) and after_turns == before_turns, (n.get('memory') or {}).get('audit'))
+    errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
+    check('no errors on the page', not errs, errs[:3])
+
+async def scenario_notes(b):
+    """the notes: the check against the book with its verdict and reasons, a card saved with only what he typed, his unsaved words kept on Back, what its model would not read"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Notes Kept')
+    await add_conn(pg)
+    await write(pg, 'Mara finds a bottle.')
+    nid = await pg.evaluate("location.hash.split('/')[2]")
+    novel = lambda: pg.evaluate(f"fetch('/api/store/novel/{nid}').then((r) => r.json()).then((j) => j.data)")
+    async def until(test, t=15000):
+        for _ in range(t // 200):
+            n = await novel()
+            if test(n):
+                return n
+            await pg.wait_for_timeout(200)
+        return await novel()
+    n = await until(lambda n: len((n.get('notes') or {}).get('people', [])) > 0)
+    await pg.click('#notesBtn'); await pg.wait_for_timeout(400)
+    report = await pg.inner_text('#sidePane .checkbox')
+    check('the notes say when they were checked against the book — not yet, and when they will be', 'Not checked against the book yet' in report and 'more reading' in report, report)
+    await pg.click('#sidePane button:has-text("Check the notes against the book")')
+    n = await until(lambda n: ((n.get('memory') or {}).get('audit') or {}).get('checked'))
+    await pg.wait_for_timeout(600)
+    report = await pg.inner_text('#sidePane .checkbox')
+    check('the check says plainly that every card holds and he can carry on, in its own words too', 'every card holds true to the book. You can carry on.' in report and 'Every card holds true to the book.' in report, report)
+    # a card: only what he typed is saved, onto the card as it stands now
+    await pg.click('#sidePane .notesec:has(h3:text-is("People")) .card >> nth=0'); await pg.wait_for_selector('.sheet.on')
+    now_box = '.sheet.on label.field:has(span:text-is("Right now")) textarea'
+    await pg.fill(now_box, 'HIS NOW: asleep by the lamp.')
+    await pg.evaluate(f"import('/js/store.js').then((s) => s.change('novel', '{nid}', (n) => {{ n.notes.people[0].about = 'THE HELPER WROTE THIS MEANWHILE.'; }}, {{ now: true }}))")
+    await pg.click('.sheet.on button:has-text("Save")'); await pg.wait_for_timeout(700)
+    n = await novel()
+    card = n['notes']['people'][0]
+    check('a card saved with only what he typed — the helper’s words written meanwhile stand', card.get('now') == 'HIS NOW: asleep by the lamp.' and card.get('about') == 'THE HELPER WROTE THIS MEANWHILE.' and (card.get('updated') or {}).get('by') == 'you', card)
+    # his words, left with Back, come back when he opens it again
+    await pg.click('#sidePane .notesec:has(h3:text-is("People")) .card >> nth=0'); await pg.wait_for_selector('.sheet.on')
+    about_box = '.sheet.on label.field:has(span:text-is("Who they are")) textarea'
+    await pg.fill(about_box, 'TYPED AND LEFT.')
+    await pg.keyboard.press('Escape'); await pg.wait_for_timeout(500)
+    if await pg.locator('.sheet.on').count():
+        await pg.go_back(); await pg.wait_for_timeout(500)
+    n = await novel()
+    left = n['notes']['people'][0].get('about')
+    await pg.click('#sidePane .notesec:has(h3:text-is("People")) .card >> nth=0'); await pg.wait_for_selector('.sheet.on')
+    back = await pg.input_value(about_box)
+    said = await pg.inner_text('.sheet.on .body')
+    check('words typed into a card and left are kept, never saved by themselves, and back when it opens again', left == 'THE HELPER WROTE THIS MEANWHILE.' and back == 'TYPED AND LEFT.' and 'not saved yet, are back' in said, (left, back))
+    # renamed by his hand: the old name stays among the others it goes by
+    name_box = '.sheet.on label.field:has(span:text-is("Name")) input'
+    old_name = await pg.input_value(name_box)
+    await pg.fill(name_box, 'Mara Venn-Hale')
+    await pg.fill(about_box, 'TYPED AND SAVED.')
+    await pg.click('.sheet.on button:has-text("Save")'); await pg.wait_for_timeout(700)
+    n = await novel()
+    card = n['notes']['people'][0]
+    check('a card renamed by his hand keeps its old name among the others it goes by', card['name'] == 'Mara Venn-Hale' and old_name in (card.get('aka') or []) and card.get('about') == 'TYPED AND SAVED.', card)
+    # what its model would not read: said, with Read it again
+    pid = await pg.evaluate("document.querySelector('#passages .passage').dataset.id || ''")
+    await pg.evaluate(f"import('/js/store.js').then((s) => s.change('novel', '{nid}', (n) => {{ n.memory.aside = {{ 'p-x': {{ label: 'Chapter One, passage 9', why: 'its answer could not be read', at: Date.now() }} }}; }}, {{ now: true }}))")
+    await pg.wait_for_timeout(600)
+    aside = await pg.inner_text('#sidePane .lightcard.aside') if await pg.locator('#sidePane .lightcard.aside').count() else ''
+    check('a part its model would not read is said in the notes, with why and Read it again', 'Chapter One, passage 9' in aside and 'could not be read' in aside and await pg.locator('#sidePane .lightcard.aside button:has-text("Read it again")').count() == 1, aside)
+    await pg.click('#sidePane .lightcard.aside button:has-text("Read it again")'); await pg.wait_for_timeout(500)
+    n = await novel()
+    check('Read it again takes it off the list', not (n.get('memory') or {}).get('aside'), (n.get('memory') or {}).get('aside'))
     errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
     check('no errors on the page', not errs, errs[:3])
 
@@ -978,6 +1054,8 @@ async def scenario_partner(b):
     await pg.fill('#sideFoot textarea', 'TWO CHANGES please.')
     await pg.click('#sideFoot button:has-text("Send")')
     await pg.wait_for_selector('#sideBody .change.waiting', timeout=8000)
+    await pg.wait_for_timeout(500)
+    check('one box to ask the partner, however often its talk is drawn again', await pg.locator('#sideFoot textarea').count() == 1 and await pg.locator('#sideFoot button:has-text("Send")').count() == 1, await pg.locator('#sideFoot textarea').count())
     check('waiting changes: Apply, Edit by hand, Leave it — and Apply all, Leave all', await pg.locator('#sideBody .change.waiting button:has-text("Edit by hand")').count() == 2 and await pg.locator('#sideBody button:has-text("Apply all")').count() == 1 and await pg.locator('#sideBody button:has-text("Leave all")').count() == 1)
     await pg.click('#sideBody button:has-text("Apply all")'); await pg.wait_for_timeout(500)
     p1 = await pg.evaluate(first_words)
@@ -1175,7 +1253,7 @@ async def main():
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_partner, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_partner, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

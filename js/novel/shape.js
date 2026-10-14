@@ -24,7 +24,8 @@
  *   draft   { id:novelId, novelId, direction, partner, play:{} }
  */
 
-import { newId, countWords, hashText, numberWords } from '../util.js';
+import { newId, countWords, hashText, numberWords, nameKey } from '../util.js';
+import { samePersonName, plainName, isDescriptorName, nameInText } from './names.js';
 
 export const COVERS = ['ember', 'moss', 'dusk', 'rose', 'ink', 'sea', 'wine', 'gold'];
 /* how much a Write writes. A size is asked as a range (around x to y words):
@@ -242,12 +243,17 @@ export const novelSteps = {
   dropNote: (kind, cardId) => (n) => { n.notes[kind] = (n.notes[kind] || []).filter((c) => c.id !== cardId); },
   setNotes: (notes) => (n) => { n.notes = notes; },
   /* the helper's changes, card by card, by id: a card set to how it read
-   * after, or taken out when it is gone after */
+   * after, or taken out when it is gone after — only where it still reads as
+   * it did when the change was made (Cozy Tavern's M680-5: a step laid again
+   * over a newer copy never writes over his edit made meanwhile) */
   applyCards: (cards) => (n) => {
     n.notes = n.notes || {};
+    const same = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
     for (const c of cards) {
       const list = n.notes[c.kind] || (n.notes[c.kind] = []);
       const i = list.findIndex((x) => x.id === c.id);
+      const cur = i >= 0 ? list[i] : null;
+      if (!same(cur, c.before)) continue;
       if (!c.after) { if (i >= 0) list.splice(i, 1); }
       else if (i >= 0) list[i] = JSON.parse(JSON.stringify(c.after));
       else list.push(JSON.parse(JSON.stringify(c.after)));
@@ -308,6 +314,16 @@ export const novelSteps = {
     }
   },
   setMemory: (patch) => (n) => { n.memory = { ...(n.memory || {}), ...patch }; },
+  /* what the helper's model would not read, set aside with why (archivist.js) */
+  setAside: (entries) => (n) => { n.memory = n.memory || {}; n.memory.aside = { ...(n.memory.aside || {}), ...entries }; },
+  dropAside: (keys) => (n) => { if (!n.memory || !n.memory.aside) return; for (const k of keys || []) delete n.memory.aside[k]; },
+  /* one more reading since the notes were last checked against the book —
+   * what that check found kept with it */
+  readSinceCheck: () => (n) => {
+    n.memory = n.memory || {};
+    const a = n.memory.audit || null;
+    n.memory.audit = { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: ((a && a.reads) || 0) + 1 };
+  },
   /* What it's about / How it reads: Manual or Automatic, and what the helper keeps */
   setAuto: (key, on) => (n) => { n.auto = { ...(n.auto || {}), [key]: Boolean(on) }; },
   setKept: (key, value) => (n) => { n.kept = { ...(n.kept || {}) }; if (value) n.kept[key] = value; else delete n.kept[key]; },
@@ -389,6 +405,7 @@ export const chapterSteps = {
   /* the summaries of the chapter as it read before (each by its words'
    * fingerprint): a version brought back brings its summary back too */
   clearSummaries: () => (c) => { c.summaries = []; },
+  dropSummary: (fp) => (c) => { c.summaries = (c.summaries || []).filter((x) => x.fp !== fp); },
   keepSummary: (entry) => (c) => {
     const list = (c.summaries = (c.summaries || []).filter((x) => x.fp !== entry.fp));
     list.push(JSON.parse(JSON.stringify(entry)));
@@ -504,4 +521,56 @@ export function countBook(novel, chapters) {
 /* Notes cards */
 export function newCard(kind, fields = {}) {
   return { id: newId(kind.slice(0, 2)), name: '', about: '', ...(kind === 'people' ? { aka: [], ties: '', now: '' } : {}), ...(kind === 'threads' ? { open: true } : {}), ...fields };
+}
+
+/* The card a name means (Cozy Tavern's lessons: a name matched loosely takes
+ * the first card that shares it and writes on the wrong one, M584/M600/M607;
+ * one person on two cards, M405/M414): the card called that comes first, then
+ * the one that also goes by it, then the one whose name is among the other
+ * names given with it, then — for a person — the one whose name is a short or
+ * fuller form of it (Rias for Rias Wells, Captain Hitsugaya for Toshiro
+ * Hitsugaya), for a place or a thing the one called the same but for a
+ * leading "the". Past the first, a name two cards answer to means neither:
+ * `ambiguous`, and nothing is written. */
+export function matchCard(cards, name, aka = [], { kind = '' } = {}) {
+  const k = nameKey(name);
+  if (!k) return { card: null, ambiguous: false };
+  const list = cards || [];
+  const exact = list.find((c) => nameKey(c.name) === k);
+  if (exact) return { card: exact, ambiguous: false };
+  const one = (found) => (found.length === 1 ? { card: found[0], ambiguous: false } : found.length > 1 ? { card: null, ambiguous: true } : null);
+  const byAka = one(list.filter((c) => (c.aka || []).some((a) => nameKey(a) === k)));
+  if (byAka) return byAka;
+  const others = (aka || []).map(nameKey).filter(Boolean);
+  const byOthers = others.length ? one(list.filter((c) => others.includes(nameKey(c.name)))) : null;
+  if (byOthers) return byOthers;
+  /* a description is no person's name ("the girl"); a place or a thing may be called "The …" */
+  const named = (n) => n && (kind !== 'people' || !isDescriptorName(n));
+  const forms = [name, ...(aka || [])].filter(named);
+  const namesOf = (c) => [c.name, ...(c.aka || [])].filter(named);
+  const near = forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => (kind === 'people' ? samePersonName(n, f) : plainName(n) === plainName(f)))))) : null;
+  return near || { card: null, ambiguous: false };
+}
+export function findCard(cards, name, aka = [], opts = {}) { return matchCard(cards, name, aka, opts).card; }
+
+/* The cards a name takes out: only those called exactly that — never one that
+ * merely also goes by it, which is a card the name was folded into. */
+export function cardsCalled(cards, name) {
+  const k = nameKey(name);
+  return k ? (cards || []).filter((c) => nameKey(c.name) === k) : [];
+}
+
+/* Whether a card's name still stands in the book as it stands (`folded`:
+ * foldedText of the book's words): a person by the whole name or a word of it
+ * that names someone, a place by its whole name; a description ("the girl")
+ * and a thing or a thread (their names are descriptions) never. */
+export function cardStands(kind, card, folded) {
+  if (!card || !folded) return false;
+  if (kind === 'people') return !isDescriptorName(card.name) && nameInText(folded, card.name);
+  if (kind === 'places') return nameInText(folded, card.name, { words: false });
+  return false;
+}
+/* Whether another card carries a card's name — the one it was folded into */
+export function carriedBy(kind, card, cards) {
+  return (cards || []).some((o) => o.id !== card.id && [o.name, ...(o.aka || [])].some((n) => (kind === 'people' ? samePersonName(n, card.name) : plainName(n) === plainName(card.name))));
 }
