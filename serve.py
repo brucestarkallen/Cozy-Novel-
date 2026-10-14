@@ -47,7 +47,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.4.5"
+VERSION = "2.5.0"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -58,7 +58,7 @@ HISTORY = HOME / "history"    # history/<kind>/<id>/<stamp>.json.gz — the copy
 TRASH = HOME / "trash"        # trash/<stamp>-<kind>-<id>.json.gz — deleted things, kept 30 days
 COPIES = HOME / "copies"      # copies/cozynovel-YYYY-MM-DD.json.gz — everything, once a day
 SENT = HOME / "sent"          # sent/<novel>/<key>.json.gz — what the model was sent
-USAGE = HOME / "usage.json"   # {"days": {"YYYY-MM-DD": {"<address>|<model>": {calls, in, out, cached, estimated}}}} — Usage and cost
+USAGE = HOME / "usage.json"   # {"days": {"YYYY-MM-DD": {"<address>|<model>": {calls, in, out, cached, cacheWrite?, anthropic?, prices?, estimated}}}} — Usage and cost
 
 KINDS = ("house", "novel", "chapter", "talk", "play", "draft")
 # his settings, connections and instructions keep their earlier copies too; only
@@ -92,6 +92,10 @@ def _commit():
 
 COMMIT = _commit()
 LOCK = threading.RLock()
+# the model calls going through the relay right now: an update waits for them
+CALLS = {"n": 0}
+CALLS_LOCK = threading.Lock()
+RELIGHT_WAIT_MAX = 15 * 60
 
 
 def now_ms():
@@ -104,14 +108,22 @@ def stamp(at=None):
 
 
 def atomic_write_bytes(path: Path, data: bytes):
-    """Through a temp file, so a half-written file can never exist."""
+    """Through a temp file, so a half-written file can never exist (and a
+    write that fails leaves no temp file behind)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def gz_bytes(obj) -> bytes:
@@ -563,15 +575,72 @@ def prune_trash():
             pass
 
 
+def trash_ids():
+    """What waits in Recently deleted, as (kind, id) — None when a bundle
+    cannot be read, so nothing is ever taken for gone on a guess."""
+    out = set()
+    if not TRASH.is_dir():
+        return out
+    for f in TRASH.glob("*.json.gz"):
+        if not TRASH_RE.match(f.name):
+            continue
+        try:
+            b = read_gz(f)
+        except Exception:
+            return None
+        for e in b.get("records") or []:
+            if isinstance(e, dict) and isinstance(e.get("kind"), str) and isinstance(e.get("id"), str):
+                out.add((e["kind"], e["id"]))
+    return out
+
+
+def _newest_mtime(d):
+    newest = 0.0
+    for f in d.rglob("*"):
+        try:
+            newest = max(newest, f.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def sweep_gone(at=None):
+    """Everything of a record goes with it (Cozy Tavern M160, M389, M525):
+    its earlier copies, and for a book what its pages were sent, stay only
+    while it can come back — on the shelf, or in Recently deleted. Once it is
+    gone for good, and nothing of it is newer than Recently deleted keeps
+    things, they go too: the phone does not fill with them, and no copy
+    carries them. Returns how many folders went."""
+    waiting = trash_ids()
+    if waiting is None:
+        return 0
+    limit = (time.time() if at is None else at) - TRASH_DAYS * 86400
+    swept = 0
+    with LOCK:
+        places = [(kind, HISTORY / kind) for kind in KINDS] + [("novel", SENT)]
+        for kind, base in places:
+            if not base.is_dir():
+                continue
+            for d in base.iterdir():
+                if not d.is_dir() or not ID_RE.match(d.name) or record_path(kind, d.name).exists() or (kind, d.name) in waiting:
+                    continue
+                if _newest_mtime(d) < limit:
+                    shutil.rmtree(d, ignore_errors=True)
+                    swept += 1
+    return swept
+
+
 # ------------------------------------------------------- copies of everything
 
 def library_snapshot(with_sent=False):
     snap = {"format": "cozynovel-library", "version": 2, "app": VERSION, "at": now_ms(), "records": all_records()}
     if with_sent:
         sent = {}
+        # only the books in the copy: a book gone from the shelf is never carried in one (Cozy Tavern M525)
+        books = {e["id"] for e in snap["records"] if e["kind"] == "novel"}
         if SENT.is_dir():
             for d in SENT.iterdir():
-                if not d.is_dir() or not ID_RE.match(d.name):
+                if not d.is_dir() or not ID_RE.match(d.name) or d.name not in books:
                     continue
                 for f in d.glob("*.json.gz"):
                     key = f.name[:-8]
@@ -633,9 +702,49 @@ def valid_snapshot(snap):
     return ""
 
 
+def _become(records, sent, revs, putting_back=False):
+    """The library made exactly these records (and, given, these words sent):
+    whatever is not among them goes (its earlier copy kept), each of them is
+    written later-numbered than anything before it. Putting things back, what
+    cannot be taken away is passed over: the records that were are what
+    matter then."""
+    wanted = {(e["kind"], e["id"]) for e in records}
+    for (kind, rid) in list(revs):
+        if (kind, rid) not in wanted:
+            if kind in KEPT_HISTORY:
+                cur = read_record(kind, rid)
+                if cur:
+                    keep_earlier(kind, rid, cur)
+            try:
+                record_path(kind, rid).unlink(missing_ok=True)
+            except OSError:
+                if not putting_back:
+                    raise
+            _revs.pop((kind, rid), None)
+            set_gone(kind, rid, revs[(kind, rid)])
+    for e in records:
+        rev = max(revs.get((e["kind"], e["id"]), 0), int(e.get("rev") or 0), gone_rev(e["kind"], e["id"])) + 1
+        revs[(e["kind"], e["id"])] = rev
+        write_record(e["kind"], e["id"], {"rev": rev, "at": now_ms(), "data": e["data"], "saves": []})
+        set_gone(e["kind"], e["id"], 0)
+    _meta_cache.clear()
+    if isinstance(sent, dict):
+        if SENT.is_dir():
+            shutil.rmtree(SENT, ignore_errors=True)
+        for nid, keys in sent.items():
+            if not ID_RE.match(str(nid)) or not isinstance(keys, dict):
+                continue
+            for key, body in keys.items():
+                if ID_RE.match(str(key)) and isinstance(body, dict):
+                    atomic_write_bytes(SENT / nid / (key + ".json.gz"), gz_bytes(body))
+
+
 def replace_library(snap, by=""):
     """Bring a whole copy back: everything here now is kept as a copy first,
-    then the library becomes exactly the copy. Every open tab reloads."""
+    then the library becomes exactly the copy. Every open tab reloads. A copy
+    that cannot be brought back whole is not brought back at all: the library
+    is put back as it was (Cozy Tavern M675), never left half one, half the
+    other. What waits in Recently deleted keeps what its pages were sent."""
     why = valid_snapshot(snap)
     if why:
         raise ValueError(why)
@@ -643,36 +752,54 @@ def replace_library(snap, by=""):
         before = library_snapshot(with_sent=True)
         COPIES.mkdir(parents=True, exist_ok=True)
         safety = "cozynovel-before-%s.json.gz" % time.strftime("%Y%m%d-%H%M%S").lower()
-        if before["records"]:
-            atomic_write_bytes(COPIES / safety, gz_bytes(before))
+        aside = None
+        try:
+            if before["records"]:
+                atomic_write_bytes(COPIES / safety, gz_bytes(before))
+            # what was sent, set aside whole (one rename) while the copy's own is written
+            if isinstance(snap.get("sent"), dict) and SENT.is_dir():
+                aside = SENT.with_name("sent.before-%s" % stamp())
+                os.replace(SENT, aside)
+        except OSError as e:
+            raise RuntimeError("what is here could not be kept first (%s), so nothing was changed" % (e.strerror or e)) from e
+        # every record's number, here now and as it goes: whatever is written is numbered after it
         revs = {(e["kind"], e["id"]): int(e.get("rev") or 0) for e in before["records"]}
-        wanted = {(e["kind"], e["id"]) for e in snap["records"]}
-        for (kind, rid) in revs:
-            if (kind, rid) not in wanted:
-                if kind in KEPT_HISTORY:
-                    cur = read_record(kind, rid)
-                    if cur:
-                        keep_earlier(kind, rid, cur)
-                record_path(kind, rid).unlink(missing_ok=True)
-                _revs.pop((kind, rid), None)
-                set_gone(kind, rid, revs[(kind, rid)])
-        for e in snap["records"]:
-            rev = max(revs.get((e["kind"], e["id"]), 0), int(e.get("rev") or 0), gone_rev(e["kind"], e["id"])) + 1
-            write_record(e["kind"], e["id"], {"rev": rev, "at": now_ms(), "data": e["data"], "saves": []})
-            set_gone(e["kind"], e["id"], 0)
-        _meta_cache.clear()
+        try:
+            _become(snap["records"], snap.get("sent"), revs)
+        except Exception as e:
+            reason = getattr(e, "strerror", None) or str(e) or e.__class__.__name__
+            try:
+                for e2 in snap["records"]:
+                    revs.setdefault((e2["kind"], e2["id"]), max(rev_of(e2["kind"], e2["id"]), gone_rev(e2["kind"], e2["id"])))
+                _become(before["records"], None, revs, putting_back=True)
+                if isinstance(snap.get("sent"), dict):
+                    shutil.rmtree(SENT, ignore_errors=True)
+                    if aside is not None:
+                        os.replace(aside, SENT)
+            except Exception as e3:
+                print("putting the library back failed:", e3, file=sys.stderr)
+                announce({"resync": True})
+                raise RuntimeError("the copy could not be brought back (%s), and putting things back failed too — "
+                                   "what was here is kept whole in Backups → Copies kept on this phone" % reason) from e
+            announce({"resync": True})
+            raise RuntimeError("the copy could not be brought back (%s) — everything is as it was" % reason) from e
+        if aside is not None:
+            # a book in Recently deleted keeps what its pages were sent, to come back with
+            # (Recently deleted unreadable just now: every book the copy does not hold keeps them,
+            # for the hourly sweep to judge once it can read it)
+            waiting = trash_ids()
+            try:
+                for d in aside.iterdir():
+                    if d.is_dir() and (waiting is None or ("novel", d.name) in waiting) and not (SENT / d.name).exists():
+                        SENT.mkdir(parents=True, exist_ok=True)
+                        os.replace(d, SENT / d.name)
+            except OSError as e:
+                print("what a book in Recently deleted was sent could not all be kept:", e, file=sys.stderr)
+            shutil.rmtree(aside, ignore_errors=True)
         # a page's unsaved work from before the copy came back is not played over it
         set_generation(generation() + 1)
-        if isinstance(snap.get("sent"), dict):
-            if SENT.is_dir():
-                shutil.rmtree(SENT, ignore_errors=True)
-            for nid, keys in snap["sent"].items():
-                if not ID_RE.match(str(nid)) or not isinstance(keys, dict):
-                    continue
-                for key, body in keys.items():
-                    if ID_RE.match(str(key)) and isinstance(body, dict):
-                        atomic_write_bytes(SENT / nid / (key + ".json.gz"), gz_bytes(body))
-    announce({"reload": True, "by": by})
+        gen = generation()
+    announce({"reload": True, "by": by, "generation": gen})
     return safety if before["records"] else ""
 
 
@@ -719,6 +846,37 @@ def _count(v):
         return 0
 
 
+# ---------------------------------------------------------------- leases
+# THE HELPER AND THE CHECKER, ONE BROWSER AT A TIME (Cozy Tavern M293, "two
+# hands on one tale", made a lease the phone keeps). Windows of one browser
+# already take turns among themselves; two browsers on one book did not, so
+# both read the same new words into the notes and both checked the same
+# passage — every call made twice, and each one's save laid over the other's.
+# A browser holds a book's lease while it works, renewing it; another asking
+# for it is told how long it is held, and waits. In memory only: a server
+# that starts again lets every lease go, and the next asker takes it.
+LEASES = {}
+LEASE_LOCK = threading.Lock()
+LEASE_KEY = re.compile(r"^(?:helper|checker):[A-Za-z0-9_-]{1,96}$")
+
+
+def take_lease(key, holder, ttl_ms, release=False):
+    now = time.time()
+    with LEASE_LOCK:
+        cur = LEASES.get(key)
+        if cur and cur[1] <= now:
+            LEASES.pop(key, None)
+            cur = None
+        if release:
+            if cur and cur[0] == holder:
+                LEASES.pop(key, None)
+            return {"ok": True}
+        if cur and cur[0] != holder:
+            return {"ok": False, "left": int((cur[1] - now) * 1000)}
+        LEASES[key] = (holder, now + max(5.0, min(300.0, ttl_ms / 1000.0)))
+        return {"ok": True}
+
+
 def usage_add(spec):
     if not isinstance(spec, dict):
         return False
@@ -737,6 +895,22 @@ def usage_add(spec):
         row["in"] = _count(row.get("in")) + _count(spec.get("in"))
         row["out"] = _count(row.get("out")) + _count(spec.get("out"))
         row["cached"] = _count(row.get("cached")) + _count(spec.get("cached"))
+        # Claude's writes into its cache, priced higher than plain input
+        write = _count(spec.get("write"))
+        if write or row.get("cacheWrite"):
+            row["cacheWrite"] = _count(row.get("cacheWrite")) + write
+        if spec.get("anthropic") is True:
+            row["anthropic"] = True
+        # the prices the connection had at the call: a connection let go since is still priced
+        prices = spec.get("prices")
+        if isinstance(prices, dict):
+            kept = {}
+            for k in ("in", "out", "cached"):
+                v = prices.get(k)
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 1e6:
+                    kept[k] = v
+            if kept:
+                row["prices"] = kept
         if spec.get("estimated"):
             row["estimated"] = _count(row.get("estimated")) + 1
         for old in sorted(d["days"].keys())[:-USAGE_DAYS]:
@@ -1228,6 +1402,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if isinstance(pair, list) and len(pair) == 2 and self.ok_id(pair[0], pair[1]):
                         out[pair[0] + "/" + pair[1]] = rev_of(pair[0], pair[1]) or -gone_rev(pair[0], pair[1])
             return self.send_json({"revs": out})
+        if path == "/api/lease":
+            spec = self.read_body()
+            holder = self.client()
+            if not isinstance(spec, dict) or not isinstance(spec.get("key"), str) or not LEASE_KEY.match(spec["key"]) or not holder:
+                return self.send_json({"error": "bad lease"}, 400)
+            ttl = spec.get("ttl")
+            ttl = ttl if isinstance(ttl, (int, float)) and not isinstance(ttl, bool) else 90000
+            return self.send_json(take_lease(spec["key"], holder, ttl, release=spec.get("release") is True))
         if path == "/api/usage":
             ok = usage_add(self.read_body())
             return self.send_json({"ok": ok}, 200 if ok else 400)
@@ -1244,6 +1426,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 safety = replace_library(snap, self.client())
             except ValueError as e:
                 return self.send_json({"error": str(e)}, 400)
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 500)
             return self.send_json({"ok": True, "safety": safety})
         if parts[:2] == ["api", "copies"] and len(parts) == 4 and parts[3] == "restore":
             if not COPY_RE.match(parts[2]):
@@ -1258,6 +1442,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 safety = replace_library(snap, self.client())
             except ValueError as e:
                 return self.send_json({"error": str(e)}, 400)
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 500)
             return self.send_json({"ok": True, "safety": safety})
         if path == "/api/copies/now":
             name = daily_copy(force=True)
@@ -1278,6 +1464,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---------------- the one way out to a model
 
     def proxy_call(self):
+        # counted while it runs: an update never cuts a page being written
+        with CALLS_LOCK:
+            CALLS["n"] += 1
+        try:
+            return self.relay_call()
+        finally:
+            with CALLS_LOCK:
+                CALLS["n"] -= 1
+
+    def relay_call(self):
         spec = self.read_body()
         if not isinstance(spec, dict):
             return self.send_json({"error": "transport", "detail": "the request arrived incomplete"}, 200)
@@ -1456,6 +1652,17 @@ def watch_self():
             moved = bool(COMMIT) and _commit() not in ("", COMMIT)
         if now != seen or moved:
             time.sleep(0.6)  # let the update finish writing
+            # a page being written, a reply streaming in: the update waits for
+            # them, so it never cuts one short (Cozy Tavern M332) — a quarter
+            # of an hour at most
+            waited = 0.0
+            while waited < RELIGHT_WAIT_MAX:
+                with CALLS_LOCK:
+                    busy = CALLS["n"]
+                if not busy:
+                    break
+                time.sleep(0.5)
+                waited += 0.5
             print("Cozy Novel was updated — relighting", file=sys.stderr)
             try:
                 os.execv(sys.executable, [sys.executable, str(SELF)] + sys.argv[1:])
@@ -1468,6 +1675,7 @@ def every_hour():
         while True:
             try:
                 prune_trash()
+                sweep_gone()
                 daily_copy()
             except Exception as e:
                 print("hourly care skipped:", e, file=sys.stderr)

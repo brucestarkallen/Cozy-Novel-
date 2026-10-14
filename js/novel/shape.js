@@ -25,7 +25,7 @@
  */
 
 import { newId, countWords, hashText, numberWords, nameKey } from '../util.js';
-import { samePersonName, plainName, isDescriptorName, nameInText } from './names.js';
+import { samePersonName, plainName, isDescriptorName, nameInText, nearName } from './names.js';
 
 export const COVERS = ['ember', 'moss', 'dusk', 'rose', 'ink', 'sea', 'wine', 'gold'];
 /* how much a Write writes. A size is asked as a range (around x to y words):
@@ -61,8 +61,44 @@ export function newVersion(fields = {}) {
   return { id: newId('v'), text: '', at: Date.now(), ...fields };
 }
 
+/* WHERE A VERSION STOPS, carried to one made from it (Cozy Tavern's M511-1,
+ * M548): cut short at its end and why, stopped by his hand — so Go on is
+ * still offered for it. A version made by changing words inside it keeps
+ * these; one he finished himself does not (sameEnd). A few selected words
+ * rewritten that stopped partway are cut in the middle, not at the end: Go
+ * on cannot mend that, and it is not carried. */
+export function cutAtEnd(v) { return Boolean(v && v.cut && (v.how !== 'selection' || v.endCut)); }
+export function endOf(v) {
+  const out = {};
+  if (!cutAtEnd(v)) return out;
+  for (const k of ['cut', 'cutWhy', 'cutBy', 'stopped']) if (v[k] !== undefined) out[k] = v[k];
+  return out;
+}
+/* the two read the same at their end: the last words untouched */
+export function sameEnd(a, b) {
+  const tail = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(-40);
+  return tail(a) === tail(b);
+}
+
 export function newPassage(by, text = '', fields = {}) {
   return { id: newId('p'), by, pick: 0, versions: [newVersion({ text, how: by === 'you' ? 'mine' : by, ...fields })] };
+}
+
+/* What a chapter kept for some of its passages, to go with them into
+ * another chapter (A new chapter from here, Cozy Tavern F9): what the checker
+ * found and what he left, the judge's head to head, and the words of their
+ * versions taken out, which the helper reads to take back what came from
+ * them. A copy — the chapter itself is not changed. */
+export function keptFor(chapter, passageIds) {
+  const ids = new Set(passageIds);
+  const pick = (obj) => Object.fromEntries(Object.entries(obj || {}).filter(([pid]) => ids.has(pid)));
+  const theirs = (r) => r && (ids.has(r.key) || [...ids].some((pid) => String(r.key || '').startsWith(pid + ':')));
+  return JSON.parse(JSON.stringify({
+    checks: pick(chapter && chapter.checks),
+    checksLeft: pick(chapter && chapter.checksLeft),
+    duels: Object.fromEntries(Object.entries((chapter && chapter.duels) || {}).filter(([, d]) => d && ids.has(d.pid))),
+    retired: ((chapter && chapter.retired) || []).filter(theirs),
+  }));
 }
 
 export function newChapter(novelId) {
@@ -444,7 +480,15 @@ export const chapterSteps = {
     const list = (c.checksLeft[pid] = c.checksLeft[pid] || []);
     const replace = typeof item.replace === 'string' ? item.replace : null;
     if (!list.some((x) => x.find === item.find && x.replace === replace)) list.push({ find: item.find, replace });
-    if (list.length > 60) list.splice(0, list.length - 60);
+    /* past sixty, what can never be offered again goes — words no version of
+     * the passage holds any more — never the oldest he left (Cozy Tavern
+     * M559: a cap that lets the oldest go brings them back) */
+    if (list.length > 60) {
+      const p = findPassage(c, pid);
+      const texts = ((p && p.versions) || []).map((v) => String(v.text || ''));
+      c.checksLeft[pid] = list.filter((x) => texts.some((t) => t.includes(x.find)));
+      if (c.checksLeft[pid].length > 600) c.checksLeft[pid].splice(0, c.checksLeft[pid].length - 600);
+    }
   },
   /* the judge's head to head of two versions of one passage (checker.js) —
    * kept while both versions are there */
@@ -523,6 +567,39 @@ export function newCard(kind, fields = {}) {
   return { id: newId(kind.slice(0, 2)), name: '', about: '', ...(kind === 'people' ? { aka: [], ties: '', now: '' } : {}), ...(kind === 'threads' ? { open: true } : {}), ...fields };
 }
 
+/* A THREAD IS FOUND BY SENSE (Cozy Tavern M259, M653): two titles say the
+ * same thing when every telling word of the shorter is in the longer, and the
+ * shorter has two at least; a word is its stem (promise, promised, promises).
+ * A share of the words is not enough ("Claire Stone" is not "Alaric Stone"),
+ * and a title of names alone says only who — the same thread only as the very
+ * same names. */
+const THREAD_STOP = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'his', 'her', 'hers', 'their', 'about', 'into', 'over', 'will', 'what', 'who', 'was', 'are', 'has', 'have', 'had', 'its', 'not', 'but', 'out', 'off', 'onto', 'upon', 'after', 'before', 'him', 'she', 'they', 'them']);
+function titleWords(t) {
+  const all = new Set();
+  const common = new Set();
+  const tokens = String(t || '').replace(/[‘’´`]/g, "'").replace(/'s\b/gi, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/);
+  for (const raw of tokens) {
+    const low = raw.toLowerCase();
+    if (low.length <= 2 || THREAD_STOP.has(low)) continue;
+    let w = low;
+    if (w.length > 4) w = w.replace(/(?:ing|ed|es|s)$/, '');
+    if (w.length > 4) w = w.replace(/e$/, '');
+    all.add(w);
+    if (raw[0] === raw[0].toLowerCase()) common.add(w);
+  }
+  return { all, common };
+}
+export function sameThreadTitle(a, b) {
+  const x = titleWords(a);
+  const y = titleWords(b);
+  const [short, long] = x.all.size <= y.all.size ? [x, y] : [y, x];
+  if (short.all.size < 2) return false;
+  for (const w of short.all) if (!long.all.has(w)) return false;
+  if (!short.common.size) return short.all.size === long.all.size;
+  return true;
+}
+const sameWords = (a, b) => { const x = titleWords(a).all; const y = titleWords(b).all; return x.size === y.size && [...x].every((w) => y.has(w)); };
+
 /* The card a name means (Cozy Tavern's lessons: a name matched loosely takes
  * the first card that shares it and writes on the wrong one, M584/M600/M607;
  * one person on two cards, M405/M414): the card called that comes first, then
@@ -530,16 +607,25 @@ export function newCard(kind, fields = {}) {
  * names given with it, then — for a person — the one whose name is a short or
  * fuller form of it (Rias for Rias Wells, Captain Hitsugaya for Toshiro
  * Hitsugaya), for a place or a thing the one called the same but for a
- * leading "the". Past the first, a name two cards answer to means neither:
- * `ambiguous`, and nothing is written. */
+ * leading "the", and last a person's name with a slip of the pen in it.
+ * Past the first, a name two cards answer to means neither: `ambiguous`, and
+ * nothing is written. */
 export function matchCard(cards, name, aka = [], { kind = '', near = true } = {}) {
   const k = nameKey(name);
   if (!k) return { card: null, ambiguous: false };
   const list = cards || [];
   const exact = list.find((c) => nameKey(c.name) === k);
   if (exact) return { card: exact, ambiguous: false };
-  const one = (found) => (found.length === 1 ? { card: found[0], ambiguous: false } : found.length > 1 ? { card: null, ambiguous: true } : null);
-  const byAka = one(list.filter((c) => (c.aka || []).some((a) => nameKey(a) === k)));
+  const one = (found, how = '') => (found.length === 1 ? { card: found[0], ambiguous: false, ...(how ? { how } : {}) } : found.length > 1 ? { card: null, ambiguous: true } : null);
+  /* for a reading's row about a person (Cozy Tavern M752): a description a
+   * card was once known by is the record of how it was named, never a name a
+   * new row answers to — another courier forty pages on is another courier;
+   * and another name a card goes by answers only when no other card answers
+   * to it by its own name too */
+  const loose = near && kind === 'people';
+  const byAkaList = list.filter((c) => (c.aka || []).some((a) => nameKey(a) === k && !(loose && isDescriptorName(a))));
+  if (loose && byAkaList.length === 1 && !isDescriptorName(name) && list.some((c) => c !== byAkaList[0] && (samePersonName(c.name, name) || nearName(c.name, name)))) return { card: null, ambiguous: true };
+  const byAka = one(byAkaList);
   if (byAka) return byAka;
   const others = (aka || []).map(nameKey).filter(Boolean);
   const byOthers = others.length ? one(list.filter((c) => others.includes(nameKey(c.name)))) : null;
@@ -550,7 +636,26 @@ export function matchCard(cards, name, aka = [], { kind = '', near = true } = {}
   const namesOf = (c) => [c.name, ...(c.aka || [])].filter(named);
   /* a short or fuller form only where it is asked for: the helper's rows — never a change he made through the partner, which names its card exactly */
   const close = near && forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => (kind === 'people' ? samePersonName(n, f) : plainName(n) === plainName(f)))))) : null;
-  return close || { card: null, ambiguous: false };
+  if (close) return close;
+  /* a thread in other words, for a reading's row: the one that says it in
+   * the very same words when several answer; if they are all copies of one
+   * thread, the oldest; threads that are not each other's copies both
+   * answering mean neither (Cozy Tavern M653) */
+  if (near && kind === 'threads') {
+    const hits = list.filter((c) => [c.name, ...(c.aka || [])].some((n) => [name, ...(aka || [])].some((f) => sameThreadTitle(n, f))));
+    if (hits.length === 1) return { card: hits[0], ambiguous: false };
+    if (hits.length > 1) {
+      const very = hits.filter((c) => sameWords(c.name, name));
+      if (very.length === 1) return { card: very[0], ambiguous: false };
+      if (hits.every((a) => hits.every((b) => a === b || sameThreadTitle(a.name, b.name)))) return { card: hits[0], ambiguous: false };
+      return { card: null, ambiguous: true };
+    }
+  }
+  /* a slip of the pen, for a person only: one long word of the name a letter
+   * off (Cozy Tavern M646) — `how: 'slip'`, so the slip is never kept as a
+   * name the card goes by */
+  const slip = loose && forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => nearName(n, f)))), 'slip') : null;
+  return slip || { card: null, ambiguous: false };
 }
 export function findCard(cards, name, aka = [], opts = {}) { return matchCard(cards, name, aka, opts).card; }
 

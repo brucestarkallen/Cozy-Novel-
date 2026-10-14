@@ -24,6 +24,12 @@ main() {
 
   answering() { curl -sf --max-time 2 -o /dev/null "$URL/api/version"; }
   live_commit() { curl -sf --max-time 2 "$URL/api/version" | sed -n 's/.*"commit": *"\([^"]*\)".*/\1/p'; }
+  # which Cozy Novel is running, said every time it opens
+  live_version() { curl -sf --max-time 2 "$URL/api/version" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p'; }
+  said_open() {
+    V="$(live_version)"
+    echo "Cozy Novel ${V:+$V }is open at $URL"
+  }
   open_it() {
     if command -v termux-open-url >/dev/null 2>&1; then termux-open-url "$URL";
     elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1;
@@ -58,7 +64,7 @@ main() {
 
   if answering; then
     if [ "$(live_commit)" = "$WANT" ]; then
-      echo "Cozy Novel is open at $URL"
+      said_open
       open_it
       exit 0
     fi
@@ -90,7 +96,7 @@ main() {
     sleep 0.2
   done
   if answering; then
-    echo "Cozy Novel is open at $URL"
+    said_open
     echo "Your books live in $DATA"
     open_it
   else

@@ -103,6 +103,41 @@ export const EFFORT_ALIAS = {
 
 function isAnthropicShape(conn) { return wireOf(conn) === 'anthropic'; }
 
+/* WHAT A MODEL IS, IN ITS PROVIDER'S OWN WORDS (Tavern M348, M289): the
+ * weights behind an alias, the thinking levels it declares, the room it holds
+ * — kept for that very model at that very address, never for another one the
+ * connection is changed to (identFor). Kept before there was a mark: taken as
+ * it was. */
+export function identityOf(conn) {
+  const c = conn || {};
+  if (c.identFor && c.identFor !== learnKey(c)) return { hf: '', efforts: null, context: 0 };
+  return {
+    hf: typeof c.modelHf === 'string' ? c.modelHf : '',
+    efforts: Array.isArray(c.modelEfforts) && c.modelEfforts.length ? c.modelEfforts.map((e) => String(e || '').toLowerCase()) : null,
+    context: Number.isFinite(c.modelContext) && c.modelContext > 0 ? Math.round(c.modelContext) : 0,
+  };
+}
+/* the thinking levels the model itself declares (Synthetic lists them per model) — null when it says nothing */
+export function declaredEfforts(conn) { return isAnthropicShape(conn || {}) ? null : identityOf(conn).efforts; }
+/* A RELAY THAT PUBLISHES EACH MODEL'S LEVELS IS SPOKEN TO IN EXACTLY THOSE
+ * WORDS (Tavern M349): one top-level reasoning_effort, one of the values it
+ * lists — never a family's own switch, which is not part of its surface. Off
+ * is "none" where the model declares it, else its least (it always thinks);
+ * any other level through the family's own aliases, then the nearest
+ * declared level below, else its least — a level that asks for SOME thinking
+ * is never spoken as "none". */
+export function declaredWire(conn, effort) {
+  const declared = declaredEfforts(conn) || [];
+  const thinking = EFFORT_RANK.filter((l) => l !== 'off' && declared.includes(l));
+  if (effort === 'off') return declared.includes('none') ? 'none' : (thinking[0] || '');
+  const fam = familyStyle(conn);
+  const e = (EFFORT_ALIAS[fam] && EFFORT_ALIAS[fam][effort]) || effort;
+  const r = EFFORT_RANK.indexOf(e);
+  let best = '';
+  for (const l of thinking) if (EFFORT_RANK.indexOf(l) <= r) best = l;
+  return best || thinking[0] || '';
+}
+
 /* Which family's words this connection speaks (Tavern familyStyle). */
 export function familyStyle(conn) {
   const c = conn || {};
@@ -110,7 +145,7 @@ export function familyStyle(conn) {
   const url = String(c.url || '').toLowerCase();
   /* an alias hides a model's family (Synthetic serves Kimi K3 as
    * "syn:large:vision"): the weights its provider's list names are read too */
-  const names = [c.model, c.modelHf].filter(Boolean).map((n) => String(n).toLowerCase());
+  const names = [c.model, identityOf(c).hf].filter(Boolean).map((n) => String(n).toLowerCase());
   const model = names[0] || '';
   const any = (re) => names.some((n) => re.test(n));
   if (c.preset === 'hermes' || model === 'hermes-agent') return 'hermes';
@@ -132,12 +167,19 @@ export function hermesLike(conn) {
 }
 
 export function glmVersion(conn) {
-  const m = /glm[-_.]?(\d+)(?:[._](\d+))?/.exec(String((conn && conn.model) || '').toLowerCase());
-  return m ? Number(m[1]) + (m[2] ? Number('0.' + m[2]) : 0) : null;
+  /* the model's own name, and the weights its provider names behind it */
+  for (const n of [conn && conn.model, identityOf(conn).hf]) {
+    const m = /glm[-_.]?(\d+)(?:[._](\d+))?/.exec(String(n || '').toLowerCase());
+    if (m) return Number(m[1]) + (m[2] ? Number('0.' + m[2]) : 0);
+  }
+  return null;
 }
 
-/* A model that cannot be told not to think. */
+/* A model that cannot be told not to think — and one whose relay lists no
+ * "none" among its levels (Tavern M349). */
 export function cannotStopThinking(conn) {
+  const declared = declaredEfforts(conn);
+  if (declared) return !declared.includes('none');
   const style = familyStyle(conn);
   if (style === 'kimi') return true;
   if (style === 'zai') { const v = glmVersion(conn); return v !== null && v >= 5.3; }
@@ -265,6 +307,8 @@ export const COMPLETION_FIELD_REFUSAL = /(?:unsupported parameter|not supported|
 export function thinkingFields(conn, level) {
   const set = level === false || level === 'none' ? 'off' : level;
   if (set === undefined || set === null || set === '' || !EFFORT_RANK.includes(set)) return {};
+  /* a model that declares its levels: one field, one of its own values (Tavern M349) */
+  if (declaredEfforts(conn)) { const said = declaredWire(conn, set); return said ? { reasoning_effort: said } : {}; }
   const style = familyStyle(conn);
   const effort = effortFor(style, set);
   const b = {};
@@ -301,7 +345,7 @@ function thinks(conn) {
   const t = conn.thinking;
   if (t === 'off' || t === false || t === 'none') return cannotStopThinking(conn);
   if (EFFORT_RANK.includes(t)) return true;
-  return alwaysThinks(conn.model) || alwaysThinks(conn.modelHf) || cannotStopThinking(conn);
+  return alwaysThinks(conn.model) || alwaysThinks(identityOf(conn).hf) || cannotStopThinking(conn);
 }
 
 function applyThinking(body, conn, wire) {
@@ -343,7 +387,7 @@ function applyThinking(body, conn, wire) {
     Object.assign(body, thinkingFields(conn, t));
   }
   /* the levels the provider's own list says this model takes fit the level he chose */
-  const listed = Array.isArray(conn.modelEfforts) && conn.modelEfforts.length ? conn.modelEfforts : null;
+  const listed = declaredEfforts(conn);
   if (said && listed && !(learned && (learned.down || learned.efforts))) {
     if (typeof body.reasoning_effort === 'string') body.reasoning_effort = fitEffort(body.reasoning_effort, listed, t === 'off');
     if (body.reasoning && typeof body.reasoning.effort === 'string') body.reasoning.effort = fitEffort(body.reasoning.effort, listed);
@@ -636,17 +680,17 @@ export function applyPrefill(messages, conn) {
 
 /* --------------------------------------------- the note at the end (M380) */
 /* A system message after his request, the way SillyTavern's post-history
- * instructions ride. A model that refused one is remembered and is sent those
- * words at the end of the request instead; an Anthropic-shaped address takes
- * no system message among the messages at all, so it is folded there at once. */
+ * instructions ride. A model that refused one is remembered — for that model
+ * at that address — and is sent those words at the end of the request
+ * instead. Claude too (Cozy Tavern M385): its newer models take a system
+ * message right after his turn, its older ones refuse it and learn so once. */
 export function hasLateSystem(messages) {
   return (messages || []).some((m) => m && m.role === 'system');
 }
 export function lateSystemFitted(conn, messages) {
   const list = (messages || []).map((m) => ({ ...m }));
   const facts = learnedFacts(conn);
-  const never = wireOf(conn) === 'anthropic';
-  if (!hasLateSystem(list) || (!never && !(facts && facts.noLateSystem))) return list;
+  if (!hasLateSystem(list) || !(facts && facts.noLateSystem)) return list;
   const out = [];
   for (const m of list) {
     const last = out[out.length - 1];
@@ -691,7 +735,7 @@ export function contextOf(conn) {
   const c = conn || {};
   let n;
   if (Number.isFinite(c.context) && c.context > 0) n = Math.round(c.context);
-  else if (Number.isFinite(c.modelContext) && c.modelContext > 0) n = Math.round(c.modelContext);
+  else if (identityOf(c).context) n = identityOf(c).context;
   else n = PRESET_CONTEXT[presetOf(c)] || DEFAULT_CONTEXT;
   const facts = learnedFacts(c);
   return facts && facts.context ? Math.min(n, facts.context) : n;
@@ -931,7 +975,15 @@ export function readChunk(wire, obj) {
   const choice = (obj.choices && obj.choices[0]) || {};
   const d = choice.delta || {};
   const text = typeof d.content === 'string' ? d.content : '';
-  const thinking = [d.reasoning_content, d.reasoning].find((v) => typeof v === 'string' && v) || '';
+  let thinking = [d.reasoning_content, d.reasoning].find((v) => typeof v === 'string' && v) || '';
+  /* a provider that names its thinking another way (reasoning_text, thought,
+   * thinking…) is read too: a new field is no reason for the thinking to
+   * vanish (Tavern M350) */
+  if (!thinking) {
+    for (const [k, v] of Object.entries(d)) {
+      if (k !== 'content' && k !== 'role' && k !== 'refusal' && typeof v === 'string' && v && /reason|think|thought/i.test(k)) { thinking = v; break; }
+    }
+  }
   const cut = choice.finish_reason === 'length';
   if (!text && !thinking && !cut) return null;
   return cut ? { text, thinking, cut } : { text, thinking };

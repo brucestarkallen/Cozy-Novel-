@@ -98,6 +98,24 @@ export function truthOf(v) {
   return undefined;
 }
 
+/* Whether a thread is open, as a model writes it: "open": false, or the
+ * same in words — "closed", "resolved" — or a "status" saying so, or
+ * "resolved": true; anything else is no answer (undefined). */
+const CLOSED_WORD = /^(?:closed?|resolved|settled|done|finished|over|ended|complete(?:d)?|fulfilled)$/i;
+const OPEN_WORD = /^(?:open(?:ed)?|ongoing|active|unresolved|pending|in progress|still open)$/i;
+export function openOf(row) {
+  if (!row || typeof row !== 'object') return undefined;
+  const word = (v) => { if (typeof v !== 'string') return undefined; const t = v.trim().replace(/[.!]+$/, ''); return CLOSED_WORD.test(t) ? false : OPEN_WORD.test(t) ? true : undefined; };
+  const o = truthOf(row.open);
+  if (o !== undefined) return o;
+  const ow = word(row.open);
+  if (ow !== undefined) return ow;
+  const st = word(row.status);
+  if (st !== undefined) return st;
+  for (const k of ['resolved', 'closed', 'done']) { const t = truthOf(row[k]); if (t !== undefined) return !t; }
+  return undefined;
+}
+
 /* A name compared the way a person would: case, accents and spacing aside. */
 export function nameKey(s) {
   return String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();

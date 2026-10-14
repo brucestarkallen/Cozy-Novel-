@@ -3,11 +3,12 @@
  * everything. Busy sections fold closed until opened. */
 
 import * as store from '../store.js';
-import { h, openSheet, field, group, toast, undoToast, confirmIt, download, pickFile, menu, icon } from './dom.js';
+import { h, openSheet, field, group, toast, undoToast, confirmIt, askChoice, copyText, download, pickFile, menu, icon } from './dom.js';
 import { PRESETS, LEVELS, spokenAs, describePrefill, learnedFacts, contextOf, alwaysThinks, cannotStopThinking, wireOf, presetOf, budgetFor, searchOffered, structuredOffered, prefillFields } from '../model/providers.js';
-import { listModels, tryConnection, testPrefill } from '../model/call.js';
+import { listModels, tryConnection, testPrefill, learnIdentity } from '../model/call.js';
+import { costOf, addRow } from '../model/usage.js';
 import { STRUCTURED_PRESETS, fillPreset, presetWords, bannedPattern, MIN_AFTER_DEFAULT } from '../model/structured.js';
-import { connFor, connName } from '../novel/writer.js';
+import { connFor, connName, partsOf, partsWords } from '../novel/writer.js';
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from '../novel/prompts.js';
 import { voiceOf, presetsOf, presetInUse, presetSteps, cleanVoice, cleanName, voiceLine, startingVoice, FORMAT as PRESET_FORMAT } from '../novel/presets.js';
 import { listModules, moduleOf, builtinOf, moduleSteps, rideLine, READERS, READER_WORDS, RIDES, RIDES_WORDS } from '../novel/modules.js';
@@ -15,6 +16,7 @@ import { newId, debounce, timeAgo, plural } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
 import { applyLook, DEFAULT_LOOK } from './look.js';
+import { draftNow } from './desk.js';
 
 let sheet = null;
 let editingId = null;
@@ -105,13 +107,16 @@ function connectionsGroup(hs, open) {
   const g = group('Connections', { key: 'set.connections', open: open || !conns.length, note: conns.length ? plural(conns.length, 'connection') : 'none yet' });
   g.body.append(h('p.say', 'Who writes with you. The key lives only on this phone and travels nowhere but to them. What you set here is exactly what is sent — your temperature, your top-p, your thinking; what you leave empty is not sent at all, so the provider does what it normally does.'));
   const pick = h('select', { 'aria-label': 'Which connection' });
-  for (const c of conns) pick.append(h('option', { value: c.id, selected: c.id === editingId }, `${connName(c)}${c.model && c.name ? ` — ${c.model}` : ''}`));
+  for (const c of conns) pick.append(h('option', { value: c.id, selected: c.id === editingId }, `${connName(c)}${c.model && c.name ? ` — ${c.model}` : ''}${partsOf(hs, c.id).length ? ' (in use)' : ''}`));
   pick.addEventListener('change', () => { editingId = pick.value; draw(); });
   const row = h('div.btnrow',
     conns.length ? h('label.field', { style: { flex: '1', minWidth: '200px', margin: '0' } }, pick) : null,
     h('button.btn.small', { title: 'A new connection, started from a provider', onclick: (e) => presetMenu(e.currentTarget) }, icon('plus', 15), 'Add a connection'),
     conns.length ? h('button.btn.quiet.small', { title: 'A second connection with this one’s provider, key, address and dials — change its model and name.', onclick: () => copyConnection(editingId) }, 'Copy') : null);
-  g.body.append(row, h('p.say.quiet', conns.length
+  /* which parts the one shown has — picking it here only opens it to change (Who does what gives the parts) */
+  const shown = conns.find((x) => x.id === editingId);
+  const parts = shown ? partsOf(hs, shown.id) : [];
+  g.body.append(row, shown ? h('p.say.inuse' + (parts.length ? '.good' : ''), parts.length ? `In use as ${partsWords(parts)}.` : 'Not in use — Who does what, below, gives it a part.') : '', h('p.say.quiet', conns.length
     ? 'Your connections, A to Z — pick one to change it. Add a connection starts one from a provider; Copy makes a second with this one’s provider, key, address and dials, to change its model and name.'
     : 'No connections yet. Add one: pick your provider, paste your key, pick a model.'));
   const c = conns.find((x) => x.id === editingId);
@@ -141,6 +146,7 @@ function copyConnection(id) {
   if (!c) return;
   const copy = JSON.parse(JSON.stringify(c));
   delete copy.learned; delete copy.tested; delete copy.prefillTested; delete copy.modelHf; delete copy.modelEfforts; delete copy.modelContext;
+  delete copy.identFor; delete copy.identTriedFor; delete copy.identTriedAt;
   copy.id = newId('c');
   copy.name = `${connName(c)} (copy)`;
   changeHouse((hs) => { hs.connections.push(copy); }, { now: true });
@@ -193,7 +199,9 @@ function connectionForm(c) {
   /* ---- who it is */
   box.append(field('Call it', text('name', 'e.g. Claude at home')));
   const urlHint = quiet(wireOf(c) === 'anthropic' ? 'Leave as-is unless you know otherwise.' : 'Usually ends in /v1 — left off, it is added for you.');
-  box.append(field('Address', text('url', 'https://api.deepseek.com/v1')), urlHint);
+  /* another address: what its provider says of the model there is asked, in the background */
+  const askAbout = () => setTimeout(() => { const live = (house().connections || []).find((x) => x.id === c.id); if (live) learnIdentity(live).catch(() => {}); }, 300);
+  box.append(field('Address', text('url', 'https://api.deepseek.com/v1', { after: askAbout })), urlHint);
   box.append(field('Key', text('key', 'The key they gave you', { type: 'password' })));
   const model = text('model', (PRESETS.find((p) => p.id === kind) || {}).model || 'the model’s name');
   const pick = h('select', { 'aria-label': 'What’s on offer' });
@@ -214,11 +222,16 @@ function connectionForm(c) {
       const m = r.models.find((x) => x.id === pick.value);
       if (!m) return;
       model.value = m.id;
-      set({ model: m.id, modelHf: m.hf || undefined, modelEfforts: m.efforts || undefined, modelContext: m.context || undefined }, { redraw: true });
+      /* what the provider says of it, kept for this very model at this very address */
+      set({ model: m.id, modelHf: m.hf || undefined, modelEfforts: m.efforts || undefined, modelContext: m.context || undefined, identFor: `${m.id}@${now().url || ''}`, identTriedFor: undefined, identTriedAt: undefined }, { redraw: true });
     };
     say.textContent = `${r.models.length.toLocaleString()} on offer. Pick one and it fills the model field — and keeps what the provider says about it (its room, its thinking levels).`;
   } }, 'Fetch what’s on offer');
-  model.addEventListener('input', typing(() => { if (model.value.trim() !== c.model) set({ modelHf: undefined, modelEfforts: undefined, modelContext: undefined }); }, 400));
+  /* a model typed by hand: what was said of another goes, and its provider is asked about this one, in the background (Tavern M289) */
+  model.addEventListener('input', typing(() => {
+    if (model.value.trim() !== c.model) set({ modelHf: undefined, modelEfforts: undefined, modelContext: undefined, identFor: undefined, identTriedFor: undefined, identTriedAt: undefined });
+    askAbout();
+  }, 400));
   box.append(field('Model', model), quiet(MODEL_HINT[kind] || MODEL_HINT.custom), h('div.btnrow', list), pickBox, say);
 
   /* ---- thinking */
@@ -523,13 +536,6 @@ function usageGroup(hs) {
   return g;
 }
 
-export function costOf(row, conn) {
-  if (!conn || !Number.isFinite(conn.priceIn) || !Number.isFinite(conn.priceOut)) return null;
-  const cachedPrice = Number.isFinite(conn.priceCached) ? conn.priceCached : conn.priceIn;
-  const cached = Math.min(row.cached || 0, row.in || 0);
-  return (((row.in || 0) - cached) * conn.priceIn + cached * cachedPrice + (row.out || 0) * conn.priceOut) / 1e6;
-}
-
 /* Cozy Tavern's Usage and cost (M457, M510): one period at a time — Today,
  * Last 7 days, Last 30 days — as a small table, each connection and model a
  * row with the total; what it comes to per day, week and month at the rate so
@@ -553,11 +559,7 @@ async function fillUsage(box, hs) {
     const rows = new Map();
     for (const day of keys) {
       if (from && day < from) continue;
-      for (const [key, r] of Object.entries(days[day] || {})) {
-        const t = rows.get(key) || { calls: 0, in: 0, out: 0, cached: 0, estimated: 0 };
-        for (const k of ['calls', 'in', 'out', 'cached', 'estimated']) t[k] += Number(r[k]) || 0;
-        rows.set(key, t);
-      }
+      for (const [key, r] of Object.entries(days[day] || {})) rows.set(key, addRow(rows.get(key) || { calls: 0, in: 0, out: 0, cached: 0, cacheWrite: 0, estimated: 0 }, r || {}));
     }
     const list = [...rows.entries()].map(([key, r]) => { const c = connOf(key); return { ...r, name: c ? connName(c) : 'A connection no longer here', model: key.slice(key.lastIndexOf('|') + 1), cost: costOf(r, c) }; })
       .sort((a, b) => (b.in + b.out) - (a.in + a.out));
@@ -595,7 +597,7 @@ async function fillUsage(box, hs) {
   for (const day of keys) for (const [key, r] of Object.entries(days[day] || {})) {
     const b = busiest.get(key);
     const size = (Number(r.in) || 0) + (Number(r.out) || 0);
-    if (!b || size > b.size) busiest.set(key, { day, size, r: { calls: Number(r.calls) || 0, in: Number(r.in) || 0, out: Number(r.out) || 0, cached: Number(r.cached) || 0 } });
+    if (!b || size > b.size) busiest.set(key, { day, size, r: addRow({ calls: 0, in: 0, out: 0, cached: 0, cacheWrite: 0, estimated: 0 }, r || {}) });
   }
   const fold = h('details.usage-busiest', h('summary.stack-label', 'Your busiest day, per model — and a month of days like it'));
   try { fold.open = localStorage.getItem('cozynovel.usageBusiest') === 'open'; } catch (_) { /* a private window */ }
@@ -615,6 +617,16 @@ async function fillUsage(box, hs) {
 
 /* ------------------------------------------------------------ his words */
 
+/* Back to the default over words of his: go back, or copy his first (to
+ * paste anywhere) and go back — Undo, right after, puts his back either way */
+function backChoice(words) {
+  return askChoice('Back to the default?', `${words} Copy mine first keeps a copy of yours to paste anywhere; Undo, right after, puts them back.`, [
+    { label: 'Back to the default', value: 'back', primary: true },
+    { label: 'Copy mine first', value: 'copy' },
+    { label: 'Not now', value: false, quiet: true },
+  ]);
+}
+
 /* the starting words of each box, for Back to the default */
 const STARTING = { system: DEFAULT_WRITING, narrator: DEFAULT_NARRATOR, partner: DEFAULT_PARTNER };
 
@@ -628,14 +640,20 @@ function wordsGroup(hs) {
     ta.addEventListener('input', typing(() => changeHouse((x) => { x.instructions = x.instructions || {}; x.instructions[key] = ta.value; }), 500));
     return ta;
   };
-  /* every box with starting words can have them back */
-  const back = (ta, key) => h('div.btnrow', h('button.btn.quiet.small', { onclick: async () => {
-    if (ta.value.trim() && ta.value !== STARTING[key] && !(await confirmIt('Back to the default?', 'The words in the box go, and the starting words come back. (Copy yours first if you want to keep them.)', 'Back to the default'))) return;
-    ta.value = STARTING[key];
+  /* every box with starting words can have them back — and his back again with Undo */
+  const back = (ta, key) => h('div.btnrow', h('button.btn.quiet.small', { title: 'The starting words come back in place of the words in the box — with Undo.', onclick: async () => {
+    const mine = ta.value;
+    let how = 'back';
+    if (mine.trim() && mine !== STARTING[key]) {
+      how = await backChoice('The words in the box go, and the starting words come back.');
+      if (!how) return;
+      if (how === 'copy' && !(await copyText(mine))) { toast('Your words could not be copied, so they stay in the box.'); return; }
+    }
     /* kept on the phone at once, not after the typing pause */
-    changeHouse((x) => { x.instructions = x.instructions || {}; x.instructions[key] = STARTING[key]; }, { now: true });
-    ta.dispatchEvent(new Event('input'));
-    toast('The starting words are back.');
+    const put = (v) => { ta.value = v; changeHouse((x) => { x.instructions = x.instructions || {}; x.instructions[key] = v; }, { now: true }); ta.dispatchEvent(new Event('input')); };
+    put(STARTING[key]);
+    if (mine === STARTING[key]) { toast('The starting words are back.'); return; }
+    undoToast(how === 'copy' ? 'Yours are copied, and the starting words are back.' : 'The starting words are back.', () => put(mine));
   } }, 'Back to the default'));
   const choose = (key, options, cur, hint, label) => {
     const sel = h('select');
@@ -766,23 +784,23 @@ function usePresetNow(p) {
 
 function presetMenu2(anchor, p) {
   menu(anchor, [
-    { label: 'Save what is in the boxes over it', run: async () => {
+    { label: 'Save what is in the boxes over it', hint: 'This preset becomes your instructions as they stand in the boxes now.', run: async () => {
       if (!(await confirmIt(`Save over “${p.name}”?`, 'It becomes what is in the boxes now.', 'Save over it'))) return;
       landTyping();
       await store.flush('house', 'house');
       changeHouse(presetSteps.save(p.id, p.name, voiceOf(house()), Date.now()), { now: true }); toast(`“${p.name}” is saved over.`); draw();
     } },
-    { label: 'Rename', run: async () => {
+    { label: 'Rename', hint: 'A new name for this preset; its words stay as they are.', run: async () => {
       const name = await askName('Rename the preset', p.name, 'Rename');
       if (!name || name === p.name) return;
       if (presetsOf(house()).some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) { toast(`Another preset is called “${name}” already.`); return; }
       changeHouse(presetSteps.rename(p.id, name), { now: true }); draw();
     } },
-    { label: 'Take it out as a file', run: () => {
+    { label: 'Take it out as a file', hint: 'Saves this preset as a file, to keep or to bring into another Cozy Novel.', run: () => {
       download(`${p.name.replace(/[^\w -]+/g, '').trim() || 'preset'}.cozynovel-preset.json`, JSON.stringify({ format: PRESET_FORMAT, name: p.name, at: p.at, voice: p.voice }, null, 2), 'application/json');
     } },
     '-',
-    { label: 'Remove', danger: true, run: () => {
+    { label: 'Remove', hint: 'This preset goes from the list, with Undo; your instructions as they stand are not touched.', danger: true, run: () => {
       const row = JSON.parse(JSON.stringify(p));
       changeHouse(presetSteps.remove(p.id), { now: true }); draw();
       undoToast(`“${p.name}” is removed.`, () => { changeHouse(presetSteps.restore(row), { now: true }); draw(); });
@@ -907,16 +925,26 @@ function openModule(id, { fresh = false } = {}) {
     const m = now();
     if (base) {
       /* always there, as in Cozy Tavern: greyed while the module is as it came */
-      buttons.append(h('button.btn.quiet.small', { disabled: !m.changed, title: m.changed ? 'The app’s words come back, with who reads it and when it rides as they came.' : 'Nothing is changed — it is as it came.', onclick: async () => {
-        if (m.ownWords && !(await confirmIt('Back to the default?', 'Your words for this module go, and the app’s come back — with who reads it and when it rides as they came. (Copy yours first if you want to keep them.)', 'Back to the default'))) return;
+      buttons.append(h('button.btn.quiet.small', { disabled: !m.changed, title: m.changed ? 'The app’s words come back, with who reads it and when it rides as they came — with Undo.' : 'Nothing is changed — it is as it came.', onclick: async () => {
+        let how = 'back';
+        if (m.ownWords) {
+          how = await backChoice('Your words for this module go, and the app’s come back — with who reads it and when it rides as they came.');
+          if (!how) return;
+          if (how === 'copy' && !(await copyText(words.value))) { toast('Your words could not be copied, so they stay as they are.'); return; }
+        }
         for (const x of savers) x.cancel();
+        const row = JSON.parse(JSON.stringify((house().modules || {})[id] || null));
+        /* the sheet as the module now stands */
+        const fill = () => {
+          const d = now();
+          name.value = d.name; words.value = d.text; rides.value = d.rides;
+          for (const [i, r] of READERS.entries()) who.children[i].querySelector('input').checked = d.to.includes(r);
+          s.setTitle(d.name);
+          sayNow(); drawButtons();
+        };
         changeHouse(moduleSteps.remove(id), { now: true });
-        const d = now();
-        name.value = d.name; words.value = d.text; rides.value = d.rides;
-        for (const [i, r] of READERS.entries()) who.children[i].querySelector('input').checked = d.to.includes(r);
-        s.setTitle(d.name);
-        sayNow(); drawButtons();
-        toast('The module is as it came.');
+        fill();
+        undoToast(how === 'copy' ? 'Yours are copied, and the module is as it came.' : 'The module is as it came.', () => { if (row) changeHouse(moduleSteps.restore(id, row), { now: true }); fill(); if (sheet) draw(); });
       } }, 'Back to the default'));
     }
     if (!base) {
@@ -987,12 +1015,11 @@ function lookGroup(hs) {
       field('Size', sel('size', [['16', 'Small'], ['18', 'Medium'], ['20', 'Large'], ['22', 'Larger'], ['25', 'Largest']], look.size || '18')),
       field('Line spacing', sel('lead', [['1.5', 'Snug'], ['1.72', 'Comfortable'], ['1.95', 'Airy']], look.lead || '1.72')),
       field('Page width', sel('width', [['600', 'Narrow'], ['680', 'Book'], ['780', 'Wide']], look.width || '680'))),
-    h('div.btnrow', h('button.btn.quiet.small', { onclick: () => {
-      changeHouse((x) => { x.look = { ...DEFAULT_LOOK }; }, { now: true });
-      applyLook(DEFAULT_LOOK);
-      Object.assign(look, DEFAULT_LOOK);
-      toast('It looks the way it began.');
-      draw();
+    h('div.btnrow', h('button.btn.quiet.small', { title: 'The theme, the type, the spacing and the width as they began — with Undo.', onclick: () => {
+      const was = JSON.parse(JSON.stringify(house().look || {}));
+      const put = (v) => { changeHouse((x) => { x.look = { ...v }; }, { now: true }); applyLook({ ...DEFAULT_LOOK, ...v }); for (const k of Object.keys(look)) delete look[k]; Object.assign(look, v); draw(); };
+      put({ ...DEFAULT_LOOK });
+      undoToast('It looks the way it began.', () => put(was));
     } }, 'Back to the default look')));
   return g;
 }
@@ -1006,13 +1033,29 @@ function backupsGroup() {
   g.body.append(
     h('p.say', 'Your books live on this phone, in ~/.cozynovel — the same in every browser. A copy of everything is kept on the phone once a day (the newest fourteen), and every chapter keeps its earlier copies.'),
     h('div.btnrow',
-      h('button.btn.primary.small', { onclick: () => { location.href = '/api/backup'; toast('The copy is on its way to your downloads.'); } }, 'Take a copy of everything'),
-      h('button.btn.small', { onclick: bringCopyBack }, 'Bring a copy back')),
+      h('button.btn.primary.small', { title: 'Every book, its notes, talks and scenes, and your settings — as one file in your downloads.', onclick: async () => {
+        if (!(await allOnPhone())) return;
+        location.href = '/api/backup'; toast('The copy is on its way to your downloads.');
+      } }, 'Take a copy of everything'),
+      h('button.btn.small', { title: 'A copy taken before: its books beside yours, or everything made exactly as in it.', onclick: bringCopyBack }, 'Bring a copy back')),
+    h('p.say.quiet', 'Take a copy of everything: one file in your downloads, with every word on the phone. Bring a copy back: adds its books to the shelf, or makes everything as in the copy.'),
     h('h4', { style: { margin: '16px 0 6px', font: '600 16px/1.2 var(--display)' } }, 'Copies kept on this phone'), copies,
     h('h4', { style: { margin: '16px 0 6px', font: '600 16px/1.2 var(--display)' } }, 'Recently deleted'), trash);
   fillCopies(copies);
   fillTrash(trash);
   return g;
+}
+
+/* what is still on its way to the phone goes first, so a copy holds every
+ * word and a copy brought back keeps them in the one made before it (Cozy
+ * Tavern M670) — the box's last words too */
+async function allOnPhone() {
+  draftNow();
+  /* a phone that does not answer is not waited on for long: it is said */
+  await Promise.race([store.flush().catch(() => {}), new Promise((done) => setTimeout(done, 8000))]);
+  if (!store.hasPending()) return true;
+  toast('Some of your words have not reached the phone yet, so nothing was done — try again once it answers.');
+  return false;
 }
 
 async function fillCopies(box) {
@@ -1026,6 +1069,7 @@ async function fillCopies(box) {
     list.append(h('li', h('div.grow', before ? 'Kept just before a copy was brought back' : `The day’s copy`, h('small', `${new Date(c.at).toLocaleString()} · ${Math.max(1, Math.round(c.size / 1024)).toLocaleString()} KB`)),
       h('button.btn.small', { onclick: async () => {
         if (!(await confirmIt('Bring this copy back?', 'Everything goes back to how it was then. Everything as it is now is kept as a copy first, so nothing is lost.', 'Bring it back'))) return;
+        if (!(await allOnPhone())) return;
         const r = await store.api('POST', `/api/copies/${c.name}/restore`, { body: {} });
         if (r.status === 200) { toast('Everything is as it was then.'); setTimeout(() => location.reload(), 600); } else toast((r.data && r.data.error) || 'It could not be brought back.');
       } }, 'Bring back')));
@@ -1088,6 +1132,7 @@ async function bringCopyBack() {
     toast(`${plural(list.length, 'book')} added to the shelf.`);
   } else if (choice === 'replace') {
     if (!(await confirmIt('Replace everything?', 'Everything becomes exactly as in the copy. What is here now is kept on the phone first (Backups → Copies kept on this phone).', 'Replace everything', { danger: true }))) return;
+    if (!(await allOnPhone())) return;
     const r = await store.api('POST', '/api/restore', { body: data });
     if (r.status === 200) { toast('Everything is as in the copy.'); setTimeout(() => location.reload(), 600); } else toast((r.data && r.data.error) || 'It could not be brought back.');
   }

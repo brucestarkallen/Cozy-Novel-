@@ -13,7 +13,7 @@
  */
 
 import * as store from '../store.js';
-import { ask, emptyWhy } from '../model/call.js';
+import { ask, emptyWhy, stripControlLeak } from '../model/call.js';
 import { wireOf } from '../model/providers.js';
 import { estimateTokens } from '../util.js';
 import { assemble, requiredLength, SAFETY, partnerReply, PARTNER_FLOOR } from './context.js';
@@ -21,7 +21,8 @@ import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText } from './shape.js';
 import { newId, numberWords } from '../util.js';
-import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest } from './prompts.js';
+import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, CHOICES_OPEN } from './prompts.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail } from './textshape.js';
 import { numberedText } from './context.js';
 import { opsOf, readAsks, makeChange, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf } from './changes.js';
 import { searchBook } from './search.js';
@@ -35,6 +36,9 @@ const jobFns = new Set();
 export function onTalkJob(fn) { jobFns.add(fn); return () => jobFns.delete(fn); }
 function tell(key) { for (const fn of jobFns) { try { fn(key, running.get(key) || null); } catch (e) { console.error(e); } } }
 export function talkBusy(kind, id) { return running.has(`${kind}/${id}`); }
+/* any answer on its way anywhere — the partner's, a scene's, Ideas — in any book (an update waits for it) */
+let ideasAsked = 0;
+export function anyTalking() { return running.size > 0 || ideasAsked > 0; }
 export function stopTalk(kind, id) { const j = running.get(`${kind}/${id}`); if (j) j.ctl.abort(); }
 
 const liveFns = new Set();
@@ -103,6 +107,69 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
  * with them for the whole scene, as a premise does on the page until a scene
  * break (shape.js hisWordsBefore). */
 export const HIS_TURNS = 3;
+/* his own message this answer answers: what an answer that ran past its end types out again */
+function hisLine(record, turnId) {
+  const turns = (record && record.turns) || [];
+  const i = turns.findIndex((t) => t.id === turnId);
+  for (let k = (i === -1 ? turns.length : i) - 1; k >= 0; k--) {
+    const t = turns[k];
+    if (t.by !== 'you') continue;
+    const v = picked(t) || {};
+    return [String(v.text || ''), String(v.tell || '')].filter((x) => x.trim()).join('\n');
+  }
+  return '';
+}
+/* the answer without what is never its words: a provider's leaked control
+ * token, or his next message typed out by a model that ran past its end
+ * (Cozy Tavern M117, M469) — said once on the answer */
+function cleanAnswer(kind, id, turnId, words, notes) {
+  const leak = stripControlLeak(words, { asked: hisLine(store.peek(kind, id), turnId) });
+  if (!leak.leaked) return words;
+  const said = leak.ranPast ? 'It ran past the end of its answer and began writing your next message — the words before that were kept.' : 'The words before the provider’s leak were kept.';
+  if (!notes.includes(said)) notes.push(said);
+  return leak.text;
+}
+
+/* the narrator's telling made whole the way a page is (Cozy Tavern's
+ * storyteller: M510-34, M524, M476, M458, M626) — a block of tracking and a
+ * note to him after it taken off and kept (`tookOff`: the turn's menu puts
+ * it back), white space and marks mended; only the telling: the ways it
+ * could go, offered after it, stay to the letter; the unfinished end of a
+ * telling that was cut is left as it is */
+export function shapeTelling(words, { cut = false, notes = null } = {}) {
+  const w = String(words || '');
+  const at = w.toLowerCase().indexOf(CHOICES_OPEN);
+  const story = at >= 0 ? w.slice(0, at) : w;
+  const rest = at >= 0 ? w.slice(at) : '';
+  const say = (said) => { if (notes && !notes.includes(said)) notes.push(said); };
+  const unglued = dropGluedStrays(story);
+  if (unglued.changed) say('A stray character of another script, stuck to the front of a word, was taken off.');
+  const fin = finishTail(joinSoftWraps(unglued.text));
+  if (fin.removed) {
+    const what = fin.kinds.includes('tracking') && fin.kinds.includes('note') ? 'A block of tracking and a note to you' : fin.kinds.includes('tracking') ? 'A block of tracking' : 'A note to you';
+    say(`${what} after the telling ${fin.kinds.length > 1 ? 'were' : 'was'} taken off — Put back what was taken off brings ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
+  }
+  const telling = fin.removed ? fin.text.replace(/\s+$/, '') + (rest ? '\n\n' : '') : fin.text;
+  return { text: mendMarks(telling, { leaveLast: cut && !rest }).text + rest, tookOff: fin.removed || '' };
+}
+/* What came off a telling's end, put back where it was — before the ways it
+ * offers — as a new version of that answer; the one without it stays one
+ * arrow away. */
+export function putBackTelling({ playId, turnId }) {
+  const play = store.peek('play', playId);
+  const turn = play && (play.turns || []).find((t) => t.id === turnId);
+  const v = turn && picked(turn);
+  if (!v || !String(v.tookOff || '').trim() || running.has(`play/${playId}`)) return false;
+  const w = String(v.text || '');
+  const at = w.toLowerCase().indexOf(CHOICES_OPEN);
+  const story = (at >= 0 ? w.slice(0, at) : w).replace(/\s+$/, '');
+  const rest = at >= 0 ? w.slice(at) : '';
+  const text = `${story}\n\n${v.tookOff}${rest ? `\n\n${rest}` : ''}`;
+  const { id: _id, at: _at, tookOff: _off, notes: _n, ...keep } = v;
+  store.change('play', playId, turnSteps.addVersion(turnId, newVersion({ ...keep, text, done: Date.now() })), { now: true });
+  return true;
+}
+
 export function hisLast(record, upto = null) {
   const out = [];
   for (const t of (record && record.turns) || []) {
@@ -292,8 +359,12 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       }
     };
     out = await askReading();
-    if (!String(out.text || text).trim()) {
-      const why = out.stopped ? 'stopped before any words came' : out.ok ? emptyWhy(out, thinking) : out.error;
+    const leakNotes = [];
+    const firstWords = cleanAnswer(kind, id, turnId, String(out.text || text), leakNotes);
+    if (!firstWords.trim()) {
+      const why = out.stopped ? 'stopped before any words came'
+        : String(out.text || text).trim() ? 'the answer held nothing before the provider’s own markers'
+          : out.ok ? emptyWhy(out, thinking) : out.error;
       /* what it thought is never thrown away: kept beside his message, with why no words came (Cozy Tavern's M301) */
       const thought = allThought(out.thinking || thinking);
       if (thought.trim()) {
@@ -304,14 +375,20 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       if (out.stopped) return { ok: false, stopped: true };
       return { ok: false, error: why };
     }
-    done = String(out.text || text).replace(/\s+$/, '');
+    const shaped = kind === 'play' ? shapeTelling(firstWords, { cut: Boolean(out.cut || out.stopped), notes: leakNotes }) : { text: firstWords, tookOff: '' };
+    done = shaped.text.replace(/\s+$/, '');
+    const notesOf = (o) => { const all = [...new Set([...((o && o.notes) || []), ...leakNotes])]; return all.length ? all : undefined; };
+    /* what its own web search looked at, every round of the answer (Cozy Tavern F9) */
+    const looked = [];
+    const sourcesOf = (o) => { for (const x of (o && o.sources) || []) if (x && x.url && !looked.some((y) => y.url === x.url)) looked.push(x); return looked.length ? looked.slice(0, 20) : undefined; };
     store.change(kind, id, turnSteps.setVersion(turnId, versionId, {
       text: done, thinking: allThought(out.thinking || thinking) || undefined, streaming: undefined, beat: undefined, tab: undefined, browser: undefined,
-      cut: out.cut || out.stopped ? true : undefined, cutWhy: out.cut || out.stopped ? cutWords(out) : undefined, notes: out.notes && out.notes.length ? out.notes : undefined,
+      cut: out.cut || out.stopped ? true : undefined, cutWhy: out.cut || out.stopped ? cutWords(out) : undefined, notes: notesOf(out), sources: sourcesOf(out),
       usage: out.usage || undefined, ms: out.sent ? out.sent.ms : undefined, model: conn.model, conn: connName(conn), sent: out.sent ? versionId : undefined, done: Date.now(),
       tokensIn: out.usage && Number.isFinite(out.usage.in) ? out.usage.in : (out.sent && Number.isFinite(out.sent.tokens) ? out.sent.tokens : undefined),
       tokensCounted: out.usage && Number.isFinite(out.usage.in) ? true : undefined,
       read: read.length ? read : undefined,
+      tookOff: shaped.tookOff || undefined,
     }), { checkpoint: true, now: true });
     /* what the partner's block asks for: made now, or waiting for Apply. What
      * could not be made is told back for it to put right in the same answer
@@ -339,20 +416,20 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         thinking = '';
         live({ kind, id, turnId, versionId, text: replacing ? '' : done, thinking: thoughtBefore, note: missed.length ? 'Putting right what could not be made…' : 'Asking it for the change it described…' });
         out = await askReading();
-        const next = String(out.text || text).replace(/\s+$/, '');
+        const next = cleanAnswer(kind, id, turnId, String(out.text || text), leakNotes).replace(/\s+$/, '');
         const whole = replacing;
         replacing = false;
         if (!next.trim()) break;
         segment = next;
         done = whole ? next : `${done}\n\n${next}`;
         store.change(kind, id, turnSteps.setVersion(turnId, versionId, { text: done, thinking: allThought(out.thinking || thinking) || undefined,
-          cut: out.cut || out.stopped ? true : undefined, cutWhy: out.cut || out.stopped ? cutWords(out) : undefined, notes: out.notes && out.notes.length ? out.notes : undefined }), { checkpoint: true, now: true });
+          cut: out.cut || out.stopped ? true : undefined, cutWhy: out.cut || out.stopped ? cutWords(out) : undefined, notes: notesOf(out), sources: sourcesOf(out) }), { checkpoint: true, now: true });
       }
       /* a change that missed and was then made (or set to wait) in a later round no longer stands as missed (Cozy Tavern's M683) */
       supersede(novelId, turnId, versionId);
     }
     store.change(kind, id, turnSteps.set({ updated: Date.now() }), { now: true });
-    if (out.sent) store.api('PUT', `/api/sent/${novelId}/${versionId}`, { body: { ...out.sent, purpose: kind === 'talk' ? 'partner' : 'play' } }).catch(() => {});
+    if (out.sent) store.keepSent(novelId, versionId, { ...out.sent, purpose: kind === 'talk' ? 'partner' : 'play' });
     await store.flush(kind, id);
     return { ok: true };
   } catch (e) {
@@ -485,6 +562,8 @@ function cutWords(out) {
   if (out.cutBy === 'filter') return `the provider stopped it${out.reason ? ` (its reason: ${out.reason})` : ''}`;
   if (out.cutBy === 'provider') return 'the provider broke off partway';
   if (out.cutBy === 'quiet') return 'it ended without the provider saying it was finished';
+  if (out.cutBy === 'closed') return 'the structured answer closed mid-sentence — a quote written bare ends its text';
+  if (out.cutBy === 'stalled') return 'the structured answer stopped making progress, so it was let go';
   return 'it stopped partway';
 }
 
@@ -630,6 +709,7 @@ export async function nextIdeas({ novelId, chapterId, count = 4, signal = null }
   const house = store.peek('house', 'house') || {};
   const conn = connFor(house, 'partner');
   if (!conn) return { ok: false, error: 'no connection is chosen for your partner yet — Settings → Connections' };
+  ideasAsked++;
   const out = await ask(conn, {
     build: (c) => {
       const { novel, chapters } = bookNow(novelId);
@@ -641,7 +721,7 @@ export async function nextIdeas({ novelId, chapterId, count = 4, signal = null }
     /* premises to choose from, never a page: no started reply, no page template (Tavern M328) */
     noPrefill: true,
     noStructured: true,
-  });
+  }).finally(() => { ideasAsked--; });
   if (!out.ok) return { ok: false, error: out.error || 'no answer came' };
   const ideas = directionsIn(out.text).slice(0, Math.max(1, Math.min(5, count)));
   return ideas.length ? { ok: true, ideas } : { ok: false, error: 'it gave no premises — ask again' };

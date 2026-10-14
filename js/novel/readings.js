@@ -128,6 +128,13 @@ export function newestRead(novel, chapters, chapterId, pid, { after } = {}) {
  * what the helper read from the version being replaced is taken out, card by
  * card, wherever the card still reads as that reading left it. */
 export function notesBefore(novel, chapterId, pid) {
+  return notesBeforeWith(novel, chapterId, pid).notes;
+}
+/* …and the other passages whose notes went with it: a passage read together
+ * with the ones before it (one reading of 1.3–1.5) cannot be taken back
+ * alone, so theirs go too — and they are said to be not in these notes yet,
+ * for the writer to take from the page (context.js notesBehind) */
+export function notesBeforeWith(novel, chapterId, pid) {
   let notes = (novel && novel.notes) || {};
   const seen = (novel && novel.memory && novel.memory.seen && novel.memory.seen[chapterId]) || {};
   /* a version read as a change from the one before it is taken back to that
@@ -137,14 +144,15 @@ export function notesBefore(novel, chapterId, pid) {
   const chain = [];
   let r = readingOf(novel, pid, seen[pid]);
   for (let step = 0; r && step < 12; step++) {
-    if (r.mode !== 'new' && r.mode !== 'change') return notes;
+    if (r.mode !== 'new' && r.mode !== 'change') return { notes, also: [] };
     chain.push(r);
     if (r.mode === 'new') break;
     r = readingOf(novel, pid, r.fromSig);
   }
-  if (!chain.length || chain[chain.length - 1].mode !== 'new') return notes;
+  if (!chain.length || chain[chain.length - 1].mode !== 'new') return { notes, also: [] };
   for (const x of chain) notes = moved(notes, planOf({ notes, kept: novel.kept }, x, { back: true }).moves);
-  return notes;
+  const also = [...new Set(chain.flatMap((x) => (Array.isArray(x.covers) ? x.covers : [])))].filter((id) => id !== pid);
+  return { notes, also };
 }
 
 /* The signature the helper marks a version read with (archivist.signature),

@@ -11,12 +11,13 @@
  */
 
 import * as store from '../store.js';
-import { ask, emptyWhy } from '../model/call.js';
-import { wireOf } from '../model/providers.js';
+import { ask, emptyWhy, stripControlLeak } from '../model/call.js';
+import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays } from './textshape.js';
 
 /* -------------------------------------------------------------- roles */
 
@@ -31,6 +32,32 @@ export function connFor(house, role) {
   return roles.writer ? connById(house, roles.writer) : null;
 }
 export function connName(c) { return c ? (c.name || c.model || 'a connection') : ''; }
+/* The parts a connection has as Who does what stands now — the partner and
+ * the helper go with the writer unless he set them, the checker with the
+ * helper unless he set it or turned it off (Cozy Tavern M321: which one is
+ * in use is said, never guessed). */
+export const PART_WORDS = { writer: 'the writer', partner: 'the partner', helper: 'the helper', checker: 'the checker' };
+export function partsOf(house, id) {
+  if (!id) return [];
+  const roles = (house && house.roles) || {};
+  const out = [];
+  for (const role of ['writer', 'partner', 'helper']) { const c = connFor(house, role); if (c && c.id === id) out.push(role); }
+  const check = roles.checker === 'off' ? null : (roles.checker && connById(house, roles.checker)) || connFor(house, 'helper');
+  if (check && check.id === id) out.push('checker');
+  return out;
+}
+/* the parts that go with the writer, set to "The same as the writer" (the checker through the helper) */
+export function followersOf(house) {
+  const roles = (house && house.roles) || {};
+  const own = (role) => Boolean(roles[role] && connById(house, roles[role]));
+  const out = ['partner', 'helper'].filter((r) => !own(r));
+  if (roles.checker !== 'off' && !own('checker') && out.includes('helper')) out.push('checker');
+  return out;
+}
+export function partsWords(parts) {
+  const w = (parts || []).map((p) => PART_WORDS[p]).filter(Boolean);
+  return w.length <= 1 ? (w[0] || '') : `${w.slice(0, -1).join(', ')} and ${w[w.length - 1]}`;
+}
 
 /* ------------------------------------------------------- the running job */
 
@@ -41,6 +68,15 @@ function tellJob(novelId) { for (const fn of jobFns) { try { fn(novelId, running
 export function jobOf(novelId) { return running.get(novelId) || null; }
 export function busy(novelId) { return running.has(novelId); }
 export function stop(novelId) { const j = running.get(novelId); if (j) { if (j.auto) j.yielded = true; j.ctl.abort(); } }
+/* the book, or the chapter being written, removed: the writing stops at once —
+ * it is paid for word by word, and there is nowhere left to keep it */
+export function stopIn(novelId, chapterId = null) {
+  const j = running.get(novelId);
+  if (!j || (chapterId && j.chapterId !== chapterId)) return false;
+  j.gone = true;
+  j.ctl.abort();
+  return true;
+}
 /* a page the app is writing by itself (the judge's lift): his own hand comes first */
 export function autoBusy(novelId) { const j = running.get(novelId); return Boolean(j && j.auto); }
 /* Anything he asks the writer for, while the app writes by itself, goes first:
@@ -102,7 +138,8 @@ export async function recount(novelId) {
 function keepSent(novelId, key, sent, extra) {
   if (!sent) return;
   const body = { ...sent, ...extra };
-  store.api('PUT', `/api/sent/${novelId}/${key}`, { body }).catch(() => { /* what was sent is a convenience; the page is not */ });
+  /* what was sent is a convenience; the page is not — a keep that fails is said where it is looked up */
+  store.keepSent(novelId, key, body);
 }
 
 /* the model's words, cleaned only of what can never be the story: a code fence
@@ -196,12 +233,36 @@ export function setNotesWait(fn) { notesWait = fn; }
 
 /* -------------------------------------------------------- the one loop */
 
+/* his connection with only the thinking seed of his prefill: what a passage
+ * carried on, or a few words written again, is given (Cozy Tavern M585) */
+function seedOnly(conn) {
+  const seed = splitPrefill(String((conn && conn.prefill) || '')).seed;
+  return { ...conn, prefill: seed ? '<think>' + seed : '' };
+}
+/* the thinking of the words carried on, then the thinking that carried them on */
+function joinThought(before, after) {
+  const a = String(before || '').trim();
+  const b = String(after || '').trim();
+  if (!a) return b;
+  if (!b) return a;
+  return `${a}\n\n— then, carrying it on —\n\n${b}`;
+}
+
 /* Write one version: kind 'new' (a passage), 'version' (another on a passage),
  * 'append' (go on). Resolves {ok, error?, stopped?, notes?}. */
-async function runVersion({ novelId, chapterId, passageId, versionId, base = '', original = null, mode, build, how, splice = null, length = 'scene', purpose = 'write', auto = false }) {
+async function runVersion({ novelId, chapterId, passageId, versionId, base = '', original = null, mode, build, how, splice = null, length = 'scene', purpose = 'write', auto = false, keepEnd = null }) {
   const h = house();
   const conn = connFor(h, 'writer');
   const undo = () => undoEmpty(chapterId, passageId, versionId, mode, original);
+  /* carried on, or a few selected words written again: never a page's
+   * opening — his started reply and a structured template would begin it
+   * again in the middle of the passage; only his thinking seed rides (Cozy
+   * Tavern M585) */
+  const carryOn = mode === 'append' || how === 'selection';
+  const askConn = carryOn && conn ? seedOnly(conn) : conn;
+  /* carried on: the thinking of the words before stays, the new thinking after it (Tavern M674) */
+  const thoughtBefore = mode === 'append' && original ? String(original.thinking || '') : '';
+  const thoughtOf = (t) => joinThought(thoughtBefore, t);
   if (running.has(novelId) || !conn) { undo(); return preflight(novelId) || { ok: false, error: 'the writer could not start' }; }
   const ctl = new AbortController();
   const job = { kind: how, chapterId, passageId, versionId, ctl, at: Date.now(), conn: connName(conn), auto: Boolean(auto) };
@@ -220,7 +281,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   const checkpoint = () => {
     lastSave = Date.now();
     const words = shown();
-    store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: words, thinking: thinking || undefined, ...alive() }), { checkpoint: true, delay: 50 });
+    store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: words, thinking: thoughtOf(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 });
   };
   store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, alive()), { checkpoint: true, delay: 50 });
   /* and it beats while the model is silent too (a long think that streams
@@ -229,30 +290,75 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   const beating = setInterval(() => { if (Date.now() - lastSave > 25000) checkpoint(); }, 30000);
   try {
     if (notesWait) { try { await notesWait(novelId, 5000, ctl.signal); } catch (_) { /* it goes anyway */ } }
-    const out = await ask(conn, {
+    /* what the last request built held of the chapter open (context.js stats) */
+    let told = null;
+    const out = await ask(askConn, {
       build: (c) => {
         const { novel, chapters } = bookNow(novelId);
         const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '' });
+        told = a.stats;
         return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least };
       },
       stream: true,
       signal: ctl.signal,
+      noStructured: carryOn,
       onText: (s) => {
         text += s;
-        live({ novelId, chapterId, passageId, versionId, text: shown(), thinking, phase: 'text' });
+        live({ novelId, chapterId, passageId, versionId, text: shown(), thinking: thoughtOf(thinking), phase: 'text' });
         if (Date.now() - lastSave > 3000) checkpoint();
       },
       onThinking: (s) => {
         thinking += s;
-        live({ novelId, chapterId, passageId, versionId, text: shown(), thinking, phase: 'thinking' });
+        live({ novelId, chapterId, passageId, versionId, text: shown(), thinking: thoughtOf(thinking), phase: 'thinking' });
         /* a long, silent think still beats */
         if (Date.now() - lastSave > 20000) checkpoint();
       },
     });
-    const key = versionId;
-    const answer = mode === 'append' ? unfence(out.text || text).replace(/\s+$/, '') : tidyAnswer(out.text || text);
-    const finalText = splice ? splice(answer).text : base + answer;
-    const arrived = String(out.text || text).trim();
+    /* the book or the chapter was removed while it wrote: nothing is left to keep it in */
+    if (job.gone) return { ok: false, stopped: true, gone: true };
+    /* carried on: its request kept beside the first part's, never over it (Tavern M674) */
+    const more = mode === 'append' && original && original.sent;
+    const key = more ? `${versionId}-g${((original.sentMore || []).length) + 2}` : versionId;
+    /* the thinking as it is kept: the call's own (a thought it never opened set apart), else what streamed */
+    const thought = typeof out.thinking === 'string' ? out.thinking : thinking;
+    /* words that are never the story: a provider's leaked control token, or
+     * his next request typed out by a model that ran past its end (Tavern
+     * M117, M469) — the answer is what came before */
+    const leak = stripControlLeak(out.text || text, { asked: build.request || '' });
+    const notes = [...(out.notes || [])];
+    /* the chapter open told in part to fit its model's room: he is told too, not only the writer */
+    if (told && build.target && build.target.chapterId && Array.isArray(told.wholeIds) && !told.wholeIds.includes(build.target.chapterId)) notes.push('This chapter was longer than the writer’s room, so it was sent its opening and the words right before this point, with the middle left out.');
+    if (leak.leaked) notes.push(leak.ranPast ? 'The writer ran past the end of its answer and began writing your next request — the words before that were kept.' : 'The words before the provider’s leak were kept.');
+    let answer = mode === 'append' ? unfence(leak.text).replace(/\s+$/, '') : tidyAnswer(leak.text);
+    /* the page made whole before it is kept — white space and its end only,
+     * never a word of the story (Cozy Tavern M476, M510-34): a soft wrap the
+     * model let through joined; a note to him after the story taken off and
+     * kept with the version, to put back from the passage's menu */
+    let tookOff = '';
+    if (how !== 'selection') {
+      answer = joinSoftWraps(answer);
+      /* carried on: the story the passage already holds counts toward what must stay — the new part still has to bring some */
+      const held = mode === 'append' && original ? String(original.text || '').replace(/\s+/g, ' ').trim().length : 0;
+      const fin = finishTail(answer, { minLeft: Math.max(1, 200 - held) });
+      if (fin.removed) {
+        answer = fin.text.replace(/\s+$/, '');
+        tookOff = fin.removed;
+        const what = fin.kinds.includes('tracking') && fin.kinds.includes('note') ? 'A block of tracking and a note to you' : fin.kinds.includes('tracking') ? 'A block of tracking' : 'A note to you';
+        notes.push(`${what} after the story ${fin.kinds.length > 1 ? 'were' : 'was'} taken off the page — the passage’s menu puts ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
+      }
+    }
+    let finalText = splice ? splice(answer).text : base + answer;
+    /* the marks a model left open closed, and a stray of another script
+     * stuck to the front of a word taken off — marks only, never a word, and
+     * only what is new (Go on: never the words it carries on), never the
+     * unfinished end of a page that was cut (Cozy Tavern M458, M626) */
+    if (how !== 'selection') {
+      const from = mode === 'append' && original ? original.text.length : 0;
+      const unglued = dropGluedStrays(finalText, { from });
+      if (unglued.changed) notes.push('A stray character of another script, stuck to the front of a word, was taken off.');
+      finalText = mendMarks(unglued.text, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
+    }
+    const arrived = String(answer).trim();
     /* the app's own page, given way to his hand: taken away whole */
     if (job.yielded) {
       undo();
@@ -260,28 +366,38 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       return { ok: false, stopped: true, yielded: true };
     }
     if (!arrived) {
-      /* nothing came: the empty version goes, and the reason is said */
+      /* nothing came: the empty version goes, and the reason is said — and
+       * what it thought is handed back, never thrown away (Tavern M301) */
       undo();
       await store.flush('chapter', chapterId);
-      if (out.stopped) return { ok: false, stopped: true };
-      return { ok: false, error: out.ok ? emptyWhy(out, thinking) : out.error, notes: out.notes };
+      const kept = String(thought || '').trim() ? thought : undefined;
+      if (out.stopped) return { ok: false, stopped: true, thought: kept };
+      const error = leak.leaked && String(out.text || text).trim() ? 'the answer held nothing before the provider’s own markers' : out.ok ? emptyWhy(out, thought) : out.error;
+      return { ok: false, error, notes, thought: kept };
     }
     const cutWhy = out.stopped ? 'you stopped it'
       : !out.cut ? undefined
         : out.cutBy === 'provider' ? `the provider broke off: ${out.error || ''}`.trim()
           : out.cutBy === 'filter' ? `the provider stopped it (its reason: ${out.reason || 'not given'})`
             : out.cutBy === 'quiet' ? 'the answer ended without the provider saying it was finished'
-              : 'it reached the reply length';
+              : out.cutBy === 'closed' ? 'the structured answer closed mid-sentence — a quote the model wrote bare ends its text'
+                : out.cutBy === 'stalled' ? 'the structured answer stopped making progress, so it was let go'
+                  : 'it reached the reply length';
+    /* a few words rewritten in the middle of a passage cut at its end: the end is still cut, and Go on is still offered */
+    const own = Boolean(out.cut || out.stopped);
+    const endKept = !own && keepEnd && keepEnd.cut ? keepEnd : null;
     const patch = {
       text: finalText,
-      thinking: (out.thinking || thinking) || undefined,
+      thinking: thoughtOf(thought) || undefined,
       streaming: undefined, beat: undefined, tab: undefined, browser: undefined,
-      cut: out.cut || out.stopped ? true : undefined,
-      stopped: out.stopped ? true : undefined,
-      cutWhy,
-      notes: out.notes && out.notes.length ? out.notes : undefined,
+      cut: own || endKept ? true : undefined,
+      stopped: out.stopped ? true : endKept && endKept.stopped ? true : undefined,
+      cutWhy: own ? cutWhy : endKept ? endKept.cutWhy : undefined,
+      endCut: endKept || (mode === 'append' && own && original && original.how === 'selection') ? true : undefined,
+      /* carried on: what was said of the first part stays with what is said now */
+      notes: (() => { const all = [...new Set([...(mode === 'append' && original ? original.notes || [] : []), ...notes])]; return all.length ? all.slice(-8) : undefined; })(),
       /* what the provider's own web search looked at, when he let it look things up */
-      sources: out.sources && out.sources.length ? out.sources.slice(0, 20) : undefined,
+      sources: (() => { const all = [...(mode === 'append' && original ? original.sources || [] : []), ...(out.sources || [])].filter((x, i, a) => x && a.findIndex((y) => y && y.url === x.url) === i); return all.length ? all.slice(0, 20) : undefined; })(),
       usage: out.usage || undefined,
       /* how big the request was: the provider's own count, or the app's when it gave none */
       tokensIn: out.usage && Number.isFinite(out.usage.in) ? out.usage.in : (out.sent && Number.isFinite(out.sent.tokens) ? out.sent.tokens : undefined),
@@ -291,7 +407,10 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       /* carried on by another writer: no longer one writer's words (the judge's head to head and its counts leave it out) */
       carried: mode === 'append' && original && (original.carried || (original.model && original.model !== conn.model)) ? true : undefined,
       conn: connName(conn),
-      sent: out.sent ? key : undefined,
+      sent: more ? original.sent : out.sent ? key : undefined,
+      sentMore: more ? (out.sent ? [...(original.sentMore || []), key] : original.sentMore) : undefined,
+      /* carried on: what came off the first part is kept beside what came off now */
+      tookOff: [mode === 'append' && original ? original.tookOff : '', tookOff].filter((x) => String(x || '').trim()).join('\n\n') || undefined,
       words: countWords(finalText),
       done: Date.now(),
     };
@@ -300,13 +419,14 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     keepSent(novelId, key, out.sent, { purpose: how, chapterId, passageId });
     await store.flush('chapter', chapterId);
     recount(novelId);
-    return { ok: true, cut: patch.cut, notes: out.notes, passageId };
+    return { ok: true, cut: patch.cut, notes, passageId };
   } catch (e) {
+    if (job.gone) return { ok: false, stopped: true, gone: true };
     try {
       if (job.yielded || !String(text || '').trim()) undo();
-      else store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: shown(), streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'something went wrong partway' }), { now: true });
+      else store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: shown(), thinking: thoughtOf(thinking) || undefined, streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'something went wrong partway' }), { now: true });
     } catch (_) { /* the record is gone */ }
-    return { ok: false, error: (e && e.message) || String(e) };
+    return { ok: false, error: (e && e.message) || String(e), thought: !String(text || '').trim() && thinking.trim() ? thinking : undefined };
   } finally {
     clearInterval(beating);
     running.delete(novelId);
@@ -324,7 +444,9 @@ function undoEmpty(chapterId, passageId, versionId, mode, original) {
     if (mode === 'new') store.change('chapter', chapterId, chapterSteps.removePassage(passageId), { now: true });
     else if (mode === 'version') store.change('chapter', chapterId, chapterSteps.removeVersion(passageId, versionId), { now: true });
     else store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, original === null ? quiet
-      : { ...quiet, text: original.text, cut: original.cut || undefined, cutWhy: original.cutWhy || undefined, stopped: original.stopped || undefined }), { now: true });
+      : { ...quiet, text: original.text, cut: original.cut || undefined, cutWhy: original.cutWhy || undefined, stopped: original.stopped || undefined, endCut: original.endCut || undefined,
+        /* and the thinking it had, never the thinking of the call that brought nothing (Tavern M674) */
+        thinking: original.thinking || undefined }), { now: true });
   } catch (_) { /* the record is gone */ }
 }
 
@@ -511,6 +633,8 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
     splice: (answer) => spliceSelection(full, start, end, answer),
+    /* the passage it is written into was cut at its end: so is this version, and Go on still carries it on */
+    keepEnd: cutAtEnd(baseV) ? endOf(baseV) : null,
     build: { target: { chapterId, mark: passageId }, request, moment } });
 }
 
@@ -542,14 +666,17 @@ export async function goOn({ novelId, chapterId, passageId }) {
   if (!p) return { ok: false, error: 'that passage is not there any more' };
   const v = picked(p);
   /* a rewrite of a few selected words that stopped partway sits in the middle
-   * of the passage: carrying the passage on from its end would leave it cut there */
-  if (v.how === 'selection') return { ok: false, error: 'a rewrite of selected words can’t be carried on — Another take writes it again' };
-  const original = { text: String(v.text || ''), cut: v.cut, cutWhy: v.cutWhy, stopped: v.stopped, model: v.model, carried: v.carried };
+   * of the passage: carrying the passage on from its end would leave it cut
+   * there — unless what is cut is the passage's own end */
+  if (v.how === 'selection' && !v.endCut) return { ok: false, error: 'a rewrite of selected words can’t be carried on — Another take writes it again' };
+  /* what it had, put back exactly if nothing comes — and kept with what does: its thinking, its request, what was said of it */
+  const original = { text: String(v.text || ''), cut: v.cut, cutWhy: v.cutWhy, stopped: v.stopped, endCut: v.endCut, model: v.model, carried: v.carried, how: v.how,
+    thinking: v.thinking, sent: v.sent, sentMore: v.sentMore, notes: v.notes, sources: v.sources, tookOff: v.tookOff };
   /* what wakes a rule: the words of his that made it, or the premise it carried on */
   const moment = momentOf(chapter, p);
   const i = chapter.passages.indexOf(p);
   const between = chapter.passages.slice(i + 1).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
-  store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, { streaming: true, cut: undefined, cutWhy: undefined, stopped: undefined }), { now: true });
+  store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, { streaming: true, cut: undefined, cutWhy: undefined, stopped: undefined, endCut: undefined }), { now: true });
   /* its last words, from the start of a word */
   const tail = original.text.length > 240 ? original.text.slice(-240).replace(/^\S*\s+/, '') : original.text;
   /* what he asked for in it, and who decides how it turns out — as the chip
@@ -597,6 +724,21 @@ export function addBreak({ chapterId, after = null }) {
   return passage.id;
 }
 
+/* What was taken off the end of a page as a note to him, put back as it came
+ * — a new version, the page without it one arrow away. */
+export function putBackTail({ novelId, chapterId, passageId }) {
+  const chapter = store.peek('chapter', chapterId);
+  const p = chapter && chapter.passages.find((x) => x.id === passageId);
+  const now = p && picked(p);
+  if (!now || !String(now.tookOff || '').trim()) return false;
+  const t = `${String(now.text || '').replace(/\s+$/, '')}\n\n${now.tookOff}`;
+  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}) });
+  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
+  store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
+  recount(novelId);
+  return true;
+}
+
 /* His edit, kept as a new version — the words before it stay one arrow away. */
 export function saveEdit({ novelId, chapterId, passageId, text }) {
   const chapter = store.peek('chapter', chapterId);
@@ -606,7 +748,8 @@ export function saveEdit({ novelId, chapterId, passageId, text }) {
   const t = String(text || '').replace(/\s+$/, '');
   if (t === String(now.text || '')) return false;
   if (!t.trim()) return false;
-  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}) });
+  /* his words changed inside a passage cut short: it still stops where it stopped, and Go on stays — unless he wrote its end himself (Tavern M511-1) */
+  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...(sameEnd(now.text, t) ? endOf(now) : {}) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
   recount(novelId);

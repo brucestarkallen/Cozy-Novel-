@@ -43,35 +43,67 @@ export function paced(paint) {
 
 /* blocks: each line its own block (the thinking); otherwise each line is a
  * text node in the same run of text (a reply, whose "…" sits after its last
- * word). Returns whether anything was drawn. */
-const drawnLines = new WeakMap();   /* box -> { blocks, data: string[], nodes: Node[] } */
+ * word). A line that runs long is drawn in pieces — ended at its next
+ * sentence past 500 characters, or at its next space past 1,500 (Cozy
+ * Tavern M279: a thinking with no line breaks at all was one line, drawn
+ * whole every frame, and froze the phone) — so a frame's new words touch only
+ * the piece they land on; the pieces of a line stay one line on the screen.
+ * Returns whether anything was drawn. */
+const LONG = 500;
+const HARD = 1500;
+export function piecesOf(line) {
+  const out = [];
+  let rest = line;
+  for (;;) {
+    if (rest.length <= LONG) break;
+    const m = /[.!?…]["”’)\]]*\s/.exec(rest.slice(LONG));
+    const atSentence = m ? LONG + m.index + m[0].length : Infinity;
+    const sp = rest.length > HARD ? rest.indexOf(' ', HARD) : -1;
+    const atSpace = sp >= 0 ? sp + 1 : Infinity;
+    const cut = Math.min(atSentence, atSpace);
+    if (!Number.isFinite(cut) || cut >= rest.length) break;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  out.push(rest);
+  return out;
+}
+const drawnLines = new WeakMap();   /* box -> { blocks, data: [{ t, ln }], nodes: Text[], lines: Element[] } */
 export function streamLines(box, text, { blocks = false } = {}) {
   const parts = String(text || '').split('\n');
-  const want = blocks ? parts : parts.map((p, i) => (i < parts.length - 1 ? p + '\n' : p));
+  const want = [];
+  parts.forEach((p, ln) => {
+    const pcs = piecesOf(p);
+    pcs.forEach((t, k) => want.push({ t: !blocks && ln < parts.length - 1 && k === pcs.length - 1 ? t + '\n' : t, ln }));
+  });
   let was = drawnLines.get(box);
-  if (!was || was.blocks !== blocks || box.childNodes.length !== was.nodes.length) {
+  if (!was || was.blocks !== blocks || box.childNodes.length !== (blocks ? was.lines.length : was.nodes.length)) {
     box.textContent = '';
-    was = { blocks, data: [], nodes: [] };
+    was = { blocks, data: [], nodes: [], lines: [] };
   }
   let k = 0;
   const n = Math.min(want.length, was.data.length);
-  while (k < n && want[k] === was.data[k]) k++;
+  while (k < n && want[k].t === was.data[k].t && want[k].ln === was.data[k].ln) k++;
   if (k === want.length && k === was.data.length) return false;
   for (let i = was.nodes.length - 1; i >= k; i--) was.nodes[i].remove();
   const data = was.data.slice(0, k);
   const nodes = was.nodes.slice(0, k);
+  /* the lines kept: those with a piece still drawn */
+  const keepLines = k ? data[k - 1].ln + 1 : 0;
+  for (let i = was.lines.length - 1; i >= keepLines; i--) was.lines[i].remove();
+  const lines = was.lines.slice(0, keepLines);
   const doc = box.ownerDocument;
-  const frag = doc.createDocumentFragment();
   for (let i = k; i < want.length; i++) {
-    let node;
-    if (blocks) { node = doc.createElement('div'); node.className = 'ln'; node.textContent = want[i]; }
-    else node = doc.createTextNode(want[i]);
-    frag.append(node);
+    const node = doc.createTextNode(want[i].t);
+    if (blocks) {
+      let line = lines[want[i].ln];
+      if (!line) { line = doc.createElement('div'); line.className = 'ln'; box.append(line); lines[want[i].ln] = line; }
+      line.append(node);
+    } else box.append(node);
     data.push(want[i]);
     nodes.push(node);
   }
-  box.append(frag);
-  drawnLines.set(box, { blocks, data, nodes });
+  drawnLines.set(box, { blocks, data, nodes, lines });
   return true;
 }
 

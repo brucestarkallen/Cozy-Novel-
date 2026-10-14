@@ -6,7 +6,8 @@
  * map from the letters on screen back to the letters stored, so words he
  * selects on screen are found exactly in the passage. */
 
-const BREAK = /^\s*(?:\*\s*\*\s*\*|\*{3,}|-{3,}|_{3,}|#|⁂|~{3,}|❦|•\s*•\s*•)\s*$/;
+import { BREAK_LINE as BREAK } from '../novel/textshape.js';
+
 const HEADING = /^\s{0,3}#{1,4}\s+(.+?)\s*#*\s*$/;
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
@@ -21,7 +22,8 @@ function marks(raw, tint) {
   const add = (m, i, t) => { if (!m.has(i)) m.set(i, []); m.get(i).push(t); };
   let masked = raw;
   const mask = (from, len) => { masked = masked.slice(0, from) + '\u0000'.repeat(len) + masked.slice(from + len); };
-  for (const m of raw.matchAll(/\*\*(?=\S)([^*\n]*?\S)\*\*/g)) {
+  /* flanking: a bold starts and ends on a letter, never on a space or an asterisk ("*****" is text) */
+  for (const m of raw.matchAll(/\*\*(?=[^\s*])([^*\n]*?[^\s*])\*\*/g)) {
     const a = m.index, b = m.index + m[0].length - 1;
     hide.add(a); hide.add(a + 1); hide.add(b); hide.add(b - 1);
     add(open, a + 2, 'strong'); add(close, b - 2, 'strong');

@@ -13,10 +13,12 @@ const WHO = { partner: 'your partner', play: 'the narrator' };
 export async function showSent(novelId, key, purpose = '') {
   const s = openSheet(`What ${WHO[purpose] || 'the writer'} was sent`);
   s.body.append(h('p.say', 'Looking it up…'));
+  /* the words on their way to the phone are waited for, never called missing (Cozy Tavern M347) */
+  const kept = await store.sentKept(novelId, key);
   const { status, data } = await store.api('GET', `/api/sent/${novelId}/${key}`).catch(() => ({ status: 0 }));
   s.body.textContent = '';
   if (status !== 200 || !data) {
-    s.body.append(h('p.say', status === 404 ? 'This one is not kept any more — the phone keeps what was sent for the newest sixty requests of each book.' : 'It could not be read just now.'));
+    s.body.append(h('p.say', status === 404 ? (kept.failed ? `This one was not kept: ${kept.failed} when it was sent.` : 'This one is not kept any more — the phone keeps what was sent for the newest sixty requests of each book.') : 'It could not be read just now.'));
     return;
   }
   const body = data.body || {};

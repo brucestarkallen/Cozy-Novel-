@@ -10,7 +10,7 @@
 import { picked, passageNumbers, chapterNumber, NOTE_KINDS } from './shape.js';
 import { wordsOf } from './changes.js';
 import { sceneWords } from './prompts.js';
-import { numberWords } from '../util.js';
+import { numberWords, plural } from '../util.js';
 
 const QUOTES = { '’': "'", '‘': "'", 'ʼ': "'", '“': '"', '”': '"', '„': '"', '«': '"', '»': '"' };
 const SPACE = new Set([9, 10, 11, 12, 13, 32, 160, 0x2028, 0x2029]);
@@ -140,4 +140,30 @@ export function searchBook({ novel, chapters = {}, talk = null, plays = [], quer
     }
   }
   return out;
+}
+
+/* The order every book is searched in: this one first, then the shelf's
+ * own — the newest written or opened first — and the archived last (Cozy
+ * Tavern A8: never the order the phone happens to list them in). */
+export function searchOrder(novelId, rows) {
+  const when = (r) => Math.max((r.meta && r.meta.written) || 0, (r.meta && r.meta.opened) || 0);
+  const others = (rows || []).filter((r) => r && r.id && r.id !== novelId);
+  const newest = (list) => list.sort((a, b) => when(b) - when(a)).map((r) => r.id);
+  return [novelId, ...newest(others.filter((r) => !(r.meta && r.meta.archived))), ...newest(others.filter((r) => r.meta && r.meta.archived))];
+}
+
+/* What a search says it found — and what it could not read, said, never
+ * taken for words that are not there (Cozy Tavern A8): the shelf, a book, a
+ * chapter the phone did not answer for. `searched`: the books it read. */
+export function searchSaid({ q, scope = 'book', total = 0, limit = 400, searched = 1, noShelf = false, unread = 0, lost = 0 }) {
+  const all = scope === 'all';
+  if (!searched) return `${all ? 'Your books' : 'This book'} could not be read just now — the phone did not answer. Try again in a moment.`;
+  const partial = (all && (noShelf || unread)) || lost;
+  const said = total ? (total >= limit ? `The first ${limit.toLocaleString()} places — more words find fewer.` : `${plural(total, 'place')}.`)
+    : `“${q}” isn’t anywhere ${partial ? 'in what could be read' : all ? 'in your books' : 'in this book'}.`;
+  const out = [said];
+  if (all && noShelf) out.push('The shelf could not be read just now, so only this book was searched — the phone did not answer.');
+  if (all && unread) out.push(`${unread === 1 ? 'One book' : plural(unread, 'book')} could not be read just now, so ${unread === 1 ? 'it was' : 'they were'} not searched — the phone did not answer.`);
+  if (lost) out.push(`${lost === 1 ? 'One chapter' : plural(lost, 'chapter')} could not be read just now, so ${lost === 1 ? 'it was' : 'they were'} not searched.`);
+  return out.join(' ');
 }

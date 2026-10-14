@@ -5,12 +5,12 @@
 import * as store from './store.js';
 import * as writer from './novel/writer.js';
 import * as archivist from './novel/archivist.js';
-import { onLearn, onKey } from './model/call.js';
+import { onLearn, onKey, onIdentity } from './model/call.js';
 import { h, $, icon, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays } from './ui/dom.js';
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
-import { initDesk, openChapter, drawComposer, deskState } from './ui/desk.js';
-import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight } from './ui/panes.js';
+import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow } from './ui/desk.js';
+import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords } from './ui/panes.js';
 import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK } from './ui/look.js';
@@ -18,8 +18,8 @@ import { bringOldBooks } from './legacy.js';
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, freshStarting, narratorCarryDue, carryNarrator, lateSplitDue, splitLate } from './novel/prompts.js';
 import { chapterLabel, novelSteps } from './novel/shape.js';
 import { plural, numberWords } from './util.js';
-import { talkBusy, repairStaleTurns as talkRepair } from './novel/talk.js';
-import { startChecking } from './novel/checker.js';
+import { anyTalking, repairStaleTurns as talkRepair } from './novel/talk.js';
+import { startChecking, busyAny as checkingAny } from './novel/checker.js';
 import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
 
@@ -90,6 +90,14 @@ async function boot() {
   /* what a model teaches about itself, and a Hermes key that moved, are kept on the connection */
   onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
   onKey((id, key) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.key = key; }));
+  /* what the provider said its model is (its room, the weights behind an alias, its thinking levels): kept on the connection */
+  onIdentity((id, patch) => store.change('house', 'house', (hs) => {
+    const c = (hs.connections || []).find((x) => x.id === id);
+    if (!c) return;
+    /* only while the connection is still that model at that address */
+    if (patch.identTriedFor && patch.identTriedFor !== `${c.model || ''}@${c.url || ''}`) return;
+    for (const [f, v] of Object.entries(patch)) { if (v === undefined) delete c[f]; else c[f] = v; }
+  }));
   /* the first Cozy Novel's books come along, once */
   try {
     const n = await bringOldBooks();
@@ -260,10 +268,10 @@ function bindChrome() {
     if (document.visibilityState === 'hidden') { store.flushOnHide(); store.quiet(); }
     else store.recheck();
   });
-  window.addEventListener('pagehide', () => { store.flushOnHide(); store.quiet(); });
+  window.addEventListener('pagehide', () => { draftNow(); store.flushOnHide(); store.letLeasesGo(); store.quiet(); });
   window.addEventListener('pageshow', (e) => { if (e.persisted) store.recheck(); });
   window.addEventListener('beforeunload', (e) => {
-    if (writer.anyRunning()) { e.preventDefault(); e.returnValue = ''; }
+    if (writer.anyRunning() || anyTalking()) { e.preventDefault(); e.returnValue = ''; }
   });
   store.onStatus((s) => banner(s.offline));
   store.onUpdate(() => { A.updateWaiting = true; reloadWhenQuiet(); });
@@ -276,7 +284,7 @@ export function drawBar() {
   if (!n || !c) return;
   $('#bookTitle b').textContent = n.meta.title || 'Untitled';
   const num = n.order.indexOf(c.id) + 1;
-  $('#bookTitle small').textContent = `Chapter ${numberWords(num)}${c.name ? ` — ${c.name}` : ''}`;
+  $('#chapLine').textContent = `Chapter ${numberWords(num)}${c.name ? ` — ${c.name}` : ''}`;
 }
 
 function writerMenu(anchor) {
@@ -285,13 +293,21 @@ function writerMenu(anchor) {
   const cur = (hs.roles || {}).writer;
   menu(anchor, [
     { label: 'The writer', header: true },
-    ...conns.map((c) => ({ label: `${writer.connName(c)}${c.model && c.name ? ` — ${c.model}` : ''}`, checked: c.id === cur, run: () => {
-      store.change('house', 'house', (x) => { x.roles = x.roles || {}; x.roles.writer = c.id; }, { now: true });
-      drawComposer();
-      toast(`${writer.connName(c)} writes now.`);
-    } })),
+    ...conns.map((c) => {
+      /* what tapping it does, and what goes with it (Who does what: the parts set to follow the writer) */
+      const follow = writer.partsWords(writer.followersOf(hs));
+      const others = writer.partsWords(writer.partsOf(hs, c.id).filter((r) => r !== 'writer'));
+      const hint = c.id === cur
+        ? `Writes the pages and narrates your scenes now${follow ? `, with ${follow} beside it` : ''}.`
+        : `Writes the pages and narrates your scenes from now on${follow ? ` — ${follow} ${writer.followersOf(hs).length > 1 ? 'go' : 'goes'} with it` : ''}.${others ? ` It is ${others} already.` : ''}`;
+      return { label: `${writer.connName(c)}${c.model && c.name ? ` — ${c.model}` : ''}`, hint, checked: c.id === cur, run: () => {
+        store.change('house', 'house', (x) => { x.roles = x.roles || {}; x.roles.writer = c.id; }, { now: true });
+        drawComposer();
+        toast(`${writer.connName(c)} writes now${follow ? `, and is ${follow} too` : ''}.`);
+      } };
+    }),
     conns.length ? '-' : null,
-    { label: conns.length ? 'Connections…' : 'Add a connection…', run: () => openSettings('connections') },
+    { label: conns.length ? 'Connections…' : 'Add a connection…', hint: conns.length ? 'Settings → Connections: add one, or change a key, a model, the dials.' : 'Settings → Connections: pick your provider, paste your key, pick a model.', run: () => openSettings('connections') },
   ]);
 }
 
@@ -344,15 +360,24 @@ function banner(offline) {
   b.append('Cozy Novel’s server on the phone is not answering, so nothing can be saved or written just now. Open Termux and run ', h('code', 'cozynovel'), ' — what you typed here waits and is saved the moment it answers.');
 }
 
-/* An update to the app lands by itself: the page refreshes once nothing is
- * being written and he is not typing. */
+/* An update to the app lands by itself: the page refreshes once nothing
+ * would be lost or cut (Cozy Tavern M720, M332) — no page, answer, scene,
+ * Ideas, reading or checking on its way in any book; nothing waiting to be
+ * saved (the box's last words too); no sheet open (a card being edited, Edit
+ * by hand, a new scene); no words typed and not yet sent — the box beside
+ * the page, a rewrite note, his edit of a passage. */
+export function quietNow() {
+  const typing = document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName) && document.activeElement.value;
+  const unsaved = document.querySelector('.editbox') || [...document.querySelectorAll('.rewriterow input')].some((i) => i.value.trim()) || unsentWords();
+  const open = document.querySelector('.sheet.on');
+  const working = writer.anyRunning() || anyTalking() || archivist.busyAny() || checkingAny() || store.hasPending() || draftWaiting();
+  return !(working || unsaved || open || typing);
+}
 function reloadWhenQuiet() {
   if (!A.updateWaiting) return;
-  const typing = document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName) && document.activeElement.value;
-  const busy = writer.anyRunning() || store.hasPending() || (A.novelId && talkBusy('talk', A.novelId)) || document.querySelector('.editbox');
-  if (busy || typing) { setTimeout(reloadWhenQuiet, 4000); return; }
+  if (!quietNow()) { setTimeout(reloadWhenQuiet, 4000); return; }
   toast('Cozy Novel was updated — refreshing.');
-  setTimeout(() => location.reload(), 800);
+  setTimeout(() => { if (quietNow()) location.reload(); else reloadWhenQuiet(); }, 800);
 }
 
 /* ------------------------------------------------------------- the service worker */

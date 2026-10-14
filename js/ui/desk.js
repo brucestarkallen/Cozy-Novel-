@@ -8,12 +8,15 @@ import * as archivist from '../novel/archivist.js';
 import * as talk from '../novel/talk.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS } from '../novel/shape.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
+import { webUrl } from '../model/call.js';
 import { thinkBox as makeThinkBox, updateThinkBox } from './think.js';
 import { paced, follower } from './live.js';
 import { findIn } from '../novel/search.js';
+import { makeChange, undoChange } from '../novel/changes.js';
+import { nameChange, namedMidSentence, foldName } from '../novel/names.js';
 
 const S = {
   novelId: null, chapterId: null,
@@ -21,7 +24,7 @@ const S = {
   editing: null,         /* the passage being edited */
   rewriting: null,       /* the passage with the rewrite box open */
   sel: null,             /* {passageId, start, end, text} — words selected for rewriting */
-  error: null,           /* the last page that did not come, said once */
+  errors: new Map(),     /* chapterId -> a page that did not come there: why, and what it thought */
   followId: null,        /* the passage being written here, whose newest words the page follows */
   drawn: null,           /* what the page was last drawn from (shownSig) */
   els: new Map(),        /* passageId -> element */
@@ -84,7 +87,7 @@ export async function openChapter(novelId, chapterId) {
   if (changingBook) saveDraftSoon.now();
   S.novelId = novelId;
   S.chapterId = chapterId;
-  S.selected = null; S.editing = null; S.rewriting = null; S.sel = null; S.error = null; S.insertAfter = null; S.followId = null;
+  S.selected = null; S.editing = null; S.rewriting = null; S.sel = null; S.insertAfter = null; S.followId = null;
   F.start();
   S.offs.push(store.subscribe('chapter', chapterId, (data, why) => {
     if (why === 'deleted') { hooks.chapterGone(); return; }
@@ -386,7 +389,7 @@ function controls(p) {
     return row;
   }
   /* a rewrite of selected words that stopped partway is written again, never carried on from the passage's end */
-  const carry = v.cut && v.how !== 'selection';
+  const carry = cutAtEnd(v);
   if (carry) row.append(h('button.go', { title: 'Carry this passage on from its last word', disabled: working, onclick: () => run(() => writer.goOn({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Go on'));
   if (writer.takeOf(p)) row.append(h('button', { title: 'The same request written again, as a new version — the notes it is written from are the ones before this passage', disabled: working, onclick: () => run(() => writer.anotherTake({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Another take'));
   row.append(h('button', { title: 'Say what should change; the change becomes what happens, carried through the passage', disabled: working, onclick: () => { S.rewriting = S.rewriting === p.id ? null : p.id; S.focusNext = 'rewrite'; drawPage(); } }, 'Rewrite…'));
@@ -408,7 +411,9 @@ function controls(p) {
   if (bits.length) row.append(h('div.note', bits.join(' · ')));
   if (v.cut) row.append(h('div.note.warn', `It stopped partway${v.cutWhy ? ` (${v.cutWhy})` : ''}. ${carry ? 'Go on carries it on from the last word.' : 'Another take writes it again.'}`));
   if (v.notes && v.notes.length) row.append(h('div.note', v.notes.join(' ')));
-  if (v.sources && v.sources.length) row.append(h('div.note.sources', 'Looked up: ', ...v.sources.slice(0, 8).flatMap((x, k) => [k ? ' · ' : '', h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer' }, String(x.title || x.url).slice(0, 80))])));
+  /* only an address on the web is ever a link (a page kept before this check, too) */
+  const looked = (v.sources || []).filter((x) => x && webUrl(x.url));
+  if (looked.length) row.append(h('div.note.sources', 'Looked up: ', ...looked.slice(0, 8).flatMap((x, k) => [k ? ' · ' : '', h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer' }, String(x.title || x.url).slice(0, 80))])));
   return row;
 }
 
@@ -437,7 +442,9 @@ function passageMenu(anchor, p) {
   const i = c.passages.indexOf(p);
   menu(anchor, [
     v.sent ? { label: 'What the writer was sent', hint: 'Every word of the request this version was written from.', run: () => showSent(S.novelId, v.sent) } : null,
+    ...(Array.isArray(v.sentMore) ? v.sentMore : []).map((key, k, all) => ({ label: all.length > 1 ? `What Go on was sent (${numberWords(k + 1).toLowerCase()})` : 'What Go on was sent', hint: 'Every word of the request that carried this passage on.', run: () => showSent(S.novelId, key) })),
     { label: 'Copy the words', hint: 'This passage as it shows, to paste anywhere.', run: async () => { toast((await copyText(v.text || '')) ? 'Copied.' : 'It could not be copied.'); } },
+    v.tookOff ? { label: 'Put back what was taken off its end', hint: 'What the writer added after the story — a note to you, a block of tracking — back on the page as it came, as a new version.', run: () => { if (writer.putBackTail({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) { archivist.nudge(S.novelId); toast('Put back — the page without it is one arrow away.'); } } } : null,
     '-',
     { label: 'Write from here (a passage after this one)', hint: 'A new passage between this one and the next, written to fit both.', disabled: busy(), run: () => { S.insertAfter = p.id; S.sel = null; drawComposer(); ui.direction.focus(); } },
     { label: 'Add a scene break after this', hint: 'A * * * line: a new scene begins after it.', run: () => { writer.addBreak({ chapterId: c.id, after: p.id }); } },
@@ -482,7 +489,10 @@ function keepOpenEdit(fromBack = false) {
   if (!fromBack && S.editBack) { const r = S.editBack; S.editBack = null; r(); }
   if (box) {
     if (!box.value.trim()) toast(EMPTY_EDIT, 6000);
-    else if (writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text: box.value })) { archivist.nudge(S.novelId); toast('Your edit is kept — the earlier words are one arrow away.'); }
+    else {
+      const before = shownText(pid);
+      if (writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text: box.value })) editKept(pid, before, box.value, 'Your edit is kept — the earlier words are one arrow away.');
+    }
   }
   if (fromBack) drawPage();
 }
@@ -490,12 +500,54 @@ function keepOpenEdit(fromBack = false) {
 const EMPTY_EDIT = 'An empty passage is not kept, so the words stay as they were. To take the passage out, use ⋯ → Remove the passage.';
 function finishEdit(pid, text) {
   const empty = !String(text || '').trim();
+  const before = shownText(pid);
   const changed = !empty && writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text });
   S.editing = null;
   if (S.editBack) { const r = S.editBack; S.editBack = null; r(); }
   drawPage();
   if (empty) toast(EMPTY_EDIT, 6000);
-  else if (changed) { archivist.nudge(S.novelId); toast('Saved — the earlier words are one arrow away.'); }
+  else if (changed) editKept(pid, before, text, 'Saved — the earlier words are one arrow away.');
+}
+function shownText(pid) {
+  const c = chapter();
+  const p = c && (c.passages || []).find((x) => x.id === pid);
+  return String(((p && picked(p)) || {}).text || '');
+}
+/* His edit kept, and said. When it changed a name everywhere it stood in the
+ * passage, and the rest of the book still holds the old one, changing it
+ * everywhere is offered (Cozy Tavern M100, the ripple — offered, never done
+ * by itself): every passage, chapter name, card, the book's own words and
+ * the scenes, each passage a new version, with Undo. */
+function editKept(pid, before, after, words) {
+  const novelId = S.novelId;
+  archivist.nudge(novelId);
+  const n = store.peek('novel', novelId) || {};
+  const cards = NOTE_KINDS.flatMap((k) => (n.notes && n.notes[k]) || []);
+  const isName = (w) => namedMidSentence(before, w) || cards.some((c) => [c.name, ...(c.aka || [])].some((x) => (' ' + foldName(x) + ' ').includes(' ' + foldName(w) + ' ')));
+  const ch = nameChange(before, after, isName);
+  if (!ch || !standsElsewhere(n, ch.from, pid)) { toast(words); return; }
+  toast(`${words} “${ch.from}” is “${ch.to}” here now; the rest of the book still says “${ch.from}”.`, 12000, { label: 'Change it everywhere', run: () => {
+    const out = makeChange(novelId, { rename: { from: ch.from, to: ch.to }, why: 'Your edit of the name.' });
+    if (out.status !== 'made') { toast(`Nothing was changed — ${out.said}.`, 7000); return; }
+    archivist.nudge(novelId);
+    undoToast(`“${ch.from}” is “${ch.to}” everywhere — ${String(out.said || '').replace(/^changed in /, 'changed in ')}.`, () => {
+      const back = undoChange(novelId, out);
+      archivist.nudge(novelId);
+      toast(back.ok ? (back.said ? `Put back — ${back.said}.` : `Put back — “${ch.from}” everywhere else again.`) : `It could not be put back — ${back.said}.`, 6000);
+    });
+  } });
+}
+/* the old name still stands somewhere else in the book: another passage, a chapter's name, a card */
+function standsElsewhere(n, name, pid) {
+  const w = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])${w}(?![\\p{L}\\p{M}\\p{N}])`, 'u');
+  for (const id of n.order || []) {
+    const c = store.peek('chapter', id);
+    if (!c) continue;
+    if (re.test(String(c.name || ''))) return true;
+    for (const p of c.passages || []) if (p.id !== pid && p.by !== 'break' && re.test(String((picked(p) || {}).text || ''))) return true;
+  }
+  return NOTE_KINDS.some((k) => ((n.notes && n.notes[k]) || []).some((c) => [c.name, ...(c.aka || []), c.about, c.now, c.ties].some((x) => re.test(String(x || '')))));
 }
 
 /* Versions taken out — the one on show, or several chosen — with Undo; one
@@ -584,11 +636,15 @@ async function splitHere(p) {
   const moving = JSON.parse(JSON.stringify(c.passages.slice(i)));
   const fresh = newChapter(S.novelId);
   fresh.passages = moving;
+  /* what was kept for those passages goes with them (shape.js keptFor) */
+  Object.assign(fresh, keptFor(c, moving.map((m) => m.id)));
   await store.create('chapter', fresh.id, fresh);
   store.change('novel', S.novelId, novelSteps.addChapter(fresh.id, c.id), { now: true });
   /* the moved passages were read where they stood: the helper is told nothing new */
   archivist.moveSeen(S.novelId, c.id, fresh.id, moving.map((m) => m.id));
   store.change('chapter', c.id, chapterSteps.cutFrom(p.id), { now: true });
+  store.change('chapter', c.id, chapterSteps.pruneChecks(), { now: true });
+  if (fresh.retired.length) store.change('chapter', c.id, chapterSteps.clearRetired(fresh.retired.map((r) => r.key)), { now: true });
   archivist.nudge(S.novelId);
   hooks.goChapter(fresh.id);
 }
@@ -607,11 +663,20 @@ function drawEnd() {
       ? 'The first page. Say how the story opens and press Write — or write the opening yourself and press Add as my words.'
       : 'A fresh chapter. Say what happens and press Write, or write it yourself. With the box left empty, Write carries the story on.'));
   }
-  if (S.error) {
-    ui.end.append(h('div.endcard.error',
-      h('b', 'The page did not come. '), S.error.words,
-      h('div.row', S.error.needsConnection ? h('button.btn.primary.small', { onclick: () => hooks.openSettings('connections') }, 'Open Connections') : null,
-        h('button.btn.small', { onclick: () => { S.error = null; drawEnd(); } }, 'Dismiss'))));
+  /* a page that did not come, said in the chapter it was asked for — with
+   * what the model thought, kept to read and copy (Cozy Tavern M301) */
+  const err = S.errors.get(c.id);
+  if (err) {
+    const card = h('div.endcard.error',
+      h('b', err.stopped ? 'Stopped before any words came. ' : 'The page did not come. '), err.stopped ? 'What it thought is below.' : err.words);
+    if (err.thought) {
+      const fold = h('details.keptthought', h('summary', 'What it thought'), h('div.thinkbody', err.thought));
+      card.append(fold, h('p.say.quiet', 'Copy it, and Add as my words puts any of it in the chapter as your own.'));
+    }
+    card.append(h('div.row', err.needsConnection ? h('button.btn.primary.small', { onclick: () => hooks.openSettings('connections') }, 'Open Connections') : null,
+      err.thought ? h('button.btn.small', { title: 'Its thinking, to paste anywhere', onclick: async () => toast((await copyText(err.thought)) ? 'What it thought is copied.' : 'It could not be copied.') }, 'Copy what it thought') : null,
+      h('button.btn.small', { onclick: () => { S.errors.delete(c.id); drawEnd(); } }, 'Dismiss')));
+    ui.end.append(card);
   }
   const at = n.order.indexOf(c.id);
   if (hasText && !busy()) {
@@ -722,23 +787,42 @@ function outcomeMenu() {
 }
 
 async function run(fn) {
-  await writer.yieldAuto(S.novelId);
-  S.error = null;
+  /* the book and the chapter this was asked in: where its answer — or why
+   * none came — is said, wherever he has gone meanwhile */
+  const novelId = S.novelId;
+  const chapterId = S.chapterId;
+  await writer.yieldAuto(novelId);
+  S.errors.delete(chapterId);
   S.followId = null;
   F.start();
   drawEnd();
   const out = await fn();
-  if (out && !out.ok && !out.stopped && out.error) {
-    S.error = { words: sentence(out.error), needsConnection: out.needsConnection };
-    drawPage();
-    if (!S.els.size) drawEnd();
-    /* the reason is shown where he will see it */
-    toBottomSoon(null, true);
+  const here = () => S.novelId === novelId && S.chapterId === chapterId;
+  const failed = out && !out.ok && !out.gone && ((!out.stopped && out.error) || (out.stopped && out.thought));
+  if (failed) {
+    S.errors.set(chapterId, { words: sentence(out.error), needsConnection: out.needsConnection, thought: out.thought || '', stopped: Boolean(out.stopped) });
+    if (here()) {
+      drawPage();
+      if (!S.els.size) drawEnd();
+      /* the reason is shown where he will see it */
+      if (!out.stopped) toBottomSoon(null, true);
+    } else if (!out.stopped) {
+      /* he went elsewhere while it wrote: told now, and kept in its chapter for when he goes back */
+      toast(`${chapterNameOf(novelId, chapterId)}: the page did not come — ${out.error}.`, 7000);
+    }
   } else if (out && out.ok) {
-    archivist.nudge(S.novelId);
+    archivist.nudge(novelId);
   }
   drawComposer();
   return out;
+}
+/* "Chapter Two", or the book's title and chapter when it is another book */
+function chapterNameOf(novelId, chapterId) {
+  const n = store.peek('novel', novelId);
+  const c = store.peek('chapter', chapterId);
+  if (!n || !c) return 'The page you asked for';
+  const label = chapterLabel(n, c, { withName: false });
+  return novelId === S.novelId ? label : `${n.meta && n.meta.title ? n.meta.title : 'Another book'}, ${label}`;
 }
 
 function sentence(s) {
@@ -884,16 +968,18 @@ function flushLive() {
 }
 
 /* ------------------------------------------------------------ the scroller */
-/* A thumb at the page's right edge: it says which passage is under the eye
- * (its number on the page) and, dragged, moves through the chapter quickly —
- * the phone's own scrollbar can't be held. While he scrolls or holds it,
- * "Passage N of M" shows beside it (Cozy Tavern's "page N of M"). */
-const SC = { bar: null, thumb: null, tip: null, drag: null, idle: 0, frame: 0, self: 0, said: '' };
+/* A slim thumb in the page's right gutter: dragged, it moves through the
+ * chapter quickly — the phone's own scrollbar can't be held. Which passage is
+ * under the eye ("Passage N of M", Cozy Tavern's "page N of M") is said in
+ * the bar above the page, where no word of the story is, and beside the thumb
+ * only while he holds it (Cozy Tavern M675). */
+const SC = { bar: null, thumb: null, tip: null, where: null, drag: null, idle: 0, frame: 0, self: 0, said: '' };
 function initScroller() {
   SC.bar = document.getElementById('scroller');
   if (!SC.bar) return;
   SC.thumb = SC.bar.querySelector('.thumb');
   SC.tip = SC.bar.querySelector('.tip');
+  SC.where = document.getElementById('whereNow');
   const ratioAt = (y) => {
     const r = SC.bar.getBoundingClientRect();
     return clamp((y - r.top - SC.drag.offset) / Math.max(1, r.height - SC.thumb.offsetHeight), 0, 1);
@@ -929,7 +1015,11 @@ function numberedEls() {
   for (const [pid, el] of S.els) if (nums.has(pid)) out.push({ el, n: nums.get(pid) });
   return out;
 }
-/* the passage under the eye: the last one that starts above a quarter of the way down */
+/* the passage under the eye: the last one that starts above a quarter of the
+ * way down. (Cozy Tavern slides its line to the bottom near the end, M468, so
+ * a short last passage is named there; here the page keeps 40–45% of the
+ * screen as room under the last passage, which brings it up past the line at
+ * the end — measured, and held by the walk.) */
 function passageUnderEye(list) {
   if (!list.length) return null;
   const eye = ui.wrap.getBoundingClientRect().top + ui.wrap.clientHeight * 0.25;
@@ -946,7 +1036,7 @@ function placeScroller() {
   const max = ui.wrap.scrollHeight - ui.wrap.clientHeight;
   const show = list.length > 1 && max > ui.wrap.clientHeight * 0.5;
   SC.bar.hidden = !show;
-  if (!show) return;
+  if (!show) { if (SC.said) { SC.said = ''; if (SC.where) SC.where.textContent = ''; } return; }
   const i = passageUnderEye(list);
   const n = list[i].n;
   const total = list[list.length - 1].n;
@@ -957,7 +1047,8 @@ function placeScroller() {
   const say = `Passage ${n} of ${total}`;
   if (SC.said === say) return;
   SC.said = say;
-  SC.thumb.textContent = String(n);
+  /* said where no word of the story is: the bar above the page (Cozy Tavern M675) */
+  if (SC.where) SC.where.textContent = ` · ${say}`;
   SC.thumb.setAttribute('aria-valuemax', String(total));
   SC.thumb.setAttribute('aria-valuenow', String(n));
   SC.thumb.setAttribute('aria-valuetext', say);
@@ -1051,6 +1142,10 @@ function saveDraft() {
   draftDue = { id: S.novelId, text: ui.direction.value };
   saveDraftSoon();
 }
+/* the box's last words, not yet handed to the store (the moment after he types): an update waits for them */
+export function draftWaiting() { return Boolean(draftDue); }
+/* the page going away: they are handed over now, to go with the rest */
+export function draftNow() { if (draftDue) saveDraftSoon.now(); }
 
 async function loadDraft() {
   const id = S.novelId;

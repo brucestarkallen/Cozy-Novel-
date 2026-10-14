@@ -89,6 +89,9 @@ def answer_for(body):
             # a version that says SECOND TAKE has a note of its own (each version its own notes)
             **({"lore": [{"name": "The bottle", "about": "Green glass gone milky, a curl of paper inside that smells of tar and oranges."}, {"name": "The second take", "about": "Only this version holds it."}]} if "SECOND TAKE" in last_user.split("The notes as they stand:")[-1].split('New in')[-1] else {}),
         }})
+    if "Write the summary again with every one" in last_user:
+        # a summary asked again for the names and figures it left out
+        return json.dumps({"summary": "Mara Venn finds a bottle at the tide line below the lighthouse at Crane Point, with a letter inside that smells of tar and oranges."})
     if "Summarise " in last_user and "for the book's notes" in last_user:
         return json.dumps({"summary": "Mara Venn finds a bottle at the tide line with a letter inside that smells of tar and oranges.", "name": "The Bottle"})
     if "⟦" in last_user and "Write only the new words" in last_user:
@@ -180,6 +183,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": {"message": "This model's maximum context length is 9000 tokens. However, your messages resulted in %d tokens." % (size // 3)}}, 400)
         if model == "fake-broken":
             return self.send_json({"error": {"message": "The server had an error while processing your request."}}, 500)
+        msgs0 = body.get("messages") or []
+        asked0 = ""
+        for m in reversed(msgs0):
+            if m.get("role") == "user" and isinstance(m.get("content"), str):
+                asked0 = m["content"]
+                break
+        if "SLOWFAIL" in asked0:
+            # a page that fails after a while: time to go elsewhere first
+            time.sleep(1.5)
+            return self.send_json({"error": {"message": "The server had an error while processing your request."}}, 500)
         text = answer_for(body)
         forced_cut = text.endswith(CUT_MARK)
         if forced_cut:
@@ -205,10 +218,24 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode())
             self.wfile.flush()
         try:
+            if "ONLYTHINK" in asked0:
+                # a model that only thinks and writes no page
+                for piece in ["I weigh the storm ", "and the letter, ", "and write nothing yet."]:
+                    chunk({"reasoning_content": piece})
+                    time.sleep(0.05)
+                chunk({}, "stop")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                return
             if think:
                 for piece in ["Let me ", "think about ", "the scene."]:
                     chunk({"reasoning_content": piece})
                     time.sleep(0.5 if slow else 0.05)
+            if "LOOK IT UP" in asked0:
+                # its own web search: what it looked at, as OpenRouter's plugin sends it (one address that is no web page)
+                chunk({"content": "", "annotations": [
+                    {"type": "url_citation", "url_citation": {"url": "https://example.com/lighthouses", "title": "Lighthouses of the north coast"}},
+                    {"type": "url_citation", "url_citation": {"url": "javascript:alert(1)", "title": "Not a page"}}]})
             pieces = re.findall(r"\S+\s*", text)
             limit = body.get("max_tokens")
             cut = forced_cut

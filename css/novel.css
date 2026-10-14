@@ -89,7 +89,8 @@
   --chrome: rgba(250, 247, 241, .86); --chrome-solid: #faf6ef; --chrome-ink: #2e261e; --chrome-soft: #7a6852; --line: rgba(60, 40, 20, .12);
   --paper: #fffdf8; --paper-2: #fbf6ec; --paper-edge: rgba(80, 55, 30, .16);
   --ink: #2a231c; --ink-soft: #6f5f4d; --ink-faint: #a08f7a;
-  --accent: #b06d1d; --accent-2: #c98a36; --accent-ink: #fffaf2;
+  /* deep enough that the light words on a button, and the accent's own words on the page, read at AA (4.5:1 and more) */
+  --accent: #8a5410; --accent-2: #a1631a; --accent-ink: #fffaf2;
   --dlg: #8a3b18; --select: rgba(176, 109, 29, .12);
   --card: rgba(255, 252, 246, .92); --card-ink: #2e261e;
   --shadow: 0 14px 40px rgba(60,40,20,.14), 0 2px 6px rgba(60,40,20,.08);
@@ -243,7 +244,9 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 }
 .booktitle { flex: 1; min-width: 0; text-align: left; padding: 4px 6px; border-radius: 10px; display: flex; flex-direction: column; }
 .booktitle b { font: 600 19px/1.15 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.booktitle small { color: var(--chrome-soft); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.booktitle small { color: var(--chrome-soft); font-size: 12.5px; white-space: nowrap; display: flex; min-width: 0; }
+.booktitle small #chapLine { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.booktitle small #whereNow { flex: none; font-variant-numeric: tabular-nums; }
 /* the helper's light rides on the Notes button: green, all read; amber,
  * reading or about to; red, trouble; grey, no helper chosen */
 .notesbtn { position: relative; }
@@ -258,15 +261,21 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 /* the page's own column: the page, and beside its right edge the scroller */
 .pagecol { position: relative; flex: 1; min-width: 0; display: flex; }
 .pagewrap { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
-/* the scroller: its thumb says which passage is under the eye, and drags the page */
-.scroller { position: absolute; top: 12px; bottom: 68px; right: 3px; width: 40px; z-index: 5; pointer-events: none; }
-.scroller .thumb { position: absolute; right: 0; top: 0; min-width: 32px; height: 32px; padding: 0 7px; border-radius: 16px; display: grid; place-items: center;
-  font: 600 12.5px/1 var(--ui); font-variant-numeric: tabular-nums; background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); box-shadow: var(--shadow);
+/* one thumb on the page: the passage mark, which says where he is and drags anywhere — the browser's own is not drawn (Cozy Tavern M752) */
+.pagewrap { scrollbar-width: none; }
+.pagewrap::-webkit-scrollbar { display: none; }
+/* the scroller: a slim bar in the page's right gutter that drags the page — never painted over a word (Cozy Tavern
+ * M675, his: "it's hidden some words on it"); the finger's target is wider than the bar, and unpainted. The passage
+ * under the eye is said in the bar above the page (#whereNow), and beside the bar only while he drags it — he is
+ * choosing a passage then, not reading one */
+.scroller { position: absolute; top: 12px; bottom: 68px; right: 0; width: 26px; z-index: 5; pointer-events: none; }
+.scroller .thumb { position: absolute; right: 0; top: 0; width: 26px; height: 48px; padding: 0; border: 0; background: none; color: transparent; font-size: 0;
   opacity: .45; transition: opacity .3s; cursor: grab; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+.scroller .thumb::after { content: ''; position: absolute; right: 2px; top: 6px; bottom: 6px; width: 5px; border-radius: 3px; background: var(--chrome-soft); }
 .scroller.on .thumb, .scroller .thumb:focus-visible { opacity: 1; }
 .scroller.drag .thumb { cursor: grabbing; opacity: 1; }
-.scroller .tip { position: absolute; right: 44px; top: 0; white-space: nowrap; padding: 7px 11px; border-radius: 10px; background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); box-shadow: var(--shadow); font: 13px/1.2 var(--ui); display: none; }
-.scroller.on .tip, .scroller.drag .tip { display: block; }
+.scroller .tip { position: absolute; right: 32px; top: 0; white-space: nowrap; padding: 7px 11px; border-radius: 10px; background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); box-shadow: var(--shadow); font: 13px/1.2 var(--ui); display: none; }
+.scroller.drag .tip { display: block; }
 .page {
   position: relative; max-width: var(--page-width); margin: 16px auto 0; min-height: calc(100% - 16px);
   background: var(--paper); color: var(--ink);
@@ -340,6 +349,10 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .endcard { margin: 26px 0 0; padding: 16px 18px; border-radius: 12px; font: 14px/1.5 var(--ui); background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink-soft); }
 .endcard.error { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--ink); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); }
 .endcard .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.endcard .keptthought { margin-top: 10px; }
+.endcard .keptthought > summary { cursor: pointer; color: var(--ink-soft); font-size: 13.5px; }
+.endcard .keptthought .thinkbody { margin-top: 8px; padding: 10px 12px; border-radius: 10px; white-space: pre-wrap; max-height: 40vh; overflow-y: auto; font: 13.5px/1.55 var(--ui); color: var(--ink-soft); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.endcard .say.quiet { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-soft); }
 .emptypage { text-align: center; color: var(--ink-soft); font: italic 400 1.02em/1.6 var(--serif); padding: 4vh 6% 0; }
 .nextchapter { display: flex; justify-content: center; margin: 40px 0 0; }
 /* a long chapter name wraps inside its button, never past the page */
@@ -525,6 +538,8 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
   border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--chrome-ink);
 }
 [data-theme="day"] .field input, [data-theme="day"] .field select, [data-theme="day"] .field textarea { background: #fff; }
+/* a tick inside a field is a tick: never stretched into a text box's size (Cozy Tavern's switch rows) */
+.field input[type="checkbox"], .field input[type="radio"] { width: 20px; height: 20px; min-height: 0; padding: 0; border: 0; border-radius: 4px; background: none; flex: none; accent-color: var(--accent); }
 .field select option { background: var(--chrome-solid); color: var(--chrome-ink); }
 .field textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
 .field textarea.tall { min-height: 220px; }

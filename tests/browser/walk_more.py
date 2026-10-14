@@ -249,6 +249,25 @@ async def scenario_offline(b, env):
     pg = await page(b, logs)
     await new_book(pg, title='Power Cut')
     await pg.wait_for_timeout(500)
+    # another book whose chapter the phone cannot read (its file damaged, with no earlier copy)
+    rq = urllib.request.Request(f'http://127.0.0.1:{PORT}/api/store/novel/n-damaged', method='PUT', headers={'Content-Type': 'application/json', 'X-Base': '0', 'X-Client': 'another-device'},
+                                data=json.dumps({'data': {'id': 'n-damaged', 'meta': {'title': 'Damaged', 'subtitle': '', 'cover': 'ember', 'words': 0, 'chapters': 1, 'created': 1, 'written': 1, 'opened': 0, 'archived': False},
+                                                          'brief': '', 'style': '', 'plans': '', 'order': ['c-damaged'], 'notes': {'people': [], 'places': [], 'lore': [], 'threads': []}, 'memory': {'seen': {}, 'removed': [], 'undo': None, 'at': 0}, 'prefs': {}, 'plays': []}}).encode())
+    urllib.request.urlopen(rq).read()
+    os.makedirs(os.path.join(env.home, 'store', 'chapter'), exist_ok=True)
+    with open(os.path.join(env.home, 'store', 'chapter', 'c-damaged.json'), 'w') as f:
+        f.write('{damaged')
+    await pg.click('#searchBtn')
+    await pg.wait_for_selector('.sheet.on .searchtop')
+    await pg.click('.sheet.on .segmented button:has-text("All books")')
+    await pg.fill('.sheet.on input[type=search]', 'nowhere at all')
+    try:
+        await pg.wait_for_function("/could not be read/.test(document.querySelector('.sheet.on .searchsay').textContent)", timeout=15000)
+        say = await pg.inner_text('.sheet.on .searchsay')
+        check('a search says the chapter it could not read — never that the words are nowhere in it', 'One chapter could not be read' in say and 'in your books' not in say, say)
+    except Exception as e:
+        check('a search says the chapter it could not read — never that the words are nowhere in it', False, await pg.inner_text('.sheet.on .searchsay'))
+    await close_sheet(pg)
     env.srv.terminate(); env.srv.wait()
     await pg.fill('#direction', 'Typed while the server was away.')
     await pg.click('#mineBtn')
@@ -257,6 +276,30 @@ async def scenario_offline(b, env):
         check('the page says the server is not answering', 'not answering' in await pg.inner_text('#banner'), '')
     except Exception as e:
         check('the page says the server is not answering', False, e)
+    # a search of every book while the phone does not answer says what it could not read
+    await pg.click('#searchBtn')
+    await pg.wait_for_selector('.sheet.on .searchtop')
+    await pg.click('.sheet.on .segmented button:has-text("All books")')
+    await pg.fill('.sheet.on input[type=search]', 'server was away')
+    try:
+        await pg.wait_for_function("(() => { const t = document.querySelector('.sheet.on .searchsay').textContent; return /could not be read/.test(t) && !/nowhere at all/.test(t); })()", timeout=15000)
+        say = await pg.inner_text('.sheet.on .searchsay')
+        check('searching every book while the phone does not answer says only this book was searched — never that the words are nowhere', say.startswith('1 place.') and 'only this book was searched' in say, say)
+    except Exception as e:
+        check('searching every book while the phone does not answer says only this book was searched — never that the words are nowhere', False, await pg.inner_text('.sheet.on .searchsay'))
+    await close_sheet(pg)
+    # a copy of everything is not taken while words wait to reach the phone
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    if not await pg.locator('.sheet.on .group[data-key="set.backups"] button:has-text("Take a copy of everything")').is_visible():
+        await pg.click('.sheet.on .group button.ghead:has-text("Backups")'); await pg.wait_for_timeout(200)
+    await pg.click('.sheet.on button:has-text("Take a copy of everything")')
+    try:
+        await pg.wait_for_function("document.querySelector('#toast') && /not reached the phone yet/.test(document.querySelector('#toast').textContent)", timeout=15000)
+        check('a copy of everything is not taken while words wait to reach the phone — he is told why', (await pg.evaluate('location.pathname')) == '/')
+    except Exception as e:
+        check('a copy of everything is not taken while words wait to reach the phone — he is told why', False, await pg.evaluate("document.querySelector('#toast') ? document.querySelector('#toast').textContent : location.href"))
+    await close_sheet(pg)
     env.srv = subprocess.Popen([sys.executable, APP + '/serve.py'], env=dict(os.environ, COZYNOVEL_HOME=env.home, COZYNOVEL_PORT=str(PORT)), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         await pg.wait_for_selector('#banner[hidden]', state='attached', timeout=30000)
@@ -268,7 +311,7 @@ async def scenario_offline(b, env):
     nov = json.load(urllib.request.urlopen(f'http://127.0.0.1:{PORT}/api/store/novel/{hashid}'))['data']
     ch = json.load(urllib.request.urlopen(f'http://127.0.0.1:{PORT}/api/store/chapter/{nov["order"][0]}'))['data']
     texts = [v['text'] for p in ch['passages'] for v in p['versions']]
-    check('what he wrote meanwhile is saved once it answers', any('server was away' in t for t in texts), texts)
+    check('what he wrote meanwhile is saved once it answers', any('server was away' in t for t in texts), (texts, nov['order'], ch.get('passages')))
     await pg.close()
 
 async def scenario_windows(b):
@@ -354,7 +397,7 @@ async def scenario_round(b):
     await pg.evaluate("document.querySelector('#pageWrap').scrollTop = 0")
     await pg.wait_for_timeout(300)
     vis = await pg.evaluate("!document.querySelector('#scroller').hidden")
-    first = await pg.inner_text('#scroller .thumb') if vis else ''
+    first = (await pg.get_attribute('#scroller .thumb', 'aria-valuenow') or '') if vis else ''
     check('the scroller stands at the page\'s edge with the passage under the eye', vis and first.strip() == '1', (vis, first))
     box = await pg.locator('#scroller .thumb').bounding_box()
     track = await pg.locator('#scroller').bounding_box()
@@ -365,7 +408,7 @@ async def scenario_round(b):
     await pg.mouse.up()
     await pg.wait_for_timeout(300)
     top = await pg.evaluate("(() => { const w = document.querySelector('#pageWrap'); return [w.scrollTop, w.scrollHeight - w.clientHeight] })()")
-    last = await pg.inner_text('#scroller .thumb')
+    last = await pg.get_attribute('#scroller .thumb', 'aria-valuenow') or ''
     check('dragging it moves through the chapter, and says which passage of how many', top[0] > top[1] * 0.9 and tip.startswith('Passage ') and ' of 4' in tip and last.strip() in ('3', '4'), (top, tip, last))
     # full screen on the page: the bars go, Back brings them back, a new chapter keeps it
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Full screen")')
@@ -1039,6 +1082,56 @@ async def scenario_notes(b):
     errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
     check('no errors on the page', not errs, errs[:3])
 
+async def scenario_page_fails(b):
+    """a page that did not come is said in its own chapter, with what it thought; a chapter removed while it is written stops the writing"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Failing Page')
+    await add_conn(pg)
+    await write(pg, 'Mara finds a bottle.')
+    await pg.click('.nextchapter button')
+    await pg.wait_for_function("document.querySelector('#chapnum').textContent.includes('Two')", timeout=5000)
+    # chapter two asks, and he goes back to chapter one before the answer
+    await pg.fill('#direction', 'SLOWFAIL the storm comes.')
+    await pg.click('#writeBtn')
+    await pg.wait_for_timeout(300)
+    await pg.click('#bookTitle'); await pg.wait_for_timeout(300)
+    await pg.locator('#chaptersBody li').nth(0).locator('button.go').click()
+    await pg.wait_for_function("document.querySelector('#chapnum').textContent === 'Chapter One'", timeout=5000)
+    await pg.wait_for_function("document.querySelector('#toast') && /did not come/.test(document.querySelector('#toast').textContent)", timeout=8000)
+    toast = await pg.inner_text('#toast')
+    here = await pg.locator('#pageEnd .endcard.error, .endcard.error').count()
+    check('he is told where he is, naming the chapter it was asked in — and the chapter he is in shows no failure of another', 'Chapter Two' in toast and here == 0, (toast, here))
+    await pg.click('#bookTitle'); await pg.wait_for_timeout(300)
+    await pg.locator('#chaptersBody li').nth(1).locator('button.go').click()
+    await pg.wait_for_function("document.querySelector('#chapnum').textContent === 'Chapter Two'", timeout=5000)
+    await pg.wait_for_timeout(300)
+    card = await pg.inner_text('.endcard.error') if await pg.locator('.endcard.error').count() else ''
+    check('back in its chapter, the reason waits there', 'The page did not come' in card and 'trouble on its side' in card, card[:200])
+    await pg.click('.endcard.error button:has-text("Dismiss")'); await pg.wait_for_timeout(200)
+    # a model that only thinks: what it thought is kept with the reason, to read and copy
+    await pg.fill('#direction', 'ONLYTHINK and then nothing.')
+    await pg.click('#writeBtn')
+    await pg.wait_for_selector('.endcard.error .keptthought', timeout=8000)
+    await pg.click('.endcard.error .keptthought summary'); await pg.wait_for_timeout(200)
+    kept = await pg.inner_text('.endcard.error .keptthought')
+    buttons = await pg.locator('.endcard.error button').all_inner_texts()
+    check('a page that only thought keeps what it thought under the reason, with a way to copy it — no empty passage', 'I weigh the storm' in kept and 'Copy what it thought' in buttons and await pg.locator('#passages .passage').count() == 0, (kept[:120], buttons))
+    # a chapter removed while its page is being written: the writing stops
+    await pg.fill('#direction', 'SLOW the storm comes again.')
+    await pg.click('#writeBtn')
+    await pg.wait_for_function("document.querySelector('#writeBtn').textContent.trim() === 'Stop'", timeout=5000)
+    await pg.click('#bookTitle'); await pg.wait_for_timeout(300)
+    await pg.locator('#chaptersBody li').nth(1).locator('button.menu').click()
+    await pg.click('.menu-pop button:has-text("Remove the chapter")')
+    await pg.click('.sheet.on button:has-text("Remove it")')
+    await pg.wait_for_timeout(600)
+    busy = await pg.evaluate("import('/js/novel/writer.js').then((w) => w.busy(location.hash.split('/')[2]))")
+    check('a chapter removed while its page is being written stops the writing at once', busy is False, busy)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (failures)', not errs, errs[:5])
+    await pg.close()
+
 async def scenario_partner_said(b):
     """the partner says what happened: a reply cut off inside its changes, Another answer only on the newest answer, a waiting change that can no longer land"""
     logs = []
@@ -1288,13 +1381,384 @@ async def scenario_auto(b):
     check('no page errors (by itself)', not errs, errs[:5])
     await pg.close()
 
+QUIET_NOW = "import('/js/app.js').then((m) => m.quietNow())"
+CONTRAST = r"""(() => {
+  const L = (rgb) => { const [r, g, b] = rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map((c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (a, b) => { const x = L(a), y = L(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const color = (v) => { const p = document.createElement('i'); p.style.color = `var(${v})`; document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; };
+  const was = document.documentElement.dataset.theme;
+  const out = {};
+  for (const t of ['study', 'candle', 'rain', 'day', 'ink']) {
+    document.documentElement.dataset.theme = t;
+    const btn = getComputedStyle(document.querySelector('#writeBtn'));
+    const stops = btn.backgroundImage.match(/rgba?\([^)]+\)/g) || [];
+    out[t] = Math.round(100 * Math.min(...stops.map((s) => ratio(btn.color, s)), ratio(color('--accent'), color('--chrome-solid')), ratio(color('--accent-on-paper'), color('--paper')))) / 100;
+  }
+  document.documentElement.dataset.theme = was;
+  return out;
+})()"""
+
+async def quiet_soon(pg, want=True, t=40000):
+    for _ in range(t // 250):
+        if await pg.evaluate(QUIET_NOW) == want:
+            return True
+        await pg.wait_for_timeout(250)
+    return False
+
+async def scenario_tavern_page(b):
+    """what Cozy Tavern learned, on the page: a chapter split off keeps its checks, the reading line at the bottom, the partner's sources, an update waits for words not sent, the looks read, one scroll thumb, his own words wake the helper"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Tavern Lessons')
+    await add_conn(pg)
+    nid = (await pg.evaluate('location.hash')).split('/')[2]
+    def record(kind, rid):
+        return json.load(urllib.request.urlopen(f'http://127.0.0.1:{PORT}/api/store/{kind}/{rid}'))['data']
+    # a chapter split off takes what the checker found for its passages, and what he left
+    await pg.fill('#direction', 'Mine first: the harbour at dawn.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(300)
+    await write(pg, 'The lamp goes out.')
+    for i in range(80):
+        if await pg.get_attribute('#checkBubble', 'data-state') == 'found': break
+        await pg.wait_for_timeout(250)
+    await pg.click('#checkBubble')
+    await pg.wait_for_selector('.sheet.on .sug')
+    await pg.locator('.sheet.on .sug:has-text("letters any more") button:has-text("Leave it")').click()
+    await pg.wait_for_timeout(400)
+    await close_sheet(pg)
+    left = (await pg.inner_text('#checkBubble')).strip()
+    reset()
+    await pg.locator('#passages .passage:not(.break)').nth(1).click()
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    await pg.click('.menu-pop button:has-text("Start a new chapter from here")')
+    await pg.click('.sheet.on button:has-text("Start the new chapter")')
+    await pg.wait_for_function("document.querySelector('#chapnum').textContent === 'Chapter Two'", timeout=5000)
+    await pg.wait_for_timeout(1200)
+    nov = record('novel', nid)
+    one, two = record('chapter', nov['order'][0]), record('chapter', nov['order'][1])
+    pid = two['passages'][0]['id']
+    check('a chapter split off takes what the checker found for its passages and what he left — the chapter before keeps none of it',
+          left == '1' and pid in (two.get('checks') or {}) and pid in (two.get('checksLeft') or {}) and pid not in (one.get('checks') or {}) and pid not in (one.get('checksLeft') or {}),
+          (left, list((two.get('checks') or {}).keys()), list((two.get('checksLeft') or {}).keys()), list((one.get('checks') or {}).keys())))
+    # a page written after it: the moved passage is not checked again, and what he left is not offered again
+    await write(pg, 'The tide turns.')
+    for i in range(80):
+        if await pg.get_attribute('#checkBubble', 'data-state') in ('found', 'clean'): break
+        await pg.wait_for_timeout(250)
+    await pg.wait_for_timeout(1500)
+    asked = [x['body']['messages'][-1]['content'].split('Check these passages from', 1)[1].split('Suggest only what is worth changing', 1)[0] for x in reqs() if checking(x)]
+    n = (await pg.inner_text('#checkBubble')).strip()
+    check('…so it is not checked again where it now stands, and what he left stays left', asked and not any('[2.1]' in a for a in asked) and any('[2.2]' in a for a in asked) and n == '3', (n, [a[:120] for a in asked]))
+    # at the bottom, a short last passage is named: the room under the last passage brings it past the reading line
+    await pg.fill('#direction', 'The end.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(400)
+    await pg.evaluate("document.querySelector('#pageWrap').scrollTop = 1e9")
+    await pg.wait_for_timeout(400)
+    thumb = (await pg.get_attribute('#scroller .thumb', 'aria-valuenow') or '').strip() if await pg.evaluate("!document.querySelector('#scroller').hidden") else ''
+    check('at the bottom of the chapter the scroller names its last passage, however short', thumb == '3', thumb)
+    # a name he changes by hand: changing it everywhere is offered, with Undo (Cozy Tavern's ripple)
+    for words in ('At dawn Mara walked down to the shore.', 'By night Mara slept beside the lamp.'):
+        await pg.fill('#direction', words); await pg.click('#mineBtn'); await pg.wait_for_timeout(300)
+    n_before = await pg.locator('#passages .passage:not(.break)').count()
+    await pg.locator('#passages .passage:not(.break)').nth(n_before - 2).click()
+    await pg.click('.passage.selected .pctl button:has-text("Edit")')
+    await pg.fill('.editbox', 'At dawn Mira walked down to the shore.')
+    await pg.click('.editrow button:has-text("Save")')
+    offered = False
+    for i in range(20):
+        if await pg.locator('#toast.on button.toastact:has-text("Change it everywhere")').count():
+            offered = True; break
+        await pg.wait_for_timeout(250)
+    offer = await pg.inner_text('#toast')
+    if offered:
+        await pg.click('#toast button.toastact:has-text("Change it everywhere")')
+    await pg.wait_for_timeout(600)
+    last = await pg.inner_text(f'#passages .passage:not(.break) >> nth={n_before - 1}')
+    first = await pg.inner_text('#passages .passage:not(.break) >> nth=0')
+    check('a name he changes by hand: changing it everywhere is offered, and done everywhere at a tap', '“Mara” is “Mira” here now' in offer and 'Mira slept' in last and 'Mara' not in first.split('\n')[0], (offer, last[:80], first[:80]))
+    if await pg.locator('#toast button:has-text("Undo")').count():
+        await pg.click('#toast button:has-text("Undo")')
+    await pg.wait_for_timeout(600)
+    last = await pg.inner_text(f'#passages .passage:not(.break) >> nth={n_before - 1}')
+    check('…and Undo puts the old name back everywhere else', offered and 'Mara slept' in last, last[:80])
+    await pg.fill('#direction', 'At noon Tobin came up the stair.'); await pg.click('#mineBtn'); await pg.wait_for_timeout(300)
+    await pg.locator('#passages .passage:not(.break)').last.click()
+    await pg.click('.passage.selected .pctl button:has-text("Edit")')
+    await pg.fill('.editbox', 'At noon Tobias came up the stair.')
+    await pg.click('.editrow button:has-text("Save")')
+    await pg.wait_for_selector('#toast.on', timeout=5000)
+    check('…never for a name that stands nowhere else in the book', await pg.locator('#toast button.toastact').count() == 0, await pg.inner_text('#toast'))
+    # the partner's own web search: what it looked at, under its answer — only addresses on the web
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(300)
+    await pg.fill('#sideFoot textarea', 'LOOK IT UP: how lighthouses were lit.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_function("document.querySelectorAll('#sideBody .turn.ai').length >= 1 && !document.querySelector('#sideBody .turn.streaming')", timeout=10000)
+    links = await pg.evaluate("[...document.querySelectorAll('#sideBody .turn.ai .sources a')].map((a) => a.getAttribute('href'))")
+    said = await pg.inner_text('#sideBody .turn.ai .sources') if links else ''
+    check('what the partner looked up is listed under its answer, only the addresses on the web', links == ['https://example.com/lighthouses'] and 'Lighthouses of the north coast' in said, (links, said))
+    # an update waits for words he has not sent
+    check('with nothing going on, an update may land', await quiet_soon(pg, True))
+    await pg.fill('#sideFoot textarea', 'Half a thought')
+    await pg.evaluate('document.activeElement && document.activeElement.blur()')
+    check('words typed beside the page and not sent hold an update back', await pg.evaluate(QUIET_NOW) is False)
+    await pg.click('#sideTabs button[data-tab="notes"]'); await pg.wait_for_timeout(300)
+    check('…still, when another tab is shown', await pg.evaluate(QUIET_NOW) is False)
+    await pg.click('#sideTabs button[data-tab="partner"]'); await pg.wait_for_timeout(300)
+    back = await pg.input_value('#sideFoot textarea')
+    await pg.fill('#sideFoot textarea', '')
+    await pg.evaluate('document.activeElement && document.activeElement.blur()')
+    check('…and once he clears them, it may land again (the box is the truth, not what was kept of it)', back == 'Half a thought' and await quiet_soon(pg, True, 6000), back)
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    check('an open sheet holds it back', await pg.evaluate(QUIET_NOW) is False)
+    await close_sheet(pg)
+    await pg.fill('#direction', 'Half a direction')
+    await pg.evaluate('document.activeElement && document.activeElement.blur()')
+    check('the box’s last words, not yet handed over, hold it back', await pg.evaluate(QUIET_NOW) is False)
+    check('…until they are on the phone', await quiet_soon(pg, True, 8000))
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(300)
+    await pg.fill('#sideFoot textarea', 'SLOW tell me about the keeper.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .turn.streaming', timeout=5000)
+    check('an answer on its way holds it back', await pg.evaluate(QUIET_NOW) is False)
+    await pg.wait_for_function("!document.querySelector('#sideBody .turn.streaming')", timeout=30000)
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    # every look reads: the words on a button and the accent's own words, at 4.5:1 or more
+    ratios = await pg.evaluate(CONTRAST)
+    check('every look reads at 4.5:1 or more — a button’s words, the accent’s words on the page and around it', all(v >= 4.5 for v in ratios.values()), ratios)
+    # one scroll thumb on a wide screen: the page's own mark, never the browser's beside it
+    # (a browser that draws its scroll bars, as a computer's does — the test browser hides them unless asked)
+    drawn = await b.browser_type.launch(ignore_default_args=['--hide-scrollbars'])
+    wctx = await drawn.new_context(viewport={'width': 1280, 'height': 760})
+    wide = await wctx.new_page()
+    wide.on('pageerror', lambda e: logs.append(f'PAGEERROR: {e}'))
+    await wide.goto(f'http://127.0.0.1:{PORT}/' + await pg.evaluate('location.hash'))
+    await wide.wait_for_selector('#desk:not([hidden]) #passages .passage', timeout=8000)
+    await wide.wait_for_timeout(600)
+    bar = await wide.evaluate("""(() => { const w = document.querySelector('#pageWrap');
+      const t = document.createElement('div'); t.style.cssText = 'position:fixed;top:0;left:0;width:100px;height:50px;overflow:scroll'; document.body.append(t); const drawnHere = t.offsetWidth - t.clientWidth; t.remove();
+      return { drawnHere, scrolls: w.scrollHeight > w.clientHeight, native: w.offsetWidth - w.clientWidth, mark: !document.querySelector('#scroller').hidden } })()""")
+    check('one scroll thumb on a wide screen: the passage mark, and no bar of the browser’s beside it', bar['drawnHere'] > 0 and bar['scrolls'] and bar['native'] == 0 and bar['mark'], bar)
+    await drawn.close()
+    # his own words for what the book is about, rewritten: the helper writes what it keeps beside them again, by itself
+    await pg.wait_for_function("document.querySelector('#notesBtn').dataset.state === 'idle'", timeout=40000)
+    reset()
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("About this book")')
+    await pg.wait_for_selector('.sheet.on .keptfield')
+    await pg.locator('.sheet.on .keptfield >> nth=0').locator('textarea.tall').fill('A lighthouse keeper finds a letter from her drowned brother.')
+    kept_asked = False
+    for i in range(100):
+        if any('for the writer to read before every page' in (x['body']['messages'][-1].get('content') or '') for x in reqs() if x['path'].endswith('/chat/completions')):
+            kept_asked = True; break
+        await pg.wait_for_timeout(250)
+    check('his own words for what it is about, rewritten on Automatic: what the helper keeps beside them is written again by itself', kept_asked)
+    await close_sheet(pg)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (what Cozy Tavern learned)', not errs, errs[:5])
+    await pg.close()
+
+async def scenario_update_waits(b):
+    """an update waits for words he has not sent, then lands by itself"""
+    import tempfile, shutil
+    app = tempfile.mkdtemp(prefix='cozynovel-update-')
+    home = tempfile.mkdtemp(prefix='cozynovel-update-home-')
+    files = subprocess.run(['git', 'ls-files', '-co', '--exclude-standard'], cwd=APP, capture_output=True, text=True).stdout.split('\n')
+    for f in files:
+        if f and os.path.isfile(os.path.join(APP, f)):
+            os.makedirs(os.path.dirname(os.path.join(app, f)), exist_ok=True)
+            shutil.copy2(os.path.join(APP, f), os.path.join(app, f))
+    git = ['git', '-c', 'user.name=walk', '-c', 'user.email=walk@example.com']
+    subprocess.run(['git', 'init', '-q'], cwd=app, check=True)
+    subprocess.run(['git', 'add', '-A'], cwd=app, check=True)
+    subprocess.run(git + ['commit', '-qm', 'one'], cwd=app, check=True)
+    port = PORT + 9
+    srv = subprocess.Popen([sys.executable, app + '/serve.py'], env=dict(os.environ, COZYNOVEL_HOME=home, COZYNOVEL_PORT=str(port)), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    logs = []
+    pg = await page(b, logs)
+    try:
+        for _ in range(50):
+            try: urllib.request.urlopen(f'http://127.0.0.1:{port}/api/version', timeout=1); break
+            except Exception: time.sleep(0.1)
+        await pg.goto(f'http://127.0.0.1:{port}/')
+        await pg.wait_for_selector('#shelf:not([hidden]) #books > *', timeout=8000)
+        await pg.click('button:has-text("Begin a book")') if await pg.locator('button:has-text("Begin a book")').count() else await pg.click('button[aria-label="Begin a new book"]')
+        await pg.fill('.sheet input[placeholder="A working title"]', 'The Update')
+        await pg.click('text=Open the book')
+        await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
+        await pg.click('#partnerBtn'); await pg.wait_for_timeout(300)
+        await pg.fill('#sideFoot textarea', 'A thought not sent yet')
+        await pg.evaluate('document.activeElement && document.activeElement.blur(); window.__stillHere = true')
+        before = json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/api/version'))['commit']
+        subprocess.run(git + ['commit', '-q', '--allow-empty', '-m', 'two'], cwd=app, check=True)
+        moved = ''
+        for _ in range(100):
+            try:
+                moved = json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/api/version', timeout=1))['commit']
+                if moved and moved != before: break
+            except Exception: pass
+            await pg.wait_for_timeout(200)
+        await pg.wait_for_timeout(9000)
+        held = await pg.evaluate('window.__stillHere === true')
+        words = await pg.input_value('#sideFoot textarea') if held else ''
+        check('an update that lands while words wait unsent in the box beside the page waits for them', moved != before and held and words == 'A thought not sent yet', (before[:8], moved[:8], held, words))
+        await pg.fill('#sideFoot textarea', '')
+        await pg.evaluate('document.activeElement && document.activeElement.blur()')
+        try:
+            await pg.wait_for_function('window.__stillHere !== true', timeout=20000)
+            await pg.wait_for_selector('#desk:not([hidden]), #shelf:not([hidden])', timeout=8000)
+            check('…and lands by itself once they are gone', True)
+        except Exception as e:
+            check('…and lands by itself once they are gone', False, e)
+        errs = [l for l in logs if l.startswith('PAGEERROR')]
+        check('no page errors (an update)', not errs, errs[:5])
+    finally:
+        await pg.close()
+        srv.terminate()
+        shutil.rmtree(app, ignore_errors=True); shutil.rmtree(home, ignore_errors=True)
+
+# the painted bar of the scroller and every word on the page that it stands beside: where they meet
+BAR_OVER_WORDS = r"""(() => {
+  const t = document.querySelector('#scroller .thumb');
+  if (!t || document.querySelector('#scroller').hidden) return { shown: false };
+  const r = t.getBoundingClientRect();
+  /* what of it is painted: the thumb itself when it has a fill, a border or words; its bar (::after) where it stands */
+  const cs = getComputedStyle(t);
+  const clear = (c) => !c || c === 'transparent' || /rgba\([^)]*,\s*0\)$/.test(c);
+  const painted = [];
+  if (!clear(cs.backgroundColor) || (parseFloat(cs.borderTopWidth) > 0 && cs.borderTopStyle !== 'none' && !clear(cs.borderTopColor)) || (t.textContent.trim() && !clear(cs.color) && parseFloat(cs.fontSize) > 0)) painted.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+  const af = getComputedStyle(t, '::after');
+  if (af.content && af.content !== 'none') {
+    const right = parseFloat(af.right) || 0, width = parseFloat(af.width) || 0, top = parseFloat(af.top) || 0, bottom = parseFloat(af.bottom) || 0;
+    painted.push({ left: r.right - right - width, right: r.right - right, top: r.top + top, bottom: r.bottom - bottom });
+  }
+  const hits = [];
+  const walker = document.createTreeWalker(document.querySelector('#page'), NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (!n.data.trim()) continue;
+    const range = document.createRange(); range.selectNodeContents(n);
+    for (const q of range.getClientRects()) {
+      if (q.width < 1 || q.height < 1) continue;
+      for (const bar of painted) if (q.left < bar.right && q.right > bar.left && q.top < bar.bottom && q.bottom > bar.top) hits.push(n.data.slice(0, 30));
+    }
+  }
+  const tip = getComputedStyle(document.querySelector('#scroller .tip')).display;
+  return { shown: true, hits, tip, painted: painted.length, where: document.querySelector('#whereNow').textContent };
+})()"""
+
+async def scenario_tavern_ui(b):
+    """what Cozy Tavern learned, on the screen: the scroller never over a word, ticks in their fields, every menu item says what it does, which parts a connection has, Back to the default with Undo, a thinking with no line breaks drawn in pieces"""
+    logs = []
+    pg = await page(b, logs)   # a phone, 412 wide
+    await new_book(pg, title='The Narrow Screen')
+    await add_conn(pg)
+    for i in range(6):
+        await write(pg, f'Part {i + 1}.')
+    # the scroller: its bar is never painted over a word, at forty places down the chapter; the number is said above the page
+    hit, tips, wheres = [], [], set()
+    most = await pg.evaluate("(() => { const w = document.querySelector('#pageWrap'); return w.scrollHeight - w.clientHeight })()")
+    for k in range(40):
+        await pg.evaluate(f"document.querySelector('#pageWrap').scrollTop = {most} * {k} / 39")
+        await pg.wait_for_timeout(60)
+        got = await pg.evaluate(BAR_OVER_WORDS)
+        if not got.get('shown'): continue
+        hit += got['hits']; tips.append(got['tip']); wheres.add(got['where']); painted = got['painted']
+    check('the scroller’s bar is never painted over a word, anywhere down the chapter, on a phone', most > 0 and tips and painted and not hit, (most, hit[:5]))
+    check('…the number is not beside it while the page only scrolls — it is said above the page', tips and all(t == 'none' for t in tips) and any(w.startswith(' · Passage 1 of ') for w in wheres) and any(w.startswith(' · Passage ') and ' of ' in w and not w.startswith(' · Passage 1 of ') for w in wheres), (set(tips), sorted(wheres)[:4]))
+    box = await pg.locator('#scroller .thumb').bounding_box()
+    await pg.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    await pg.mouse.down()
+    await pg.mouse.move(box['x'] + box['width'] / 2, box['y'] + 60, steps=4)
+    held = await pg.evaluate("[getComputedStyle(document.querySelector('#scroller .tip')).display, document.querySelector('#scroller .tip').textContent]")
+    await pg.mouse.up()
+    check('…and beside the bar only while he drags it', held[0] == 'block' and held[1].startswith('Passage '), held)
+    # every item of the writer menu says what it does, and what goes with it
+    await pg.click('#writerBtn'); await pg.wait_for_selector('.menu-pop')
+    items = await pg.evaluate("[...document.querySelectorAll('.menu-pop button')].map((b) => [b.querySelector('.mlabel') ? b.querySelector('.mlabel').textContent : b.textContent, b.querySelector('.mhint') ? b.querySelector('.mhint').textContent : ''])")
+    await pg.keyboard.press('Escape'); await pg.wait_for_timeout(300)
+    check('every item of the writer menu says in a small line what it does — and that the partner and the helper go with the writer', items and all(h for _, h in items) and any('the partner, the helper and the checker' in h for _, h in items), items)
+    # Settings: which parts the connection shown has; ticks the size of ticks
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    if not await pg.locator('.sheet.on .say.inuse').is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Connections")'); await pg.wait_for_timeout(300)
+    inuse = await pg.inner_text('.sheet.on .say.inuse')
+    opt = await pg.evaluate("[...document.querySelectorAll('.sheet.on select[aria-label=\"Which connection\"] option')].map((o) => o.textContent)")
+    check('the connection shown says which parts it has, and the list marks the ones in use', inuse == 'In use as the writer, the partner, the helper and the checker.' and opt and opt[0].endswith('(in use)'), (inuse, opt))
+    if not await pg.locator('.sheet.on .group[data-key="set.roles"] label.toggle').first.is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Who does what")'); await pg.wait_for_timeout(300)
+    ticks = await pg.evaluate("[...document.querySelectorAll('.sheet.on .field input[type=checkbox]')].filter((i) => i.offsetParent).map((i) => [Math.round(i.getBoundingClientRect().width), Math.round(i.getBoundingClientRect().height)])")
+    check('a tick inside a field is a tick’s size, never a text box’s', ticks and all(w <= 24 and h <= 24 for w, h in ticks), ticks)
+    # Back to the default over his words: Copy mine first, or back — and Undo puts his back
+    if not await pg.locator('.sheet.on button:has-text("Save current preset")').is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(300)
+    narr = '.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) textarea'
+    await pg.fill(narr, 'MY NARRATOR, MY WAY.')
+    await pg.wait_for_timeout(900)
+    await pg.locator('.sheet.on .btnrow:below(label.field:has(span:text-is("How the narrator tells scenes"))) button:has-text("Back to the default")').first.click()
+    await pg.wait_for_selector('.sheet.on button:has-text("Copy mine first")')
+    choices = await pg.evaluate("[...document.querySelectorAll('.sheet.on')].pop().innerText")
+    await pg.click('.sheet.on button:has-text("Back to the default") >> nth=-1')
+    await pg.wait_for_timeout(600)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    starting = await pg.evaluate("import('/js/novel/prompts.js').then((m) => m.DEFAULT_NARRATOR)")
+    went = house['instructions'].get('narrator') == starting and await pg.input_value(narr) == starting
+    await pg.click('#toast button:has-text("Undo")'); await pg.wait_for_timeout(900)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    check('Back to the default over his words offers Copy mine first, and Undo puts his words back — in the box and on the phone', 'Copy mine first' in choices and went and house['instructions'].get('narrator') == 'MY NARRATOR, MY WAY.' and await pg.input_value(narr) == 'MY NARRATOR, MY WAY.', (choices[-160:], went, (house['instructions'].get('narrator') or '')[:40]))
+    # every item of a preset's menu says what it does
+    await pg.click('.sheet.on button:has-text("Save current preset")'); await pg.wait_for_timeout(300)
+    await pg.fill('.sheet.on >> nth=-1 >> input', 'Narrow')
+    await pg.click('.sheet.on >> nth=-1 >> button:has-text("Save")'); await pg.wait_for_timeout(600)
+    await pg.click('.sheet.on .presetrow button[aria-label="More for Narrow"]'); await pg.wait_for_selector('.menu-pop')
+    items = await pg.evaluate("[...document.querySelectorAll('.menu-pop button')].map((b) => [b.querySelector('.mlabel') ? b.querySelector('.mlabel').textContent : b.textContent, b.querySelector('.mhint') ? b.querySelector('.mhint').textContent : ''])")
+    await pg.keyboard.press('Escape'); await pg.wait_for_timeout(300)
+    check('every item of a preset’s menu says in a small line what it does', len(items) == 4 and all(h for _, h in items), items)
+    await close_sheet(pg)
+    # a thinking with no line breaks at all: drawn in pieces, its first words there, the pieces before the newest never drawn again
+    pieces = await pg.evaluate("""(async () => {
+      const m = await import('/js/ui/live.js');
+      const box = document.createElement('div'); document.body.append(box);
+      const one = 'The keeper weighed the letter and the storm and what each would cost her. '.repeat(120);
+      m.streamLines(box, one, { blocks: true });
+      const first = [...box.querySelectorAll('.ln')][0].childNodes[0];
+      const firstNodes = [...box.querySelector('.ln').childNodes];
+      m.streamLines(box, one + 'And then the lamp went out.', { blocks: true });
+      const after = [...box.querySelector('.ln').childNodes];
+      const out = { lines: box.querySelectorAll('.ln').length, pieces: after.length, longest: Math.max(...after.map((n) => n.data.length)),
+        same: box.textContent === one + 'And then the lamp went out.', kept: firstNodes.slice(0, -1).every((n, i) => after[i] === n), firstWords: first.data.startsWith('The keeper weighed') };
+      box.remove();
+      return out;
+    })()""")
+    check('a thinking with no line breaks is drawn in pieces of one line — every word there from the first, only the newest piece drawn again', pieces['lines'] == 1 and pieces['pieces'] > 5 and pieces['longest'] <= 1600 and pieces['same'] and pieces['kept'] and pieces['firstWords'], pieces)
+    # a page that goes (reloaded, closed, an update landing) lets its book's lease go at once: the next page never waits it out
+    nid = (await pg.evaluate('location.hash')).split('/')[2]
+    held = await pg.evaluate(f"import('/js/store.js').then((m) => m.lease('helper:{nid}')).then((h) => h.ok)")
+    def other_asks():
+        req = urllib.request.Request(f'http://127.0.0.1:{PORT}/api/lease', data=json.dumps({'key': f'helper:{nid}', 'ttl': 60000}).encode(), headers={'Content-Type': 'application/json', 'X-Client': 'tab-another-browser'}, method='POST')
+        return json.load(urllib.request.urlopen(req))
+    before = other_asks()
+    await pg.reload(); await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
+    after = other_asks()
+    urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{PORT}/api/lease', data=json.dumps({'key': f'helper:{nid}', 'release': True}).encode(), headers={'Content-Type': 'application/json', 'X-Client': 'tab-another-browser'}, method='POST'))
+    check('a page that goes lets its book’s lease go at once — another browser never waits it out', held and before.get('ok') is False and after.get('ok') is True, (held, before, after))
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (on the screen)', not errs, errs[:5])
+    await pg.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_partner_said, scenario_partner, lambda b: scenario_offline(b, env)):
+            async def bring_in(b):
+                """bringing a book in"""
+                await scenario_bring_in(b, tmp)
+            async def offline(b):
+                """the server stops under an open page, then comes back"""
+                await scenario_offline(b, env)
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

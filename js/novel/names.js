@@ -112,6 +112,63 @@ export function samePersonName(a, b) {
   return false;
 }
 
+/* A SLIP OF THE PEN IS FORGIVEN ONLY WHERE IT CAN BE ONE (Cozy Tavern M646).
+ * One word of the name a letter off — two, in a word of ten letters or more —
+ * inside a word of six letters at least, every other word the same and no
+ * title that disagrees: "Hitsugaya" and "Hitsugayo" are one man. A short name
+ * a letter off is another name — Mira is not Mina, Tom is not Tim, Jon is not
+ * John — and "Tom Wells" and "Tim Wells" are brothers. */
+function boundedLevenshtein(a, b, bound) {
+  if (Math.abs(a.length - b.length) > bound) return bound + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > bound) return bound + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+export function nearName(a, b) {
+  if (titlesConflict(a, b)) return false;
+  const x = parseName(a).words;
+  const y = parseName(b).words;
+  if (!x.length || x.length !== y.length) return false;
+  let slips = 0;
+  for (let i = 0; i < x.length; i++) {
+    if (x[i] === y[i]) continue;
+    const short = Math.min(x[i].length, y[i].length);
+    if (short < 6) return false;
+    const bound = short >= 10 ? 2 : 1;
+    if (boundedLevenshtein(x[i], y[i], bound) > bound) return false;
+    slips += 1;
+  }
+  return slips === 1;
+}
+
+/* A GROUP IS NOT A PERSON (Cozy Tavern M484, M490-3): a determiner and a word
+ * for people that ends the name ("the onlookers behind the taped line",
+ * "several guards", "the rest"), or a bare plural of one ("Harbour runners").
+ * "of" before the word ("Captain of the guards"), a possessive, or anything
+ * after it but where they stand or who they are ("Squad Leader Hayes") is a
+ * person. */
+const GROUP_PLURAL = '(?:onlookers|bystanders|crowds|people|passers-?by|guards|officers|soldiers|troops|villagers|townsfolk|townspeople|men|women|children|kids|students|runners|attendants|servants|thugs|bandits|goons|others|spectators|reporters|guests|patrons|workers|refugees|civilians|sailors|fishermen|monks|nuns|priests|pirates|knights|riders|mercenaries)';
+const GROUP_COLLECTIVE = '(?:crowd|mob|patrol|squad|unit|team|band|gang|pair|couple|group|handful|dozen|rest)';
+const GROUP_AFTER = '(?:\\s+(?:behind|at|by|near|in|on|from|outside|inside|around|along|under|over|beside|across|with|of|who|that|watching|waiting)\\b.*)?';
+const GROUP_BEFORE = "(?:(?!of\\b)[\\p{L}-]+\\s+)";
+const GROUP_DET = '(?:the|a|an|some|several|a few|many|two|three|four|five|six|seven|eight|nine|ten|\\d+)';
+const GROUP_WITH_DET = new RegExp('^' + GROUP_DET + '\\s+' + GROUP_BEFORE + '{0,3}(?:' + GROUP_PLURAL + '|' + GROUP_COLLECTIVE + ')' + GROUP_AFTER + '$', 'iu');
+const GROUP_BARE = new RegExp('^' + GROUP_BEFORE + '{0,2}' + GROUP_PLURAL + GROUP_AFTER + '$', 'iu');
+export function isGroupName(name) {
+  const n = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!n || /['’]s\b/i.test(n)) return false;
+  return GROUP_WITH_DET.test(n) || GROUP_BARE.test(n);
+}
+
 /* Is this name in this text? The whole name, or any word of it that names
  * someone — never a title, a joining word, or the owner in "Jovan's mother".
  * `folded` is the text already folded (foldedText), for asking of many names. */
@@ -137,3 +194,91 @@ export function nameInText(folded, name, { words = true } = {}) {
 export function plainName(name) {
   return foldName(name).replace(/^(?:the|a|an)\s+/, '');
 }
+
+/* ------------------------------------------------------- the hard tokens */
+/* What a chapter's summary loses most disastrously, and what code can check
+ * without a model (Cozy Tavern M111): the NAMES the chapter holds — the
+ * notes' own, and any capitalised word it repeats inside a sentence (a
+ * contraction or "I" never one, a possessive folded onto its name: M192) —
+ * and the FIGURES (counts, times, money, distances; a year or a bare single
+ * digit is not one). */
+const TOKEN_STOP = new Set(['The', 'She', 'They', 'And', 'But', 'Then', 'When', 'His', 'Her', 'Hers', 'Their', 'You', 'Your', 'Not', 'For', 'With', 'That', 'This', 'There', 'These', 'Those',
+  'What', 'Where', 'Who', 'How', 'Why', 'Yes', 'Now', 'Still', 'Just', 'Even', 'Only', 'Fine', 'Okay', 'Sir', 'Madam', 'Miss', 'Mister', 'God',
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'January', 'February', 'March', 'April', 'June', 'July', 'August', 'September', 'October', 'November', 'December']);
+const CONTRACTION = /['’](m|ve|ll|re|d|t)$/i;
+const UNITS = '%|am|pm|a\\.m\\.|p\\.m\\.|o[\'’]clock|men|women|soldiers|riders|ships|guards|gold|silver|coins|crowns|dollars|euros|pounds|yen|seconds|minutes|hours|days|nights|weeks|months|years|km|kilometres|kilometers|miles|metres|meters|feet|yards|steps|rounds|shots';
+const FIGURE = new RegExp(`\\b(\\d{1,3}(?:[.,]\\d{3})*(?:[.,]\\d+)?|\\d+)(\\s*(?:${UNITS}))?(?![\\p{L}\\d])`, 'giu');
+export function hardTokens(text, knownNames = []) {
+  const t = String(text || '');
+  const names = new Set();
+  const folded = foldedText(t);
+  for (const n of knownNames || []) if (String(n || '').trim().length >= 2 && nameInText(folded, n, { words: false })) names.add(String(n).trim());
+  const counts = new Map();
+  for (const m of t.matchAll(/(?<![.!?…]\s|^|["“‘(—–]|\n)\b(\p{Lu}[\p{Ll}'’-]{2,})(?![\p{L}])/gmu)) {
+    let w = m[1];
+    if (/^I['’]/.test(w) || CONTRACTION.test(w)) continue;
+    const bare = w.replace(/['’]s$/i, '');
+    if (bare.length >= 3) w = bare;
+    counts.set(w, (counts.get(w) || 0) + 1);
+  }
+  const knownFolded = [...names].map((n) => foldName(n));
+  for (const [w, c] of counts) if (c >= 2 && !TOKEN_STOP.has(w) && !knownFolded.some((k) => (' ' + k + ' ').includes(' ' + foldName(w) + ' '))) names.add(w);
+  const figures = new Set();
+  for (const m of t.matchAll(FIGURE)) {
+    if (/^(1[5-9]|20)\d\d$/.test(m[1]) && !m[2]) continue;
+    if (!m[2] && Number(String(m[1]).replace(/[.,]/g, '')) < 10) continue;
+    figures.add((m[1] + (m[2] || '')).replace(/\s+/g, ' ').trim());
+  }
+  return { names: [...names], figures: [...figures] };
+}
+/* which of them a summary has lost: a name kept whole or by any word of it, a figure by its number */
+export function tokensMissing(text, summary, knownNames = []) {
+  const { names, figures } = hardTokens(text, knownNames);
+  const kept = foldedText(summary);
+  const keptRaw = ' ' + String(summary || '').toLowerCase().replace(/\s+/g, ' ') + ' ';
+  return {
+    names: names.filter((n) => !nameInText(kept, n)),
+    figures: figures.filter((f) => !new RegExp(`(?<![\\d.,])${f.split(' ')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\d])`).test(keptRaw)),
+  };
+}
+/* a bare list of words is not a summary's sentence (Cozy Tavern M208): "also
+ * named: Rachel, British, American" is the app talking nonsense to the writer */
+export function looksLikeTokenDump(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/^(also named|figures?|names?)\s*:/i.test(t)) return true;
+  const words = t.split(/\s+/);
+  if (words.length < 4) return false;
+  const commas = (t.match(/,/g) || []).length;
+  const joiners = (t.match(/\b(is|was|are|were|has|had|said|told|and|of|in|at|to|for|with|from|who|which|that)\b/gi) || []).length;
+  return commas >= 3 && joiners <= 1;
+}
+
+/* A NAME HIS HAND CHANGED (Cozy Tavern M100, the ripple, made for a book):
+ * one name his edit took out everywhere it stood in the passage, with
+ * another in its place every time — {from, to}. Anything more (a rewrite, two
+ * names at once), a word the book does not hold as a name (`isName`: a card's
+ * name, or a word it capitalises inside a sentence — never "Rain" changed to
+ * "Snow" at a sentence's start), or a change made in only some places, is
+ * not one. A possessive is its name's ("Mara's" is Mara). */
+export function nameChange(before, after, isName = () => false) {
+  const words = (t) => [...String(t || '').matchAll(/(?<![\p{L}\p{M}\p{N}'’-])\p{Lu}[\p{L}\p{M}'’-]*/gu)].map((m) => m[0].replace(/['’]s$/i, '').replace(/['’-]+$/, ''));
+  const count = (list) => list.reduce((m, w) => m.set(w, (m.get(w) || 0) + 1), new Map());
+  const b = count(words(before));
+  const a = count(words(after));
+  const gone = [...b.keys()].filter((w) => !a.has(w));
+  const came = [...a.keys()].filter((w) => !b.has(w));
+  if (gone.length !== 1 || came.length !== 1) return null;
+  const from = gone[0];
+  const to = came[0];
+  if (from.length < 2 || to.length < 2 || TOKEN_STOP.has(from) || TOKEN_STOP.has(to) || !isName(from)) return null;
+  /* every place it stood, and only there */
+  if (a.get(to) !== b.get(from)) return null;
+  return { from, to };
+}
+/* is this word one a text capitalises inside a sentence (a name, not a sentence's first word)? */
+export function namedMidSentence(text, word) {
+  const w = String(word || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return Boolean(w) && new RegExp(`(?<![.!?…]\\s|^|["“‘(—–]|\\n)(?<![\\p{L}\\p{M}\\p{N}])${w}(?![\\p{L}\\p{M}\\p{N}])`, 'mu').test(String(text || ''));
+}
+

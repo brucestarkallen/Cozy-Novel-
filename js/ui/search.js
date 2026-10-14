@@ -4,10 +4,10 @@
  * words; a card of the notes opens; the partner or a scene opens at the turn). */
 
 import * as store from '../store.js';
-import { searchBook } from '../novel/search.js';
+import { searchBook, searchSaid, searchOrder } from '../novel/search.js';
 import { h, openSheet, toast } from './dom.js';
 import * as talk from '../novel/talk.js';
-import { plural, debounce } from '../util.js';
+import { debounce } from '../util.js';
 import * as desk from './desk.js';
 import { showCard, showTurn } from './panes.js';
 
@@ -21,11 +21,13 @@ async function bookOf(novelId) {
   const novel = store.peek('novel', novelId) || await store.open('novel', novelId).catch(() => null);
   if (!novel) return null;
   const chapters = {};
-  await Promise.all((novel.order || []).map(async (id) => { const c = store.peek('chapter', id) ?? await store.open('chapter', id).catch(() => null); if (c) chapters[id] = c; }));
+  /* a chapter the phone did not answer for is counted, and said: never searched as if it were empty */
+  let lost = 0;
+  await Promise.all((novel.order || []).map(async (id) => { const c = store.peek('chapter', id) ?? await store.open('chapter', id).catch(() => null); if (c) chapters[id] = c; else lost++; }));
   const talk = store.peek('talk', novelId) ?? await store.open('talk', novelId).catch(() => null);
   const plays = [];
   for (const id of novel.plays || []) { const p = store.peek('play', id) ?? await store.open('play', id).catch(() => null); if (p) plays.push(p); }
-  return { novel, chapters, talk, plays };
+  return { novel, chapters, talk, plays, lost };
 }
 
 export function openSearch() {
@@ -54,15 +56,17 @@ export function openSearch() {
     results.textContent = '';
     if (!q) { say.textContent = Q.scope === 'all' ? 'Type to search every book on the shelf.' : 'Type to search the whole book — its passages, chapter names, notes, what it’s about, the partner and the scenes.'; return; }
     let books = [];
+    /* what could not be read is said — never taken for words that are not there (Cozy Tavern A8) */
+    let unread = 0;
+    let noShelf = false;
     if (Q.scope === 'all') {
       say.textContent = 'Reading your books…';
       let rows = [];
-      try { rows = await store.listNovels(); } catch (_) { rows = []; }
-      const ids = [novelId, ...rows.map((r) => r.id).filter((id) => id !== novelId)];
-      for (const id of ids) { const b = await bookOf(id); if (b) books.push(b); if (me !== ticket) return; }
+      try { rows = await store.listNovels(); } catch (_) { rows = []; noShelf = true; }
+      for (const id of searchOrder(novelId, rows)) { const b = await bookOf(id); if (b) books.push(b); else unread++; if (me !== ticket) return; }
     } else {
       const b = await bookOf(novelId);
-      if (b) books = [b];
+      if (b) books = [b]; else unread++;
     }
     if (me !== ticket) return;
     let total = 0;
@@ -81,7 +85,7 @@ export function openSearch() {
       }
       if (total >= LIMIT) break;
     }
-    say.textContent = total ? (total >= LIMIT ? `The first ${LIMIT.toLocaleString()} places — more words find fewer.` : `${plural(total, 'place')}.`) : `“${q}” isn’t anywhere ${Q.scope === 'all' ? 'in your books' : 'in this book'}.`;
+    say.textContent = searchSaid({ q, scope: Q.scope, total, limit: LIMIT, searched: books.length, noShelf, unread, lost: books.reduce((n, b) => n + (b.lost || 0), 0) });
   };
   input.addEventListener('input', debounce(run, 140));
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); input.blur(); } });

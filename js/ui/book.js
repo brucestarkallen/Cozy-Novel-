@@ -13,7 +13,8 @@ import * as archivist from '../novel/archivist.js';
 import { h, openSheet, field, toast, confirmIt, download, group } from './dom.js';
 import { novelSteps, COVERS, soundOf } from '../novel/shape.js';
 import { autoOn } from '../novel/prompts.js';
-import { connFor } from '../novel/writer.js';
+import { connFor, stopIn } from '../novel/writer.js';
+import { stopTalk } from '../novel/talk.js';
 import { toMarkdown, toText, toPrintable, toEpub, fileName } from '../novel/files.js';
 import { plural, debounce, timeAgo } from '../util.js';
 
@@ -46,7 +47,8 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder }
   }, 600);
   const mine = h('textarea.tall', { placeholder: ownPlaceholder });
   mine.value = own.value();
-  mine.addEventListener('input', debounce(() => own.save(mine.value), 500));
+  /* his own words rewritten: on Automatic, what the helper keeps beside them is written again once he pauses (Cozy Tavern M518-2) */
+  mine.addEventListener('input', debounce(() => { own.save(mine.value); if (autoOn(store.peek('novel', novelId) || {}, key)) archivist.nudge(novelId, 15000); }, 500));
   const kept = h('textarea', { placeholder: keptPlaceholder, 'aria-label': `${label} — kept by the helper` });
   kept.addEventListener('input', () => save(kept.value));
   const say = h('p.say');
@@ -169,6 +171,10 @@ export function openBook(novelId, { onGone, onClose } = {}) {
       h('button.btn', { onclick: () => { save('meta', { archived: !n.meta.archived }); toast(n.meta.archived ? 'It is back on the shelf.' : 'Archived — it waits under Archived on the shelf.'); s.close(); } }, n.meta.archived ? 'Bring it back from the archive' : 'Archive it'),
       h('button.btn.danger', { onclick: async () => {
         if (!(await confirmIt('Remove this book?', `“${n.meta.title}” — every chapter, its notes, its talk and its scenes — goes to Recently deleted (Settings → Backups) for thirty days.`, 'Remove it', { danger: true }))) return;
+        /* whatever is being written for it stops: a page, the partner's answer, a scene's (Tavern M675) */
+        stopIn(novelId);
+        stopTalk('talk', novelId);
+        for (const pid of (store.peek('novel', novelId) || {}).plays || []) stopTalk('play', pid);
         await store.flush();
         await store.remove('novel', novelId);
         s.close();

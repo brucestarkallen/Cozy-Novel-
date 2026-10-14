@@ -64,9 +64,10 @@ class Page:
     def __init__(self, port=PORT, client="tab-test"):
         self.c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         self.client = client
+        self.port = port
 
     def ask(self, method, path, body=None, headers=None):
-        h = {"X-Client": self.client, "Origin": "http://127.0.0.1:%d" % PORT, **(headers or {})}
+        h = {"X-Client": self.client, "Origin": "http://127.0.0.1:%d" % self.port, **(headers or {})}
         data = None
         if body is not None:
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -102,7 +103,9 @@ def main():
             print(out[-3000:])
     run_first_cozynovel()
     run_update_lands()
+    run_launcher()
     run_pages_leave()
+    run_gone_and_restore()
     shutil.rmtree(home, ignore_errors=True)
     print("\nserver: %d passed, %d failed" % (len(passed), len(failed)))
     sys.exit(1 if failed else 0)
@@ -123,6 +126,30 @@ def run(home):
     check("the phone names the saves it took", st == 200 and [s[0] for s in out.get("saves", [])] == ["h1", "h2"] and out["saves"][1][1] == "tab-test", out)
     st, out = pg.ask("GET", "/api/store/novel/n-none")
     check("a record not there is said plainly", st == 200 and out["data"] is None, out)
+
+    print("a book's lease: one browser at a time")
+    a, b = Page(client="tab-a"), Page(client="tab-b")
+    st, out = a.ask("POST", "/api/lease", {"key": "helper:n-t1", "ttl": 5000})
+    check("a lease is given to the first to ask", st == 200 and out == {"ok": True}, out)
+    st, out = b.ask("POST", "/api/lease", {"key": "helper:n-t1", "ttl": 5000})
+    check("another browser is told it is held, and for how long", st == 200 and out["ok"] is False and 0 < out["left"] <= 5000, out)
+    st, out = b.ask("POST", "/api/lease", {"key": "checker:n-t1", "ttl": 5000})
+    check("the checker's lease is its own", out == {"ok": True}, out)
+    st, out = a.ask("POST", "/api/lease", {"key": "helper:n-t1", "ttl": 5000})
+    check("its holder renews it", out == {"ok": True}, out)
+    st, out = b.ask("POST", "/api/lease", {"key": "helper:n-t1", "release": True})
+    st, out = b.ask("POST", "/api/lease", {"key": "helper:n-t1", "ttl": 5000})
+    check("only its holder lets it go", out["ok"] is False, out)
+    st, out = a.ask("POST", "/api/lease", {"key": "helper:n-t1", "release": True})
+    st, out = b.ask("POST", "/api/lease", {"key": "helper:n-t1", "ttl": 5000})
+    check("let go, the next to ask has it", out == {"ok": True}, out)
+    time.sleep(5.3)
+    st, out = a.ask("POST", "/api/lease", {"key": "helper:n-t1", "ttl": 5000})
+    check("a lease nobody renewed runs out", out == {"ok": True}, out)
+    st, out = a.ask("POST", "/api/lease", {"key": "../../etc", "ttl": 5000})
+    check("only a book's helper or checker has a lease", st == 400, out)
+    st, out = a.ask("POST", "/api/lease", {"key": "helper:n-t1", "ttl": 5000}, {"Origin": "http://evil.example"})
+    check("a page from elsewhere is turned away", st == 403, out)
 
     print("kept-alive connections")
     st, _ = pg.ask("POST", "/api/copies/now", {})
@@ -390,11 +417,47 @@ def run_update_lands():
         srv = start(home, port=port, app=folder)
         page = urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=5).read().decode()
         check("the page says which code it is", '<meta name="cozynovel-commit" content="%s">' % first in page, page[:400])
+        # a page being written through the relay while the update lands: the
+        # update waits for it, and never cuts it short
+        class Slow(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            def log_message(self, *a):
+                pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'); self.wfile.flush()
+                time.sleep(4)
+                self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
+        slow = ThreadingHTTPServer(("127.0.0.1", UP_PORT + 3), Slow)
+        threading.Thread(target=slow.serve_forever, daemon=True).start()
+        streamed = {}
+        def page_being_written():
+            req = urllib.request.Request("http://127.0.0.1:%d/api/call" % port, method="POST", headers={"Content-Type": "application/json", "X-Client": "tab-test", "Origin": "http://127.0.0.1:%d" % port},
+                                         data=json.dumps({"url": "http://127.0.0.1:%d/v1/chat/completions" % (UP_PORT + 3), "headers": {}, "body": {"stream": True}, "stream": True}).encode())
+            try:
+                streamed["text"] = urllib.request.urlopen(req, timeout=20).read().decode()
+            except Exception as e:
+                streamed["text"] = "broke: %s" % e
+        writing = threading.Thread(target=page_being_written)
+        writing.start()
+        time.sleep(0.8)
         # a pull that changes only the page's own files
         util = folder / "js" / "util.js"
         util.write_text(util.read_text() + "\n/* a later version */\n")
         git("commit", "-q", "-am", "two")
         second = git("rev-parse", "HEAD").stdout.strip()
+        time.sleep(2.6)
+        try:
+            during = json.loads(urllib.request.urlopen("http://127.0.0.1:%d/api/version" % port, timeout=1).read()).get("commit", "")
+        except Exception:
+            during = ""
+        writing.join(15)
+        slow.shutdown()
+        check("an update waits for a page being written through it — the page comes whole", during == first and "[DONE]" in streamed.get("text", ""), (during[:7], first[:7], streamed.get("text", "")[-80:]))
         got = ""
         for _ in range(60):
             try:
@@ -419,6 +482,139 @@ def run_update_lands():
             time.sleep(0.25)
         for d in (folder, home):
             shutil.rmtree(d, ignore_errors=True)
+
+
+def run_launcher():
+    """The one word says which Cozy Novel it opened."""
+    print("the cozynovel word")
+    folder = Path(tempfile.mkdtemp(prefix="cozynovel-app-"))
+    home = Path(tempfile.mkdtemp(prefix="cozynovel-home-"))
+    port = PORT + 11
+    try:
+        for item in APP.iterdir():
+            if item.name in (".git", "tests", "__pycache__"):
+                continue
+            (shutil.copytree if item.is_dir() else shutil.copy2)(item, folder / item.name)
+        env = dict(os.environ, COZYNOVEL_PORT=str(port), COZYNOVEL_HOME=str(home), PATH="/usr/bin:/bin")
+        out = subprocess.run(["bash", str(folder / "cozynovel.sh")], env=env, capture_output=True, text=True, timeout=60).stdout
+        version = json.loads(urllib.request.urlopen("http://127.0.0.1:%d/api/version" % port, timeout=2).read()).get("version", "")
+        check("it says which Cozy Novel is open", version and ("Cozy Novel %s is open at http://127.0.0.1:%d" % (version, port)) in out, out)
+    finally:
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/api/quit" % port, data=b"{}", method="POST", headers={"Content-Type": "application/json", "Origin": "http://127.0.0.1:%d" % port})
+            urllib.request.urlopen(req, timeout=3).read()
+        except Exception:
+            pass
+        for _ in range(20):
+            if free_port(port):
+                break
+            time.sleep(0.25)
+        for d in (folder, home):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def run_gone_and_restore():
+    """What a book gone for good leaves behind is swept; a whole copy carries
+    only the shelf's books; a copy that cannot be brought back whole is not
+    brought back at all; the pages are told the library's new generation."""
+    print("what a gone book leaves, and copies brought back")
+    home = Path(tempfile.mkdtemp(prefix="cozynovel-gone-"))
+    port = PORT + 13
+    old = time.time() - 40 * 86400
+
+    def put_gz(path, obj, at=None):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(gzip.compress(json.dumps(obj).encode()))
+        if at:
+            os.utime(path, (at, at))
+
+    def rec(kind, rid, data, rev=1):
+        p = home / "store" / kind / (rid + ".json")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"rev": rev, "at": 1, "data": data}))
+
+    H, SENT = home / "history", home / "sent"
+    # a book on the shelf, with its earlier copies and what its pages were sent
+    rec("novel", "n-live", {"meta": {"title": "Live"}, "order": [], "plays": []})
+    put_gz(H / "novel" / "n-live" / "20200101-000000-000.json.gz", {"rev": 0, "data": {}}, old)
+    put_gz(SENT / "n-live" / "k1.json.gz", {"messages": []}, old)
+    # gone for good, long ago
+    put_gz(H / "chapter" / "c-gone" / "20200101-000000-000.json.gz", {"rev": 0, "data": {}}, old)
+    put_gz(SENT / "n-gone" / "k1.json.gz", {"messages": []}, old)
+    # gone, but waiting in Recently deleted
+    put_gz(home / "trash" / ("%s-000-novel-n-trashed.json.gz" % time.strftime("%Y%m%d-%H%M%S")), {"kind": "novel", "id": "n-trashed", "title": "Trashed", "at": 1,
+           "records": [{"kind": "novel", "id": "n-trashed", "rev": 1, "data": {"meta": {"title": "Trashed"}}}, {"kind": "chapter", "id": "c-trashed", "rev": 1, "data": {"novelId": "n-trashed"}}]})
+    put_gz(H / "chapter" / "c-trashed" / "20200101-000000-000.json.gz", {"rev": 0, "data": {}}, old)
+    put_gz(SENT / "n-trashed" / "k1.json.gz", {"messages": []}, old)
+    # gone lately: kept as long as Recently deleted would keep it
+    put_gz(H / "chapter" / "c-lately" / "20260101-000000-000.json.gz", {"rev": 0, "data": {}})
+    srv = start(home, port)
+    try:
+        for _ in range(60):
+            if not (H / "chapter" / "c-gone").exists() and not (SENT / "n-gone").exists():
+                break
+            time.sleep(0.1)
+        check("a record gone for good leaves nothing behind: its earlier copies, a book's sent words",
+              not (H / "chapter" / "c-gone").exists() and not (SENT / "n-gone").exists(), sorted(str(p.relative_to(home)) for p in home.rglob("*") if p.is_dir()))
+        check("…never what a book on the shelf, one in Recently deleted, or one gone lately keeps",
+              (H / "novel" / "n-live").exists() and (SENT / "n-live").exists() and (H / "chapter" / "c-trashed").exists() and (SENT / "n-trashed").exists() and (H / "chapter" / "c-lately").exists())
+        pg = Page(port)
+        st, snap = pg.ask("GET", "/api/backup")
+        check("a whole copy carries what the shelf's books were sent, and nothing of a book gone from it", st == 200 and sorted((snap.get("sent") or {}).keys()) == ["n-live"], (st, sorted((snap.get("sent") or {}).keys()) if isinstance(snap, dict) else snap))
+
+        # a copy that cannot be brought back whole is not brought back at all
+        pg.put("chapter", "c-live1", {"novelId": "n-live", "passages": [{"id": "p1"}]}, 0)
+        st, nv = pg.ask("GET", "/api/store/novel/n-live")
+        pg.put("novel", "n-live", dict(nv["data"], order=["c-live1"]), nv["rev"])
+        st, ver = pg.ask("GET", "/api/version")
+        gen = ver["generation"]
+        # a place no record can be written (standing in for a phone that has run out of room)
+        boom = home / "store" / "chapter" / "c-boom.json"
+        boom.mkdir()
+        (boom / "x").write_text("x")
+        copy = {"format": "cozynovel-library", "records": [
+            {"kind": "novel", "id": "n-copy", "rev": 1, "data": {"meta": {"title": "From the copy"}, "order": ["c-copy", "c-boom"], "plays": []}},
+            {"kind": "chapter", "id": "c-copy", "rev": 1, "data": {"novelId": "n-copy", "passages": []}},
+            {"kind": "chapter", "id": "c-boom", "rev": 1, "data": {"novelId": "n-copy", "passages": []}}],
+            "sent": {"n-copy": {"k9": {"messages": []}}}}
+        st, out = pg.ask("POST", "/api/restore", copy)
+        _, a = pg.ask("GET", "/api/store/novel/n-live")
+        _, b = pg.ask("GET", "/api/store/chapter/c-live1")
+        _, c = pg.ask("GET", "/api/store/novel/n-copy")
+        _, d = pg.ask("GET", "/api/store/chapter/c-copy")
+        _, ver2 = pg.ask("GET", "/api/version")
+        check("a copy that cannot be brought back whole leaves everything as it was, and says so",
+              st == 500 and "everything is as it was" in (out or {}).get("error", "") and a["data"] and a["data"]["order"] == ["c-live1"] and b["data"] is not None
+              and c["data"] is None and d["data"] is None and ver2["generation"] == gen, (st, out, a.get("data"), c.get("data"), d.get("data"), gen, ver2.get("generation")))
+        check("…what its pages were sent too, and no half-written file is left",
+              (SENT / "n-live" / "k1.json.gz").exists() and (SENT / "n-trashed" / "k1.json.gz").exists() and not (SENT / "n-copy").exists()
+              and not any(p.name.endswith(".tmp") for p in (home / "store" / "chapter").iterdir()) and not list(home.glob("sent.before-*")))
+        # brought back whole: every page is told the library's new generation, and a book in Recently deleted keeps its sent words
+        shutil.rmtree(boom)
+        s = socket.create_connection(("127.0.0.1", port))
+        s.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
+        s.settimeout(5)
+        got = b""
+        while b"hello" not in got:
+            got += s.recv(4096)
+        st, out = Page(port).ask("POST", "/api/restore", copy)
+        got = b""
+        t0 = time.time()
+        while b"reload" not in got and time.time() - t0 < 5:
+            got += s.recv(4096)
+        s.close()
+        _, ver3 = pg.ask("GET", "/api/version")
+        told = [json.loads(line[6:]) for line in got.decode().split("\n") if line.startswith("data: ") and "reload" in line]
+        check("a copy brought back tells every page the library's new generation", st == 200 and told and told[0].get("generation") == ver3["generation"] == gen + 1, (st, told, ver3.get("generation"), gen))
+        check("…and a book waiting in Recently deleted keeps what its pages were sent; one the copy does not hold goes",
+              (SENT / "n-copy" / "k9.json.gz").exists() and (SENT / "n-trashed" / "k1.json.gz").exists() and not (SENT / "n-live").exists() and not list(home.glob("sent.before-*")))
+    finally:
+        srv.terminate()
+        out = srv.stdout.read().decode()
+        if "Traceback" in out:
+            failed.append("server raised (gone and restore)")
+            print(out[-3000:])
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def run_pages_leave():

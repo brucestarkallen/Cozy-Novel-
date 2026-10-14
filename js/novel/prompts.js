@@ -115,6 +115,26 @@ export const FICTION_WORK = 'This is fiction craft for a novel being written tog
 
 function nameOf(house) { return String((house && house.you && house.you.name) || '').trim(); }
 
+/* SILLYTAVERN'S OWN NAMES FOR THE TWO PEOPLE (Cozy Tavern M361). Words
+ * brought over from a SillyTavern preset still say {{user}} and {{char}} (and
+ * the older <USER> and <BOT>); SillyTavern puts names in before anything is
+ * sent, and so does this app — template syntax never reaches a model. For a
+ * book: {{user}} is him (his name, else "me"), and in a scene the one he plays;
+ * {{char}} is whoever the words are for — the writer, the narrator, his
+ * partner. Never a raw macro. */
+export function macroNames(house, purpose = 'write', play = null) {
+  const name = nameOf(house);
+  if (purpose === 'play') return { user: String((play && play.who) || '').trim() || name || 'the one I play', char: 'the narrator' };
+  if (purpose === 'partner') return { user: name || 'me', char: 'my partner' };
+  return { user: name || 'me', char: 'the writer' };
+}
+export function withMacros(text, names) {
+  const out = String(text == null ? '' : text);
+  if (!/\{\{\s*(?:user|char)\s*\}\}|<(?:USER|BOT)>/i.test(out)) return out;
+  const n = names || {};
+  return out.replace(/\{\{\s*user\s*\}\}|<USER>/gi, () => n.user || 'me').replace(/\{\{\s*char\s*\}\}|<BOT>/gi, () => n.char || 'the writer');
+}
+
 function fence(text) { return `"""\n${String(text || '').trim()}\n"""`; }
 
 function titled(novel) { return `“${(novel.meta && novel.meta.title) || 'Untitled'}”`; }
@@ -270,6 +290,8 @@ function hereIs(purpose) {
  * conversation has to open on his side (Claude, and others, refuse
  * otherwise). */
 export const PICK_UP = 'Let’s pick up where we left off.';
+/* …and for a book with no words in it yet, where there is nothing to pick up */
+export const PICK_UP_FIRST = 'Let’s begin our book.';
 
 /* ---------------------------------------------------------- the writer */
 
@@ -455,7 +477,7 @@ ${CHANGES_OPEN}[
   {"passage": "2.3", "text": "the whole passage, written anew", "why": "…"},
   {"passage": "2.4", "remove": true, "why": "…"},
   {"replace_all": true, "find": "…", "replace": "…", "chapters": "2-5", "why": "…"},
-  {"rename": {"from": "Oda Jovan", "to": "Jovan Oda"}, "why": "…"},
+  {"rename": {"from": "Name Surname", "to": "Surname Name"}, "why": "…"},
   {"chapter": 2, "name": "its new name", "why": "…"},
   {"summary": 2, "text": "…", "why": "…"},
   {"book": "about", "find": "…", "replace": "…", "why": "…"},
@@ -467,7 +489,7 @@ ${CHANGES_OPEN}[
 - "2.3" is passage 3 of Chapter Two, as on the page. Quote "find" exactly — enough to be found in one place only. A passage written anew is a new version. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
 - "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary.
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved): only the parts you give change; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
-- To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Oda Jovan"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
+- To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - Only quote what you can see; never make up a passage or a fact. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block.`;
 
 export function partnerFrame(house, novel, { notesAs = 'system' } = {}) {
@@ -626,6 +648,17 @@ function stockLine(stock) {
  * for how it is written (and his note at the end), so nothing he asked for is
  * ever "fixed" or held against a page; and the story so far, chapter by
  * chapter, for what is true in it beyond the notes */
+/* The notes are kept to the newest page of the book: what someone is doing or
+ * feeling "right now" there is never the moment of a passage from earlier in
+ * it (Cozy Tavern G3) */
+const NOTES_FOR_A_READER = 'The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right). They are kept to the newest page of the book: each “Right now” is where someone stands at the end of the book so far, never at these passages — a passage from earlier in the book is not wrong for coming before it:';
+
+/* what I asked the writer for in these passages, each by its number — doing it is never a fault */
+function askedLines(asked) {
+  const rows = (asked || []).filter((a) => a && String(a.words || '').trim()).map((a) => `[${a.n}] ${String(a.words).replace(/\s+/g, ' ').trim().slice(0, 400)}`);
+  return rows.length ? `What I asked the writer for in these passages — whatever a passage does because I asked for it is never a fault:\n${rows.join('\n')}` : '';
+}
+
 function writerSees({ his = '', sofar = '' }) {
   const out = [];
   if (his && his.trim()) out.push(`How I want the book written — what the writer is told; nothing it asks for is ever a fault:\n${fence(his)}`);
@@ -633,21 +666,23 @@ function writerSees({ his = '', sofar = '' }) {
   return out;
 }
 
-export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, his = '', sofar = '', notesFit = 0 }) {
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, his = '', sofar = '', notesFit = 0, asked = [] }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });
-  if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
+  if (notes) parts.push(`${NOTES_FOR_A_READER}\n${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
   parts.push(...writerSees({ his, sofar }));
   if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to these passages, for what has just happened:\n${fence(before)}`);
+  const askedPart = askedLines(asked);
+  if (askedPart) parts.push(askedPart);
   parts.push(`Check these passages from ${chapterLabel}, each numbered as it is on the page:\n${fence(numbered)}`);
   const allowed = judge ? allowedFails(judge.target) : 0;
   parts.push(`Suggest only what is worth changing, each a small fix in place:
 - "grammar": spelling, grammar, punctuation, a word missing or doubled.
 - "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
-- "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. And the seams: this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
+- "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix. And the seams: this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
 
 Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake${his && his.trim() ? ', and nothing I ask the writer for (above) is one' : ''}. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
 
@@ -655,7 +690,7 @@ Each fix replaces a stretch of words: "find" is the words exactly as they stand 
 
 Then judge each passage’s craft as a page of a finished novel, by ten checks. Answer every check of every passage "yes" or "no" — "no" only where you can point to the words in it that fail the check; a check with nothing to try in a passage (nobody speaks: the voices) is "yes". Judged like this, a page from a published novelist fails one or two; a page that reads machine-made fails most. More figures, longer sentences or rarer words are never better writing: overwriting fails "fresh".
 ${JUDGE_CHECKS.map(([k, , what]) => `- ${k}: ${what}.`).join('\n')}
-For each "no", a fault: the check, "words" — the words that fail it, copied exactly from the passage, no more than a sentence — and "why", in a few words. A passage with ${allowed ? `more than ${numberWords(allowed).toLowerCase()} “no”` : 'any “no”'} is under my mark of ${judge.target}: for it, add fixes of kind "craft" — small changes in place that lift it — and in "lift" say, in a few lines in my voice, what writing it again would need to reach ${judge.target} (“Slow the moment Yuki falls…”).` : ''}
+For each "no", a fault: the check, "words" — the words that fail it, copied exactly from the passage, no more than a sentence — and "why", in a few words. A passage with ${allowed ? `more than ${numberWords(allowed).toLowerCase()} “no”` : 'any “no”'} is under my mark of ${judge.target}: for it, add fixes of kind "craft" — small changes in place that lift it — and in "lift" say, in a few lines in my voice, what writing it again would need to reach ${judge.target} (“Slow the moment she falls…”).` : ''}
 
 Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "grammar", "find": "…", "replace": "…", "why": "…"}]${judge ? `, "grades": [{"passage": "2.3", "checks": {${JUDGE_CHECKS.map(([k], i) => `"${k}": "${i === 9 ? 'no' : 'yes'}"`).join(', ')}}, "faults": [{"check": "ending", "words": "…", "why": "…"}], "lift": "…"}]` : ''}} — or {"edits": []${judge ? ', "grades": […]' : ''}} when nothing needs fixing.`);
   return parts.join('\n\n');
@@ -671,7 +706,7 @@ Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kin
 export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false, his = '', sofar = '', notesFit = 0 }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${first}\n${second}` });
-  if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
+  if (notes) parts.push(`${NOTES_FOR_A_READER}\n${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
   parts.push(...writerSees({ his, sofar }));
@@ -725,7 +760,7 @@ const NOTE_RULES = `Include only entries that are new or changed, and in each on
 - Use "gone" only for an entry that no longer belongs in the book at all (it was only ever in text that's been taken out). Mark a thread "open": false once the story resolves it — by what happens after it was set up, never by the words that set it up (an oath sworn, a plan made, a promise given is open) and never just because time passed.
 - Write only what the book actually says — never invent, never guess.`;
 
-export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, goesOn = false, notesFit = 0 }) {
+export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0 }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n') });
   parts.push(`The notes as they stand:\n${notes ? notes : '(none yet — this is the start)'}`);
@@ -735,7 +770,7 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   if (keeps.includes('about')) parts.push(keptPart(novel, 'about', KEEP_ABOUT));
   if (keeps.includes('style')) parts.push(keptPart(novel, 'style', KEEP_STYLE));
   /* where this part sits: a change to an early chapter never turns back where people are "now" */
-  if (at && of && at < of) parts.push(`This part is from ${chapterLabel}; the book goes on to Chapter ${numberWords(of)}. Where people are “now” is as of the end of the book, so change a “now” only if this part changes it for good.`);
+  if (at && of && at < of && later) parts.push(`This part is from ${chapterLabel}; the book goes on to Chapter ${numberWords(of)}. Where people are “now” is as of the end of the book, so change a “now” only if this part changes it for good.`);
   else if (goesOn) parts.push(`This part sits in the middle of ${chapterLabel}: the chapter goes on after it, and what follows is already in the notes. Where people are “now” is as of the end of the book, so change a “now” only if this part changes it for good.`);
   if (before && before.trim()) parts.push(`${chapterLabel}, up to the new part (for context — already in the notes):\n${fence(before)}`);
   for (const c of changes) {
@@ -826,7 +861,7 @@ export function keepRequest({ novel, keeps, bookText: text, notesFit = 0 }) {
  * each part's summary carried into the next. What to keep is Summaryception's
  * hard-won list, for a novel: causes kept with what they led to, first
  * appearances described, who learns what, the exact words that will matter. */
-export function summaryRequest({ novel, chapterLabel, text, needsName, words, part = 0, parts = 0, soFar = '', known = [] }) {
+export function summaryRequest({ novel, chapterLabel, text, needsName, words, part = 0, parts = 0, soFar = '', known = [], his = '' }) {
   const size = Math.max(120, Math.min(450, Math.round(words / 12)));
   const lines = [];
   if (part) {
@@ -842,9 +877,17 @@ export function summaryRequest({ novel, chapterLabel, text, needsName, words, pa
 - anything set up for later — a promise, a secret, an object, a question left open — with the exact words of any promise, oath or threat that will matter (a short quote);
 - where it happens, and the day, date or time where the chapter gives one;
 - numbers, ages, amounts and distances exactly as the chapter gives them.
-Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the chapter is dense: nothing that matters left out to keep it short.${needsName ? ' The chapter has no name yet, so give it a short one.' : ''}`);
+${his ? `\nMy own summary of this chapter, from before its latest changes — my words are right wherever the chapter still says what they say, so keep them there:\n${fence(his)}\n` : ''}Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the chapter is dense: nothing that matters left out to keep it short.${needsName ? ' The chapter has no name yet, so give it a short one.' : ''}`);
   lines.push(`Answer with one JSON object and nothing else: {"summary": "…"${needsName ? ', "name": "…"' : ''}}`);
   return lines.join('\n\n');
+}
+
+/* A summary that left out a name or a figure the chapter holds, asked once
+ * more with each one where it stands (Cozy Tavern M111, M208): in the
+ * summary's own sentences, never a list of words. */
+export function summaryAgainRequest({ novel, chapterLabel, summary, missing }) {
+  const lines = (missing || []).map((m) => `- ${m.kind === 'name' ? 'the name' : 'the figure'} ${m.token}${m.where ? ` — the chapter has: “…${m.where}…”` : ''}`);
+  return `Here's the summary of ${chapterLabel} of ${titled(novel)} as it stands:\n${fence(summary)}\n\nThese stand in the chapter and nowhere in the summary:\n${lines.join('\n')}\n\nWrite the summary again with every one of them a writer carrying the book on would need — who each one is, what each figure counts and why it matters — in the summary's own sentences, never as a list of words. Leave out any that is not a person, a place or a figure that matters, and keep everything the summary already holds.\n\nAnswer with one JSON object and nothing else: {"summary": "…"}`;
 }
 
 export const JSON_AGAIN = 'That answer could not be read as JSON. Answer again with only the JSON object — no other words, no code fence.';

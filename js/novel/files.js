@@ -8,6 +8,7 @@
 
 import { newId, countWords, hashText, numberWords, slug } from '../util.js';
 import { newNovel, newChapter, newPassage, newTurn, chapterLabel, passageText, picked, coverFor } from './shape.js';
+import { isBreakLine, STRONG, EM } from './textshape.js';
 
 /* ------------------------------------------------------------- out */
 
@@ -18,7 +19,7 @@ function chapterParas(chapter) {
     for (const line of passageText(p).split(/\n+/)) {
       const t = line.trim();
       if (!t) continue;
-      if (/^(?:\*\s*\*\s*\*|-{3,}|_{3,}|#|⁂|~{3,}|\*{3,})$/.test(t)) out.push({ brk: true });
+      if (isBreakLine(t)) out.push({ brk: true });
       else out.push({ text: t });
     }
   }
@@ -39,7 +40,7 @@ export function toMarkdown(novel, chapters) {
 
 /* plain words: *italic* and **bold** marks taken off, nothing else touched */
 function plainWords(t) {
-  return String(t).replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g, '$1').replace(/(^|[^*\w])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, '$1$2');
+  return String(t).replace(STRONG, '$1').replace(EM, '$1$2');
 }
 export function toText(novel, chapters) {
   const lines = [novel.meta.title];
@@ -62,8 +63,8 @@ function esc(s) {
 /* *italic* and **bold**, nothing else, on escaped text */
 export function inlineMarks(escaped) {
   return escaped
-    .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*\w])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, '$1<em>$2</em>')
+    .replace(STRONG, '<strong>$1</strong>')
+    .replace(EM, '$1<em>$2</em>')
     .replace(/(^|[^_\w])_(?=\S)([^_\n]*?\S)_(?![_\w])/g, '$1<em>$2</em>');
 }
 
@@ -264,7 +265,13 @@ export function fromText(name, raw) {
     /* "Chapter 3" names nothing; "Chapter 3: The Letter" names "The Letter" */
     c.name = ch.name;
     if (c.name) c.nameBy = 'you';
-    const scenes = body.split(/\n\s*(?:\*\s*\*\s*\*|-{3,}|#|⁂|\*{3,})\s*\n/);
+    /* a line that is a scene break parts the scenes (a lone asterisk too) — never the chapter's first line */
+    const scenes = [];
+    let scene = [];
+    for (const line of body.split('\n')) {
+      if (scene.some((l) => l.trim()) && isBreakLine(line)) { scenes.push(scene.join('\n')); scene = []; } else scene.push(line);
+    }
+    scenes.push(scene.join('\n'));
     scenes.forEach((s, i) => {
       if (i > 0) c.passages.push(newPassage('break'));
       const words = s.trim();

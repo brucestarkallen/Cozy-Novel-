@@ -70,6 +70,72 @@ async function api(method, path, { body, headers = {}, keepalive = false, wait =
 }
 export { api };
 
+/* WHAT WAS SENT, kept on the phone after each call (Cozy Tavern M347): a
+ * sheet opened the moment a page lands waits for the words on their way
+ * instead of calling them missing, and a keep that failed is said as failed —
+ * never "not kept any more". The newest two hundred are remembered. */
+const sentKeeps = new Map();   /* `${novelId}/${key}` -> { done, failed } */
+export function keepSent(novelId, key, body) {
+  const entry = { failed: '' };
+  entry.done = api('PUT', `/api/sent/${novelId}/${key}`, { body })
+    .then((r) => { if (r.status !== 200) entry.failed = (r.data && r.data.error) || `the phone answered ${r.status}`; })
+    .catch(() => { entry.failed = 'the phone could not be reached'; });
+  const k = `${novelId}/${key}`;
+  sentKeeps.delete(k);
+  sentKeeps.set(k, entry);
+  while (sentKeeps.size > 200) sentKeeps.delete(sentKeeps.keys().next().value);
+  return entry.done;
+}
+export async function sentKept(novelId, key) {
+  const e = sentKeeps.get(`${novelId}/${key}`);
+  if (!e) return { failed: '' };
+  await e.done;
+  return { failed: e.failed };
+}
+
+/* A BOOK'S LEASE (serve.py take_lease; Cozy Tavern M293): the helper and the
+ * checker work on a book in one browser at a time. Held while the work goes
+ * on and renewed; `confirm()` before a result is written says whether it is
+ * still this window's — a tab Android froze past its lease has lost it to
+ * another browser, and lays nothing over that one's work. A phone that does
+ * not answer holds nothing for anyone: the work waits, as every call it
+ * makes would fail anyway; a phone too old to keep leases lets it go ahead. */
+const LEASE_MS = 90000;
+const leasesHeld = new Set();
+export async function lease(key, { ttl = Number(globalThis.__cozyLeaseMs) || LEASE_MS } = {}) {
+  const ask = async (release = false, keepalive = false) => {
+    try {
+      const { status: code, data } = await api('POST', '/api/lease', { body: { key, ttl, ...(release ? { release: true } : {}) }, keepalive });
+      if (code === 404) return { ok: true };
+      if (code !== 200 || !data) return { ok: false, unreachable: true };
+      return data;
+    } catch (_) { return { ok: false, unreachable: true }; }
+  };
+  const first = await ask();
+  if (!first.ok) return { ok: false, left: Number(first.left) || 0, unreachable: Boolean(first.unreachable) };
+  let at = Date.now();
+  let lost = false;
+  const renew = async () => {
+    if (lost) return false;
+    const r = await ask();
+    if (r.ok) at = Date.now();
+    else if (!r.unreachable) lost = true;
+    return Boolean(r.ok);
+  };
+  const timer = setInterval(renew, Math.floor(ttl / 3));
+  const handle = {
+    ok: true,
+    /* still this window's: renewed lately, or renewed now */
+    async confirm() { if (lost) return false; if (Date.now() - at < ttl / 2) return true; return renew(); },
+    release() { clearInterval(timer); leasesHeld.delete(handle); if (!lost) ask(true); },
+    /* the page is going (closed, reloaded, an update landing): let go at once, so the next page never waits it out */
+    goNow() { clearInterval(timer); leasesHeld.delete(handle); if (!lost) { lost = true; ask(true, true); } },
+  };
+  leasesHeld.add(handle);
+  return handle;
+}
+export function letLeasesGo() { for (const h of [...leasesHeld]) h.goNow(); }
+
 /* ------------------------------------------------------------ records */
 
 function rec(kind, id) {
@@ -218,6 +284,19 @@ function rebase(r, rev, data) {
 /* how many bytes a text is on the wire */
 const bytesOf = (s) => (typeof Blob === 'function' ? new Blob([s]).size : s.length * 3);
 
+/* A save that could not land waits a while before it tries again — but
+ * never past the moment the phone answers again: the banner says what he
+ * typed is saved the moment it answers, and so it is. */
+const napping = new Set();
+function nap(ms) {
+  return new Promise((resolve) => {
+    const wake = () => { clearTimeout(t); napping.delete(wake); resolve(); };
+    const t = setTimeout(wake, ms);
+    napping.add(wake);
+  });
+}
+function wakeSaves() { for (const wake of [...napping]) wake(); }
+
 function saveNow(r, { keepalive = false } = {}) {
   if (r.saving) return new Promise((resolve) => { r.wait.push(resolve); r.again = true; });
   r.saving = true;
@@ -243,7 +322,7 @@ function saveNow(r, { keepalive = false } = {}) {
           ride = false;
           setOffline(true, e);
           journal(r);
-          await sleep(backoff);
+          await nap(backoff);
           backoff = Math.min(backoff * 2, 15000);
           continue;
         }
@@ -270,7 +349,7 @@ function saveNow(r, { keepalive = false } = {}) {
         /* the phone could not write it (full, or a fault): keep it and keep trying */
         setOffline(true, new Error((res.data && res.data.error) || `the phone answered ${res.status}`));
         journal(r);
-        await sleep(backoff);
+        await nap(backoff);
         backoff = Math.min(backoff * 2, 15000);
       }
     } finally {
@@ -288,6 +367,8 @@ function setOffline(on, err) {
   offline = on;
   lastError = on ? String((err && err.message) || err || '') : '';
   if (was !== on || on) tellStatus();
+  /* back: what waits goes now */
+  if (was && !on) wakeSaves();
 }
 
 /* ------------------------------------------------------- the shelf list */
@@ -323,13 +404,27 @@ let caughtUp = true;         /* false: news may have been missed (the line newly
 const NEWS = typeof BroadcastChannel === 'function' ? new BroadcastChannel('cozynovel-news') : null;
 const LOCKS = Boolean(NEWS && globalThis.navigator && navigator.locks && navigator.locks.request);
 
+/* a whole copy was brought back: nothing this page kept waiting from before
+ * it is played over it, and the page shows the copy */
+function libraryReplaced() {
+  for (const r of recs.values()) { r.pending = []; r.loaded = false; r.journaled = false; }
+  Journal.clear();
+  for (const fn of reloadFns) fn();
+  for (const fn of shelfFns) fn();
+}
+
 function onNews(raw) {
   let ev;
   try { ev = JSON.parse(raw); } catch (_) { return; }
   if (ev.hello) {
     if (bootCommit === null) bootCommit = ev.hello.commit || '';
     else if ((ev.hello.commit || '') !== bootCommit) for (const fn of updateFns) fn(ev.hello);
-    if (Number.isFinite(ev.hello.generation)) generation = ev.hello.generation;
+    if (Number.isFinite(ev.hello.generation)) {
+      /* the copy came back while this page was away (Cozy Tavern M670): what it kept waiting is not saved over it */
+      const missed = generation !== null && ev.hello.generation !== generation;
+      generation = ev.hello.generation;
+      if (missed) { libraryReplaced(); return; }
+    }
     setOffline(false);
     /* back after a gap, or the line newly held here: whatever changed
      * meanwhile is fetched, and work a closed tab left in this browser's
@@ -340,10 +435,8 @@ function onNews(raw) {
   if (ev.resync) { recheckAll(); return; }   /* this page fell behind the news: it reads everything again */
   if (ev.reload) {
     /* a whole copy was brought back: nothing waiting from before it is played over it */
-    for (const r of recs.values()) { r.pending = []; r.loaded = false; r.journaled = false; }
-    Journal.clear();
-    for (const fn of reloadFns) fn();
-    for (const fn of shelfFns) fn();
+    if (Number.isFinite(ev.generation)) generation = ev.generation;
+    libraryReplaced();
     return;
   }
   if (ev.kind === 'novel') for (const fn of shelfFns) fn(ev);
@@ -683,4 +776,5 @@ export function replayJournal() {
   return replaying.finally(() => { replaying = null; });
 }
 
-export function forTests() { return { recs, Journal }; }
+/* the news as the line brings it — for the tests, which have no line */
+export function forTests() { return { recs, Journal, news: onNews }; }

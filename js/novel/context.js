@@ -24,8 +24,8 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, standingNotes } from './prompts.js';
-import { notesBefore, unread } from './readings.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, standingNotes, macroNames, withMacros } from './prompts.js';
+import { notesBeforeWith, unread } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
 
@@ -194,7 +194,7 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
 /* The passages the notes have not read yet, up to the point being written
  * (for the partner and a scene: anywhere in the book) — the words that say
  * so, or ''. The passage being written again is not counted. */
-export function notesBehind(novel, chapters, chapter, target = {}, purpose = 'write') {
+export function notesBehind(novel, chapters, chapter, target = {}, purpose = 'write', alsoBack = []) {
   let point = {};
   if (purpose === 'write' && chapter && chapter.id) {
     const list = chapter.passages || [];
@@ -206,6 +206,18 @@ export function notesBehind(novel, chapters, chapter, target = {}, purpose = 'wr
     }
   }
   const rows = unread(novel, chapters, point);
+  /* passages read together with the one written again, their notes taken back with it */
+  if (alsoBack.length && chapter && chapter.id) {
+    const nums = passageNumbers(chapter);
+    const list = chapter.passages || [];
+    const at = point.before ? list.findIndex((p) => p.id === point.before) : list.length;
+    for (const pid of alsoBack) {
+      const i = list.findIndex((p) => p.id === pid);
+      if (i >= 0 && i < at && nums.get(pid) && !rows.some((r) => r.pid === pid)) rows.push({ chapterId: chapter.id, pid, n: nums.get(pid) });
+    }
+    const order = novel.order || [];
+    rows.sort((a, b) => order.indexOf(a.chapterId) - order.indexOf(b.chapterId) || a.n - b.n);
+  }
   const groups = [];
   for (const r of rows) {
     const label = chapterLabel(novel, chapters[r.chapterId], { withName: false });
@@ -262,20 +274,19 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
    * passage written again — another take, a rewrite, his selected words — is
    * never handed the notes its old version made */
   const again = purpose === 'write' && chapter.id && !rebuilt ? (target.mark || target.before || '') : '';
-  const notesNow = again ? { ...novel, notes: notesBefore(novel, chapter.id, again) } : shown;
-  /* and which passages up to that point they have not read yet, said at their top */
-  const kept = notesText(notesNow);
-  const notes = kept ? [rebuilt ? '' : notesBehind(novel, chapters, chapter, target, purpose), kept].filter(Boolean).join('\n\n') : '';
+  const before = again ? notesBeforeWith(novel, chapter.id, again) : null;
+  const notesNow = before ? { ...novel, notes: before.notes } : shown;
   /* the modules (modules.js): the ones that always ride, and the ones his words woke */
   const ride = ridingFor(house, novel, purpose, wakesOn(moment));
-  const woken = ride.woken.join('\n\n');
+  /* his words and the modules with the names in them — never {{user}} or {{char}} (Tavern M361) */
+  const names = macroNames(house, purpose, play);
+  const woken = withMacros(ride.woken.join('\n\n'), names);
   /* his own words first, then the words he never wants (when he listed any),
    * then the modules that always ride, then the frame */
-  const head = withHis([String(own || '').trim(), avoidLine(avoidList(house)), ...ride.always].filter(Boolean).join('\n\n'), frame);
+  const head = withHis(withMacros([String(own || '').trim(), avoidLine(avoidList(house)), ...ride.always].filter(Boolean).join('\n\n'), names), frame);
   const opening = notesAs === 'system' ? '' : notesOpening(house, novel, notesAs, purpose);
-  const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
   /* his note at the end: the writer's, or the scenes' own (prompts.js lateFor) */
-  const late = lateFor(instr, purpose);
+  const late = withMacros(lateFor(instr, purpose), names);
   const after = [];
   for (const t of turns) after.push({ role: t.role, content: t.content });
   if (request) after.push({ role: 'user', content: request });
@@ -291,6 +302,15 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
    * reason says which of them takes the room. */
   const instructions = estimateTokens(head) + estimateTokens(woken);
   const least = instructions + afterCost + 200 + reserve;
+  /* THE NOTES NEVER CROWD OUT THE CHAPTER (Cozy Tavern M664, for the writer,
+   * the partner and the narrator too): past a third of what is left beside
+   * his words, the talk and the answer, the cards the chapter and his request
+   * do not name ride by their first line — his own cards always whole. And
+   * which passages up to that point they have not read yet, said at their top. */
+  const notesShare = Math.max(1500, Math.floor((total - reserve - instructions - afterCost) / 3));
+  const kept = notesText(notesNow, { fit: notesShare, focus: chapter.id ? `${chapterText(chapter)}\n${request}` : request });
+  const notes = kept || (before && before.also.length) ? [rebuilt ? '' : notesBehind(novel, chapters, chapter, target, purpose, before ? before.also : []), kept].filter(Boolean).join('\n\n') : '';
+  const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
   /* a room this app only guessed after a "too long" is never a reason to
    * refuse: the book fits it, and the page goes */
   const facts = learnedFacts(conn);
@@ -335,7 +355,9 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     const lead = joinParts([opening, stableBook]);
     const body = joinParts([lead, moving]);
     if (body.trim()) {
-      if (notesAs === 'assistant') messages.push({ role: 'user', content: PICK_UP });
+      /* a book with no words yet has nothing to pick up: it begins */
+      const written = Object.values(chapters || {}).some((c) => c && chapterText(c).trim());
+      if (notesAs === 'assistant') messages.push({ role: 'user', content: written ? PICK_UP : PICK_UP_FIRST });
       messages.push({ role: notesAs, content: body, cacheSplit: moving.trim() ? lead.length : body.length });
     }
   }

@@ -15,8 +15,8 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newVersion, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard } from './shape.js';
-import { countWords, nameKey, numberWords, newId, clone, truthOf, hashText } from '../util.js';
+import { chapterSteps, novelSteps, newVersion, endOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard } from './shape.js';
+import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE } from './prompts.js';
 import { listModules, moduleSteps } from './modules.js';
@@ -210,21 +210,31 @@ export function labelOf(op) {
 
 /* ------------------------------------------------------------ finding words */
 
-/* where `find` stands in `text`: exactly, or else read loosely (runs of
- * space as one, curly quotes as straight) — and only when it stands in one
- * place. {start, end} or {why}. */
+/* where `find` stands in `text`: exactly, or else read loosely — runs of
+ * space as one, curly quotes as straight, any dash (and the space around it,
+ * or a double hyphen) as one, an ellipsis as its dots (Cozy Tavern A7: a
+ * model types "--" and "..." where the book has "—" and "…") — and only when
+ * it stands in one place. {start, end} or {why}. */
+const SINGLE_QUOTES = new Set(['’', '‘', 'ʼ', '′']);
+const DOUBLE_QUOTES = new Set(['“', '”', '„', '″']);
+const DASHES = new Set(['—', '–', '‐', '‑', '‒', '―', '−']);
 function loose(str) {
-  const out = []; const map = [];
-  let space = false;
+  const out = []; const starts = []; const ends = [];
   for (let i = 0; i < str.length; i++) {
     let ch = str[i];
-    if (/\s/.test(ch)) { if (space) continue; space = true; ch = ' '; } else space = false;
-    if (ch === '’' || ch === '‘') ch = "'";
-    else if (ch === '“' || ch === '”') ch = '"';
-    out.push(ch); map.push(i);
+    if (/\s/.test(ch)) ch = ' ';
+    else if (SINGLE_QUOTES.has(ch)) ch = "'";
+    else if (DOUBLE_QUOTES.has(ch)) ch = '"';
+    else if (DASHES.has(ch)) ch = '-';
+    else if (ch === '…') ch = '.';
+    const last = out.length - 1;
+    /* a run of space, of dashes or of dots is one; space beside a dash is the dash's */
+    if (last >= 0 && (ch === ' ' || ch === '-' || ch === '.') && out[last] === ch) { ends[last] = i + 1; continue; }
+    if (last >= 0 && ch === ' ' && out[last] === '-') { ends[last] = i + 1; continue; }
+    if (last >= 0 && ch === '-' && out[last] === ' ') { out[last] = '-'; ends[last] = i + 1; continue; }
+    out.push(ch); starts.push(i); ends.push(i + 1);
   }
-  map.push(str.length);
-  return { s: out.join(''), map };
+  return { s: out.join(''), starts, ends };
 }
 export function locate(text, find) {
   const f = String(find || '');
@@ -235,11 +245,17 @@ export function locate(text, find) {
     return { start: at, end: at + f.length };
   }
   const T = loose(text);
-  const F = loose(f.trim()).s;
+  const F = loose(f.trim()).s.trim();
+  if (!F) return { why: 'those words are not there' };
   const i = T.s.indexOf(F);
   if (i < 0) return { why: 'those words are not there' };
   if (T.s.indexOf(F, i + 1) >= 0) return { why: 'those words stand in more than one place — it has to quote more of them' };
-  return { start: T.map[i], end: T.map[i + F.length - 1] + 1 };
+  /* the words themselves: never the space a dash took in at either end */
+  let start = T.starts[i];
+  let end = T.ends[i + F.length - 1];
+  while (start < end && /\s/.test(text[start])) start++;
+  while (end > start && /\s/.test(text[end - 1])) end--;
+  return { start, end };
 }
 
 /* ------------------------------------------------------------ cards */
@@ -335,11 +351,8 @@ function newVersionOn(put, novelId, x, next, why) {
 /* what a version's words fixed in place keep of it: what was asked, and
  * whether it was cut short or stopped (its Go on stays) */
 export function carried(v) {
-  const out = {};
-  if (!v) return out;
-  if (v.ask) out.ask = v.ask;
-  for (const k of ['cut', 'cutWhy', 'cutBy', 'stopped']) if (v[k] !== undefined) out[k] = v[k];
-  return out;
+  if (!v) return {};
+  return { ...(v.ask ? { ask: v.ask } : {}), ...endOf(v) };
 }
 
 /* ------------------------------------------------------------ making one */
@@ -567,7 +580,13 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     /* the words it replaced, where they still stand elsewhere in the book —
      * said, so the rest can be made to agree when it should (Cozy Tavern's
      * ripple, M61 v2.77; nothing else is changed by itself) */
-    const said = op.find !== undefined && !dry ? stillStands(novel, String(op.find), passage.id) : '';
+    const stands = op.find !== undefined && !dry ? stillStands(novel, String(op.find), passage.id) : '';
+    /* a passage written whole at less than half its length is said so, with
+     * both counts — asked for, it stands; if not, Undo is right there */
+    const was = countWords(old);
+    const now = countWords(next);
+    const shrunk = anew && was > 60 && now < was / 2 ? `it is ${now.toLocaleString()} words now, from ${was.toLocaleString()}` : '';
+    const said = [shrunk, stands].filter(Boolean).join('; ');
     return { ...base, status: 'made', undo: { what: 'passage', chapterId: chapter.id, passageId: passage.id, versionId: version.id, from: v.id }, before: old, after: next, ...(said ? { said } : {}) };
   }
 
@@ -656,7 +675,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const all = [...(next.aka || []), ...more];
       next.aka = all.filter((a, i) => all.findIndex((b) => nameKey(b) === nameKey(a)) === i && nameKey(a) !== nameKey(next.name));
     }
-    if (kind === 'threads' && truthOf(op.open) !== undefined) next.open = truthOf(op.open);
+    if (kind === 'threads' && openOf(op) !== undefined) next.open = openOf(op);
     /* changed for him, as if by his own hand: the helper keeps his words on it */
     next.updated = { by: 'you', at };
     const was = card ? JSON.stringify({ ...card, updated: null }) : '';

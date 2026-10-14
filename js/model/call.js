@@ -163,6 +163,55 @@ export function splitThink(text) {
   return { text: words.replace(/^\s+/, ''), thinking: thought.trim() };
 }
 
+/* THE ANSWER THAT RAN PAST ITS END (Cozy Tavern's M117, M469). A provider
+ * that leaks its model's control tokens (<|im_end|>, <|eot_id|>) into the
+ * words, or a model that misses the end of its turn and writes the next one
+ * itself — a role label ("User:", "Human:") and his own request typed out
+ * again, then an answer to that — leaves words that are never the story. The
+ * answer is what came before the first of: a leaked control token; a role
+ * label at a line's start followed within 300 characters by forty characters
+ * of his request word for word; or a paragraph that IS his request (sixty
+ * characters or more), once 600 characters of answer came before it — an
+ * answer that opens by saying his words back is still the answer. A line of
+ * his quoted inside the prose never trips it: it takes a label AND his words,
+ * or his whole request standing alone. */
+export const CONTROL_TOKEN = /<\|[a-zA-Z_][a-zA-Z0-9_]{0,31}\|>/;
+const ROLE_LABEL = /(?:^|\n)[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?(?:USER|User|HUMAN|Human|ASSISTANT|Assistant)(?:\*\*)?[ \t]*:/g;
+const squash = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+function runPastAt(str, asked) {
+  const his = squash(asked);
+  if (his.length < 40) return -1;
+  ROLE_LABEL.lastIndex = 0;
+  let m;
+  while ((m = ROLE_LABEL.exec(str))) {
+    const labelAt = m.index + (m[0].startsWith('\n') ? 1 : 0);
+    const after = squash(str.slice(m.index + m[0].length, m.index + m[0].length + 300));
+    if (after && (his.includes(after.slice(0, 40)) || after.includes(his.slice(0, 40)))) return labelAt;
+  }
+  if (his.length < 60) return -1;
+  /* his whole request as a paragraph of the answer: the cut is at its line's start */
+  const map = []; let out = '';
+  for (let i = 0; i < str.length; i += 1) {
+    const ch = str[i];
+    if (/\s/.test(ch)) { if (out.length && out[out.length - 1] !== ' ') { out += ' '; map.push(i); } } else { out += ch; map.push(i); }
+  }
+  const i = out.lastIndexOf(his);
+  if (i === -1) return -1;
+  const src = i < map.length ? map[i] : str.length;
+  const lineStart = str.lastIndexOf('\n', src) + 1;
+  if (!squash(str.slice(lineStart, src)) && squash(str.slice(0, lineStart)).length >= 600) return lineStart;
+  return -1;
+}
+export function stripControlLeak(text, { asked = '' } = {}) {
+  const str = String(text || '');
+  const m = str.match(CONTROL_TOKEN);
+  let cut = m ? m.index : -1;
+  const past = runPastAt(str, asked);
+  if (past !== -1 && (cut === -1 || past < cut)) cut = past;
+  if (cut === -1) return { text: str, leaked: false };
+  return { text: str.slice(0, cut).replace(/\s+$/, ''), leaked: true, ranPast: past !== -1 && past === cut };
+}
+
 const TRANSIENT_WORDS = /overload|rate.?limit|too many requests|timed? ?out|try again|temporar|unavailable|capacity|busy/i;
 function errorOf(e) {
   const err = e && typeof e === 'object' ? e : { message: String(e || '') };
@@ -177,20 +226,29 @@ function errorOf(e) {
 export function countOf(u) {
   if (!u || typeof u !== 'object') return null;
   const n = (v) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? null : Number(v));
-  const cached = n(u.cache_read_input_tokens) ?? n(u.prompt_cache_hit_tokens) ?? n(u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) ?? 0;
+  /* what came from its cache, in every shape it comes in: OpenAI's, DeepSeek's,
+   * Kimi's (cached_tokens), Claude's — and Claude's writes into its cache apart,
+   * priced higher than plain input (Tavern M510-25) */
+  const cached = n(u.cache_read_input_tokens) ?? n(u.prompt_cache_hit_tokens) ?? n(u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) ?? n(u.cached_tokens) ?? 0;
+  const write = n(u.cache_creation_input_tokens) || 0;
   let inTok = n(u.prompt_tokens);
   if (inTok === null && n(u.input_tokens) !== null) inTok = n(u.input_tokens) + (n(u.cache_read_input_tokens) || 0) + (n(u.cache_creation_input_tokens) || 0);
   const outTok = n(u.completion_tokens) ?? n(u.output_tokens);
   if (inTok === null && outTok === null) return null;
-  return { in: inTok, out: outTok, cached };
+  /* the thinking tokens inside its count of what came back (OpenAI's shape and others') */
+  const reasoning = n(u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens) ?? n(u.reasoning_tokens) ?? 0;
+  return { in: inTok, out: outTok, cached, ...(write ? { write } : {}), ...(reasoning ? { reasoning } : {}) };
 }
+
+/* a page it looked at: an address on the web, never a script or a file of the phone's */
+export function webUrl(url) { return typeof url === 'string' && /^https?:\/\/[^\s]+$/i.test(url.trim()); }
 
 /* ONE READER FOR EVERY ANSWER, streamed or not. Words and thinking go to
  * whoever listens, each on its own channel. A refusal comes back as one line
  * of JSON (the phone's server answers every refusal so); a provider that
  * ignored "stream" is read whole; an error in the middle of a stream is an
  * error, never a finished answer. */
-export async function readReply(wire, res, { onText, onThinking, onNote } = {}) {
+export async function readReply(wire, res, { onText, onThinking, onNote, until, raw: asIs = false, onChunk = null } = {}) {
   const reader = res && res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
   const whole = (data) => {
     if (data && data.error) {
@@ -202,9 +260,9 @@ export async function readReply(wire, res, { onText, onThinking, onNote } = {}) 
     const a = readAnswer(wire, data);
     a.usage = countOf(data && data.usage);
     a.sources = [];
-    for (const b of (data && Array.isArray(data.content) ? data.content : [])) if (b && b.type === 'web_search_tool_result' && Array.isArray(b.content)) for (const r of b.content) if (r && r.url && !a.sources.some((x) => x.url === r.url)) a.sources.push({ url: r.url, title: r.title || r.url });
+    for (const b of (data && Array.isArray(data.content) ? data.content : [])) if (b && b.type === 'web_search_tool_result' && Array.isArray(b.content)) for (const r of b.content) if (r && webUrl(r.url) && !a.sources.some((x) => x.url === r.url)) a.sources.push({ url: r.url, title: String(r.title || r.url) });
     const msg = data && data.choices && data.choices[0] && data.choices[0].message;
-    for (const x of (msg && Array.isArray(msg.annotations) ? msg.annotations : [])) { const c = x && (x.url_citation || x); if (c && c.url && !a.sources.some((y) => y.url === c.url)) a.sources.push({ url: c.url, title: c.title || c.url }); }
+    for (const x of (msg && Array.isArray(msg.annotations) ? msg.annotations : [])) { const c = x && (x.url_citation || x); if (c && webUrl(c.url) && !a.sources.some((y) => y.url === c.url)) a.sources.push({ url: c.url, title: String(c.title || c.url) }); }
     a.reason = typeof a.finish === 'string' ? a.finish : '';
     const cut = splitThink(a.text);
     if (cut.thinking) { a.text = cut.text; a.thinking = [a.thinking, cut.thinking].filter(Boolean).join('\n\n'); }
@@ -221,9 +279,12 @@ export async function readReply(wire, res, { onText, onThinking, onNote } = {}) 
   let buffer = '', raw = '', sse = false, text = '', thinking = '', cut = false, ended = false, midError = null, usage = null, reason = '';
   /* the provider's own web search: what it looked at (Claude's results, OpenRouter's citations) */
   const sources = [];
-  const source = (url, title) => { if (url && !sources.some((x) => x.url === url)) sources.push({ url: String(url), title: String(title || url) }); };
+  const source = (url, title) => { if (webUrl(url) && !sources.some((x) => x.url === url)) sources.push({ url: String(url), title: String(title || url) }); };
   let pending = '';   /* an event whose words came over more than one data: line */
-  const split = makeThinkSplitter((kind, s) => {
+  /* a structured answer's raw JSON goes to its reader as it comes (asIs): its
+   * own <think> is inside its words, read there — and a run of space before it
+   * is never held back here, so a stalled answer is seen */
+  const split = asIs ? { feed: (s) => { text += s; if (onText) onText(s); }, end: () => {} } : makeThinkSplitter((kind, s) => {
     if (kind === 'thinking') { thinking += s; if (onThinking) onThinking(s); } else { text += s; if (onText) onText(s); }
   });
   const parsed = (s) => { try { const o = JSON.parse(s); return o && typeof o === 'object' ? o : null; } catch (_) { return null; } };
@@ -255,6 +316,11 @@ export async function readReply(wire, res, { onText, onThinking, onNote } = {}) 
     if (obj.toolCallId) return;              /* a Hermes Agent narrating its tools */
     if (obj.error) { midError = obj.error; return; }
     if (obj.usage && typeof obj.usage === 'object') usage = { ...(usage || {}), ...obj.usage };
+    /* Kimi's stream puts its count inside the choice (Tavern M510-25) */
+    {
+      const c0 = obj.choices && obj.choices[0];
+      if (c0 && c0.usage && typeof c0.usage === 'object') usage = { ...(usage || {}), ...c0.usage };
+    }
     if (obj.type === 'message_start' && obj.message && obj.message.usage) usage = { ...(usage || {}), ...obj.message.usage };
     if (obj.type === 'message_stop') ended = true;
     if (obj.type === 'message_delta' && obj.delta && obj.delta.stop_reason) { ended = true; reason = String(obj.delta.stop_reason); }
@@ -275,33 +341,50 @@ export async function readReply(wire, res, { onText, onThinking, onNote } = {}) 
     if (part.text) split.feed(part.text);
     if (part.cut) cut = true;
   };
+  /* the listener may say the answer is whole, or never will be (a structured
+   * answer whose text closed, or that stopped making words): the line is let go
+   * at once, rather than read to the provider's end (Tavern M585) — the phone's
+   * server hangs up on the provider when the page does */
+  let letGo = '';
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    /* anything at all heard from the provider (a keep-alive too): it is there */
+    if (onChunk) onChunk();
     const piece = decoder.decode(value, { stream: true });
     if (!sse) raw += piece;
     buffer += piece;
     let nl;
     while ((nl = buffer.indexOf('\n')) !== -1) { handle(buffer.slice(0, nl)); buffer = buffer.slice(nl + 1); }
+    const verdict = sse && typeof until === 'function' ? until() : '';
+    if (verdict) {
+      letGo = String(verdict);
+      try { const p = reader.cancel(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch (_) { /* already closed */ }
+      buffer = '';
+      pending = '';
+      break;
+    }
   }
   const tail = decoder.decode();
   if (!sse) raw += tail;
   handle(buffer + tail);
   handle('');
+  /* its text closed: the answer is whole, whatever the provider would have padded it with */
+  if (letGo === 'closed') ended = true;
   if (!sse) {
     let data = null;
     try { data = JSON.parse(raw); } catch (_) { return { finish: 'error', error: raw.trim() ? plainPage(raw) || 'the answer could not be read' : 'nothing came back', status: 0, text: '', thinking: '' }; }
     return whole(data);
   }
   split.end();
-  const late = splitThink(text);
+  const late = asIs ? { text, thinking: '' } : splitThink(text);
   if (late.thinking) { text = late.text; thinking = [thinking, late.thinking].filter(Boolean).join('\n\n'); }
   if (midError) { const e = errorOf(midError); return { finish: 'error', error: e.message, status: e.status, midStream: true, text, thinking, reason, usage: countOf(usage), sources }; }
-  if (!text && !thinking && !ended) return { finish: 'error', error: 'the answer stopped before anything came', status: 0, text: '', thinking: '' };
+  if (!text && !thinking && !ended && !letGo) return { finish: 'error', error: 'the answer stopped before anything came', status: 0, text: '', thinking: '' };
   /* words came, then the line simply closed — no "finished" from the provider:
    * kept, and said to be possibly cut */
-  const quiet = !ended && !cut;
-  return { text, thinking, finish: cut ? 'length' : 'stop', usage: countOf(usage), reason, quiet, sources };
+  const quiet = !ended && !cut && !letGo;
+  return { text, thinking, finish: cut ? 'length' : 'stop', usage: countOf(usage), reason, quiet, sources, ...(letGo ? { letGo } : {}) };
 }
 
 /* WHAT WAS SENT, kept as it went: the body's lists and objects copied, its
@@ -324,11 +407,19 @@ export function noteUsage(conn, usage, sent, text) {
     const u = usage || null;
     const counted = Boolean(u && Number.isFinite(u.in));
     const d = new Date();
+    /* the prices the connection had when the call was made, kept with the
+     * count: a connection let go since is still priced (Tavern M510-25) */
+    const prices = {};
+    for (const [k, f] of [['in', 'priceIn'], ['out', 'priceOut'], ['cached', 'priceCached']]) if (conn && Number.isFinite(conn[f])) prices[k] = conn[f];
     const spec = {
       url: String((conn && conn.url) || ''), model: String((conn && conn.model) || ''),
       in: counted ? u.in : Math.max(0, Number((sent && sent.tokens) || 0)),
       out: u && Number.isFinite(u.out) ? u.out : estimateTokens(String(text || '')),
       cached: (u && Number.isFinite(u.cached) && u.cached) || 0,
+      /* Claude's writes into its cache, priced higher than plain input */
+      write: (u && Number.isFinite(u.write) && u.write) || 0,
+      ...(wireOf(conn) === 'anthropic' ? { anthropic: true } : {}),
+      ...(Object.keys(prices).length ? { prices } : {}),
       estimated: !counted,
       day: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
     };
@@ -341,6 +432,30 @@ export function noteUsage(conn, usage, sent, text) {
 /* ------------------------------------------------------------ the call */
 
 export const BACKOFF_MS = [3000, 8000, 20000];
+/* A WORKER'S LEASH (Cozy Tavern A5, M207): a call of the helper's or the
+ * checker's that hears nothing at all from its provider for three minutes —
+ * or goes on past a quarter of an hour — is let go and tried again as a
+ * passing fault, so one hung call never holds a book's notes for good. A
+ * page is never leashed: he has Stop. (Tests may shorten it.) */
+export const LEASH_QUIET_MS = 3 * 60 * 1000;
+export const LEASH_ALL_MS = 15 * 60 * 1000;
+const leashOf = (ms, name) => (Number(globalThis[name]) > 0 ? Number(globalThis[name]) : ms);
+/* how long a provider asked to be left alone: seconds, or a date (Cozy Tavern M28) — 0 when it did not say */
+export function retryAfterMs(v, now = Date.now()) {
+  if (v === undefined || v === null || v === '') return 0;
+  const n = Number(v);
+  if (Number.isFinite(n)) return n > 0 ? n * 1000 : 0;
+  const at = Date.parse(String(v));
+  return Number.isFinite(at) && at > now ? at - now : 0;
+}
+function anySignal(signals) {
+  const list = signals.filter(Boolean);
+  if (list.length === 1) return list[0];
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function') return AbortSignal.any(list);
+  const c = new AbortController();
+  for (const s of list) { if (s.aborted) { c.abort(); break; } s.addEventListener('abort', () => c.abort(), { once: true }); }
+  return c.signal;
+}
 function sleep(ms, signal) {
   return new Promise((resolve) => {
     const t = setTimeout(resolve, ms);
@@ -369,6 +484,8 @@ export async function ask(conn, opts = {}) {
   }
   const stream = opts.stream !== false;
   const notes = [];
+  /* what the model is, asked of its provider the first time (a moment at most) */
+  await learnIdentityWithin(conn);
   /* asked without his page's started reply (the partner, Ideas, Go on): never given one (Tavern M328, M585) */
   let flags = { noPrefill: Boolean(opts.noPrefill), noUsage: false, maxCap: 0, noStructured: Boolean(opts.noStructured) };
   let lessons = 0;
@@ -419,6 +536,23 @@ export async function ask(conn, opts = {}) {
      * the template made it write goes to the thinking box (Tavern M580, M586) */
     let decoder = null;
     let onWords = emitText;
+    /* A STRUCTURED ANSWER THAT NEVER ENDS (Tavern M585): a bare quote the model
+     * writes closes the answer's text early and it pads to its limit, or it
+     * thrashes against the pattern and no words come. The moment the text
+     * closes, the line is let go — nothing after it is ever words; and one that
+     * keeps sending with no new words for twenty seconds is stopped, its words
+     * kept and the page said to be cut short. The clock starts with the first of
+     * the answer, never during a long think before it. */
+    let rawSince = 0; let rawSeen = false; let wordsAt = Date.now(); let wordsLen = 0; let stalled = false;
+    const STALL_MS = Number(globalThis.__cozyStructuredStallMs) > 0 ? Number(globalThis.__cozyStructuredStallMs) : 20000;
+    const until = () => {
+      if (!decoder) return '';
+      if (decoder.closed()) return 'closed';
+      const n = decoder.wordsSoFar();
+      if (n > wordsLen) { wordsLen = n; wordsAt = Date.now(); rawSince = 0; return ''; }
+      if (rawSeen && Date.now() - wordsAt > STALL_MS && rawSince > 400) { stalled = true; return 'stalled'; }
+      return '';
+    };
     if (req.structured) {
       decoder = makeStructuredDecoder({ hidden: req.structured.hidden });
       let sep = false;
@@ -429,32 +563,72 @@ export async function ask(conn, opts = {}) {
         if (!begun) { x = x.replace(/^\s+/, ''); if (!x) return; begun = true; }
         emitText(x);
       });
-      onWords = (raw) => { const w = decoder.feed(raw); if (w) splitter.feed(w); };
+      onWords = (raw) => {
+        if (!rawSeen && raw) { rawSeen = true; wordsAt = Date.now(); }
+        rawSince += String(raw || '').length;
+        const w = decoder.feed(raw);
+        if (w) splitter.feed(w);
+      };
       onWords.end = () => { const w = decoder.end ? decoder.end() : ''; if (w) splitter.feed(w); splitter.end(); };
     }
+    /* what came before a </think> the reply never opened is thinking — on a
+     * stream too, and on a page stopped by hand (Tavern's late split): the
+     * page keeps only what follows it */
+    const lateSplit = () => {
+      if (decoder) return;
+      const keep = req.prefill && req.prefill.applied && String(req.prefill.content || '') && text.startsWith(String(req.prefill.content)) ? String(req.prefill.content) : '';
+      const rest = text.slice(keep.length);
+      const close = rest.lastIndexOf('</think>');
+      if (close === -1 || rest.slice(0, close).indexOf('<think>') !== -1) return;
+      const thought = rest.slice(0, close).trim();
+      text = keep + rest.slice(close + 8).replace(/^\s+/, '');
+      if (thought) thinking = [thinking, thought].filter((x) => String(x).trim()).join('\n\n');
+    };
     let out;
+    /* a helper's or the checker's call on its leash */
+    let leashed = '';
+    const leash = opts.worker ? new AbortController() : null;
+    let heardAt = Date.now();
+    const leashFrom = Date.now();
+    const quietMs = leashOf(LEASH_QUIET_MS, '__cozyLeashQuietMs');
+    const allMs = leashOf(LEASH_ALL_MS, '__cozyLeashAllMs');
+    const leashTimer = leash ? setInterval(() => {
+      if (leash.signal.aborted) return;
+      if (Date.now() - heardAt > quietMs) { leashed = 'quiet'; leash.abort(); } else if (Date.now() - leashFrom > allMs) { leashed = 'long'; leash.abort(); }
+    }, Math.max(50, Math.min(5000, Math.floor(quietMs / 4)))) : null;
     try {
       const res = await fetch('/api/call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream }),
-        signal: opts.signal,
+        signal: leash ? anySignal([opts.signal, leash.signal]) : opts.signal,
       });
+      heardAt = Date.now();
       if (!res.ok) {
         out = { finish: 'error', error: res.status === 403 ? 'the phone’s server turned the call away' : `the phone’s server answered ${res.status}`, status: 0, text: '', thinking: '' };
       } else {
-        out = await readReply(req.wire, res, { onText: onWords, onThinking: emitThinking, onNote: (n) => { if (!notes.includes(n)) notes.push(n); } });
+        out = await readReply(req.wire, res, { onText: onWords, onThinking: emitThinking, onNote: (n) => { if (!notes.includes(n)) notes.push(n); }, until: decoder ? until : null, raw: Boolean(decoder), onChunk: () => { heardAt = Date.now(); } });
         if (decoder && onWords.end) onWords.end();
       }
     } catch (e) {
-      if ((e && e.name === 'AbortError') || (opts.signal && opts.signal.aborted)) {
+      if (leashed && !(opts.signal && opts.signal.aborted)) {
+        /* let go on its leash: a passing fault, its words (if any) kept as cut */
+        const mins = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m === 1 ? 'a minute' : `${m} minutes`; };
+        out = { finish: 'error', error: leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer went on for more than ${mins(allMs)}`, status: 0, transport: true, midStream: Boolean(text), text, thinking };
+      } else if ((e && e.name === 'AbortError') || (opts.signal && opts.signal.aborted)) {
         sent.ms = Date.now() - sent.at;
         if (opts.onSent) opts.onSent(sent);
+        /* every word that came is flushed first: what a structured answer still held, a thought it never closed */
+        try { if (decoder && onWords.end) onWords.end(); } catch (_) { /* what came stands */ }
+        lateSplit();
         /* what streamed before Stop was paid for too */
         if (String(text + thinking).trim()) noteUsage(conn, null, sent, text + thinking);
         return { ok: false, stopped: true, text, thinking, notes, error: 'stopped', sent, cut: true };
+      } else {
+        out = { finish: 'error', error: 'the phone’s server could not be reached (is Cozy Novel still running in Termux?)', status: 0, phone: true, text, thinking };
       }
-      out = { finish: 'error', error: 'the phone’s server could not be reached (is Cozy Novel still running in Termux?)', status: 0, phone: true, text, thinking };
+    } finally {
+      if (leashTimer) clearInterval(leashTimer);
     }
     sent.ms = Date.now() - sent.at;
     sent.usage = out.usage || null;
@@ -620,23 +794,73 @@ export async function ask(conn, opts = {}) {
       if (!keyMended && await repairHermesKey(conn, lastStatus)) { keyMended = true; continue; }
       /* only a helper waits out a passing fault; a page never asks again by itself */
       const transient = lastStatus === 0 || lastStatus === 408 || lastStatus === 429 || lastStatus >= 500;
-      if (opts.patient && transient && transientTries < BACKOFF_MS.length && !(opts.signal && opts.signal.aborted)) {
-        const retryAfter = Number(out.retryAfter) * 1000;
-        await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 60000) : BACKOFF_MS[transientTries], opts.signal);
+      /* the wait its provider asked for is kept, however long (Cozy Tavern M28): a
+       * short one waited here, a long one handed back for the helper to keep */
+      const asked = retryAfterMs(out.retryAfter);
+      if (opts.patient && transient && asked <= 60000 && transientTries < BACKOFF_MS.length && !(opts.signal && opts.signal.aborted)) {
+        await sleep(asked > 0 ? asked : BACKOFF_MS[transientTries], opts.signal);
         transientTries++;
         continue;
       }
       if (opts.onSent) opts.onSent(sent);
       return { ok: false, text: '', thinking, notes, error: plainError(lastError, lastStatus, { transport: out.transport, phone: out.phone }), status: lastStatus, sent,
-        permanent: !transient && lastStatus !== 0 };
+        permanent: !transient && lastStatus !== 0, ...(asked > 0 ? { retryAfterMs: asked } : {}) };
     }
     if (opts.onSent) opts.onSent(sent);
     noteUsage(conn, out.usage, sent, text + thinking);
+    /* the answer as it is kept: a thought it never opened set apart from the page */
+    lateSplit();
+    let emptySaid = '';
+    let closedMid = false;
+    if (decoder && out.finish !== 'error') {
+      /* ITS JSON ANSWER WRITTEN IN THE THINKING CHANNEL (Tavern M590): taken
+       * out of the thinking and made the page — the words are never lost */
+      if (!text.trim()) {
+        const at = thinking.search(/\{\s*"(?:response|value|content|text)"\s*:/);
+        const fromThought = at === -1 ? '' : unwrapStructured(thinking.slice(at), { hidden: req.structured.hidden });
+        if (fromThought.trim()) {
+          let t = ''; let p = '';
+          const sp = makeThinkSplitter((kind, x) => { if (kind === 'thinking') t += x; else p += x; });
+          sp.feed(fromThought); sp.end();
+          const before = thinking.slice(0, at).replace(/\s+$/, '');
+          text = p.replace(/^\s+/, '');
+          thinking = before + (t.trim() ? (before.trim() ? '\n\n' : '') + t.trim() : '');
+        }
+      }
+      /* A SCHEMA NOT HELD IS NOTICED (Tavern M590, M592): judged only on an
+       * answer the model finished itself — never one cut short or stalled —
+       * and remembered for this model, as a refusal is: its pages go with the
+       * prefill as written from then on */
+      const judgeable = !stalled && (decoder.closed() || (out.finish === 'stop' && !out.quiet && !BLOCKED.test(String(out.reason || ''))));
+      let held = true;
+      try { if (judgeable) held = new RegExp(req.structured.schema.properties.response.pattern).test(decoder.allWords() || text); } catch (_) { held = true; }
+      if (!held && String(decoder.allWords() || text || thinking).trim()) {
+        learn(conn, { structuredDownAt: Date.now() });
+        notes.push('This model’s provider did not hold the structured prefill — its answer did not open as your template asks, so the prefill did nothing. Its pages go with the prefill as written from now on.');
+        if (!text.trim()) emptySaid = 'this model’s provider did not hold the structured prefill — it wrote its thinking and no page in the shape your template asks. Its pages go with the prefill as written from now on, so write it again when you like';
+      }
+      /* its text closed (Tavern M585): a page that ends on a sentence's close
+       * is whole; one that closed mid-sentence (a bare quote ends its text) is
+       * cut short, so Go on is offered for the rest */
+      if (decoder.closed() && text.trim() && !/[.!?…"”'’*)\]~—–-]\s*$/.test(text)) closedMid = true;
+    }
+    if (stalled && !text.trim() && !emptySaid) emptySaid = 'the structured answer stopped making progress — it kept sending, but no words came — so it was let go';
+    /* his thinking seed that left no page (Tavern M590, M596): said, never asked again by itself */
+    if (!decoder && !text.trim() && thinking.trim() && req.prefill && req.prefill.applied && req.prefill.seed && out.finish === 'stop' && !out.quiet && /^(?:stop|end_turn|stop_sequence|eos)?$/i.test(String(out.reason || ''))) {
+      emptySaid = 'the model thought on from your thinking prefill (the <think> words) and stopped there, with no page after it — nothing was cut here, so write it again when you like';
+    }
     /* a request whose thinking seed opened the thinking on purpose says nothing about Off */
     const opened = Boolean(req.prefill && req.prefill.applied && req.prefill.keepThinkingOpen && (conn.thinking === 'off' || conn.thinking === false));
     if (!opened) noticeOff(conn, thinking);
     if (flags.usageTried) learn(conn, { drop: ['stream_options'] });
-    const extra = { thinkTokens: Number(out.thinkTokens) || 0, hiddenThought: Boolean(out.hiddenThought) };
+    const extra = { thinkTokens: Number(out.thinkTokens) || 0, hiddenThought: Boolean(out.hiddenThought), ...(emptySaid ? { emptyWhy: emptySaid } : {}) };
+    /* thinking asked for, and none came back: said quietly with the answer (Tavern M348, M351) */
+    const askedThought = Boolean(conn.thinking) && conn.thinking !== 'off' && THINKING_FIELDS.some((f) => f in (req.body || {}));
+    if (askedThought && String(text).trim() && !String(thinking).trim()) {
+      notes.push(extra.thinkTokens > 0 || extra.hiddenThought
+        ? `It thought${extra.thinkTokens ? ` (${extra.thinkTokens.toLocaleString()} tokens)` : ''}, but its provider does not show the thinking.`
+        : 'Thinking was asked for, and none came back — this model or its provider may not think at this setting.');
+    }
     if (out.finish === 'error') {
       /* broken off partway: what arrived is kept, and said to be cut */
       return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra };
@@ -646,9 +870,10 @@ export async function ask(conn, opts = {}) {
     const byLength = out.finish === 'length' || /^(?:length|max_tokens|max_output_tokens)$/i.test(reason);
     const quiet = Boolean(out.quiet && String(text).trim());
     if (blocked && String(text).trim()) notes.push(`The provider stopped the answer here (its reason: ${reason}).`);
-    else if (quiet && !byLength) notes.push('The answer ended without the provider saying it was finished, so it may have been cut short.');
+    else if (quiet && !byLength && !stalled) notes.push('The answer ended without the provider saying it was finished, so it may have been cut short.');
     if (out.sources && out.sources.length) notes.push(`It looked things up: ${out.sources.length} page${out.sources.length === 1 ? '' : 's'}.`);
-    return { ok: true, text, thinking, cut: byLength || blocked || quiet, cutBy: blocked ? 'filter' : byLength ? 'length' : quiet ? 'quiet' : undefined,
+    const cutBy = stalled ? 'stalled' : closedMid ? 'closed' : blocked ? 'filter' : byLength ? 'length' : quiet ? 'quiet' : undefined;
+    return { ok: true, text, thinking, cut: Boolean(cutBy), cutBy,
       finish: out.finish, reason, usage: out.usage || null, notes, sent, sources: out.sources || [], ...extra };
   }
 }
@@ -659,6 +884,8 @@ export const BLOCKED = /content_filter|safety|blocked|prohibited|refus|recitatio
 /* WHY AN ANSWER CAME BACK EMPTY, IN THE PROVIDER'S OWN WORD (Tavern M545) —
  * never a guess. */
 export function emptyWhy(out, thinking = '') {
+  /* what the call itself could tell (a schema not held, a seed thought on, a stalled answer) */
+  if (out && typeof out.emptyWhy === 'string' && out.emptyWhy) return out.emptyWhy;
   const why = String((out && out.reason) || '').trim();
   const thought = String(thinking || (out && out.thinking) || '').trim().length > 0 || Boolean(out && (out.thinkTokens > 0 || out.hiddenThought));
   if (/max_tokens|length/i.test(why)) {
@@ -755,6 +982,49 @@ export async function listModels(conn) {
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 }
 
+/* THE PROVIDER IS ASKED WHAT ITS MODEL IS (Cozy Tavern M289, M348). A model
+ * he typed rather than picked from the list was planned at its preset's room
+ * (128,000 for an address the app does not know) and spoken to in the
+ * thinking words of whatever family its name suggests. Now the provider's own
+ * list is asked once, in the background, for that very model at that very
+ * address: the room it reports, the weights behind an alias, the thinking
+ * levels it declares — kept on the connection (identFor) until the model or
+ * the address changes, and asked again after a day when nothing came back.
+ * His own room always wins (contextOf). */
+export const ASK_AGAIN_MS = 24 * 60 * 60 * 1000;
+const identityKeepers = new Set();
+export function onIdentity(fn) { identityKeepers.add(fn); return () => identityKeepers.delete(fn); }
+const asking = new Map();
+export function learnIdentity(conn, { now = Date.now() } = {}) {
+  if (!conn || !conn.id || !String(conn.model || '').trim() || !String(conn.url || '').trim()) return Promise.resolve(null);
+  const key = learnKey(conn);
+  if (conn.identFor === key) return Promise.resolve(null);
+  if (conn.identTriedFor === key && now - (Number(conn.identTriedAt) || 0) < ASK_AGAIN_MS) return Promise.resolve(null);
+  const k = conn.id + '|' + key;
+  if (asking.has(k)) return asking.get(k);
+  const p = (async () => {
+    let patch = { identTriedFor: key, identTriedAt: now };
+    try {
+      const r = await listModels(conn);
+      const want = String(conn.model).trim();
+      const hit = r.ok ? (r.models.find((m) => m.id === want) || r.models.find((m) => m.id.toLowerCase() === want.toLowerCase())) : null;
+      if (hit) patch = { ...patch, identFor: key, modelHf: hit.hf || undefined, modelEfforts: hit.efforts || undefined, modelContext: hit.context || undefined };
+    } catch (_) { /* no answer: the preset stands, and it is asked again tomorrow */ }
+    /* the connection in hand knows at once; the house keeps it */
+    for (const [f, v] of Object.entries(patch)) { if (v === undefined) delete conn[f]; else conn[f] = v; }
+    for (const fn of identityKeepers) { try { fn(conn.id, patch); } catch (_) { /* a listener's trouble is not the call's */ } }
+    return patch;
+  })().finally(() => asking.delete(k));
+  asking.set(k, p);
+  return p;
+}
+/* the same, waited for no longer than a moment — a page is never held back by it */
+export async function learnIdentityWithin(conn, ms = 1500) {
+  let timer = null;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), ms); });
+  try { return await Promise.race([learnIdentity(conn), late]); } finally { clearTimeout(timer); }
+}
+
 /* DOES IT WORK, AND DOES IT THINK AT THE LEVEL SET? (Tavern M351, M373) Sends
  * exactly what a page sends for the thinking — never the page's structured
  * schema nor its web search, which would answer for themselves — and says
@@ -777,15 +1047,30 @@ export function speedWords(m) {
 export async function measureSpeed(conn, { now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) } = {}) {
   const t0 = now();
   let first = null;
+  let last = null;
   let words = '';
-  const mark = () => { if (first === null) first = now() - t0; };
+  let thought = 0;
+  /* the clock starts on the first real word — never on a chunk of only space a
+   * provider opens its stream with before the model has written anything —
+   * and stops on the last one (Tavern M374) */
+  const mark = (t, thinking) => {
+    const at = now() - t0;
+    if (first === null && /\S/.test(t)) first = at;
+    if (first === null) return;
+    last = at;
+    words += t;
+    if (thinking) thought += t.length;
+  };
   const out = await ask(conn, { build: () => ({ messages: [{ role: 'user', content: SPEED_ASK }], maxTokens: SPEED_MAX_TOKENS }), stream: true, noStructured: true, noSearch: true,
-    onText: (t) => { mark(); words += t; }, onThinking: (t) => { mark(); words += t; } });
+    onText: (t) => mark(t, false), onThinking: (t) => mark(t, true) });
   if (!out.ok) return null;
   const totalMs = now() - t0;
   const counted = out.usage && Number.isFinite(out.usage.out) ? out.usage.out : null;
-  const tokens = counted !== null ? counted : estimateTokens(words);
-  const writing = first === null ? 0 : totalMs - first;
+  let tokens = counted !== null ? counted : estimateTokens(words);
+  /* thinking it counted but never streamed is not writing that was watched (Tavern M374) */
+  const hidden = out.usage && Number(out.usage.reasoning) > 0 ? Number(out.usage.reasoning) : 0;
+  if (counted !== null && hidden && !thought && hidden < counted) tokens = counted - hidden;
+  const writing = first === null ? 0 : (last !== null ? last : totalMs) - first;
   const tps = first !== null && writing >= 250 && tokens >= 20 ? tokens / (writing / 1000) : null;
   return { firstMs: first === null ? null : Math.round(first), totalMs: Math.round(totalMs), tokens, estimated: counted === null, tps };
 }

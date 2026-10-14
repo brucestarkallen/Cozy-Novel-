@@ -8,8 +8,9 @@ import * as archivist from '../novel/archivist.js';
 import * as talk from '../novel/talk.js';
 import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGrow, copyText, field, onBack } from './dom.js';
 import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, NOTE_KINDS, turnSteps } from '../novel/shape.js';
-import { numberWords, plural, timeAgo, nameKey, truthOf } from '../util.js';
+import { numberWords, plural, timeAgo, nameKey, openOf } from '../util.js';
 import { showSent } from './sent.js';
+import { webUrl } from '../model/call.js';
 import { thinkBox, updateThinkBox } from './think.js';
 import { wordsOf, changesComing, editableOf, partsOf } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
@@ -235,6 +236,8 @@ async function removeChapter(id) {
   const c = store.peek('chapter', id);
   const words = c ? chapterWords(c) : 0;
   if (!(await confirmIt('Remove this chapter?', `${chapterLabel(n, c)}${words ? ` and its ${plural(words, 'word')}` : ''} go to Recently deleted (Settings → Backups) for thirty days.`, 'Remove it', { danger: true }))) return;
+  /* a page being written into it stops: there is nowhere left to keep it (Tavern M675) */
+  writer.stopIn(P.novelId, id);
   archivist.retireChapter(P.novelId, c);
   const i = n.order.indexOf(id);
   store.change('novel', P.novelId, novelSteps.removeChapter(id), { now: true });
@@ -298,6 +301,17 @@ function keepTyped() {
   typed.value = ta.value;
   typed.focus = document.activeElement === ta;
   if (tb) { typed.tell = tb.value; typed.tellOpen = !tb.hidden; }
+}
+/* words he typed beside the page and has not sent yet (an update waits for them: they live only here) */
+export function unsentWords() {
+  const foot = ui && ui.rightFoot;
+  const boxes = foot ? [...foot.querySelectorAll('textarea')] : [];
+  if (boxes.some((t) => String(t.value || '').trim())) return true;
+  /* the boxes on screen are the truth for their own words (he may have
+   * cleared them since they were last kept); what is kept counts only while
+   * its boxes are not the ones shown */
+  if (boxes.length && foot.dataset.for === typed.key) return false;
+  return Boolean(String(typed.value || '').trim()) || Boolean(String(typed.tell || '').trim());
 }
 export function restoreTyped(key) {
   ui.rightFoot.dataset.for = key;
@@ -440,7 +454,7 @@ function checkReport(n, { asked, off, cards }) {
     box.append(h('p.notekey', 'The check before this one:'));
   }
   if (!a.checked) { box.append(h('b', 'Not checked against the book yet.'), ` ${next} Check the notes against the book does it now.`); return box; }
-  if (a.failed) { box.append(h('b', `The last check could not be made (${timeAgo(a.at)}).`), ` Its model would not check them: ${a.failed}. ${next}`); return box; }
+  if (a.failed) { box.append(h('b', `The last check could not be made (${timeAgo(a.at)}).`), ` It could not check them: ${a.failed}. ${next}`); return box; }
   const changes = a.changes || [];
   const head = a.clear === false
     ? `Checked ${timeAgo(a.at)} — something is worth a look:`
@@ -774,6 +788,11 @@ function drawTurn(kind, id, turn) {
   if (live || v.streaming) return el;
   if (turn.by !== 'you' && v.cut) el.append(h('div.turnnote.cutnote', String(v.text || '').trim() ? `It stopped partway${v.cutWhy ? ` — ${v.cutWhy}` : ''}.` : `No words came${v.cutWhy ? ` — ${v.cutWhy}` : ''}. What it thought is kept above.`));
   if (kind === 'talk' && v.read && v.read.length) el.append(h('div.turnnote', `It read ${v.read.join(', ')} whole.`));
+  /* what was said of this answer — a lesson its model taught, what was taken off it — as a page's version says it */
+  if (turn.by !== 'you' && v.notes && v.notes.length) el.append(h('div.turnnote.said', v.notes.join(' ')));
+  /* what its own web search looked at — only an address on the web is ever a link */
+  const looked = turn.by !== 'you' ? (v.sources || []).filter((x) => x && webUrl(x.url)) : [];
+  if (looked.length) el.append(h('div.turnnote.sources', 'Looked up: ', ...looked.slice(0, 8).flatMap((x, k) => [k ? ' · ' : '', h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer' }, String(x.title || x.url).slice(0, 80))])));
   if (kind === 'talk' && v.changes && v.changes.length) el.append(changeList(id, turn, v));
   const row = h('div.tctl');
   if (turn.by !== 'you') {
@@ -822,6 +841,7 @@ function drawTurn(kind, id, turn) {
     /* the answer as it came, its blocks and all (Cozy Tavern's "What it said, whole") */
     !mine && kind === 'talk' && String(v.text || '').trim() !== wordsOf(v.text).trim() ? { label: 'What it said, whole', hint: 'The answer as it came — its changes block and all.', run: () => showWhole(v.text) } : null,
     !mine && v.sent ? { label: 'What was sent', hint: 'Everything this answer was asked with, as it went out.', run: () => showSent(P.novelId, v.sent) } : null,
+    !mine && kind === 'play' && String(v.tookOff || '').trim() ? { label: 'Put back what was taken off', hint: 'What the narrator added after its telling — a note to you, a block of tracking — back where it was, as a new version of this answer.', disabled: talk.talkBusy('play', id), run: () => { if (talk.putBackTelling({ playId: id, turnId: turn.id })) toast('Put back — the answer without it is one arrow away.'); } } : null,
     { label: 'Copy', hint: mine ? 'Your words, to paste anywhere.' : 'Its words, to paste anywhere.', run: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') },
     '-',
     { label: 'Remove', hint: mine ? 'This message goes from the conversation, with Undo.' : 'This answer goes from the conversation, with Undo; changes it made stay in the book.', danger: true, run: () => removeTurn(kind, id, turn) },
@@ -850,7 +870,7 @@ function whatChanged(c) {
   if (op.note !== undefined) {
     const bits = ['about', 'ties', 'now'].filter((k) => op[k] !== undefined).map((k) => `${k === 'ties' ? 'with others' : k === 'now' ? 'right now' : 'who they are'}: ${clip(op[k], 80)}`);
     if (op.newName !== undefined) bits.unshift(`renamed ${clip(op.newName, 60)}`);
-    if (truthOf(op.open) !== undefined) bits.push(truthOf(op.open) ? 'open again' : 'closed');
+    if (openOf(op) !== undefined) bits.push(openOf(op) ? 'open again' : 'closed');
     return bits.join(' · ') || 'brought up to date';
   }
   return '';
@@ -870,7 +890,7 @@ function changeList(novelId, turn, v) {
     const mark = { made: '✓', waiting: '•', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
     /* a waiting one that could not land now (its words gone, its thing changed since): said, with no Apply (M224) */
     const stale = c.status === 'waiting' && !c.copied ? talk.waitingWhy(novelId, c) : '';
-    const state = { made: c.edited ? 'made with your words' : (c.said && c.op && c.op.find !== undefined ? c.said : ''), waiting: stale ? `can’t be made now — ${stale}` : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'left — a newer answer changes the same' : 'left as it was' }[c.status] || '';
+    const state = { made: c.edited ? 'made with your words' : (c.said && c.op && (c.op.find !== undefined || c.op.text !== undefined) ? c.said : ''), waiting: stale ? `can’t be made now — ${stale}` : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'left — a newer answer changes the same' : 'left as it was' }[c.status] || '';
     const row = h('div.change.' + c.status,
       h('div.chead', h('b', `${mark} ${c.label}`), state ? h('small', state) : null),
       c.status !== 'refused' ? h('div.cwhat', whatChanged(c)) : (c.op && c.op.find !== undefined ? h('div.cwhat', 'It looked for: ', h('del', clip(c.op.find, 140))) : null),
@@ -1100,6 +1120,7 @@ function drawOnePlay(p) {
       { label: 'Turn it all into prose (from the start)', hint: 'The whole scene written into the chapter, not just what is new since last time.', run: () => toProse(p, true) },
       { label: 'Remove this scene', hint: 'To Recently deleted; prose already written from it stays.', danger: true, run: async () => {
         if (!(await confirmIt('Remove this scene?', 'It goes to Recently deleted (Settings → Backups) for thirty days. Anything already turned into prose stays in the book.', 'Remove it', { danger: true }))) return;
+        talk.stopTalk('play', p.id);
         store.change('novel', P.novelId, novelSteps.removePlay(p.id), { now: true });
         await store.remove('play', p.id).catch(() => {});
         P.playId = null; drawSide();
