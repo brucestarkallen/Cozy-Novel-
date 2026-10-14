@@ -1444,4 +1444,4 @@ function finishReread(novelId) {
   else if (novel && novel.memory && novel.memory.rereadFrom) store.change('novel', novelId, novelSteps.setMemory({ rereadFrom: null }));
 }
 
-export function forTests() { return { lights, failures, blocked, timers, narrow, stuck }; }
+export function forTests() { return { lights, failures, blocked, timers, narrow, stuck, running: runningFor }; }

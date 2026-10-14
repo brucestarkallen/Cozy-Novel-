@@ -369,7 +369,8 @@ export async function ask(conn, opts = {}) {
   }
   const stream = opts.stream !== false;
   const notes = [];
-  let flags = { noPrefill: false, noUsage: false, maxCap: 0, noStructured: Boolean(opts.noStructured) };
+  /* asked without his page's started reply (the partner, Ideas, Go on): never given one (Tavern M328, M585) */
+  let flags = { noPrefill: Boolean(opts.noPrefill), noUsage: false, maxCap: 0, noStructured: Boolean(opts.noStructured) };
   let lessons = 0;
   let keyMended = false;
   let transientTries = 0;

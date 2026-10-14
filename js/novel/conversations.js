@@ -39,6 +39,22 @@ export function openName(rec) { return String((rec && rec.name) || '').trim() ||
 
 export function cleanConvName(s) { return String(s || '').replace(/\s+/g, ' ').trim().slice(0, 40); }
 
+/* A name for a copy or a branch of one: its stem (any "(copy)" or "(branch
+ * 3)" it already carries set aside), cut to leave room for the mark, then
+ * the first mark no conversation has — always ends (Cozy Tavern's M245-2: a
+ * name capped at 40 matched the open one for every number, and the page
+ * froze). */
+export function markedName(name, mark, used) {
+  const stem = String(name || '').replace(/\s*\((?:copy|branch)(?:\s+\d+)?\)\s*$/i, '').replace(/\s+/g, ' ').trim() || NAME;
+  const taken = new Set(used || []);
+  for (let n = 1; n < 10000; n++) {
+    const tag = n === 1 ? ` (${mark})` : ` (${mark} ${n})`;
+    const out = `${stem.slice(0, Math.max(1, 40 - tag.length)).trim()}${tag}`;
+    if (!taken.has(out)) return out;
+  }
+  return `${stem.slice(0, 20)} (${mark} ${Date.now() % 100000})`;
+}
+
 /* what the list shows: the open one, and the others newest used first */
 export function conversationsOf(rec) {
   const others = ((rec && rec.convs) || []).filter((c) => c && c.id)

@@ -962,6 +962,8 @@ async def scenario_versions(b):
         t = await pg.evaluate(f"fetch('/api/store/talk/{nid}').then((r) => r.ok ? r.json() : null)")
         return len(((t or {}).get('data') or {}).get('turns') or [])
     before_turns = await talk_turns()
+    # the take on show is read by now (until then its notes are the book's before it: none)
+    await until(lambda n: len((n.get('notes') or {}).get('people', [])) > 0, 20000)
     await pg.click('.menu-pop button:has-text("Check the notes against the book")'); await pg.wait_for_timeout(600)
     n = await novel()
     after_turns = await talk_turns()
@@ -1034,6 +1036,45 @@ async def scenario_notes(b):
     await pg.click('#sidePane .lightcard.aside button:has-text("Read it again")'); await pg.wait_for_timeout(500)
     n = await novel()
     check('Read it again takes it off the list', not (n.get('memory') or {}).get('aside'), (n.get('memory') or {}).get('aside'))
+    errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
+    check('no errors on the page', not errs, errs[:3])
+
+async def scenario_partner_said(b):
+    """the partner says what happened: a reply cut off inside its changes, Another answer only on the newest answer, a waiting change that can no longer land"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Partner Says')
+    await add_conn(pg)
+    await pg.fill('#direction', 'Rain hammered the glass. The sea was grey.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(400)
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(300)
+    await pg.fill('#sideFoot textarea', 'CUT CHANGES please.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .turn.ai .cutnote', timeout=8000)
+    words = await pg.inner_text('#sideBody .turn.ai >> nth=-1')
+    check('a reply cut off inside its changes says none were made, and why it stopped', 'none of them were made' in words and 'It stopped partway' in words and 'ran out of room' in words and 'Making the changes' not in words, words[:300])
+    await pg.fill('#sideFoot textarea', 'Anything else?')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_function("document.querySelectorAll('#sideBody .turn.ai').length >= 2 && !document.querySelector('#sideBody .turn.streaming')", timeout=8000)
+    await pg.wait_for_timeout(300)
+    n_again = await pg.locator('#sideBody .turn.ai .tctl button:has-text("Another answer")').count()
+    last_again = await pg.locator('#sideBody .turn.ai >> nth=-1 >> .tctl button:has-text("Another answer")').count()
+    check('Another answer is offered on the newest answer only', n_again == 1 and last_again == 1, (n_again, last_again))
+    # set to wait: a change whose words are gone since can no longer land — said, with no Apply
+    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { h.partnerApplies = 'wait'; }, { now: true }))")
+    await pg.fill('#sideFoot textarea', 'CHANGE THE PASSAGE please.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .change.waiting', timeout=8000)
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    await pg.click('#passages .passage >> nth=0'); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected .pctl button:has-text("Edit")')
+    await pg.fill('.editbox', 'Snow fell on the glass. The sea was grey.')
+    await pg.click('.editrow button:has-text("Save")'); await pg.wait_for_timeout(500)
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(500)
+    row = await pg.inner_text('#sideBody .change.waiting >> nth=-1')
+    applies = await pg.locator('#sideBody .change.waiting >> nth=-1 >> button:has-text("Apply")').count()
+    check('a waiting change whose words are gone since says it can’t be made now, and offers no Apply', 'can’t be made now' in row and 'not there' in row and applies == 0, row[:200])
+    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { h.partnerApplies = 'now'; }, { now: true }))")
     errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
     check('no errors on the page', not errs, errs[:3])
 
@@ -1253,7 +1294,7 @@ async def main():
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_partner, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_partner_said, scenario_partner, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

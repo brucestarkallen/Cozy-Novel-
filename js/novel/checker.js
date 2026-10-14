@@ -1002,4 +1002,4 @@ function autoAfter(novelId) {
   tell(novelId);
 }
 
-export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter }; }
+export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor }; }

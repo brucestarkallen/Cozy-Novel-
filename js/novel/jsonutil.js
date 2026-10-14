@@ -71,9 +71,34 @@ export function repairJson(text) {
   return fixed;
 }
 
+/* A quote inside a string that was never escaped ("find": "He said, "Go.""):
+ * a quote that is not followed by what ends a string (a comma, a closing
+ * bracket or brace, a colon, the end) is one of the words — escaped. The last
+ * thing tried, after the mending above. */
+export function repairQuotes(text) {
+  const src = String(text || '');
+  let out = '';
+  let inStr = false;
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (!inStr) { out += ch; if (ch === '"') inStr = true; continue; }
+    if (ch === '\\') { out += ch + (src[i + 1] || ''); i += 1; continue; }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < src.length && /\s/.test(src[j])) j += 1;
+      if (j >= src.length || ',}]:'.includes(src[j])) { out += ch; inStr = false; } else out += '\\"';
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 export function parseLenient(candidate) {
   try { return JSON.parse(candidate); } catch (_) { /* try mending */ }
-  try { return JSON.parse(repairJson(candidate)); } catch (_) { return null; }
+  const mended = repairJson(candidate);
+  try { return JSON.parse(mended); } catch (_) { /* one more */ }
+  try { return JSON.parse(repairQuotes(mended)); } catch (_) { return null; }
 }
 
 /* The object that answers, or null. want(obj) picks among several. */

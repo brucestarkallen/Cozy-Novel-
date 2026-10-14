@@ -797,8 +797,9 @@ export function buildRequest(conn, opts = {}) {
   const fitted = foldTurns(lateSystemFitted(conn, messages));
   /* a request that already ends on the story's own words is a reply already started: no prefill on top of it */
   const endsOnAssistant = fitted.length && fitted[fitted.length - 1].role === 'assistant';
-  /* a helper rides with the prefill only when he ticked "Workers riding this connection get it too" */
-  const noPrefill = opts.noPrefill || (worker && conn.prefillForWorkers !== true) || endsOnAssistant;
+  /* a helper rides with the prefill only when he ticked "Workers riding this connection get it too" —
+   * and never a Structured template's: its opening is a page's, and breaks a helper's JSON (Tavern M587) */
+  const noPrefill = opts.noPrefill || (worker && (conn.prefillForWorkers !== true || conn.prefillMode === 'structured')) || endsOnAssistant;
   /* structured: his opening is asked of the model through the answer's schema — nothing is handed to it */
   const structured = !noPrefill && !opts.noStructured && !worker ? structuredPlanFor(conn) : null;
   const pf = noPrefill || structured ? { messages: fitted, applied: false } : applyPrefill(fitted, conn);

@@ -776,6 +776,12 @@ pre.whole { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-mon
 .turn .words .direction > span { display: block; white-space: pre-wrap; }
 .turn .words .direction .btn { margin-top: 8px; }
 .turn .words > span { white-space: pre-wrap; }
+/* the partner's words, drawn with their bold and italics */
+.turn .talkprose p { margin: 0 0 .6em; }
+.turn .talkprose p:last-child { margin-bottom: 0; }
+.turn .talkprose strong { font-weight: 650; }
+.turn .turnnote.cutnote { color: #e3a85a; }
+[data-theme="day"] .turn .turnnote.cutnote { color: #8a5310; }
 .turn .tctl .tmore { width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 /* Usage and cost, as Cozy Tavern shows it: a period at a time, a small table */
 .usage-periods { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }

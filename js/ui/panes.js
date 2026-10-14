@@ -8,7 +8,7 @@ import * as archivist from '../novel/archivist.js';
 import * as talk from '../novel/talk.js';
 import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGrow, copyText, field, onBack } from './dom.js';
 import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, NOTE_KINDS, turnSteps } from '../novel/shape.js';
-import { numberWords, plural, timeAgo, nameKey } from '../util.js';
+import { numberWords, plural, timeAgo, nameKey, truthOf } from '../util.js';
 import { showSent } from './sent.js';
 import { thinkBox, updateThinkBox } from './think.js';
 import { wordsOf, changesComing, editableOf, partsOf } from '../novel/changes.js';
@@ -595,6 +595,8 @@ async function drawPartner() {
   const t = store.peek('talk', novelId) ?? await store.open('talk', novelId).catch(() => null);
   if (gen !== sideGen || P.side !== 'partner' || P.novelId !== novelId) return;
   if (t) talk.repairStaleTurns('talk', novelId);
+  /* the book's scenes at hand, so a rename everywhere reaches them */
+  talk.loadPlays(novelId).catch(() => {});
   if (!P.offs.talkSub) { P.offs.push(store.subscribe('talk', novelId, () => { if (P.side === 'partner' && !drawnAlready('talk', novelId)) drawPartnerSoon(); })); P.offs.talkSub = true; }
   ui.rightBody.textContent = '';
   ui.rightBody.append(conversationRow(novelId, t));
@@ -742,7 +744,7 @@ function shownWords(kind, turn, raw, live) {
   const words = wordsOf(raw);
   if (words) return words;
   if (live && live.note) return live.note;
-  if (changesComing(raw)) return 'Making the changes…';
+  if (changesComing(raw)) return live ? 'Making the changes…' : 'Its changes were cut off before they finished, so none of them were made — ask again (a larger Longest reply gives it room).';
   /* it asked to read more than one answer can be sent */
   if (/<read>/i.test(String(raw || ''))) return 'It asked to read more of the book than one answer can carry — ask it again, about less at a time.';
   return '';
@@ -761,14 +763,16 @@ function drawTurn(kind, id, turn) {
     /* each premise it offered, with its own Use as the next direction */
     const w = h('div.words');
     for (const part of partsOf(text)) {
-      if (part.kind === 'words') { w.append(h('span', part.text)); continue; }
+      if (part.kind === 'words') { if (live || v.streaming) w.append(h('span', part.text)); else { const d = h('div.tprose.talkprose'); drawProse(d, part.text); w.append(d); } continue; }
       w.append(h('div.direction', h('span', part.text), part.done && !(live || v.streaming) ? h('button.btn.small', { title: 'Puts this premise in the box under the page — change it as you like, then Write.', onclick: async () => { if (!(await desk.useAsDirection(part.text))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction') : null));
     }
     el.append(w);
-  } else el.append(h('span.words', shownWords(kind, turn, text, live)));
+  } else if (kind === 'talk' && turn.by !== 'you' && !(live || v.streaming) && wordsOf(text)) { const w = h('div.words.tprose.talkprose'); drawProse(w, shownWords(kind, turn, text, live)); el.append(w); }
+  else el.append(h('span.words', shownWords(kind, turn, text, live)));
   /* his line to the narrator, not his character's */
   if (kind === 'play' && turn.by === 'you' && v.tell) el.append(h('div.tell', h('b', 'To the narrator: '), v.tell));
   if (live || v.streaming) return el;
+  if (turn.by !== 'you' && v.cut) el.append(h('div.turnnote.cutnote', String(v.text || '').trim() ? `It stopped partway${v.cutWhy ? ` — ${v.cutWhy}` : ''}.` : `No words came${v.cutWhy ? ` — ${v.cutWhy}` : ''}. What it thought is kept above.`));
   if (kind === 'talk' && v.read && v.read.length) el.append(h('div.turnnote', `It read ${v.read.join(', ')} whole.`));
   if (kind === 'talk' && v.changes && v.changes.length) el.append(changeList(id, turn, v));
   const row = h('div.tctl');
@@ -779,7 +783,9 @@ function drawTurn(kind, id, turn) {
         h('span', { style: { alignSelf: 'center', fontSize: '12px', color: 'var(--chrome-soft)' } }, `${i + 1}/${turn.versions.length}`),
         h('button', { 'aria-label': 'The answer after', disabled: i >= turn.versions.length - 1, onclick: () => store.change(kind, id, turnSteps.pick(turn.id, turn.versions[i + 1].id), { now: true }) }, '›'));
     }
-    row.append(h('button', { title: 'Asks again for this answer; the one you have stays one arrow away.', onclick: async () => {
+    const rec = store.peek(kind, id);
+    const newest = rec && rec.turns && rec.turns.length && rec.turns[rec.turns.length - 1].id === turn.id;
+    if (newest) row.append(h('button', { title: 'Asks again for this answer; the one you have stays one arrow away.', onclick: async () => {
       const out = kind === 'talk' ? await talk.partnerAgain({ novelId: id, chapterId: P.chapterId, turnId: turn.id }) : await talk.playAgain({ playId: id, turnId: turn.id });
       if (out && !out.ok && out.error) toast(out.error, 6000);
     } }, 'Another answer'));
@@ -844,7 +850,7 @@ function whatChanged(c) {
   if (op.note !== undefined) {
     const bits = ['about', 'ties', 'now'].filter((k) => op[k] !== undefined).map((k) => `${k === 'ties' ? 'with others' : k === 'now' ? 'right now' : 'who they are'}: ${clip(op[k], 80)}`);
     if (op.newName !== undefined) bits.unshift(`renamed ${clip(op.newName, 60)}`);
-    if (typeof op.open === 'boolean') bits.push(op.open ? 'open again' : 'closed');
+    if (truthOf(op.open) !== undefined) bits.push(truthOf(op.open) ? 'open again' : 'closed');
     return bits.join(' · ') || 'brought up to date';
   }
   return '';
@@ -859,11 +865,15 @@ function changeList(novelId, turn, v) {
     drawSideSoon();
   };
   for (const c of v.changes) {
+    /* a miss it put right in a later round of the same answer is not shown as a miss (M683) */
+    if (c.superseded) continue;
     const mark = { made: '✓', waiting: '•', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
-    const state = { made: c.edited ? 'made with your words' : '', waiting: 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: 'left as it was' }[c.status] || '';
+    /* a waiting one that could not land now (its words gone, its thing changed since): said, with no Apply (M224) */
+    const stale = c.status === 'waiting' && !c.copied ? talk.waitingWhy(novelId, c) : '';
+    const state = { made: c.edited ? 'made with your words' : (c.said && c.op && c.op.find !== undefined ? c.said : ''), waiting: stale ? `can’t be made now — ${stale}` : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'left — a newer answer changes the same' : 'left as it was' }[c.status] || '';
     const row = h('div.change.' + c.status,
       h('div.chead', h('b', `${mark} ${c.label}`), state ? h('small', state) : null),
-      c.status !== 'refused' ? h('div.cwhat', whatChanged(c)) : null,
+      c.status !== 'refused' ? h('div.cwhat', whatChanged(c)) : (c.op && c.op.find !== undefined ? h('div.cwhat', 'It looked for: ', h('del', clip(c.op.find, 140))) : null),
       c.why ? h('div.cwhy', c.why) : null);
     const btns = h('div.cbtns');
     if (c.copied) {
@@ -872,7 +882,7 @@ function changeList(novelId, turn, v) {
     } else {
       if (c.status === 'made') btns.append(h('button', { title: 'Put back what this change changed (only if nothing has changed it since).', onclick: act(talk.undoOneChange, c.id) }, 'Undo'));
       if (c.status === 'waiting') {
-        btns.append(h('button.go', { title: 'Make this change in the book.', onclick: act(talk.applyChange, c.id) }, 'Apply'));
+        if (!stale) btns.append(h('button.go', { title: 'Make this change in the book.', onclick: act(talk.applyChange, c.id) }, 'Apply'));
         if (editableOf(c.op).length) btns.append(h('button', { title: 'Change its words yourself before it goes into the book.', onclick: () => editByHand(novelId, turn, v, c) }, 'Edit by hand'));
         btns.append(h('button', { title: 'Leave the book as it is for this one.', onclick: act(talk.skipChange, c.id) }, 'Leave it'));
       }

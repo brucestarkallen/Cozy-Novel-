@@ -100,6 +100,9 @@ def answer_for(body):
     if "how it went" in last_user and "Narrator:" in last_user:
         return "Mara walked down to the shore, where the stranger stood with his collar up. “You found it,” he said. She did not ask how he knew."
     if "talking over our novel" in system:
+        if "CUT CHANGES" in last_user:
+            # a reply that runs out of room inside its changes block
+            return '<changes>[{"passage": "1.1", "text": "A whole new passage that goes on and on' + CUT_MARK
         if "TAKE OUT THE PASSAGE" in last_user:
             return '<changes>[{"passage": "1.1", "remove": true, "why": "too quiet"}]</changes>\n\nIt can go.'
         if "TWO CHANGES" in last_user:
@@ -126,6 +129,9 @@ def answer_for(body):
     if body.get("model") == "fake-thinker" and "THE LAMP" in last_user:
         words.append("LAMP LIT.")
     return "\n\n".join(words)
+
+
+CUT_MARK = "\u27eacut\u27eb"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -175,6 +181,9 @@ class Handler(BaseHTTPRequestHandler):
         if model == "fake-broken":
             return self.send_json({"error": {"message": "The server had an error while processing your request."}}, 500)
         text = answer_for(body)
+        forced_cut = text.endswith(CUT_MARK)
+        if forced_cut:
+            text = text[: -len(CUT_MARK)]
         msgs = body.get("messages") or []
         joined = " ".join((m.get("content") or "") for m in msgs if isinstance(m.get("content"), str))
         slow = "SLOW" in joined
@@ -202,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(0.5 if slow else 0.05)
             pieces = re.findall(r"\S+\s*", text)
             limit = body.get("max_tokens")
-            cut = False
+            cut = forced_cut
             if model == "fake-cutter":
                 pieces = pieces[: max(3, len(pieces) // 3)]
                 cut = True

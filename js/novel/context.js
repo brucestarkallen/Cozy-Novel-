@@ -34,13 +34,28 @@ export const SAFETY = 1500;
 /* How much of the room the answer may need — for budgeting only; what is SENT
  * as the reply's length is his setting alone (providers.js). Never more than
  * half of what the model holds. */
-export function answerRoom(conn, length = 'scene') {
+export function answerRoom(conn, length = 'scene', purpose = 'write') {
   const set = Number.isFinite(conn && conn.maxTokens) && conn.maxTokens > 0 ? conn.maxTokens : 0;
   /* Automatic may run as long as a long stretch */
   const wanted = length === 'chapter' ? 12000 : length === 'long' || length === 'auto' ? 9000 : length === 'paragraphs' ? 2500 : 6000;
   let room = set || wanted;
   if (thinksOn(conn || {})) room = Math.max(room, thinkingFloor(conn || {}));
+  /* the partner's answer: room for a changes block whatever Longest reply says (talk.js) */
+  if (purpose === 'partner') room = Math.max(room, PARTNER_FLOOR);
   return Math.min(room, Math.floor(contextOf(conn || {}) * 0.5));
+}
+
+/* What one answer of the partner may run to: his Longest reply, raised to a
+ * floor a changes block fits in — a block cut off is lost whole (Cozy
+ * Tavern's M75-002, the floor his law allows) — never past half the model's
+ * room; Claude's own when he set none. Unset elsewhere: nothing is sent. */
+export const PARTNER_FLOOR = 8192;
+export function partnerReply(conn, length = 'scene', anthropic = false) {
+  const half = Math.floor(contextOf(conn || {}) * 0.5);
+  const set = Number.isFinite(conn && conn.maxTokens) && conn.maxTokens > 0 ? conn.maxTokens : 0;
+  if (anthropic) return Math.min(Math.max(requiredLength(conn, length), PARTNER_FLOOR), Math.max(half, requiredLength(conn, length)));
+  if (!set) return undefined;
+  return Math.max(set, Math.min(PARTNER_FLOOR, half));
 }
 
 /* For Claude, whose wire must say a length: what fits the length asked for,
@@ -167,8 +182,8 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
   while (cost > left && omitted < k) { cost -= shortCost[omitted]; omitted++; }
   const book = {
     omitted,
-    summaries: earlier.slice(omitted, k).map((id) => ({ label: labelOf(id), text: shortOf(ch(id)) })),
-    whole: earlier.slice(k).map((id) => ({ label: labelOf(id), text: wholeOf(id) || '(nothing written in it yet)' })),
+    summaries: earlier.slice(omitted, k).map((id) => ({ id, label: labelOf(id), text: shortOf(ch(id)) })),
+    whole: earlier.slice(k).map((id) => ({ id, label: labelOf(id), text: wholeOf(id) || '(nothing written in it yet)' })),
     current,
     later: laterRows,
     laterOmitted,
@@ -267,7 +282,7 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   if (late) after.push({ role: 'system', content: late });
 
   const total = contextOf(conn);
-  const reserve = answerRoom(conn, length);
+  const reserve = answerRoom(conn, length, purpose);
   const afterCost = after.reduce((a, m) => a + estimateTokens(m.content) + 8, 0);
   /* what has to go whatever the book — his words, the modules, the frame,
    * the talk and his request — with the room for the answer: the least this
@@ -330,6 +345,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     systemParts,
     messages,
     stats: { tokens: estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0), room: total, whole: fit.whole + (chapter.id ? 1 : 0), short: fit.short, omitted: fit.book.omitted, modules: ride.names, over, least,
+      /* the chapters it was given whole — the one open (unless told in part) and the earlier ones that fit (talk.js: never a passage written anew in one it only had in short) */
+      wholeIds: [...fit.book.whole.map((w) => w.id), ...(chapter.id && cur === current ? [chapter.id] : [])],
       /* what goes whatever the book's earlier chapters, the answer's room, the chapter open (talk.js) */
       fixed, reserve, current: currentCost(current) },
     /* a model whose room cannot hold what has to go with any of the book is

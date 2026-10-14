@@ -532,7 +532,7 @@ export function newCard(kind, fields = {}) {
  * Hitsugaya), for a place or a thing the one called the same but for a
  * leading "the". Past the first, a name two cards answer to means neither:
  * `ambiguous`, and nothing is written. */
-export function matchCard(cards, name, aka = [], { kind = '' } = {}) {
+export function matchCard(cards, name, aka = [], { kind = '', near = true } = {}) {
   const k = nameKey(name);
   if (!k) return { card: null, ambiguous: false };
   const list = cards || [];
@@ -548,8 +548,9 @@ export function matchCard(cards, name, aka = [], { kind = '' } = {}) {
   const named = (n) => n && (kind !== 'people' || !isDescriptorName(n));
   const forms = [name, ...(aka || [])].filter(named);
   const namesOf = (c) => [c.name, ...(c.aka || [])].filter(named);
-  const near = forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => (kind === 'people' ? samePersonName(n, f) : plainName(n) === plainName(f)))))) : null;
-  return near || { card: null, ambiguous: false };
+  /* a short or fuller form only where it is asked for: the helper's rows — never a change he made through the partner, which names its card exactly */
+  const close = near && forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => (kind === 'people' ? samePersonName(n, f) : plainName(n) === plainName(f)))))) : null;
+  return close || { card: null, ambiguous: false };
 }
 export function findCard(cards, name, aka = [], opts = {}) { return matchCard(cards, name, aka, opts).card; }
 
