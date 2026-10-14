@@ -350,6 +350,18 @@ export const chapterSteps = {
     if (!v) return;
     for (const [k, val] of Object.entries(patch)) { if (val === undefined) delete v[k]; else v[k] = val; }
   },
+  /* versions taken out put back (Undo): in their places, the one that was on show on show again;
+   * a version made since stays, after them */
+  putVersionsBack: (pid, versions, shownId) => (c) => {
+    const p = findPassage(c, pid);
+    if (!p) return;
+    const now = new Map(p.versions.map((v) => [v.id, v]));
+    const back = versions.map((v) => now.get(v.id) || JSON.parse(JSON.stringify(v)));
+    const since = p.versions.filter((v) => !versions.some((x) => x.id === v.id));
+    p.versions = [...back, ...since];
+    const i = p.versions.findIndex((v) => v.id === shownId);
+    if (i >= 0) p.pick = i;
+  },
   removeVersion: (pid, vid) => (c) => {
     const p = findPassage(c, pid);
     if (!p || p.versions.length < 2) return;

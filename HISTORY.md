@@ -125,3 +125,13 @@ The partner is told its part plainly: it knows the book, says what it thinks, ke
 **Usage and cost** as Cozy Tavern shows it: Today, Last 7 days or Last 30 days, one at a time, as a small table (connection · model, in, out, cost, and the total); what it comes to per day, week and month at the rate so far; the busiest day per model, folded until he opens it. The notes' long explanations are one line each, the full words on a long press; **Each version's notes** shows the newest eight, the rest on **Show all**.
 
 Checked with all five suites — three new checks in tests/app.mjs (the auditor on notes from before it: the old take's fact gone, his card kept, Undo, not again until due; the premises read from an answer; the judge's grade, its lift and its switch) — on synthetic books with stand-in models. No paid provider call was made.
+
+## 2.4.2, Remove versions, Ideas for what happens next, every version's all its own
+
+Asked: take out several versions at once (of seven, the first five). The passage's ⋯ has **Remove versions…**: each version with its first words and when it was written, ticked to go, **All but the one on show**, one always stays; their notes go with them, and **Undo** puts them back in their places with the one that was on show on show again. **Remove this version** has Undo now too.
+
+Asked: each version foolproof in everything. Checked, with a new check: picking a version brings back its notes and what the helper keeps of the book for an Automatic book (What it's about, How it reads), with no call; the chapter's summary comes back by its words, the checker's suggestions and the judge's grade are kept per version.
+
+Asked: quick ideas for what happens next. An **Ideas** chip under the page asks the partner's connection, with the whole book, for one to five premises (Settings → Who does what → Ideas beside the box, and how many); a tap puts one in the box. Off, the chip is gone. They are never kept in the conversation.
+
+Checked with all five suites — new checks: the kept words per version, several versions out and back, Ideas read from their blocks (tests/app.mjs); Remove versions and Undo, Ideas and its switch (walk_more) — on synthetic books with stand-in models.

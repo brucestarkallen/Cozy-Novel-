@@ -456,11 +456,26 @@ function rolesGroup(hs, open) {
     roleSel('partner', 'The partner', 'Talks the book over with you.', true),
     roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true),
     field('The checker', checkSel, 'Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. Writing from before it began is checked only when you ask. A quick, inexpensive model is perfect here.'),
-    judgeField(hs));
+    judgeField(hs),
+    ideasField(hs));
   return g;
 }
 
 /* ------------------------------------------------------------ usage and cost */
+/* Ideas beside the box: on or off, and how many */
+function ideasField(hs) {
+  const j = hs.ideas || {};
+  const on = h('input', { type: 'checkbox', checked: j.on !== false });
+  on.addEventListener('change', () => changeHouse((x) => { x.ideas = { ...(x.ideas || {}), on: on.checked }; }, { now: true }));
+  const sel = h('select');
+  for (const n of [1, 2, 3, 4, 5]) sel.append(h('option', { value: String(n), selected: (Number(j.count) || 4) === n }, n === 1 ? 'One' : `${n}`));
+  sel.addEventListener('change', () => changeHouse((x) => { x.ideas = { ...(x.ideas || {}), count: Number(sel.value) }; }, { now: true }));
+  return h('div.field',
+    h('label.toggle', on, h('span', 'Ideas beside the box')),
+    h('em', 'An Ideas chip under the page: a few premises for what happens next, from your partner’s connection, with the whole book — a tap puts one in the box. Off: the chip is gone.'),
+    field('How many ideas', sel));
+}
+
 /* the judge (in the checker's reading): on or off, and his mark */
 function judgeField(hs) {
   const j = hs.judge || {};

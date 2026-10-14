@@ -895,8 +895,24 @@ async def scenario_versions(b):
     await pg.click('#sidePane .sechead:has(h3:text-is("Each version’s notes"))'); await pg.wait_for_timeout(300)
     tags = await pg.locator('#sidePane .card.reading .ctag').all_inner_texts()
     check('the readings list shows each version: one in the notes, one an earlier version', sorted(t.lower() for t in tags) == ['earlier version', 'in the notes'], tags)
-    # presets: saved, the box changed, used again
+    # several versions taken out at once, with Undo
     await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    if not await pg.locator('.passage.selected').count():
+        await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected .pctl button:has-text("Another take")')
+    await pg.wait_for_function("(() => { const v = document.querySelector('.passage.selected .pctl .ver > span'); return v && /3 \\/ 3/.test(v.textContent) && !document.querySelector('.passage.streaming'); })()", timeout=15000)
+    await pg.wait_for_timeout(600)
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    await pg.click('.menu-pop button:has-text("Remove versions")')
+    await pg.wait_for_selector('.sheet.on .verrow')
+    await pg.check('.sheet.on .verrow >> nth=0 >> input'); await pg.check('.sheet.on .verrow >> nth=1 >> input')
+    await pg.click('.sheet.on button:has-text("Remove 2 versions")'); await pg.wait_for_timeout(500)
+    vl = '.passage.selected .pctl .ver > span'
+    one = await pg.locator(vl).count() == 0 or '1 / 1' in await pg.inner_text(vl)
+    await pg.click('#toast button:has-text("Undo")'); await pg.wait_for_timeout(500)
+    back = await pg.inner_text(vl) if await pg.locator(vl).count() else ''
+    check('Remove versions takes out the ones ticked, and Undo brings them back', one and '3 / 3' in back, back)
+    # presets: saved, the box changed, used again
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
     if not await pg.locator('.sheet.on button:has-text("Save current preset")').is_visible():
@@ -1027,6 +1043,16 @@ async def scenario_partner(b):
     what = await pg.inner_text('#sideBody .turn.ai >> nth=-1 >> .change.waiting .cwhat')
     check('a passage the partner would take out is said to be taken out of the chapter', what.strip() == 'taken out of the chapter', what)
     await pg.click('#sideBody .turn.ai >> nth=-1 >> .change.waiting button:has-text("Leave it")'); await pg.wait_for_timeout(300)
+    # Ideas: a premise a tap puts in the box; off, the chip is gone
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    await pg.click('#ideasBtn'); await pg.wait_for_selector('.sheet.on .idea', timeout=10000)
+    idea = await pg.inner_text('.sheet.on .idea >> nth=0 >> span')
+    await pg.click('.sheet.on .idea >> nth=0 >> button:has-text("Use")'); await pg.wait_for_timeout(400)
+    check('Ideas: a premise for what happens next goes in the box with a tap', 'brother' in idea and 'brother' in await pg.input_value('#direction'), idea)
+    await pg.fill('#direction', '')
+    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { h.ideas = { on: false }; }, { now: true }))"); await pg.wait_for_timeout(400)
+    check('Ideas off: the chip is gone', await pg.locator('#ideasBtn:not([hidden])').count() == 0)
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(300)
     # Critique among the quick asks
     await pg.click('#sideFoot button:has-text("Quick asks")'); await pg.wait_for_timeout(200)
     items = await pg.locator('.menu-pop button .mlabel').all_inner_texts()

@@ -5,7 +5,8 @@
 import * as store from '../store.js';
 import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
-import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack } from './dom.js';
+import * as talk from '../novel/talk.js';
+import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
 import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers } from '../novel/shape.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
@@ -46,6 +47,7 @@ export function initDesk(elements, appHooks) {
   ui.direction.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onWrite(); } });
   ui.writeBtn.addEventListener('click', onWrite);
   ui.mineBtn.addEventListener('click', onMine);
+  ui.ideasBtn.addEventListener('click', () => showIdeas());
   ui.lengthBtn.addEventListener('click', () => lengthMenu());
   ui.outcomeBtn.addEventListener('click', () => outcomeMenu());
   ui.writerBtn.addEventListener('click', () => hooks.writerMenu(ui.writerBtn));
@@ -439,7 +441,8 @@ function passageMenu(anchor, p) {
     { label: 'Add a scene break after this', hint: 'A * * * line: a new scene begins after it.', run: () => { writer.addBreak({ chapterId: c.id, after: p.id }); } },
     i > 0 ? { label: 'Start a new chapter from here', hint: 'This passage and everything after it become the next chapter.', disabled: busy(), run: () => splitHere(p) } : null,
     '-',
-    p.versions.length > 1 ? { label: 'Remove this version', hint: 'Only the version on show goes; its notes go with it.', danger: true, run: () => removeVersion(p, v) } : null,
+    p.versions.length > 1 ? { label: 'Remove this version', hint: 'Only the version on show goes; its notes go with it. With Undo.', danger: true, run: () => removeVersions(p, [v.id]) } : null,
+    p.versions.length > 2 ? { label: 'Remove versions…', hint: 'Choose the ones to go — any of them, one always stays. With Undo.', danger: true, run: () => chooseVersions(p) } : null,
     { label: 'Remove the passage', hint: 'With Undo; anything only it put in the notes goes too.', danger: true, run: () => removePassage(p) },
   ]);
 }
@@ -493,13 +496,54 @@ function finishEdit(pid, text) {
   else if (changed) { archivist.nudge(S.novelId); toast('Saved — the earlier words are one arrow away.'); }
 }
 
-function removeVersion(p, v) {
-  archivist.retireIfSeen(S.novelId, S.chapterId, p.id, v.id);
-  store.change('chapter', S.chapterId, chapterSteps.removeVersion(p.id, v.id), { now: true });
+/* Versions taken out — the one on show, or several chosen — with Undo; one
+ * always stays. Each one's notes go with it (the helper read it: its words
+ * are kept for it, so what came only from them is taken back). */
+function removeVersions(p, ids) {
+  const chapterId = S.chapterId;
+  const live = (chapter().passages || []).find((x) => x.id === p.id);
+  if (!live) return;
+  const gone = ids.filter((id) => live.versions.some((v) => v.id === id));
+  if (!gone.length) return;
+  if (gone.length >= live.versions.length) { toast('One version always stays.'); return; }
+  const before = JSON.parse(JSON.stringify(live.versions));
+  const shown = (picked(live) || {}).id;
+  for (const id of gone) archivist.retireIfSeen(S.novelId, chapterId, p.id, id);
+  for (const id of gone) store.change('chapter', chapterId, chapterSteps.removeVersion(p.id, id), { now: true });
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId);
   writer.recount(S.novelId);
   drawPage();
+  undoToast(gone.length === 1 ? 'The version is removed.' : `${plural(gone.length, 'version')} are removed.`, () => {
+    store.change('chapter', chapterId, chapterSteps.putVersionsBack(p.id, before, shown), { now: true });
+    store.change('chapter', chapterId, chapterSteps.clearRetired(gone.map((id) => `${p.id}:${id}`)), { now: true });
+    archivist.settle(S.novelId);
+    archivist.nudge(S.novelId);
+    writer.recount(S.novelId);
+    drawPage();
+  });
+}
+/* the versions of a passage, to choose which go */
+function chooseVersions(p) {
+  const live = (chapter().passages || []).find((x) => x.id === p.id) || p;
+  const shown = (picked(live) || {}).id;
+  const s = openSheet('Remove versions', { small: true });
+  const boxes = live.versions.map((v, i) => {
+    const cb = h('input', { type: 'checkbox' });
+    const first = String(v.text || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+    return { v, cb, row: h('label.verrow', cb, h('span.grow', h('b', `Version ${i + 1}${v.id === shown ? ' — on show' : ''}`), h('small', `${first}${String(v.text || '').length > 90 ? '…' : ''}`), h('small', timeAgo(v.done || v.at || 0)))) };
+  });
+  const go = h('button.btn.primary.small.danger', { disabled: true }, 'Remove the chosen');
+  const sync = () => {
+    const n = boxes.filter((b) => b.cb.checked).length;
+    go.disabled = !n || n >= boxes.length;
+    go.textContent = n >= boxes.length ? 'One has to stay' : n ? `Remove ${plural(n, 'version')}` : 'Remove the chosen';
+  };
+  for (const b of boxes) b.cb.addEventListener('change', sync);
+  go.addEventListener('click', () => { const ids = boxes.filter((b) => b.cb.checked).map((b) => b.v.id); s.close(); removeVersions(live, ids); });
+  s.body.append(h('p.say', 'Tick the ones to go. Their notes go with them; one always stays. With Undo.'),
+    h('div.verlist', ...boxes.map((b) => b.row)),
+    h('div.btnrow', go, h('button.btn.quiet.small', { onclick: () => { for (const b of boxes) b.cb.checked = b.v.id !== shown; sync(); } }, 'All but the one on show')));
 }
 
 function removePassage(p) {
@@ -613,12 +657,43 @@ function drawComposer() {
   if (working) { ui.writeBtn.append(icon('stop', 16), 'Stop'); ui.writeBtn.classList.remove('primary'); }
   else { ui.writeBtn.append(S.sel ? 'Rewrite' : 'Write'); ui.writeBtn.classList.add('primary'); }
   ui.mineBtn.disabled = working || Boolean(S.sel);
+  /* Ideas: there only while it is on (Settings → Who does what) */
+  ui.ideasBtn.hidden = !ideasOn(house);
+  if (!ui.ideasBtn.firstChild || ui.ideasBtn.firstChild.nodeType === 3) { ui.ideasBtn.textContent = ''; ui.ideasBtn.append(icon('feather', 14), h('b', 'Ideas')); }
   const was = ui.direction.placeholder;
   ui.direction.placeholder = S.sel ? 'How should the selected words change? (optional)'
     : S.insertAfter ? 'What happens in the new passage? (optional)'
       : 'What happens next? (optional)';
   if (ui.direction.placeholder !== was) fitDirection();
   drawSelBar();
+}
+
+/* Ideas for what happens next: a few premises, a tap puts one in the box —
+ * kept for the chapter until he asks for new ones */
+const ideasOn = (house) => !(house && house.ideas && house.ideas.on === false);
+const IDEAS = { chapterId: null, list: [], asking: false };
+async function showIdeas({ fresh = false } = {}) {
+  const house = store.peek('house', 'house') || {};
+  const count = Number((house.ideas || {}).count) || 4;
+  const s = openSheet('Ideas for what happens next', { small: true });
+  const draw = () => {
+    s.body.textContent = '';
+    if (IDEAS.asking) { s.body.append(h('p.say', 'Thinking of what could happen next…')); return; }
+    if (!IDEAS.list.length) { s.body.append(h('p.say', 'None yet.')); }
+    for (const idea of IDEAS.list) {
+      s.body.append(h('div.idea', h('span', idea), h('button.btn.small.primary', { title: 'Puts this premise in the box — change it as you like, then Write.', onclick: async () => { s.close(); await useAsDirection(idea); } }, 'Use')));
+    }
+    s.body.append(h('div.btnrow', h('button.btn.small', { title: 'Asks for new ones, from where the book stands now.', onclick: () => ask() }, 'New ideas')));
+  };
+  const ask = async () => {
+    if (IDEAS.asking) return;
+    IDEAS.asking = true; draw();
+    const out = await talk.nextIdeas({ novelId: S.novelId, chapterId: S.chapterId, count });
+    IDEAS.asking = false;
+    if (out.ok) { IDEAS.list = out.ideas; IDEAS.chapterId = S.chapterId; } else toast(`No ideas came: ${out.error}.`, 5000);
+    draw();
+  };
+  if (fresh || IDEAS.chapterId !== S.chapterId || !IDEAS.list.length) { IDEAS.list = []; draw(); ask(); } else draw();
 }
 
 function lengthMenu() {

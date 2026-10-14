@@ -21,9 +21,9 @@ import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText } from './shape.js';
 import { newId, numberWords } from '../util.js';
-import { playOpening, playOnwards, readBack, tellLine, sceneWords } from './prompts.js';
+import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest } from './prompts.js';
 import { numberedText } from './context.js';
-import { opsOf, readAsks, makeChange, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits } from './changes.js';
+import { opsOf, readAsks, makeChange, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn } from './changes.js';
 import { searchBook } from './search.js';
 import { listModules } from './modules.js';
 import { nameKey } from '../util.js';
@@ -484,6 +484,28 @@ export async function partnerSay({ novelId, chapterId, text }) {
 function replied(kind, id, turnId) {
   const rec = store.peek(kind, id);
   return Boolean(rec && (rec.turns || []).some((x) => x.id === turnId));
+}
+
+/* ---------------------------------------------------------------- ideas */
+/* A few premises for what happens next (Settings → Who does what → Ideas),
+ * asked of the partner's connection with the whole book — never kept in the
+ * conversation: a tap puts one in the box under the page. */
+export async function nextIdeas({ novelId, chapterId, count = 4, signal = null }) {
+  const house = store.peek('house', 'house') || {};
+  const conn = connFor(house, 'partner');
+  if (!conn) return { ok: false, error: 'no connection is chosen for your partner yet — Settings → Connections' };
+  const out = await ask(conn, {
+    build: (c) => {
+      const { novel, chapters } = bookNow(novelId);
+      const a = assemble({ house, novel, chapters, conn: c, purpose: 'partner', target: { chapterId }, turns: [], request: ideasRequest(count) });
+      return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, 'scene') : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least };
+    },
+    stream: true,
+    signal,
+  });
+  if (!out.ok) return { ok: false, error: out.error || 'no answer came' };
+  const ideas = directionsIn(out.text).slice(0, Math.max(1, Math.min(5, count)));
+  return ideas.length ? { ok: true, ideas } : { ok: false, error: 'it gave no premises — ask again' };
 }
 
 /* ------------------------------------------- the partner's conversations */

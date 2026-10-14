@@ -392,6 +392,12 @@ export function playToProseRequest({ chapterLabel, who, transcript, length }) {
   ].join('\n\n');
 }
 
+/* Ideas: a few premises for what happens next, each in its own block */
+export function ideasRequest(count) {
+  const n = Math.max(1, Math.min(5, Math.round(Number(count) || 4)));
+  return `Give me ${n === 1 ? 'one premise' : `${numberWords(n).toLowerCase()} genuinely different premises`} for what happens next in the book, right from where it stops — ${n === 1 ? 'the one' : 'each one'} I'd most enjoy writing from, true to the people in it. Each a few lines in my voice, the way I'd type it in the box, in its own ${'<direction>'}…${'</direction>'}. Nothing else.`;
+}
+
 /* --------------------------------------------------------- the partner */
 /* A writer who knows the book inside out (Cozy Tavern's housekeeper, as a
  * novelist): talks it over, and when asked, makes the change itself — a

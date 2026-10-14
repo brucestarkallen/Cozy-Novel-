@@ -231,7 +231,7 @@ function bindChrome() {
   $('#shelfSettings').addEventListener('click', () => openSettings());
   initDesk({
     wrap: $('#pageWrap'), passages: $('#passages'), end: $('#pageEnd'), chapnum: $('#chapnum'), chapname: $('#chapname'),
-    direction: $('#direction'), writeBtn: $('#writeBtn'), mineBtn: $('#mineBtn'), lengthBtn: $('#lengthBtn'), outcomeBtn: $('#outcomeBtn'), writerBtn: $('#writerBtn'),
+    direction: $('#direction'), writeBtn: $('#writeBtn'), mineBtn: $('#mineBtn'), ideasBtn: $('#ideasBtn'), lengthBtn: $('#lengthBtn'), outcomeBtn: $('#outcomeBtn'), writerBtn: $('#writerBtn'),
     followBtn: $('#followBtn'), selBar: $('#selBar'), selWhat: $('#selWhat'), selClear: $('#selClear'),
   }, {
     goChapter, writerMenu, openSettings, drawBar,

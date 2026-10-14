@@ -785,3 +785,12 @@ pre.whole { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-mon
 .judgebox { margin: 4px 0 12px; }
 .judgebox summary { cursor: pointer; font: 600 13.5px/1.5 var(--ui); color: var(--chrome-ink); }
 .judgebox .usage-table { margin-top: 6px; }
+/* Remove versions: each version, ticked to go */
+.verlist { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 12px; }
+.verrow { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; }
+.verrow small { display: block; color: var(--chrome-soft); font-size: 12.5px; }
+.verrow input { margin-top: 3px; }
+/* Ideas for what happens next */
+.idea { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin: 0 0 8px; border: 1px solid rgba(216,150,58,.35); border-radius: 12px; background: rgba(216,150,58,.06); }
+.idea > span { flex: 1; white-space: pre-wrap; font-size: 14.5px; line-height: 1.45; }
+.idea .btn { flex: none; }

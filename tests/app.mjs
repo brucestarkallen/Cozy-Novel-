@@ -1105,6 +1105,18 @@ await test('the notes\' auditor: notes kept before it are checked against the bo
   await putAway(b);
 });
 
+await test('Ideas: a few premises for what happens next, asked with the whole book, read from their blocks — never kept in the conversation', async () => {
+  const b = await makeBook([['Mara kept the light. A stranger waited at the gate.']]);
+  await script([{ text: 'Here.\n<direction>Mara lets him in.</direction>\n<direction>Mara bars the door.</direction>\n<direction>The stranger leaves a letter.</direction>' }]);
+  const out = await talk.nextIdeas({ novelId: b.novelId, chapterId: b.ids[0], count: 3 });
+  assert.deepEqual(out.ideas, ['Mara lets him in.', 'Mara bars the door.', 'The stranger leaves a letter.']);
+  const r = (await requests())[0].body;
+  const all = r.messages.map((m) => String(m.content)).join('\n');
+  assert.ok(all.includes('three genuinely different premises') && all.includes('A stranger waited at the gate.'), all.slice(-400));
+  assert.equal((store.peek('talk', b.novelId) || { turns: [] }).turns.length, 0, 'nothing kept in the conversation');
+  await putAway(b);
+});
+
 await test('the partner offers each premise in its own block, shown with Use as the next direction; its words read whole elsewhere', () => {
   const text = 'Two ways.\n\n<direction>Jovan says nothing and pulls Yuki clear.</direction>\n\nOr:\n<direction>Yuki runs.</direction>';
   assert.deepEqual(changes.partsOf(text).map((x) => [x.kind, x.text]), [['words', 'Two ways.'], ['direction', 'Jovan says nothing and pulls Yuki clear.'], ['words', 'Or:'], ['direction', 'Yuki runs.']]);
@@ -1147,6 +1159,44 @@ await test('the readings listed newest first; Put back takes out only what one r
   assert.equal(b.novel().notes.people[0].about, 'The keeper.', 'a card he changed is his: read again, its words stand');
   assert.equal(archivist.pendingWork(b.novelId), false, 'and it is read');
   await putAway(b);
+});
+
+await test('each version keeps all of its own: the notes and what the helper keeps of the book (about, how it reads) come back with it', async () => {
+  const b = await makeBook([['A stranger came up the path and said, "Oda Jovan."']]);
+  const p = b.ch().passages[0];
+  const takeA = picked(p);
+  await script([{ text: JSON.stringify({ people: [{ name: 'Jovan', about: 'Says his name aloud.' }], about: 'ABOUT A', style: 'STYLE A' }) }]);
+  await archivist.run(b.novelId);
+  assert.equal(b.novel().kept.about.text, 'ABOUT A');
+  await reset();
+  await script([{ text: 'The stranger said nothing at all.' }, { text: JSON.stringify({ people: [{ name: 'The stranger', about: 'Silent.' }], about: 'ABOUT B', style: 'STYLE B' }) }]);
+  await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id });
+  await archivist.run(b.novelId);
+  let n = b.novel();
+  assert.equal(n.kept.about.text, 'ABOUT B');
+  assert.deepEqual(names(n), ['The stranger']);
+  /* the arrows back to the first take: everything of it back, with no call */
+  await reset();
+  store.change('chapter', b.ids[0], shape.chapterSteps.pick(p.id, takeA.id), { now: true });
+  await archivist.settle(b.novelId);
+  n = b.novel();
+  assert.equal(n.kept.about.text, 'ABOUT A');
+  assert.equal(n.kept.style.text, 'STYLE A');
+  assert.deepEqual(names(n), ['Jovan']);
+  assert.equal((await requests()).length, 0);
+  await putAway(b);
+});
+
+await test('several versions taken out at once come back in their places with Undo, the one on show on show again', () => {
+  const vs = ['one', 'two', 'three', 'four', 'five'].map((t) => shape.newVersion({ text: t }));
+  const c = { passages: [{ id: 'p1', by: 'ai', pick: 3, versions: JSON.parse(JSON.stringify(vs)) }] };
+  const before = JSON.parse(JSON.stringify(c.passages[0].versions));
+  for (const v of vs.slice(0, 3)) shape.chapterSteps.removeVersion('p1', v.id)(c);
+  assert.deepEqual(c.passages[0].versions.map((v) => v.text), ['four', 'five']);
+  assert.equal(picked(c.passages[0]).text, 'four', 'the one on show stays on show');
+  shape.chapterSteps.putVersionsBack('p1', before, vs[3].id)(c);
+  assert.deepEqual(c.passages[0].versions.map((v) => v.text), ['one', 'two', 'three', 'four', 'five']);
+  assert.equal(picked(c.passages[0]).text, 'four');
 });
 
 await test('a chapter read as it was once before gets its summary from then back, with no call', async () => {
