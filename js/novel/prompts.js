@@ -488,7 +488,7 @@ ${CHANGES_OPEN}[
 
 - "2.3" is passage 3 of Chapter Two, as on the page. Quote "find" exactly — enough to be found in one place only. A passage written anew is a new version. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
 - "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary.
-- "note" is "people", "places", "lore" or "threads" (with "open": false once resolved): only the parts you give change; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
+- "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
 - To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - Only quote what you can see; never make up a passage or a fact. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block.`;
 
@@ -500,11 +500,13 @@ export function partnerFrame(house, novel, { notesAs = 'system' } = {}) {
   ].filter(Boolean).join('\n\n');
 }
 
-/* the chapters it asked for, sent back whole */
-export function readBack(rows, { cut = false } = {}) {
+/* the chapters it asked for, sent back whole — and what one answer could
+ * not read at once, named (Cozy Tavern's M84-2: never a silent cut) */
+export function readBack(rows, { cut = false, notSent = [] } = {}) {
+  const left = notSent.length ? ` Not sent: ${notSent.join(', ')} — one answer reads ${numberWords(rows.length).toLowerCase()} at most; ask for ${notSent.length === 1 ? 'it' : 'them'} in your next read block if you need ${notSent.length === 1 ? 'it' : 'them'}.` : '';
   return [
     rows.map((r) => `${r.label}${r.missing ? ' — not in the book' : ''}\n\n${r.text}`).join('\n\n\n'),
-    cut ? 'Here they are — as much of each as fits here beside everything else, the rest left out where it says so. Go on with your answer.' : 'Here they are, whole. Go on with your answer.',
+    (cut ? 'Here they are — as much of each as fits here beside everything else, the rest left out where it says so.' : 'Here they are, whole.') + left + ' Go on with your answer.',
   ].join('\n\n');
 }
 
@@ -746,7 +748,18 @@ export function keptByHelper(novel) {
   return out;
 }
 
-const PEOPLE_FIELDS = '"about": "who they are, for good — looks and bearing, voice and how they talk, temperament, how they act under pressure, what they want, what they would never do", "ties": "how they stand with the others who matter to them, and why — where each tie began, what moved it, where it is now", "now": "where they are and what they’re doing as of the end of the book so far, then their mood and what’s on their mind"';
+const ABOUT_ASK = 'who they are, for good — looks and bearing, voice and how they talk, temperament, how they act under pressure, what they want, what they would never do';
+const TIES_ASK = 'how they stand with the others who matter to them, and why — where each tie began, what moved it, where it is now';
+const NOW_ASK = 'where they are and what they’re doing as of the end of the book so far, then their mood and what’s on their mind';
+const PEOPLE_FIELDS = `"about": "${ABOUT_ASK}", "ties": "${TIES_ASK}", "now": "${NOW_ASK}"`;
+const PLACE_ASK = "what it is, what it looks and feels like, what's there";
+const LORE_ASK = 'a thing, a fact, a secret or a rule of the world worth remembering — and who knows it';
+const THREAD_ASK = "what's been set up — a promise, a secret, a question, a debt — and where it stands";
+const VERDICT_ASK = 'a sentence or two for me, plainly: whether the notes, with these changes, hold true to the book';
+/* the request's own words for what a field holds: an answer that gives them
+ * back as the field says nothing (Cozy Tavern's M656 — the prompt's own
+ * placeholder kept as a fact) */
+export const ASKED_WORDS = [ABOUT_ASK, TIES_ASK, NOW_ASK, PLACE_ASK, LORE_ASK, THREAD_ASK, VERDICT_ASK, 'other names they go by', 'a short name for', 'the whole of it again'];
 
 const NOTE_RULES = `Include only entries that are new or changed, and in each only the fields that changed — a field you give replaces the old one, so give it whole. Keep every fact that's still true.
 - Someone, somewhere or something new: write down how they're described the first time they appear — looks, features, voice, what they wear or carry. It can't be found again later.
@@ -787,9 +800,9 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
 
 {
   "people": [{"name": "…", "aka": ["other names they go by"], ${PEOPLE_FIELDS}}],
-  "places": [{"name": "…", "about": "what it is, what it looks and feels like, what's there"}],
-  "lore": [{"name": "…", "about": "a thing, a fact, a secret or a rule of the world worth remembering — and who knows it"}],
-  "threads": [{"name": "…", "about": "what's been set up — a promise, a secret, a question, a debt — and where it stands", "open": true}],
+  "places": [{"name": "…", "about": "${PLACE_ASK}"}],
+  "lore": [{"name": "…", "about": "${LORE_ASK}"}],
+  "threads": [{"name": "…", "about": "${THREAD_ASK}", "open": true}],
   "gone": [{"kind": "people", "name": "…"}],
   "chapterName": "a short name for ${chapterLabel}, only if it has none yet"${keptFields}
 }
@@ -832,7 +845,7 @@ Answer with one JSON object and nothing else — only the cards that need a chan
   "threads": [{"name": "…", "about": "…", "open": true, "why": "…"}],
   "gone": [{"kind": "lore", "name": "…", "why": "…"}],
   "clear": true,
-  "verdict": "a sentence or two for me, plainly: whether the notes, with these changes, hold true to the book — and anything they can't settle because the book disagrees with itself"
+  "verdict": "${VERDICT_ASK} — and anything they can't settle because the book disagrees with itself"
 }
 
 "clear" is false only when something is left for me to look at. When every card checks out, answer only {"clear": true, "verdict": "…"}. Write only what the book actually says — never invent, never guess.`);

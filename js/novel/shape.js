@@ -566,6 +566,29 @@ export function countBook(novel, chapters) {
 export function newCard(kind, fields = {}) {
   return { id: newId(kind.slice(0, 2)), name: '', about: '', ...(kind === 'people' ? { aka: [], ties: '', now: '' } : {}), ...(kind === 'threads' ? { open: true } : {}), ...fields };
 }
+/* WHAT OF A CARD IS HIS (Cozy Tavern's M263: his hand is kept field by
+ * field). A card he wrote or changed is his — never taken out, his words
+ * never written over — but only in the fields he wrote: the helper and the
+ * notes' check still write the rest as the book goes on. A card marked his
+ * before fields were told apart is his whole. */
+export const CARD_FIELDS = ['name', 'aka', 'about', 'ties', 'now', 'open'];
+export const hisCard = (card) => Boolean(card && card.updated && card.updated.by === 'you');
+export function hisField(card, field) {
+  if (!hisCard(card)) return false;
+  const list = card.updated.his;
+  return !Array.isArray(list) || list.includes(field);
+}
+/* his mark once he (or his partner, for him) wrote these fields */
+export function hisStamp(card, fields, at = Date.now()) {
+  if (hisCard(card) && !Array.isArray(card.updated.his)) return { by: 'you', at };
+  const before = hisCard(card) ? card.updated.his : [];
+  return { by: 'you', at, his: CARD_FIELDS.filter((k) => before.includes(k) || (fields || []).includes(k)) };
+}
+/* the mark a card keeps when the helper writes what is not his */
+export function keptStamp(card, chapterId, at) {
+  if (!hisCard(card)) return { chapterId, at };
+  return { by: 'you', ...(Array.isArray(card.updated.his) ? { his: [...card.updated.his] } : {}), chapterId, at };
+}
 
 /* A THREAD IS FOUND BY SENSE (Cozy Tavern M259, M653): two titles say the
  * same thing when every telling word of the shorter is in the longer, and the

@@ -24,7 +24,7 @@ import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, CHOICES_OPEN } from './prompts.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail } from './textshape.js';
 import { numberedText } from './context.js';
-import { opsOf, readAsks, makeChange, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf } from './changes.js';
+import { READ_AT_ONCE, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf } from './changes.js';
 import { searchBook } from './search.js';
 import { listModules } from './modules.js';
 import { nameKey } from '../util.js';
@@ -232,7 +232,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       if (x.rows) {
         const rows = f.rows.slice(k, k + x.rows.length);
         k += x.rows.length;
-        messages.push({ role: 'assistant', content: x.said }, { role: 'user', content: readBack(rows, { cut: f.cut }) + (x.last ? `\n\n${READ_LAST}` : '') });
+        messages.push({ role: 'assistant', content: x.said }, { role: 'user', content: readBack(rows, { cut: f.cut, notSent: x.notSent || [] }) + (x.last ? `\n\n${READ_LAST}` : '') });
       } else {
         messages.push({ role: 'assistant', content: x.said }, { role: 'user', content: x.ask });
         tokens += estimateTokens(x.said) + estimateTokens(x.ask);
@@ -245,6 +245,8 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   const read = [];
   /* the chapters it has had whole in this answer: the ones the request carried, and the ones it read (never cut) */
   let seen = new Set();
+  /* the page as it was numbered for the round its changes answer */
+  let numbers = null;
   /* the thinking of every round, kept whole (Cozy Tavern's M77/M80): what
    * each round thought, and between them what happened next */
   let thoughtBefore = '';
@@ -288,6 +290,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     const askNow = () => ask(conn, {
         build: (c) => {
           const { novel, chapters } = bookNow(novelId);
+          numbers = numbersOf(novel);
           const rec = store.peek(kind, id);
           const args = buildArgs(rec, c);
           const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length });
@@ -333,7 +336,9 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       for (;;) {
         const o = await askNow();
         const said = String(o.text || text);
-        const asked = kind === 'talk' && o.ok && !o.cut ? readAsks(said) : [];
+        const all = kind === 'talk' && o.ok && !o.cut ? readAsks(said) : [];
+        const asked = all.slice(0, READ_AT_ONCE);
+        const notSent = all.slice(READ_AT_ONCE).map(askLabel);
         /* a read block with nothing in it that can be read: told once how to ask (M222) */
         if (kind === 'talk' && o.ok && !o.cut && !asked.length && !howTold && unreadableRead(said)) {
           howTold = true;
@@ -349,7 +354,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         if (last && lastTold) return o;
         readsLeft--;
         const rows = readRows(novelId, asked);
-        rounds.push({ said: said.trim() || '(I asked to read them.)', rows, ...(last ? { last: true } : {}) });
+        rounds.push({ said: said.trim() || '(I asked to read them.)', rows, ...(notSent.length ? { notSent } : {}), ...(last ? { last: true } : {}) });
         if (last) lastTold = true;
         read.push(...rows.filter((r) => !r.missing).map((r) => r.label));
         keepThought(thinking, `read ${rows.map((r) => r.label).join(', ')}`);
@@ -401,7 +406,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       const all = [];
       let askedWhole = false;
       for (let fix = 0; ; fix++) {
-        const changes = settleChanges(novelId, turnId, versionId, segment, store.peek('house', 'house') || house, all, seen);
+        const changes = settleChanges(novelId, turnId, versionId, segment, store.peek('house', 'house') || house, all, seen, numbers);
         all.push(...changes);
         if (fix >= 2 || out.cut || out.stopped || ctl.signal.aborted) break;
         const missed = changes.filter((c) => c.status === 'refused' && MISSED.test(String(c.said || '')));
@@ -468,6 +473,12 @@ const READ_HOW = 'That read block could not be read. Ask for a chapter by its nu
 
 /* ----------------------------------------------------- the partner's changes */
 
+/* an ask named back: Chapter Nine, where “Oda” stands, the module “The novel craft” */
+function askLabel(n) {
+  if (n && typeof n === 'object' && n.find) return `where “${n.find}” stands`;
+  if (n && typeof n === 'object' && n.module) return `the module “${n.module}”`;
+  return `Chapter ${numberWords(n)}`;
+}
 /* the chapters it asked for, whole and numbered (or said not to be there) */
 function readRows(novelId, asked) {
   const novel = store.peek('novel', novelId);
@@ -500,18 +511,44 @@ function readRows(novelId, asked) {
   });
 }
 
-function settleChanges(novelId, turnId, versionId, text, house, before = [], seen = null) {
+function settleChanges(novelId, turnId, versionId, text, house, before = [], seen = null, numbers = null) {
   const ops = opsOf(text);
   if (!ops.length) return [];
   const wait = house && house.partnerApplies === 'wait';
-  const changes = ops.map((op) => {
-    if (op.unreadable) return makeChange(novelId, op);
-    if (!wait) return makeChange(novelId, op, { seen });
+  const novel = store.peek('novel', novelId);
+  /* changes across the book that touch each other are made together, in one
+   * pass over the book as it stood (Cozy Tavern's M675-8); the rest one by
+   * one, each passage and chapter found as the page it was shown numbered
+   * it (M682/M726) */
+  const groups = groupsOf(ops);
+  const groupOf = new Map();
+  groups.forEach((g, k) => g.forEach((i) => groupOf.set(i, k)));
+  const out = new Array(ops.length).fill(null);
+  ops.forEach((op, i) => {
+    if (out[i]) return;
+    if (groupOf.has(i)) {
+      const g = groups[groupOf.get(i)];
+      const made = makeTogether(novelId, g.map((k) => ops[k]), { dry: wait });
+      const group = newId('cg');
+      g.forEach((k, j) => {
+        const r = made[j];
+        out[k] = wait && r.status !== 'refused'
+          ? { id: r.id, op: r.op, label: r.label, why: r.why, status: 'waiting', group, ...(r.undo && r.said ? { reach: r.said } : {}) }
+          : { ...r, group };
+      });
+      return;
+    }
+    if (op.unreadable) { out[i] = makeChange(novelId, op); return; }
+    const where = whereOf(novel, op, numbers);
+    const at = where ? { where } : {};
+    if (!wait) { out[i] = { ...makeChange(novelId, op, { seen, numbers, where }), ...at }; return; }
     /* waiting for Apply: looked at as it arrives, so one that cannot land is said now; and what it was made against kept, so a change since is said at Apply (M422) */
-    const why = whyNot(novelId, op, { seen });
-    return why ? { id: newId('cg'), op, label: labelOf(op), why: String(op.why || '').trim(), status: 'refused', said: why }
-      : { id: newId('cg'), op, label: labelOf(op), why: String(op.why || '').trim(), status: 'waiting', base: baseOf(novelId, op) };
+    const dry = makeChange(novelId, op, { dry: true, seen, numbers, where });
+    const bulk = op.rename || op.replace_all !== undefined;
+    out[i] = dry.status === 'refused' ? { ...dry, ...at }
+      : { id: dry.id, op: dry.op, label: dry.label, why: dry.why, status: 'waiting', base: baseOf(novelId, op, where), ...at, ...(bulk && dry.said ? { reach: dry.said } : {}) };
   });
+  const changes = out;
   store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes: [...before, ...changes] }), { now: true });
   /* an older answer's change still waiting for the same thing, written whole, is set aside by this one (M397) */
   if (wait) asideOlder(novelId, turnId, changes.filter((c) => c.status === 'waiting'));
@@ -525,13 +562,13 @@ function supersede(novelId, turnId, versionId) {
   const t = rec && (rec.turns || []).find((x) => x.id === turnId);
   const v = t && t.versions.find((x) => x.id === versionId);
   const list = (v && v.changes) || [];
-  const landed = new Set(list.filter((c) => c.status === 'made' || c.status === 'waiting').map((c) => targetOf(c.op)).filter(Boolean));
+  const keysOf = (c) => [targetOf(c.op, c.where), targetOf(c.op)].filter(Boolean);
   let any = false;
   const next = list.map((c, i) => {
     if (c.status !== 'refused' || c.superseded) return c;
-    const key = targetOf(c.op);
-    const later = key && list.slice(i + 1).some((x) => (x.status === 'made' || x.status === 'waiting') && targetOf(x.op) === key);
-    if (!later || !landed.has(key)) return c;
+    const keys = keysOf(c);
+    const later = keys.length && list.slice(i + 1).some((x) => (x.status === 'made' || x.status === 'waiting') && keysOf(x).some((k) => keys.includes(k)));
+    if (!later) return c;
     any = true;
     return { ...c, superseded: true };
   });
@@ -539,18 +576,24 @@ function supersede(novelId, turnId, versionId) {
 }
 
 /* a newer answer's waiting change for the same thing, written whole (a passage
- * anew, a card's words, a summary, a module): the older one is left */
+ * anew, a card's words, a summary, a module): the older one is left — a card
+ * change only when the newer one writes one of the same parts of it */
 function asideOlder(novelId, turnId, fresh) {
-  const whole = fresh.filter((c) => c.op && (c.op.find === undefined) && targetOf(c.op));
+  const whole = fresh.filter((c) => c.op && (c.op.find === undefined) && targetOf(c.op, c.where));
   if (!whole.length) return;
-  const keys = new Set(whole.map((c) => targetOf(c.op)));
+  const clash = (older) => whole.some((n) => {
+    if (targetOf(n.op, n.where) !== targetOf(older.op, older.where)) return false;
+    const a = fieldsOf(n.op);
+    const b = fieldsOf(older.op);
+    return !a || !b || a.some((f) => b.includes(f));
+  });
   const rec = store.peek('talk', novelId);
   for (const t of (rec && rec.turns) || []) {
     if (t.id === turnId) continue;
     for (const v of t.versions || []) {
       const list = v.changes || [];
-      if (!list.some((c) => c.status === 'waiting' && !c.copied && targetOf(c.op) && keys.has(targetOf(c.op)))) continue;
-      const next = list.map((c) => (c.status === 'waiting' && !c.copied && keys.has(targetOf(c.op)) ? { ...c, status: 'skipped', said: 'a newer answer changes the same', aside: true } : c));
+      if (!list.some((c) => c.status === 'waiting' && !c.copied && targetOf(c.op, c.where) && clash(c))) continue;
+      const next = list.map((c) => (c.status === 'waiting' && !c.copied && targetOf(c.op, c.where) && clash(c) ? { ...c, status: 'skipped', said: 'a newer answer changes the same', aside: true } : c));
       store.change('talk', novelId, turnSteps.setVersion(t.id, v.id, { changes: next }), { now: true });
     }
   }
@@ -569,7 +612,7 @@ function cutWords(out) {
 
 /* a change that could not be made for its place or its words (not there,
  * there twice, no such passage, chapter, card or module): told back once */
-const MISSED = /not there|more than one place|has no passage|there is no chapter|not a passage number|passage number has to be given|only in short|no module called|more than one module|in the notes$|stand nowhere|no .* in the notes|more than one card goes by|changes block could not be read/i;
+const MISSED = /not there|more than one place|has no passage|there is no chapter|not a passage number|not a chapter number|passage number has to be given|only in short|no module called|more than one module|in the notes$|stand nowhere|no .* in the notes|more than one card goes by|is no name|gave nothing to write|changes block could not be read/i;
 /* A change said to be made, with no block for it (Cozy Tavern's M118): the
  * partner saying it changed something — first person ("I've changed the
  * lamp…", "I rewrote passage 3"), or "now reads", or "the change is made".
@@ -597,7 +640,15 @@ function afterChanges(novelId) {
 /* whether a waiting change could still be made now: '' or why not (drawn under it) */
 export function waitingWhy(novelId, change) {
   if (!change || change.status !== 'waiting') return '';
-  return driftOf(novelId, change) || whyNot(novelId, change.op);
+  /* one of a group is made with the others of it: looked at with them */
+  if (change.group) {
+    const rec = store.peek('talk', novelId);
+    const list = ((rec && rec.turns) || []).flatMap((t) => t.versions || []).map((v) => v.changes || []).find((l) => l.some((c) => c.id === change.id)) || [change];
+    const members = list.filter((c) => c.group === change.group && c.status === 'waiting');
+    const r = makeTogether(novelId, members.map((c) => c.op), { ids: members.map((c) => c.id), dry: true }).find((x) => x.id === change.id);
+    return r && r.status === 'refused' ? (r.said || 'it could not be made') : '';
+  }
+  return driftOf(novelId, change) || whyNot(novelId, change.op, { where: change.where || null });
 }
 
 /* one waiting change made, one made change undone, one waiting change left */
@@ -616,6 +667,10 @@ export function settleAll(novelId, turnId, versionId, how) {
   if (how === 'undo') ids.reverse();
   const out = { done: 0, failed: [], partly: [] };
   for (const id of ids) {
+    /* one made or undone with another of its group already is done with */
+    const cur = (((store.peek('talk', novelId) || {}).turns || []).find((x) => x.id === turnId) || { versions: [] }).versions.find((x) => x.id === versionId);
+    const now = ((cur && cur.changes) || []).find((c) => c.id === id);
+    if (!now || now.status !== want) continue;
     const r = settleOne(novelId, turnId, versionId, id, how);
     if (r.ok) { out.done++; if (r.partly) out.partly.push(r.said); } else out.failed.push(r.said || 'it could not be done');
   }
@@ -631,11 +686,30 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
   const c = list[i];
   /* copied from another conversation: it is that conversation's to apply or undo */
   if (c.copied) return { ok: false, said: 'that change is the conversation’s it was made in — undo or apply it there' };
+  const write = (changes) => store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes }), { now: true });
+  /* one of a group is applied, left or undone with the others of it — a
+   * swap is never made, or taken back, by half */
+  if (c.group && c.status === 'waiting' && (how === 'apply' || how === 'skip')) {
+    const members = list.filter((x) => x.group === c.group && x.status === 'waiting');
+    let byId;
+    if (how === 'skip') byId = new Map(members.map((x) => [x.id, { ...x, status: 'skipped' }]));
+    else {
+      const made = makeTogether(novelId, members.map((x) => (x.id === c.id && patch ? withEdits(x.op, patch) : x.op)), { ids: members.map((x) => x.id) });
+      byId = new Map(made.map((r, j) => [members[j].id, { ...r, group: c.group, ...(patch && members[j].id === c.id ? { edited: true } : {}) }]));
+    }
+    write(list.map((x) => byId.get(x.id) || x));
+    const mine = byId.get(c.id);
+    if (how === 'apply' && [...byId.values()].some((x) => x.status === 'made')) afterChanges(novelId);
+    return { ok: mine.status !== 'refused', said: mine.said, change: mine };
+  }
+  const leader = c.with ? list.find((x) => x.id === c.with) : c;
+  if (how === 'undo' && c.status === 'made' && leader && leader !== c) return settleOne(novelId, turnId, versionId, leader.id, 'undo');
   let next = c;
   /* written whole over a thing changed since it was offered: said, never made (his own words by hand are his to put) */
   const drift = how === 'apply' && c.status === 'waiting' && !patch ? driftOf(novelId, c) : '';
+  const at = c.where ? { where: c.where } : {};
   if (drift) next = { ...c, status: 'refused', said: drift };
-  else if (how === 'apply' && c.status === 'waiting') next = patch ? { ...makeChange(novelId, withEdits(c.op, patch), { id: c.id }), edited: true } : { ...makeChange(novelId, c.op, { id: c.id }) };
+  else if (how === 'apply' && c.status === 'waiting') next = patch ? { ...makeChange(novelId, withEdits(c.op, patch), { id: c.id, where: c.where || null }), ...at, edited: true } : { ...makeChange(novelId, c.op, { id: c.id, where: c.where || null }), ...at };
   else if (how === 'skip' && c.status === 'waiting') next = { ...c, status: 'skipped' };
   else if (how === 'undo' && c.status === 'made') {
     /* a passage it wrote anew, read by the helper since: those words are kept for the helper, so what came only from them goes too */
@@ -645,8 +719,9 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
     /* put back where it still read as the change left it; what was changed since stays — and he is told */
     next = { ...c, status: 'undone', ...(u.said ? { undoneSaid: u.said } : {}) };
   } else return { ok: false, said: 'nothing to do' };
-  const changes = list.map((x, k) => (k === i ? next : x));
-  store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes }), { now: true });
+  /* the others made with it are taken back with it */
+  const changes = list.map((x, k) => (k === i ? next : next.status === 'undone' && x.with === c.id && x.status === 'made' ? { ...x, status: 'undone' } : x));
+  write(changes);
   if (next.status === 'made' || next.status === 'undone') afterChanges(novelId);
   if (how === 'undo') return { ok: true, said: next.undoneSaid || '', partly: Boolean(next.undoneSaid), change: next };
   return { ok: next.status !== 'refused', said: next.said, change: next };

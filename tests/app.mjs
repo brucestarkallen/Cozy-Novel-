@@ -2269,10 +2269,11 @@ await test('the partner\'s changes: a name inside another name, a hyphened name,
   assert.equal(picked(b.ch().passages[0]).text, 'Oda Jovan walked in. Oda Jovan sat. Mary-Jane waved at Rose. Annual rites: Beth and Anna sang.');
   const v = picked(store.peek('talk', b.novelId).turns.at(-1));
   assert.deepEqual(v.changes.map((c) => c.status), ['made', 'made', 'made', 'refused']);
-  assert.match(v.changes[3].said, /there is no Oda in the notes to rename/);
+  /* a short form of a card's name is named back with the card's own name, so it is put right in the same answer (2.6) */
+  assert.match(v.changes[3].said, /there is no Oda in the notes — the card is called Oda Jovan/);
   assert.deepEqual(b.novel().notes.people.map((c) => c.name), ['Oda Jovan'], 'no card under the old name');
   /* set to wait, the card not there is said at once */
-  assert.equal(changes.whyNot(b.novelId, { note: 'people', name: 'Oda', newName: 'Jovan Oda' }), 'there is no Oda in the notes to rename');
+  assert.equal(changes.whyNot(b.novelId, { note: 'people', name: 'Zed', newName: 'Jovan Oda' }), 'there is no Zed in the notes to rename');
   assert.equal(changes.whyNot(b.novelId, { replace_all: true, find: 'Ann', replace: 'Beth', chapters: 'all' }), 'those words stand nowhere in those chapters', 'Annual and Anna are not Ann');
   await putAway(b);
 });
@@ -5303,6 +5304,191 @@ await test('another take of a passage read together with the ones before it: the
   const told = [a.system, ...a.messages.map((m) => m.content)].join('\n');
   assert.ok(!told.includes('A sailor who rows in at dusk.'), 'the reading that holds the old take is taken back');
   assert.ok(told.includes('Not in these notes yet: Chapter One, passages 1 and 2'), told.slice(told.indexOf('Not in these'), told.indexOf('Not in these') + 120));
+  await putAway(b);
+});
+
+/* =================================================== the second sweep: the partner */
+heading('the partner: what the second sweep found');
+
+await test('the partner’s passage numbers mean the page it was shown: two taken out are those two, one written anew after them is the one it named — and its row shows the number it has now', async () => {
+  const b = await makeBook([['A one.', 'B two.', 'C three.', 'D four.', 'E five.', 'F six.']], { manual: true });
+  await script([{ text: '<changes>[{"passage": "1.3", "remove": true, "why": "a"}, {"passage": "1.5", "remove": true, "why": "b"}, {"passage": "1.4", "text": "D, written anew.", "why": "c"}]</changes>\nDone.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Cut three and five, write four anew.' });
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['A one.', 'B two.', 'D, written anew.', 'F six.']);
+  const v = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.deepEqual(v.changes.map((c) => c.status), ['made', 'made', 'made']);
+  assert.equal(changes.labelNow(b.novelId, v.changes[2]), 'Chapter One, passage 3', 'the row names it as the page numbers it now');
+  assert.equal(v.changes[2].label, 'Chapter One, passage 4', 'what the partner is told back is its own number');
+  assert.equal(b.ch().passages[2].versions[0].text, 'D four.', 'the words before one arrow away');
+  await putAway(b);
+});
+
+await test('set to wait, a change keeps the passage it named: Apply all after he writes one in takes out the two it meant; one he changed since, or took out, is said and left', async () => {
+  await setHouse({}, { partnerApplies: 'wait' });
+  const b = await makeBook([['A one.', 'B two.', 'C three.', 'D four.', 'E five.']], { manual: true });
+  await script([{ text: '<changes>[{"passage": "1.3", "remove": true, "why": "a"}, {"passage": "1.4", "remove": true, "why": "b"}]</changes>\nTwo.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Cut three and four.' });
+  let turn = store.peek('talk', b.novelId).turns.at(-1);
+  let v = picked(turn);
+  assert.deepEqual(v.changes.map((c) => c.status), ['waiting', 'waiting']);
+  /* he writes a passage in after the first: every number after it moves */
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('you', 'MINE.'), b.ch().passages[0].id), { now: true });
+  const all = talk.settleAll(b.novelId, turn.id, v.id, 'apply');
+  assert.equal(all.done, 2, JSON.stringify(all));
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['A one.', 'MINE.', 'B two.', 'E five.']);
+  /* a removal waiting for a passage he has changed since is never made unseen */
+  await script([{ text: '<changes>[{"passage": "1.3", "remove": true, "why": "c"}, {"passage": "1.4", "remove": true, "why": "d"}]</changes>\nTwo more.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Cut B and E.' });
+  turn = store.peek('talk', b.novelId).turns.at(-1);
+  v = picked(turn);
+  const pB = b.ch().passages[2].id;
+  store.change('chapter', b.ids[0], shape.chapterSteps.addVersion(pB, shape.newVersion({ text: 'B, CHANGED BY HIM.', how: 'edit' })), { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(b.ch().passages[3].id), { now: true });
+  assert.match(talk.waitingWhy(b.novelId, picked(store.peek('talk', b.novelId).turns.at(-1)).changes[0]), /changed since/);
+  const one = talk.applyChange(b.novelId, turn.id, v.id, v.changes[0].id);
+  assert.equal(one.ok, false);
+  assert.match(one.said, /changed since this was offered/);
+  const two = talk.applyChange(b.novelId, turn.id, v.id, v.changes[1].id);
+  assert.equal(two.ok, false);
+  assert.match(two.said, /not there any more/);
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['A one.', 'MINE.', 'B, CHANGED BY HIM.']);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the partner names a chapter in words — “Chapter Two”, “two” — as the page names it; a list of chapters is each one, never a range', async () => {
+  const b = await makeBook([['One cat.'], ['Two cat.'], ['Three cat.'], ['Four cat.'], ['Five cat.']], { manual: true });
+  const a = changes.makeChange(b.novelId, { chapter: 'Chapter Two', name: 'The Ferry' });
+  assert.equal(a.status, 'made', a.said);
+  assert.equal(b.ch(1).name, 'The Ferry');
+  const s = changes.makeChange(b.novelId, { summary: 'two', text: 'Mara crosses on the ferry.' });
+  assert.equal(s.status, 'made', s.said);
+  assert.equal(b.ch(1).summary.text, 'Mara crosses on the ferry.');
+  assert.equal(changes.labelOf({ chapter: 'Chapter Two', name: 'x' }), 'Chapter Two’s name');
+  assert.match(changes.makeChange(b.novelId, { chapter: 'the ferry one', name: 'x' }).said, /not a chapter number/);
+  /* [2, 5] is Chapters Two and Five — Three and Four are not touched */
+  assert.equal(changes.labelOf({ replace_all: true, find: 'cat', replace: 'dog', chapters: [2, 5] }), '“cat” across Chapters Two and Five');
+  assert.equal(changes.labelOf({ replace_all: true, find: 'cat', replace: 'dog', range: '3-4' }), '“cat” across Chapters Three to Four');
+  const r = changes.makeChange(b.novelId, { replace_all: true, find: 'cat', replace: 'dog', chapters: [2, 5] });
+  assert.equal(r.status, 'made', r.said);
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => picked(b.ch(i).passages[0]).text), ['One cat.', 'Two dog.', 'Three cat.', 'Four cat.', 'Five dog.']);
+  await putAway(b);
+});
+
+await test('the partner’s card change goes through the helper’s door: nothing, “…”, “(unchanged)” or an object changes nothing and “…” is no name; a short form or a thread said otherwise is named back with the card’s own name — never a second card; “dropAka” takes a name off', async () => {
+  const b = await makeBook([['Rias Wells kept the lamp.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-r', name: 'Rias Wells', about: 'A healer.', ties: 'Owes Oren.', now: 'At the docks.', aka: [] }), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('threads', { id: 'th-t', name: 'Tom promised to fix the roof', about: 'Before winter.', open: true }), { now: true });
+  const r = changes.makeChange(b.novelId, { note: 'people', name: 'Rias Wells', now: 'In the cellar.', about: '', ties: null, newName: '…', aka: null });
+  assert.equal(r.status, 'made', r.said);
+  const card = b.novel().notes.people[0];
+  assert.deepEqual([card.name, card.about, card.ties, card.now, card.aka], ['Rias Wells', 'A healer.', 'Owes Oren.', 'In the cellar.', []]);
+  assert.deepEqual(card.updated.his, ['now'], 'his in the part it wrote, and only there');
+  for (const about of ['…', '(unchanged)', 'Unchanged from before.', 'Not mentioned in this passage.', { text: 'x' }]) {
+    assert.equal(changes.makeChange(b.novelId, { note: 'people', name: 'Rias Wells', about }).status, 'refused', JSON.stringify(about));
+  }
+  assert.equal(b.novel().notes.people[0].about, 'A healer.');
+  assert.match(changes.makeChange(b.novelId, { note: 'people', name: '…', about: 'Someone.' }).said, /is no name/);
+  assert.match(changes.makeChange(b.novelId, { note: 'people', name: 'Rias', now: 'Upstairs.' }).said, /there is no Rias in the notes — the card is called Rias Wells/);
+  assert.match(changes.makeChange(b.novelId, { note: 'threads', name: "Tom's promise to fix the roof", open: false }).said, /the card is called Tom promised to fix the roof/);
+  assert.equal(b.novel().notes.people.length, 1);
+  assert.deepEqual(b.novel().notes.threads.map((t) => t.open), [true]);
+  assert.equal(changes.makeChange(b.novelId, { note: 'threads', name: 'Tom promised to fix the roof', open: false }).status, 'made');
+  changes.makeChange(b.novelId, { note: 'people', name: 'Rias Wells', aka: ['Wells', 'the healer'] });
+  changes.makeChange(b.novelId, { note: 'people', name: 'Rias Wells', dropAka: 'Wells' });
+  assert.deepEqual(b.novel().notes.people[0].aka, ['the healer']);
+  /* the helper's door is one door */
+  for (const nothing of ['Unchanged from before.', 'Unchanged since the last chapter.', 'No changes in this passage.', 'N/A (not in this passage)', '(unchanged)', '[unchanged]', 'No new information.', 'Nothing new to report.', 'None — the line is complete.', 'DETAIL: none', 'No update.', 'other names they go by']) assert.equal(archivist.cleanText(nothing), '', nothing);
+  for (const real of ['Unknown to her, Tom had followed.', 'None of the guards saw her.', 'Same as ever — sharp-tongued and kind.', 'No change in her: still cold to Tom.', 'Nothing in the harbour moves.']) assert.equal(archivist.cleanText(real), real, real);
+  await putAway(b);
+});
+
+await test('names changed everywhere in one answer are made together: a swap swaps, a chain is made as said; one Undo takes back both, and set to wait they are applied or left together', async () => {
+  const b = await makeBook([['Kara laughed.', 'Mara wept.', 'Lena sang.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-k', name: 'Kara', about: 'The elder.' }), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-m', name: 'Mara', about: 'The younger.' }), { now: true });
+  await script([{ text: '<changes>[{"rename": {"from": "Kara", "to": "Mara"}, "why": "swap"}, {"rename": {"from": "Mara", "to": "Kara"}, "why": "swap"}]</changes>\nSwapped.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Swap their names.' });
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['Mara laughed.', 'Kara wept.', 'Lena sang.']);
+  assert.deepEqual(b.novel().notes.people.map((c) => [c.id, c.name]), [['pe-k', 'Mara'], ['pe-m', 'Kara']]);
+  assert.equal(b.novel().memory && b.novel().memory.auditAsked, undefined, 'no two cards share a name, so nothing is folded');
+  let turn = store.peek('talk', b.novelId).turns.at(-1);
+  let v = picked(turn);
+  assert.deepEqual(v.changes.map((c) => c.status), ['made', 'made']);
+  assert.equal(v.changes[1].with, v.changes[0].id);
+  /* Undo on the second takes back both */
+  const u = talk.undoOneChange(b.novelId, turn.id, v.id, v.changes[1].id);
+  assert.equal(u.ok, true, u.said);
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['Kara laughed.', 'Mara wept.', 'Lena sang.']);
+  assert.deepEqual(picked(store.peek('talk', b.novelId).turns.at(-1)).changes.map((c) => c.status), ['undone', 'undone']);
+  /* a chain, set to wait: Lena to Mara and Mara to Ilse — applied together from one */
+  await setHouse({}, { partnerApplies: 'wait' });
+  await script([{ text: '<changes>[{"rename": {"from": "Lena", "to": "Mara"}, "why": "a"}, {"rename": {"from": "Mara", "to": "Ilse"}, "why": "b"}]</changes>\nTwo.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Lena becomes Mara; Mara becomes Ilse.' });
+  turn = store.peek('talk', b.novelId).turns.at(-1);
+  v = picked(turn);
+  assert.deepEqual(v.changes.map((c) => c.status), ['waiting', 'waiting']);
+  assert.ok(v.changes[0].group && v.changes[0].group === v.changes[1].group);
+  const a = talk.applyChange(b.novelId, turn.id, v.id, v.changes[1].id);
+  assert.equal(a.ok, true, a.said);
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['Kara laughed.', 'Ilse wept.', 'Mara sang.']);
+  assert.deepEqual(picked(store.peek('talk', b.novelId).turns.at(-1)).changes.map((c) => c.status), ['made', 'made']);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('names that hold one another, changed in one answer, are each changed once — the longer name first', async () => {
+  const b = await makeBook([['Mara Holt and Mara met.']], { manual: true });
+  await script([{ text: '<changes>[{"rename": {"from": "Mara", "to": "Mira"}, "why": "a"}, {"rename": {"from": "Mara Holt", "to": "Mara Venn"}, "why": "b"}]</changes>\nTwo.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Rename them.' });
+  assert.equal(picked(b.ch().passages[0]).text, 'Mara Venn and Mira met.');
+  await putAway(b);
+});
+
+await test('a card change set to wait is watched only in the parts it writes: the helper moving where someone is now never stops a change to who they are; two changes to two parts of one card both land; a newer answer sets aside only the same part', async () => {
+  await setHouse({}, { partnerApplies: 'wait' });
+  const b = await makeBook([['Mira read by the fire.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-m', name: 'Mira', about: 'A reader.', ties: 'Owes Tom.', now: 'By the fire.', aka: [] }), { now: true });
+  await script([{ text: '<changes>[{"note": "people", "name": "Mira", "about": "A reader, left-handed.", "why": "a"}, {"note": "people", "name": "Mira", "ties": "Owes Tom; trusts Kai.", "why": "b"}]</changes>\nTwo.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Fix Mira.' });
+  const turn = store.peek('talk', b.novelId).turns.at(-1);
+  const v = picked(turn);
+  /* the helper moves where she is now */
+  store.change('novel', b.novelId, (n) => { n.notes.people[0].now = 'Asleep upstairs.'; }, { now: true });
+  assert.equal(talk.waitingWhy(b.novelId, v.changes[0]), '');
+  /* a newer answer about where she is now leaves both waiting */
+  await script([{ text: '<changes>[{"note": "people", "name": "Mira", "now": "On the road.", "why": "c"}]</changes>\nOne.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Where is she?' });
+  assert.deepEqual(picked(store.peek('talk', b.novelId).turns.find((t) => t.id === turn.id)).changes.map((c) => c.status), ['waiting', 'waiting']);
+  const all = talk.settleAll(b.novelId, turn.id, v.id, 'apply');
+  assert.equal(all.done, 2, JSON.stringify(all));
+  const m = b.novel().notes.people[0];
+  assert.deepEqual([m.about, m.ties, m.now], ['A reader, left-handed.', 'Owes Tom; trusts Kai.', 'Asleep upstairs.']);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a read block of more than one answer reads names back what was not sent — never “here they are, whole” over a cut', async () => {
+  const b = await makeBook(Array.from({ length: 10 }, (_, i) => [`Chapter ${i + 1} words.`]), { manual: true });
+  await script([{ text: '<read>[1,2,3,4,5,6,7,8,9,10]</read>' }, { text: 'Read them.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Read everything.' });
+  const r = await requests();
+  const back = r[1].body.messages.at(-1).content;
+  assert.match(back, /Not sent: Chapter Nine, Chapter Ten — one answer reads eight at most/);
+  await putAway(b);
+});
+
+await test('a change still waiting shows the words it would write over, as they stand now', async () => {
+  await setHouse({}, { partnerApplies: 'wait' });
+  const b = await makeBook([['One.'], ['Two.']], { manual: true });
+  store.change('novel', b.novelId, (n) => { n.brief = 'HIS OLD WORDS.'; }, { now: true });
+  await script([{ text: '<changes>[{"book": "about", "text": "New words.", "why": "a"}, {"chapter": "Chapter Two", "name": "The Ferry", "why": "b"}]</changes>\nTwo.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Change them.' });
+  const v = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.equal(changes.wordsNow(b.novelId, v.changes[0]), 'HIS OLD WORDS.');
+  store.change('chapter', b.ids[1], shape.chapterSteps.setName('Old Name', 'you'), { now: true });
+  assert.equal(changes.wordsNow(b.novelId, v.changes[1]), 'Old Name');
+  await setHouse();
   await putAway(b);
 });
 

@@ -12,7 +12,7 @@ import { numberWords, plural, timeAgo, nameKey, openOf } from '../util.js';
 import { showSent } from './sent.js';
 import { webUrl } from '../model/call.js';
 import { thinkBox, updateThinkBox } from './think.js';
-import { wordsOf, changesComing, editableOf, partsOf } from '../novel/changes.js';
+import { wordsOf, changesComing, editableOf, partsOf, labelNow, wordsNow } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
 import { paced, follower, streamLines } from './live.js';
 import { drawProse, growProse } from './prose.js';
@@ -853,25 +853,32 @@ function drawTurn(kind, id, turn) {
 /* The partner's changes under its answer: each with what it changed and
  * why, and its Undo — or, set to wait, Apply and Leave it. */
 const clip = (t, n = 140) => { const s = String(t || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
-function whatChanged(c) {
+function whatChanged(novelId, c) {
   const op = c.op || {};
   const u = c.status === 'made' && c.undo && c.undo.what === 'many' ? c.undo : null;
-  /* how many places a change across the book reached */
-  const reach = u ? ` (${[[u.passages, 'passage'], [u.chapters, 'chapter name'], [u.cards, 'card'], [u.book, 'of the book’s words']].filter(([l]) => l && l.length).map(([l, w]) => (w === 'of the book’s words' ? `${l.length} ${w}` : plural(l.length, w))).join(', ') || 'nowhere'})` : '';
+  /* how many places a change across the book reached — or, waiting, will reach */
+  const reach = u ? ` (${[[u.passages, 'passage'], [u.chapters, 'chapter name'], [u.cards, 'card'], [u.book, 'of the book’s words']].filter(([l]) => l && l.length).map(([l, w]) => (w === 'of the book’s words' ? `${l.length} ${w}` : plural(l.length, w))).join(', ') || 'nowhere'})`
+    : c.status === 'waiting' && c.reach ? ` (${c.reach})` : '';
+  /* what it wrote over: the words before it, kept with the change once made; as they stand now while it waits */
+  const was = (c.status === 'made' || c.status === 'undone') && typeof c.before === 'string' ? c.before : c.status === 'waiting' ? wordsNow(novelId, c) : '';
+  const over = (n = 140) => (String(was || '').trim() ? [h('del', clip(was, n)), ' → '] : []);
   if (op.rename && typeof op.rename === 'object') return h('span', h('del', clip(op.rename.from, 60)), ' → ', h('ins', clip(op.rename.to, 60)), reach);
   if (op.passage !== undefined && op.remove === true) return 'taken out of the chapter';
   if (op.remove === true) return 'taken out of the notes';
   if (op.find !== undefined) return h('span', h('del', clip(op.find, 90)), ' → ', h('ins', clip(op.replace !== undefined ? op.replace : op.text, 90) || '(taken out)'), reach);
   if (op.passage !== undefined && op.text !== undefined) return `written anew (${plural(countWordsLoose(op.text), 'word')})`;
   if (op.module !== undefined && op.text !== undefined) return `its words, whole (${plural(countWordsLoose(op.text), 'word')})`;
-  if (op.summary !== undefined) return h('span', h('ins', clip(op.text, 140)));
-  if (op.book !== undefined) return op.add !== undefined ? h('span', 'a new paragraph: ', h('ins', clip(op.add))) : h('span', h('ins', clip(op.text)));
-  if (op.chapter !== undefined) return h('span', 'named ', h('ins', clip(op.name, 80)));
+  if (op.summary !== undefined) return h('span', ...over(), h('ins', clip(op.text, 140)));
+  if (op.book !== undefined) return op.add !== undefined ? h('span', 'a new paragraph: ', h('ins', clip(op.add))) : h('span', ...over(), h('ins', clip(op.text)));
+  if (op.chapter !== undefined) return h('span', 'named ', ...over(80), h('ins', clip(op.name, 80) || '(no name)'));
   if (op.note !== undefined) {
     const bits = ['about', 'ties', 'now'].filter((k) => op[k] !== undefined).map((k) => `${k === 'ties' ? 'with others' : k === 'now' ? 'right now' : 'who they are'}: ${clip(op[k], 80)}`);
     if (op.newName !== undefined) bits.unshift(`renamed ${clip(op.newName, 60)}`);
+    if (op.aka !== undefined) bits.push(`also called ${clip([].concat(op.aka).join(', '), 60)}`);
+    if (op.dropAka !== undefined) bits.push(`no longer called ${clip([].concat(op.dropAka).join(', '), 60)}`);
     if (openOf(op) !== undefined) bits.push(openOf(op) ? 'open again' : 'closed');
-    return bits.join(' · ') || 'brought up to date';
+    const said = bits.join(' · ') || 'brought up to date';
+    return op.about !== undefined && String(was || '').trim() ? h('span', said, h('br'), 'it said: ', h('del', clip(was, 140))) : said;
   }
   return '';
 }
@@ -890,17 +897,17 @@ function changeList(novelId, turn, v) {
     const mark = { made: '✓', waiting: '•', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
     /* a waiting one that could not land now (its words gone, its thing changed since): said, with no Apply (M224) */
     const stale = c.status === 'waiting' && !c.copied ? talk.waitingWhy(novelId, c) : '';
-    const state = { made: c.edited ? 'made with your words' : (c.said && c.op && (c.op.find !== undefined || c.op.text !== undefined) ? c.said : ''), waiting: stale ? `can’t be made now — ${stale}` : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'left — a newer answer changes the same' : 'left as it was' }[c.status] || '';
+    const state = { made: c.edited ? 'made with your words' : c.with ? c.said : (c.said && c.op && (c.op.find !== undefined || c.op.text !== undefined) ? c.said : ''), waiting: stale ? `can’t be made now — ${stale}` : c.group ? 'waiting for Apply — made together with the others of its kind here' : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'left — a newer answer changes the same' : 'left as it was' }[c.status] || '';
     const row = h('div.change.' + c.status,
-      h('div.chead', h('b', `${mark} ${c.label}`), state ? h('small', state) : null),
-      c.status !== 'refused' ? h('div.cwhat', whatChanged(c)) : (c.op && c.op.find !== undefined ? h('div.cwhat', 'It looked for: ', h('del', clip(c.op.find, 140))) : null),
+      h('div.chead', h('b', `${mark} ${labelNow(novelId, c)}`), state ? h('small', state) : null),
+      c.status !== 'refused' ? h('div.cwhat', whatChanged(novelId, c)) : (c.op && c.op.find !== undefined ? h('div.cwhat', 'It looked for: ', h('del', clip(c.op.find, 140))) : null),
       c.why ? h('div.cwhy', c.why) : null);
     const btns = h('div.cbtns');
     if (c.copied) {
       /* copied with the conversation: it is undone or applied where it was made */
       if (c.status === 'made' || c.status === 'waiting') row.append(h('div.cwhy', 'In the conversation this one was copied from — its Undo and Apply are there.'));
     } else {
-      if (c.status === 'made') btns.append(h('button', { title: 'Put back what this change changed (only if nothing has changed it since).', onclick: act(talk.undoOneChange, c.id) }, 'Undo'));
+      if (c.status === 'made') btns.append(h('button', { title: c.with ? 'Put back this change and the one it was made with (only where nothing has changed them since).' : 'Put back what this change changed (only if nothing has changed it since).', onclick: act(talk.undoOneChange, c.id) }, 'Undo'));
       if (c.status === 'waiting') {
         if (!stale) btns.append(h('button.go', { title: 'Make this change in the book.', onclick: act(talk.applyChange, c.id) }, 'Apply'));
         if (editableOf(c.op).length) btns.append(h('button', { title: 'Change its words yourself before it goes into the book.', onclick: () => editByHand(novelId, turn, v, c) }, 'Edit by hand'));

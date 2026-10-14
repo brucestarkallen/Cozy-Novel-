@@ -28,7 +28,7 @@ import { parseFirstObject } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriedBy, sameThreadTitle } from './shape.js';
 import { foldedText, tokensMissing, looksLikeTokenDump, isGroupName } from './names.js';
-import { helperFrame, notesRequest, summaryRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest } from './prompts.js';
+import { helperFrame, notesRequest, summaryRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 
@@ -464,15 +464,43 @@ export async function settle(novelId) {
  * itself is no field, so the card keeps what it had; and a runaway answer is
  * cut at its last whole sentence, far beyond anything honest (M197/M235). */
 const NOTHING = /^(?:none|n\/?a|nil|null|undefined|nothing(?:\s+(?:new|yet|more|changed|to add))?|unknown|unchanged|no changes?|same(?:\s+as\s+before)?|not\s+(?:given|stated|known|mentioned|yet)|[-—–?.…\s]+)[.!]?$/i;
+/* A field that opens by saying there is nothing and goes on only to point at
+ * the passage or the notes — "Unchanged from before.", "Not mentioned in this
+ * passage.", "No new information.", "None — the line is complete." — says
+ * nothing too (Cozy Tavern's M648/M658); a real line that only begins so
+ * ("Unknown to her, Tom had followed", "None of the guards saw her") stays. */
+const NOTHING_HEAD = /^(?:none|n\/?a|nil|null|undefined|unknown|unchanged|no\s+(?:changes?|updates?|new\s+[\p{L}]+|additional\s+[\p{L}]+|further\s+[\p{L}]+|information|mention)|nothing(?:\s+(?:new|yet|more|changed|missing|further))?|same(?:\s+as\s+(?:before|above))?|not\s+(?:given|stated|known|mentioned|described|shown|specified|applicable|yet))(?![\p{L}])/iu;
+const POINTING = /\b(?:from|since|as|in|for|at|on|of|to|by|the|this|that|it|is|was|a|an|any|not|before|earlier|above|previously|last|time|chapter|passage|part|scene|section|text|reading|update|notes?|book|so|far|yet|here|now|report|add|note|line|complete|mentioned|given|stated|described|applicable|information|new|anything|nothing|change|changes|changed|same|still|currently|all)\b/giu;
 const SORRY = /^(?:i['’]?m\s+(?:sorry|afraid|unable|not able)|i\s+am\s+(?:sorry|afraid|unable|not able)|sorry[,.]|i\s+(?:can(?:['’]?t|not)|won['’]?t|will\s+not|must\s+decline|apologi[sz]e)\b|unfortunately,?\s+i\b|as\s+an\s+ai\b)/i;
 function wordsOf(v) {
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   if (Array.isArray(v)) return v.filter((x) => typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x))).map((x) => String(x).trim()).filter(Boolean).join('\n');
   return typeof v === 'string' ? v : '';
 }
+/* the field without what only dresses it: brackets or quotes around the
+ * whole, a short label before a colon ("DETAIL: none") */
+function bare(t) {
+  let x = String(t || '').trim();
+  for (let i = 0; i < 3; i++) {
+    const m = /^[(\[{“"'‘*_]+([\s\S]*?)[)\]}”"'’*_]+$/.exec(x);
+    if (!m) break;
+    x = m[1].trim();
+  }
+  const label = /^[\p{L} ]{1,24}:\s*([\s\S]+)$/u.exec(x);
+  return label && (NOTHING.test(label[1].trim()) || NOTHING_HEAD.test(label[1].trim())) ? label[1].trim() : x;
+}
+function nothingIn(t) {
+  const x = bare(t);
+  if (!x || NOTHING.test(x)) return true;
+  const m = NOTHING_HEAD.exec(x);
+  if (m && !x.slice(m[0].length).replace(POINTING, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()) return true;
+  /* the request's own words for the field, given back */
+  const low = x.toLowerCase().replace(/[’']/g, "'");
+  return ASKED_WORDS.some((w) => { const a = w.toLowerCase().replace(/[’']/g, "'"); return low === a || (low.length >= 16 && a.startsWith(low.replace(/[.…]+$/, ''))) || low.startsWith(a.slice(0, 40)); });
+}
 export function cleanText(v, max = 12000) {
   let t = wordsOf(v).replace(/\r/g, '').trim();
-  if (!t || NOTHING.test(t) || SORRY.test(t)) return '';
+  if (!t || nothingIn(t) || SORRY.test(t)) return '';
   if (t.length > max) {
     const room = t.slice(0, max - 1);
     const at = Math.max(room.lastIndexOf('. '), room.lastIndexOf('.\n'), room.lastIndexOf('; '));
@@ -480,9 +508,11 @@ export function cleanText(v, max = 12000) {
   }
   return t;
 }
+/* only says there is nothing ("none", "unchanged", "…") — no words at all */
+export function saysNothing(v) { const t = wordsOf(v).replace(/\r/g, '').trim(); return !t || NOTHING.test(bare(t)); }
 export function cleanName(v) {
   const t = wordsOf(v).replace(/\s+/g, ' ').trim().slice(0, 120);
-  return t && !NOTHING.test(t) && !SORRY.test(t) ? t : '';
+  return t && !NOTHING.test(bare(t)) && !SORRY.test(t) && /[\p{L}\p{N}]/u.test(t) ? t : '';
 }
 const his = (card) => Boolean(card && card.updated && card.updated.by === 'you');
 const NO_THREAD = /^(?:no\s+(?:new\s+)?threads?|untitled|title|tbd|todo|to\s+do)[.!]?$/i;
