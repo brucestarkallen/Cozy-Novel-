@@ -109,22 +109,14 @@ function drawSheet() {
   } }, 'Check the whole book'));
   if (row.childNodes.length) s.body.append(row);
   /* the judge: the book's passages graded, and which writer writes best by it — folded */
-  const g = checker.gradesOf(novelId);
-  if (g.rows.length) {
-    const avg = Math.round((g.rows.reduce((t, r) => t + r.overall, 0) / g.rows.length) * 10) / 10;
-    const j = checker.judgeOf(store.peek('house', 'house') || {});
-    const under = j ? g.rows.filter((r) => r.overall < j.target).length : 0;
-    s.body.append(h('details.judgebox', h('summary', `Graded ${avg} on average · ${plural(g.rows.length, 'passage')}${j ? ` · ${under} under your ${j.target}` : ''}`),
-      h('table.usage-table', h('tr', h('th', 'Who wrote it'), h('th', 'Passages'), h('th', 'Average')),
-        ...g.models.map((m) => h('tr', h('td', m.model), h('td.num', String(m.n)), h('td.num', String(m.average))))),
-      h('p.say.quiet', 'The judge grades each passage as it is checked — prose, people, continuity, pacing, pull. Its mark and whether it grades are in Settings → Who does what.')));
-  }
+  const jb = judgeBox(novelId);
+  if (jb) s.body.append(jb);
   if (st.state === 'off') {
     s.body.append(h('div.btnrow', h('button.btn.small', { onclick: () => { s.close(); hooks.openSettings('roles'); } }, 'Open Who does what')));
   }
   if (!list.length) {
     /* (older writing: the line above says so, and the buttons are there) */
-    if (st.state === 'clean' && !all.passages) s.body.append(h('p.say', 'Each passage is read once it is finished — for grammar, wording that sounds machine-made, your words to avoid, and slips against the book.'));
+    if (st.state === 'clean' && !all.passages) s.body.append(h('p.say', 'Each passage is read once it is finished — for grammar, wording that sounds machine-made (stock wording is counted too), your words to avoid, and slips against the book.'));
     s.body.scrollTop = scroll;
     return;
   }
@@ -138,6 +130,39 @@ function drawSheet() {
     for (const x of groups.get(cid)) s.body.append(card(novelId, x));
   }
   s.body.scrollTop = scroll;
+}
+
+/* The benchmark, folded: for each writer its passages graded and their
+ * average, its stock wording in every thousand words, and its record head to
+ * head; the checks the book fails most; and a judge that is the very model it
+ * grades, said so. */
+function judgeBox(novelId) {
+  const g = checker.gradesOf(novelId);
+  const j = checker.judgeOf(store.peek('house', 'house') || {});
+  const writers = g.models.filter((m) => m.n || m.words || m.win || m.loss || m.tie);
+  if (!g.rows.length && !g.duels && !writers.some((m) => m.words)) return null;
+  const avg = g.rows.length ? Math.round((g.rows.reduce((t, r) => t + r.overall, 0) / g.rows.length) * 10) / 10 : null;
+  const under = j ? g.rows.filter((r) => r.overall < j.target).length : 0;
+  const words = writers.reduce((t, m) => t + m.words, 0);
+  const stock = writers.reduce((t, m) => t + m.stock, 0);
+  const per = words ? Math.round((stock / words) * 10000) / 10 : 0;
+  const head = g.duels > 0;
+  const summary = avg !== null
+    ? `Graded ${avg} of 10 on average · ${plural(g.rows.length, 'passage')}${j ? ` · ${under} under your ${j.target}` : ''}`
+    : `Stock wording: ${per} in every 1,000 words`;
+  const box = h('details.judgebox', h('summary', summary),
+    h('table.usage-table',
+      h('tr', h('th', 'Who wrote it'), h('th', 'Graded'), h('th', 'Average'), h('th', 'Stock per 1,000 words'), head ? h('th', 'Head to head') : null),
+      ...writers.map((m) => h('tr',
+        h('td', m.model, m.self ? h('small.quiet', ' · judged by itself') : null),
+        h('td.num', String(m.n)),
+        h('td.num', m.average === null ? '—' : String(m.average)),
+        h('td.num', m.per1000 === null ? '—' : String(m.per1000)),
+        head ? h('td.num', { title: 'won – lost – even' }, `${m.win}–${m.loss}–${m.tie}`) : null))));
+  if (g.fails.length) box.append(h('p.say', h('b', 'Fails most: '), g.fails.slice(0, 4).map((f) => `${f.name} ${f.n}`).join(' · ')));
+  if (writers.some((m) => m.self && m.n)) box.append(h('p.say.quiet', 'A judge leans toward its own writing: a checker on another model grades the passages it wrote more fairly (Settings → Who does what).'));
+  box.append(h('p.say.quiet', 'Ten checks a passage passes or fails — Opening, True to the book, Shown, Pacing, Specific, Fresh, Sentences, People, Moves, Ending — its grade the number passed. Stock wording is counted, not judged (for scale: classic books of fiction hold about 0.01 in every 1,000 words, machine-made stories 0.1 to 7). Two versions of one passage by two writers are read head to head, blind and both ways round. The mark, and whether it judges: Settings → Who does what.'));
+  return box;
 }
 
 const phrasesOf = (item) => (item.phrases && item.phrases.length ? item.phrases : item.phrase ? [item.phrase] : []);
@@ -162,9 +187,20 @@ function card(novelId, x) {
   };
   el.append(h('div.sugtop', h('span.tag', KIND[item.kind] || 'Wording'), h('button.link', { onclick: show }, `Passage ${x.number}`)));
   if (item.kind === 'grade') {
-    /* graded under his mark: the five, why, and what writing it again would need */
+    /* graded under his mark: each check it fails with the words that fail it
+     * (a tap goes to them), and what writing it again would need — a grade
+     * from before 2.4.3 by its five */
     const gr = item.grade || {};
-    el.append(h('div.sugwhat', h('b', `${gr.overall} of 10 — under your ${item.target}`), h('small.gradeaxes', GRADE_AXES.filter(([k]) => Number.isFinite(gr[k])).map(([k, w]) => `${w} ${gr[k]}`).join(' · '))));
+    el.append(h('div.sugwhat', h('b', `${gr.overall} of ${gr.of || 10} — under your ${item.target}`), gr.faults ? null : h('small.gradeaxes', GRADE_AXES.filter(([k]) => Number.isFinite(gr[k])).map(([k, w]) => `${w} ${gr[k]}`).join(' · '))));
+    if (gr.faults && gr.faults.length) {
+      el.append(h('ul.faults', ...gr.faults.map((f) => h('li',
+        h('b', checker.CHECK_NAME[f.check] || f.check),
+        f.words ? [' — ', h('button.link.quote', { title: 'Go to these words in the passage.', onclick: () => {
+          if (C.sheet) C.sheet.close();
+          desk.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: f.words } });
+        } }, `“${f.words}”`)] : null,
+        f.why ? ` — ${f.why}` : null))));
+    }
     if (item.why) el.append(h('div.sugwhy', item.why));
     if (item.lift) el.append(h('div.sugwhy', h('b', 'To reach it: '), item.lift));
     el.append(h('div.btnrow',
@@ -194,7 +230,9 @@ function card(novelId, x) {
       const spot = checker.spotOf(x.chapterId, x.passageId, item);
       if (!spot) { toast('Those words are not there any more.'); checker.leaveOne(x.chapterId, x.passageId, item.id, { remember: false }); return; }
       if (C.sheet) C.sheet.close();
-      desk.rewriteSpan({ chapterId: x.chapterId, passageId: x.passageId, start: spot.start, end: spot.end, note: `Write it again without ${checker.quoted(phrasesOf(item))}.` });
+      /* his words to avoid, or stock wording counted: the sentence written again without them */
+      const note = item.stock ? `Write it again without ${checker.quoted(phrasesOf(item))} — say it the way this book would.` : `Write it again without ${checker.quoted(phrasesOf(item))}.`;
+      desk.rewriteSpan({ chapterId: x.chapterId, passageId: x.passageId, start: spot.start, end: spot.end, note });
     } }, 'Write it again'));
   }
   btns.append(h('button.btn.quiet.small', { onclick: () => checker.leaveOne(x.chapterId, x.passageId, item.id) }, 'Leave it'));

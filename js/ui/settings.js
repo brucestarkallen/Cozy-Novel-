@@ -485,8 +485,8 @@ function judgeField(hs) {
   mark.addEventListener('input', typing(() => { const n = Number(mark.value.trim().replace(',', '.')); changeHouse((x) => { x.judge = { ...(x.judge || {}) }; if (mark.value.trim() && Number.isFinite(n) && n >= 1 && n <= 10) x.judge.target = n; else delete x.judge.target; }); }, 400));
   return h('div.field',
     h('label.toggle', on, h('span', 'The judge grades each passage')),
-    h('em', 'In the checker’s own reading: prose, people, continuity, pacing, pull, 0–10. A passage under your mark comes behind the bubble with fixes that lift it and Write it again toward your mark — nothing changes until you say. Its grades show which writer writes best.'),
-    field('Your mark', mark, 'Under this, a passage is offered to be lifted (empty: 9).'));
+    h('em', 'In the checker’s own reading, ten checks a passage passes or fails — Opening, True to the book, Shown, Pacing, Specific, Fresh, Sentences, People, Moves, Ending — each one it fails named with the words that fail it; its grade is the number passed. A passage under your mark comes behind the bubble with fixes that lift it and Write it again toward your mark — nothing changes until you say. Two versions of one passage by two writers are read head to head. Its grades show which writer writes best.'),
+    field('Your mark', mark, 'Under this, a passage is offered to be lifted (empty: 9 — one check failed at most).'));
 }
 
 /* Every call to a model — the writer, the helper, the checker, the partner,

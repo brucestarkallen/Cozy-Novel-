@@ -24,27 +24,32 @@ import { connFor, connById, busy as writerBusy, recount } from './writer.js';
 import * as archivist from './archivist.js';
 import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, chapterText } from './shape.js';
 import { numberedText } from './context.js';
-import { checkerFrame, checkRequest, avoidList, avoidLine, notesText, aboutTheBook, CHECK_KINDS, GRADE_AXES } from './prompts.js';
+import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, CHECK_KINDS, JUDGE_CHECKS } from './prompts.js';
 import { locate } from './changes.js';
 import { findIn } from './search.js';
+import { stockIn } from './stock.js';
 import { contextOf } from '../model/providers.js';
 import { hashText, countWords, newId, plural, estimateTokens } from '../util.js';
 
 /* ------------------------------------------------------------ who checks */
 
-/* the checker's connection: his choice, or the helper's; "off" is nobody */
-/* The judge (Cozy Tavern's benchmark, for a novel): grades each passage in the
- * checker's own reading — prose, people, continuity, pacing, pull, and the
- * whole — on unless he turns it off; a passage under his mark (9 unless he
- * sets another) comes with fixes that lift it and what writing it again would
- * need. Behind the bubble like every suggestion: nothing changes until he says. */
+/* The judge (Cozy Tavern's benchmark, for a novel): in the checker's own
+ * reading, each passage held to ten checks of craft (prompts.js JUDGE_CHECKS)
+ * — its grade the number it passes, each one it fails named with the words
+ * that fail it; on unless he turns it off. A passage under his mark (9 unless
+ * he sets another) comes with fixes that lift it and what writing it again
+ * would need. And where one passage has versions by two writers for the same
+ * moment, the two are read head to head (duels, below). Behind the bubble like
+ * every suggestion: nothing changes until he says. */
 export function judgeOf(house) {
   const j = (house && house.judge) || {};
   if (j.on === false) return null;
   const t = Number(j.target);
   return { target: Number.isFinite(t) && t >= 1 && t <= 10 ? Math.round(t * 10) / 10 : 9 };
 }
-const score = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(10, Math.round(n * 10) / 10)) : null; };
+export const CHECK_NAME = Object.fromEntries(JUDGE_CHECKS.map(([k, name]) => [k, name]));
+
+/* the checker's connection: his choice, or the helper's; "off" is nobody */
 
 export function checkerConn(house) {
   const roles = (house && house.roles) || {};
@@ -203,11 +208,23 @@ function retryLater(novelId) {
 
 /* ------------------------------------------------------------ the reading */
 
+/* what one checking holds besides the passages and the story before them:
+ * its frame, his words to avoid, and the request itself with nothing in it to
+ * check — the notes, what the book is about, every instruction, the judge's
+ * checks when it judges — measured from the words that are sent, so a longer
+ * instruction is never more than the room allows; and room for a line of
+ * stock wording found */
+function fixedOf(house, novel) {
+  const avoid = avoidList(house);
+  const system = [checkerFrame(house, novel), avoidLine(avoid)].filter(Boolean).join('\n\n');
+  return estimateTokens(system) + estimateTokens(checkRequest({ novel, chapterLabel: 'Chapter Twenty-Two', numbered: '', avoid, judge: judgeOf(house) })) + 150;
+}
+
 /* how many words one checking carries: about as many as a careful read takes
  * at once, and never more than the checker's model holds beside the notes */
 const BATCH_WORDS = 2500;
 function batchWords(conn, house, novel) {
-  const fixed = estimateTokens(checkerFrame(house, novel)) + estimateTokens(notesText(novel, { forHelper: true })) + estimateTokens(aboutTheBook(novel, { plans: false })) + 900 + (judgeOf(house) ? 450 : 0);
+  const fixed = fixedOf(house, novel);
   const room = archivist.readingRoom(conn, fixed);
   if (room < 600) {
     const e = new Error(`its model holds ${contextOf(conn).toLocaleString()} tokens, too few to check the book beside its notes — choose one with more room for the checker`);
@@ -270,6 +287,8 @@ export async function runCheck(novelId) {
         setState(novelId, 'checking', `Checking ${batch.label}…`);
         await checkBatch(novelId, conn, batch, limit);
       }
+      /* the judge's head to head, once the reading is done */
+      if (judgeOf(store.peek('house', 'house') || {})) await runDuels(novelId, conn);
       failures.delete(novelId);
       setState(novelId, null);
     } catch (e) {
@@ -301,6 +320,10 @@ export async function runCheck(novelId) {
 /* anything kept for a passage or version no longer in the chapter */
 function stale(c) {
   for (const pid of Object.keys(c.checksLeft || {})) if (!(c.passages || []).some((x) => x.id === pid)) return true;
+  for (const d of Object.values(c.duels || {})) {
+    const p = d && (c.passages || []).find((x) => x.id === d.pid);
+    if (!p || !(p.versions || []).some((v) => v.id === d.x) || !(p.versions || []).some((v) => v.id === d.y)) return true;
+  }
   for (const [pid, byV] of Object.entries(c.checks || {})) {
     const p = (c.passages || []).find((x) => x.id === pid);
     if (!p) return true;
@@ -340,6 +363,74 @@ function avoidedIn(text, phrase) {
   return findIn(text, phrase).filter((h) => !(word.test(phrase[0]) && word.test(text[h.start - 1] || '')) && !(word.test(phrase[phrase.length - 1]) && word.test(text[h.end] || '')));
 }
 
+/* the story right before some passages, for slips against what was just
+ * written and for the seam: their own chapter up to them — or, for a
+ * chapter's first passages, the end of the chapter before (how this one
+ * picks up). from: 'this' or 'last' */
+function storyBefore(novel, chapter, pid) {
+  const list = chapter.passages || [];
+  const first = list.findIndex((p) => p.id === pid);
+  const lead = first > 0 ? chapterText({ passages: list.slice(0, first) }) : '';
+  if (lead.trim()) return { text: lead, from: 'this' };
+  const order = novel.order || [];
+  for (let i = order.indexOf(chapter.id) - 1; i >= 0; i--) {
+    const t = chapterText(store.peek('chapter', order[i]));
+    if (t.trim()) return { text: t, from: 'last' };
+  }
+  return { text: '', from: 'this' };
+}
+/* as much of it as `keep` characters hold, from its end */
+const tailOf = (text, keep) => (!keep ? '' : text.length > keep ? '[…]\n' + text.slice(-keep).replace(/^\S*\s+/, '') : text);
+
+/* The judge's grade of one passage, from its answers (a passage read in
+ * parts: every part's). A check fails where it was answered "no"; the words
+ * it named are kept where they stand in the passage, to be shown there.
+ * "fresh" fails wherever stock wording is counted in it, whatever was
+ * answered (a model reading for its own kind of phrasing misses most of it).
+ * The grade is the number of checks passed, of ten. */
+function judged(a, list, judge) {
+  const failed = new Map();
+  let answered = false;
+  for (const g of list) {
+    if (!g || typeof g !== 'object') continue;
+    const checks = g.checks && typeof g.checks === 'object' && !Array.isArray(g.checks) ? g.checks : null;
+    const faults = (Array.isArray(g.faults) ? g.faults : []).filter((f) => f && typeof f === 'object');
+    if (!checks && !faults.length) continue;
+    answered = true;
+    for (const [k] of JUDGE_CHECKS) {
+      const said = checks ? checks[k] : undefined;
+      const fault = faults.find((f) => String(f.check || '').trim().toLowerCase() === k);
+      const no = checks ? said === false || ['no', 'fail', 'failed', 'false'].includes(String(said === undefined || said === null ? '' : said).toLowerCase().replace(/[^a-z]/g, '')) : Boolean(fault);
+      if (!no || failed.has(k)) continue;
+      const words = fault ? evidence(a.text, fault.words) : '';
+      failed.set(k, { check: k, ...(words ? { words } : {}), why: fault ? clean(fault.why, 220) : '' });
+    }
+  }
+  if (!answered) return null;
+  if (a.stock.length && !(failed.get('fresh') || {}).words) {
+    failed.set('fresh', { check: 'fresh', words: a.stock[0].words, why: 'stock wording — far more common in machine-made fiction than in books people write', counted: true });
+  }
+  const faults = JUDGE_CHECKS.map(([k]) => failed.get(k)).filter(Boolean);
+  const grade = { overall: JUDGE_CHECKS.length - faults.length, of: JUDGE_CHECKS.length, faults, model: a.model };
+  if (grade.overall < judge.target) {
+    const lift = list.map((g) => String((g && g.lift) || '').trim()).filter(Boolean).join('\n');
+    grade.lift = (lift || `Fix what falls short — ${faults.map((f) => `${CHECK_NAME[f.check].toLowerCase()}: ${f.why || `“${f.words}”`}`).join('; ')}.`).slice(0, 1200);
+  }
+  return grade;
+}
+/* the words a fault named, as they stand in the passage (its own spelling,
+ * capitals and quotes) — or nothing when they are not there */
+function evidence(text, words) {
+  const w = String(words === undefined || words === null ? '' : words).replace(/^[\s"“”'‘’]+|[\s"“”'‘’]+$/g, '').trim();
+  if (!w) return '';
+  const tries = [w, ...w.split(/\s*(?:…|\.\.\.)\s*/).filter((x) => x.length >= 12).sort((x, y) => y.length - x.length)];
+  for (const t of tries) {
+    const hit = findIn(text, t, { max: 1 })[0];
+    if (hit) return text.slice(hit.start, hit.end);
+  }
+  return '';
+}
+
 /* one checking: these passages read (a passage longer than one request
  * carries, in parts); what it would change, kept */
 async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
@@ -354,7 +445,8 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   const asked = new Map();
   for (const p of batch.passages) {
     const v = picked(p);
-    asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, text: String(v.text || ''), sig: sigOf(v), items: [] });
+    const text = String(v.text || '');
+    asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, text, sig: sigOf(v), model: v.model || '', items: [], stock: stockIn(text) });
   }
   const system = [checkerFrame(house, novel), avoidLine(avoid)].filter(Boolean).join('\n\n');
   const one = asked.size === 1 ? [...asked.entries()][0] : null;
@@ -362,19 +454,24 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     ? archivist.partsOf(one[1].text, limit).map((part) => `[${one[0]}] ${part}`)
     : [numberedText(novel, chapter, batch.passages)];
   /* the story right before them, so a slip against what was just written is caught —
-   * and the passages are the truth where the notes lag behind them */
-  const first = (chapter.passages || []).findIndex((p) => p.id === batch.passages[0].id);
-  const lead = first > 0 ? chapterText({ passages: chapter.passages.slice(0, first) }) : '';
-  /* as much of it as the room left beside the passages holds (up to 6,000 characters) */
-  const fixedNow = estimateTokens(system) + estimateTokens(notesText(novel, { forHelper: true })) + estimateTokens(aboutTheBook(novel, { plans: false })) + 900;
-  const spare = archivist.readingRoom(conn, fixedNow) - Math.max(...numbered.map((x) => estimateTokens(x)));
-  const keep = Math.max(0, Math.min(6000, Math.floor(spare * 0.4 * 3.5)));
-  const before = !keep ? '' : lead.length > keep ? '[…]\n' + lead.slice(-keep).replace(/^\S*\s+/, '') : lead;
+   * and the passages are the truth where the notes lag behind them — as much of it
+   * as the room left beside the passages holds (up to 6,000 characters; of the
+   * chapter before, its last 2,500) */
+  const lead = storyBefore(novel, chapter, batch.passages[0].id);
+  const spare = archivist.readingRoom(conn, fixedOf(house, novel)) - Math.max(...numbered.map((x) => estimateTokens(x)));
+  const keep = Math.max(0, Math.min(lead.from === 'last' ? 2500 : 6000, Math.floor(spare * 0.4 * 3.5)));
+  const before = tailOf(lead.text, keep);
   const edits = [];
   const grades = [];
   const judge = judgeOf(house);
   for (const words of numbered) {
-    const got = await archivist.askJson(conn, system, checkRequest({ novel, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, judge }), { want: (o) => Array.isArray(o.edits) });
+    /* the stock wording counted in what this request carries */
+    const stock = {};
+    for (const [n, a] of asked) {
+      const here = [...new Set(a.stock.map((h) => h.words))].filter((w) => words.includes(w)).slice(0, 8);
+      if (here.length) stock[n] = here;
+    }
+    const got = await archivist.askJson(conn, system, checkRequest({ novel, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, beforeFrom: lead.from, judge, stock }), { want: (o) => Array.isArray(o.edits) });
     if (!got.ok) throw failed(got);
     edits.push(...got.obj.edits);
     if (Array.isArray(got.obj.grades)) grades.push(...got.obj.grades);
@@ -397,36 +494,48 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     const kind = CHECK_KINDS.includes(String(e.kind || '').toLowerCase()) ? String(e.kind).toLowerCase() : 'humanize';
     a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), start: spot.start, end: spot.end });
   }
-  /* a word he never wants that it let through: found here, and its sentence
-   * offered to be written again (every such word of that sentence named) */
   for (const a of asked.values()) {
+    /* a word he never wants that it let through: found here, and its sentence
+     * offered to be written again (every such word of that sentence named) */
     for (const w of avoid) {
       for (const hit of avoidedIn(a.text, w)) {
         const s = sentenceAround(a.text, hit.start, hit.end);
-        const same = a.items.find((x) => x.replace === null && x.start === s.start && x.end === s.end);
+        const same = a.items.find((x) => x.kind === 'avoid' && x.start === s.start && x.end === s.end);
         if (same) { if (!same.phrases.includes(w)) same.phrases.push(w); continue; }
         const sentence = a.text.slice(s.start, s.end);
         if (a.items.some((x) => overlaps(x, hit) || overlaps(x, s)) || wasLeft(a, sentence, null)) continue;
         a.items.push({ id: newId('sg'), kind: 'avoid', find: sentence, replace: null, phrase: w, phrases: [w], start: s.start, end: s.end });
       }
     }
-    for (const x of a.items) if (x.replace === null) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} on your list of words to avoid`;
+    for (const x of a.items) if (x.kind === 'avoid' && x.replace === null) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} on your list of words to avoid`;
+    /* stock wording counted that no fix here takes away: its sentence offered
+     * to be written again, the same way */
+    for (const hit of a.stock) {
+      if (a.items.some((x) => overlaps(x, hit))) continue;
+      const s = sentenceAround(a.text, hit.start, hit.end);
+      const same = a.items.find((x) => x.stock && x.start === s.start && x.end === s.end);
+      if (same) { if (!same.phrases.includes(hit.words)) same.phrases.push(hit.words); continue; }
+      const sentence = a.text.slice(s.start, s.end);
+      if (a.items.some((x) => overlaps(x, s)) || wasLeft(a, sentence, null)) continue;
+      a.items.push({ id: newId('sg'), kind: 'humanize', find: sentence, replace: null, stock: true, phrases: [hit.words], start: s.start, end: s.end });
+    }
+    for (const x of a.items) if (x.stock) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} stock wording — far more common in machine-made fiction than in books people write`;
   }
-  /* each passage's grade (a passage read in parts: the lowest of its parts) */
+  /* each passage's grade, from all it was answered (a passage read in parts: every part) */
   const graded = new Map();
   if (judge) {
+    const byPassage = new Map();
     for (const g of grades) {
       if (!g || typeof g !== 'object') continue;
       const ref = String(g.passage === undefined ? '' : g.passage).replace(/[^\d.]/g, '');
       const a = asked.get(ref) || (asked.size === 1 && !ref ? [...asked.values()][0] : null);
-      const overall = score(g.overall);
-      if (!a || overall === null) continue;
-      const was = graded.get(a.pid);
-      if (was && was.overall <= overall) continue;
-      const grade = { overall, why: clean(g.why), model: (picked((chapter.passages || []).find((p) => p.id === a.pid)) || {}).model || '' };
-      for (const [k] of GRADE_AXES) { const n = score(g[k]); if (n !== null) grade[k] = n; }
-      if (overall < judge.target && String(g.lift || '').trim()) grade.lift = String(g.lift).trim().slice(0, 1200);
-      graded.set(a.pid, grade);
+      if (!a) continue;
+      if (!byPassage.has(a.pid)) byPassage.set(a.pid, { a, list: [] });
+      byPassage.get(a.pid).list.push(g);
+    }
+    for (const { a, list } of byPassage.values()) {
+      const grade = judged(a, list, judge);
+      if (grade) graded.set(a.pid, grade);
     }
   }
   const at = Date.now();
@@ -435,7 +544,7 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     const items = a.items.map(({ start, end, ...rest }) => rest);
     const grade = graded.get(a.pid) || null;
     /* under his mark: a suggestion of its own, to write it again toward it — or leave it */
-    if (grade && judge && grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: grade.why, lift: grade.lift || '', target: judge.target, grade });
+    if (grade && judge && grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: '', lift: grade.lift || '', target: judge.target, grade });
     store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}) }), { checkpoint: true });
   }
   await store.flush('chapter', chapter.id);
@@ -476,20 +585,211 @@ function keepWords(novelId, w, next, rest) {
   archivist.nudge(novelId, 8000);
 }
 
-/* one suggestion, applied. {ok} or {ok: false, said} */
-/* the grades of the book's passages as they read now, by the model that wrote
- * each — the benchmark: which writer writes best, by this judge */
-export function gradesOf(novelId) {
-  const rows = [];
-  for (const c of chaptersOf(novelId)) for (const p of c.passages || []) {
-    const e = entryFor(c, p);
-    if (e && e.grade) rows.push({ chapterId: c.id, passageId: p.id, ...e.grade });
+/* ------------------------------------------------------------ head to head */
+
+/* Versions of one passage made for the same moment by the same request —
+ * written and taken again, a scene told as prose again, or written again with
+ * the same note — each by the model that wrote it whole (never one carried on
+ * by another, or one he or the checker changed). */
+function momentOf(v) {
+  const ask = (v && v.ask) || {};
+  if (v.how === 'write' || v.how === 'another') return 'w' + JSON.stringify([ask.direction || '', ask.length || '']);
+  if (v.how === 'play' && ask.transcript) return 'p' + hashText(JSON.stringify(ask.transcript));
+  if (v.how === 'rewrite') return 'r' + JSON.stringify([v.from || '', ask.note || '']);
+  return '';
+}
+const duelable = (v) => Boolean(v && !v.streaming && !v.cut && !v.carried && v.model && String(v.text || '').trim() && momentOf(v));
+const duelKey = (pid, a, b) => `${pid}:${[a, b].sort().join('|')}`;
+/* pairs that could not be judged just now: not asked again until the app starts again */
+const duelTried = new Set();
+
+/* The pairs waiting for the judge: for the version on show, the newest
+ * version by each other writer made for the same moment. Each pair is read
+ * once, and only when the later of the two was written since the judge began
+ * reading takes head to head (house.duelsFrom): takes from before are never
+ * sent unasked. */
+const madeAt = (v) => v.done || v.at || 0;
+export function duelsDue(novelId) {
+  const house = store.peek('house', 'house') || {};
+  const from = Number.isFinite(house.duelsFrom) ? house.duelsFrom : 0;
+  const out = [];
+  for (const c of chaptersOf(novelId)) {
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      const v = picked(p);
+      if (!duelable(v)) continue;
+      const m = momentOf(v);
+      const seen = new Set([v.model]);
+      for (let i = (p.versions || []).length - 1; i >= 0; i--) {
+        const u = p.versions[i];
+        if (u.id === v.id || !duelable(u) || seen.has(u.model) || momentOf(u) !== m) continue;
+        seen.add(u.model);
+        if (Math.max(madeAt(v), madeAt(u)) < from) continue;
+        const key = duelKey(p.id, v.id, u.id);
+        if ((c.duels && c.duels[key]) || duelTried.has(key)) continue;
+        out.push({ chapterId: c.id, pid: p.id, x: v.id, y: u.id, key });
+      }
+    }
   }
-  const byModel = new Map();
-  for (const r of rows) { const k = r.model || 'your own words'; const t = byModel.get(k) || { n: 0, sum: 0 }; t.n++; t.sum += r.overall; byModel.set(k, t); }
-  return { rows, models: [...byModel.entries()].map(([model, t]) => ({ model, n: t.n, average: Math.round((t.sum / t.n) * 10) / 10 })).sort((a, b) => b.average - a.average) };
+  return out;
 }
 
+/* never one page much longer than the other: a judge leans to the longer
+ * (EQ-Bench cuts its pages to one length) — the longer is shown only as far
+ * as a little past the shorter, at a paragraph's end */
+function evenUp(x, y) {
+  const wx = countWords(x);
+  const wy = countWords(y);
+  const short = Math.min(wx, wy);
+  if (!short || Math.max(wx, wy) <= short * 1.3) return { x, y, cut: false };
+  const cap = Math.ceil(short * 1.15);
+  const trim = (t) => {
+    const first = archivist.partsOf(t, cap)[0] || t;
+    if (countWords(first) <= cap * 1.3) return first;
+    /* one long paragraph: cut at the end of a sentence */
+    let out = '';
+    for (const s of t.match(/[^.!?…]+(?:[.!?…]+["”’)\]]*\s*|$)/g) || [t]) { if (out && countWords(out + s) > cap) break; out += s; }
+    return out.trim();
+  };
+  const tx = wx > wy ? trim(x) : x;
+  const ty = wy > wx ? trim(y) : y;
+  return { x: tx, y: ty, cut: tx.length < x.length || ty.length < y.length };
+}
+
+/* what he asked for that moment, for the judge */
+function askedOf(v) {
+  const ask = (v && v.ask) || {};
+  if (v.how === 'rewrite') return ask.note ? `Written again, with my note: ${ask.note}` : '';
+  if (v.how === 'play') return '';
+  return String(ask.direction || '');
+}
+
+/* One pair read head to head, blind and both ways round (Cozy Tavern's
+ * duel): a win only when both readings agree, a tie otherwise. Kept on the
+ * chapter while both versions are there. */
+async function duel(novelId, conn, d) {
+  const house = store.peek('house', 'house') || {};
+  const novel = store.peek('novel', novelId);
+  const chapter = store.peek('chapter', d.chapterId);
+  const p = chapter && (chapter.passages || []).find((x) => x.id === d.pid);
+  const vx = p && (p.versions || []).find((v) => v.id === d.x);
+  const vy = p && (p.versions || []).find((v) => v.id === d.y);
+  if (!novel || !vx || !vy) return null;
+  const pages = evenUp(String(vx.text || ''), String(vy.text || ''));
+  const system = checkerFrame(house, novel);
+  const lead = storyBefore(novel, chapter, p.id);
+  const label = chapterLabel(novel, chapter);
+  const build = (first, second, before) => duelRequest({ novel, chapterLabel: label, before, beforeFrom: lead.from, asked: askedOf(vx), first, second, cut: pages.cut });
+  const spare = archivist.readingRoom(conn, estimateTokens(system) + estimateTokens(build(pages.x, pages.y, '')));
+  /* two pages that do not fit beside the notes are not read */
+  if (spare < 0) return null;
+  const before = tailOf(lead.text, Math.max(0, Math.min(lead.from === 'last' ? 2500 : 6000, Math.floor(spare * 0.4 * 3.5))));
+  const said = (o) => { const b = String(o.better || '').trim().toUpperCase(); return b === 'A' || b === 'B' ? b : 'same'; };
+  const one = await archivist.askJson(conn, system, build(pages.x, pages.y, before), { want: (o) => typeof o.better === 'string' });
+  if (!one.ok) return one.permanent ? { stop: failed(one) } : null;
+  const two = await archivist.askJson(conn, system, build(pages.y, pages.x, before), { want: (o) => typeof o.better === 'string' });
+  if (!two.ok) return two.permanent ? { stop: failed(two) } : null;
+  const first = said(one.obj) === 'A' ? 'x' : said(one.obj) === 'B' ? 'y' : 'tie';
+  const second = said(two.obj) === 'A' ? 'y' : said(two.obj) === 'B' ? 'x' : 'tie';
+  const winner = first === second ? first : 'tie';
+  const row = { pid: p.id, x: vx.id, y: vy.id, xModel: vx.model, yModel: vy.model, winner, why: clean(winner === 'tie' ? '' : first === winner ? one.obj.why : two.obj.why, 300), at: Date.now() };
+  store.change('chapter', chapter.id, chapterSteps.setDuel(d.key, row), { checkpoint: true });
+  await store.flush('chapter', chapter.id);
+  tell(novelId);
+  return row;
+}
+
+/* a few pairs at a time (the rest in a moment); a pair that could not be read
+ * is not asked again in a loop, and a connection turned away for good stops
+ * the checker as any refusal does */
+async function runDuels(novelId, conn) {
+  let n = 0;
+  for (const d of duelsDue(novelId)) {
+    if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+    if (n >= 3) { schedule(novelId, 3000); return; }
+    n++;
+    duelTried.add(d.key);
+    const chapter = store.peek('chapter', d.chapterId);
+    const novel = store.peek('novel', novelId);
+    setState(novelId, 'checking', `Reading two versions of ${chapter && novel ? `${chapterLabel(novel, chapter, { withName: false })}, passage ${passageNumbers(chapter).get(d.pid)}` : 'a passage'} side by side…`);
+    const out = await duel(novelId, conn, d);
+    if (out && out.stop) throw out.stop;
+  }
+}
+
+/* ------------------------------------------------------------ the benchmark */
+
+/* stock wording counted in a version, kept for it while its words stay */
+const stockSeen = new WeakMap();
+function stockCount(v) {
+  const t = String((v && v.text) || '');
+  const was = stockSeen.get(v);
+  if (was && was.text === t) return was.n;
+  const n = stockIn(t).length;
+  if (v && typeof v === 'object') stockSeen.set(v, { text: t, n });
+  return n;
+}
+/* whose words a version is, for the benchmark: the model that wrote it whole,
+ * or his own (nothing wrote it but him) — never a mix (carried on by another
+ * writer, changed by him, the checker or his partner, rewritten in part), nor
+ * what was brought in from a file */
+const MIXED = ['suggested', 'partner', 'edit', 'selection', 'imported'];
+function authorOf(v) {
+  if (!v || v.streaming || v.carried || MIXED.includes(v.how)) return '';
+  return v.model || 'your own words';
+}
+
+/* The benchmark: which writer writes best, by this judge, over the book as it
+ * reads now — for each writer its passages graded and their average, the
+ * stock wording counted in every thousand of its words (no judge needed: a
+ * count), and its wins, losses and ties head to head; which checks the
+ * book's passages fail most; and whether the judge is the very model it
+ * grades (a judge leans to its own writing — Panickssery et al., arXiv
+ * 2404.13076). */
+export function gradesOf(novelId) {
+  const house = store.peek('house', 'house') || {};
+  const judgeConn = checkerConn(house);
+  const judgeModel = (judgeConn && judgeConn.model) || '';
+  const rows = [];
+  const by = new Map();
+  const row = (k) => { if (!by.has(k)) by.set(k, { model: k, n: 0, sum: 0, words: 0, stock: 0, win: 0, loss: 0, tie: 0 }); return by.get(k); };
+  const fails = new Map();
+  let duels = 0;
+  for (const c of chaptersOf(novelId)) {
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      const v = picked(p);
+      const who = authorOf(v);
+      if (who) { const r = row(who); r.words += countWords(v.text); r.stock += stockCount(v); }
+      const e = entryFor(c, p);
+      /* (a grade from before the ten checks, 2.4.1–2.4.2, was one number on another scale: its
+       * card still shows, but it is not averaged with these) */
+      if (!e || !e.grade || !Number.isFinite(e.grade.overall) || !e.grade.of) continue;
+      /* every grade counts for the book; a writer's row holds only what that writer wrote whole */
+      rows.push({ chapterId: c.id, passageId: p.id, ...e.grade });
+      if (who) { const r = row(who); r.n++; r.sum += e.grade.overall; }
+      for (const f of e.grade.faults || []) fails.set(f.check, (fails.get(f.check) || 0) + 1);
+    }
+    for (const d of Object.values(c.duels || {})) {
+      if (!d || !d.xModel || !d.yModel) continue;
+      duels++;
+      const a = row(d.xModel);
+      const b = row(d.yModel);
+      if (d.winner === 'x') { a.win++; b.loss++; } else if (d.winner === 'y') { b.win++; a.loss++; } else { a.tie++; b.tie++; }
+    }
+  }
+  const models = [...by.values()].map((r) => ({
+    model: r.model, n: r.n, average: r.n ? Math.round((r.sum / r.n) * 10) / 10 : null,
+    words: r.words, stock: r.stock, per1000: r.words ? Math.round((r.stock / r.words) * 10000) / 10 : null,
+    win: r.win, loss: r.loss, tie: r.tie, self: Boolean(judgeModel) && r.model === judgeModel,
+  })).sort((a, b) => ((b.average === null ? -1 : b.average) - (a.average === null ? -1 : a.average)) || ((b.win - b.loss) - (a.win - a.loss)) || (b.words - a.words));
+  return {
+    rows, models, duels,
+    fails: JUDGE_CHECKS.map(([k, name]) => ({ check: k, name, n: fails.get(k) || 0 })).filter((x) => x.n).sort((a, b) => b.n - a.n),
+  };
+}
+
+/* one suggestion, applied. {ok} or {ok: false, said} */
 export function applyOne(novelId, chapterId, passageId, itemId) {
   const w = where(chapterId, passageId);
   if (w.why) return { ok: false, said: w.why };

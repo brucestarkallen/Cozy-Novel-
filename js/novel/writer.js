@@ -268,6 +268,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       tokensCounted: out.usage && Number.isFinite(out.usage.in) ? true : undefined,
       ms: out.sent ? out.sent.ms : undefined,
       model: conn.model,
+      /* carried on by another writer: no longer one writer's words (the judge's head to head and its counts leave it out) */
+      carried: mode === 'append' && original && (original.carried || (original.model && original.model !== conn.model)) ? true : undefined,
       conn: connName(conn),
       sent: out.sent ? key : undefined,
       words: countWords(finalText),
@@ -518,7 +520,7 @@ export async function goOn({ novelId, chapterId, passageId }) {
   /* a rewrite of a few selected words that stopped partway sits in the middle
    * of the passage: carrying the passage on from its end would leave it cut there */
   if (v.how === 'selection') return { ok: false, error: 'a rewrite of selected words can’t be carried on — Another take writes it again' };
-  const original = { text: String(v.text || ''), cut: v.cut, cutWhy: v.cutWhy, stopped: v.stopped };
+  const original = { text: String(v.text || ''), cut: v.cut, cutWhy: v.cutWhy, stopped: v.stopped, model: v.model, carried: v.carried };
   /* what wakes a rule: the words of his that made it, or the premise it carried on */
   const moment = momentOf(chapter, p);
   const i = chapter.passages.indexOf(p);

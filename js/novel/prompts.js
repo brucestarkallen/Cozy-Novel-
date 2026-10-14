@@ -538,8 +538,37 @@ export function avoidLine(list) {
 /* ------------------------------------------------------- the checker */
 
 export const CHECK_KINDS = ['grammar', 'humanize', 'avoid', 'continuity', 'craft'];
-/* the judge's five (Cozy Tavern's benchmark, for a novel) */
+/* the judge's five of 2.4.1–2.4.2 (Cozy Tavern's benchmark, for a novel): a
+ * grade kept from then still shows by them */
 export const GRADE_AXES = [['prose', 'Prose'], ['people', 'People'], ['continuity', 'Continuity'], ['pacing', 'Pacing'], ['pull', 'Pull']];
+
+/* The judge's ten checks, each a yes or a no with the words that fail it,
+ * the grade the number passed. Why checks and not a number out of ten: a
+ * judge's whole-page number agrees with expert readers barely better than
+ * chance (Chakrabarty et al., "Art or Artifice?", arXiv 2309.14556; EQ-Bench's
+ * own grader against expert writers, Surge's Hemingway-bench), while tests
+ * of craft a reader can check — TTCW's fourteen, made from what editors look
+ * for — hold steady. These are TTCW's tests made into checks a page of a
+ * novel can be held to (pacing; scene and summary; language and figures;
+ * the ending; perspective and voice; the turn; originality; the world felt;
+ * people not there for the plot; subtext), with the faults editors fix most
+ * in machine-made fiction (Chakrabarty et al., arXiv 2409.14509: awkward
+ * phrasing, clumsy sentences, explaining, cliché) and the book's own: the
+ * seam with the passage before, the book's truth. */
+export const JUDGE_CHECKS = [
+  ['opening', 'Opening', 'its first lines carry straight on from where the story before it stopped — the same moment, everyone where they were, nothing told twice, any jump in time or place marked (the book’s very first page: it opens with something happening)'],
+  ['canon', 'True to the book', 'nothing in it disagrees with the book, its notes or what came before — names, looks, where everyone is, who knows what — and it keeps the book’s point of view and tense'],
+  ['shown', 'Shown', 'what matters is played out as scene, not summed up; nothing is explained that the scene already shows; people don’t announce their feelings in tidy sentences, and the telling doesn’t decode them'],
+  ['pacing', 'Pacing', 'each beat gets the room it deserves — nothing that matters rushed past, nothing idle dragged out'],
+  ['specific', 'Specific', 'concrete, particular detail of this place and these people; nothing vague or generic where a real detail belongs'],
+  ['fresh', 'Fresh', 'no cliché or stock phrase, no stock bodily cue standing in for a feeling, no purple or overwritten line, no “it wasn’t X — it was Y” turn'],
+  ['sentences', 'Sentences', 'every sentence reads clean and natural, with a rhythm that varies — nothing awkward, clumsy or one shape after another'],
+  ['people', 'People', 'everyone acts and speaks from their own wants and nature, each in their own voice — nobody there only to move things along, nobody agreeing or giving way without a reason'],
+  ['moves', 'Moves', 'by its end something has concretely changed — someone moved, chose, learned, lost or won; a quiet passage moves when a mood hardens or a fact travels'],
+  ['ending', 'Ending', 'it ends on forward motion — never on a summary of what it meant, a lesson, a recap or the weather'],
+];
+/* how many checks a passage may fail and still meet his mark */
+export function allowedFails(target) { return Math.max(0, Math.floor(10 - target + 1e-9)); }
 
 /* how the book writes sound (About this book → Sound), so the checker never
  * "fixes" it */
@@ -553,17 +582,27 @@ export function checkerFrame(house, novel) {
   return `${FICTION_WORK}\n\nYou read ${titled(novel)}, a novel ${name ? `${name} is writing` : 'being written'}, the way a careful copy editor would: each passage once it’s finished, for what is plainly wrong or would plainly read better — never to change what happens, the people in it, or the voice it’s told in.`;
 }
 
-export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', judge = null }) {
+/* stock wording counted in the passages (stock.js), one line: [1.2] “…”, “…”; [1.3] “…” */
+function stockLine(stock) {
+  const rows = Object.entries(stock || {}).filter(([, list]) => list && list.length);
+  if (!rows.length) return '';
+  return `\nStock wording counted in these passages — phrases that stand in machine-made fiction hundreds of times more often than in books people write — each to be said another way: ${rows.map(([n, list]) => `[${n}] ${list.map((w) => `“${w}”`).join(', ')}`).join('; ')}.`;
+}
+
+/* before: the story right before the passages — of their own chapter, or
+ * (the chapter's first passages) the end of the chapter before */
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {} }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true });
   if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
-  if (before && before.trim()) parts.push(`${chapterLabel} up to these passages, for what has just happened:\n${fence(before)}`);
+  if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to these passages, for what has just happened:\n${fence(before)}`);
   parts.push(`Check these passages from ${chapterLabel}, each numbered as it is on the page:\n${fence(numbered)}`);
+  const allowed = judge ? allowedFails(judge.target) : 0;
   parts.push(`Suggest only what is worth changing, each a small fix in place:
 - "grammar": spelling, grammar, punctuation, a word missing or doubled.
-- "humanize": what reads stock or machine-made rather than written — a cliché, filler, the same word twice close together, a phrase the book keeps reaching for — said the way this book would say it.${avoid.length ? `
+- "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
 - "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. And the seams: this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
 
@@ -571,15 +610,33 @@ Keep the book’s voice: a fragment, dialect, a character’s own way of talking
 
 Each fix replaces a stretch of words: "find" is the words exactly as they stand in that passage — copied exactly, enough of them to stand in only one place in it — "replace" the new words, and "why" a few words on why.${judge ? `
 
-Then grade each passage as a page of a finished novel, 0 to 10 each — 10 the best a gifted novelist could write here, 5 competent and forgettable, 0 broken; be exacting, most good passages are 6 or 7:
-- prose: vivid and specific, plain where plain serves, rhythm that varies, no cliché, no purple, no padding; dialogue that sounds like these people.
-- people: everyone acts from their own wants, history and nature, knows only what they could know, and reacts truly.
-- continuity: true to the book and its notes, and carrying on smoothly from the passage before it.
-- pacing: every beat earns its length — nothing rushed past, nothing dragged.
-- pull: a reader wants to turn the page; something happened that matters.
-"overall" is your whole judgment, not the average. For a passage under ${judge.target} overall, add fixes of kind "craft" — small changes in place that lift it — and in "lift" say, in a few lines in my voice, what writing it again would need to reach ${judge.target} (“Slow the moment Yuki falls…”).` : ''}
+Then judge each passage’s craft as a page of a finished novel, by ten checks. Answer every check of every passage "yes" or "no" — "no" only where you can point to the words in it that fail the check; a check with nothing to try in a passage (nobody speaks: the voices) is "yes". Judged like this, a page from a published novelist fails one or two; a page that reads machine-made fails most. More figures, longer sentences or rarer words are never better writing: overwriting fails "fresh".
+${JUDGE_CHECKS.map(([k, , what]) => `- ${k}: ${what}.`).join('\n')}
+For each "no", a fault: the check, "words" — the words that fail it, copied exactly from the passage, no more than a sentence — and "why", in a few words. A passage with ${allowed ? `more than ${numberWords(allowed).toLowerCase()} “no”` : 'any “no”'} is under my mark of ${judge.target}: for it, add fixes of kind "craft" — small changes in place that lift it — and in "lift" say, in a few lines in my voice, what writing it again would need to reach ${judge.target} (“Slow the moment Yuki falls…”).` : ''}
 
-Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "grammar", "find": "…", "replace": "…", "why": "…"}]${judge ? ', "grades": [{"passage": "2.3", "prose": 7, "people": 7, "continuity": 8, "pacing": 6, "pull": 7, "overall": 7, "why": "one sentence", "lift": "…"}]' : ''}} — or {"edits": []${judge ? ', "grades": […]' : ''}} when nothing needs fixing.`);
+Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "grammar", "find": "…", "replace": "…", "why": "…"}]${judge ? `, "grades": [{"passage": "2.3", "checks": {${JUDGE_CHECKS.map(([k], i) => `"${k}": "${i === 9 ? 'no' : 'yes'}"`).join(', ')}}, "faults": [{"check": "ending", "words": "…", "why": "…"}], "lift": "…"}]` : ''}} — or {"edits": []${judge ? ', "grades": […]' : ''}} when nothing needs fixing.`);
+  return parts.join('\n\n');
+}
+
+/* The judge's head to head (Cozy Tavern's duel): two versions of one passage,
+ * written for the same moment by two writers, read blind — "A" and "B", no
+ * names — and asked which is the better page; the app asks twice, the order
+ * swapped, and a win counts only when both answers agree (a judge's lean to
+ * the first or the second cancels out). Asking which of two is better is the
+ * judging that agrees with readers most (LitBench, arXiv 2507.00769; EQ-Bench
+ * ranks its writers the same way). */
+export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false }) {
+  const parts = [];
+  const notes = notesText(novel, { forHelper: true });
+  if (notes) parts.push(`The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right):\n${notes}`);
+  const about = aboutTheBook(novel, { plans: false });
+  if (about) parts.push(about);
+  if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to this passage, for what has just happened:\n${fence(before)}`);
+  if (asked && asked.trim()) parts.push(`What I asked for here:\n${fence(asked)}`);
+  parts.push(`Two writers each wrote this passage of ${chapterLabel}, for the same moment.\n\nPage A:\n${fence(first)}\n\nPage B:\n${fence(second)}`);
+  parts.push(`Which is the better page of a finished novel here? Judge the writing, not its length: the page that carries on from the story before, stays true to the book, plays what matters as scene, gives each beat its due, keeps its detail particular, its phrasing fresh and its sentences natural, lets its people act from their own wants in their own voices, and ends moving forward. More figures, longer sentences or rarer words are never better writing.${cut ? ' The longer page is shown only as far as the shorter one runs — never count that against it.' : ''}
+
+Answer with one JSON object and nothing else: {"better": "A" or "B" or "same", "why": "one sentence"}.`);
   return parts.join('\n\n');
 }
 

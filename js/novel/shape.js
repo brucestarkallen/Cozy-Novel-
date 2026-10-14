@@ -429,9 +429,21 @@ export const chapterSteps = {
     if (!list.some((x) => x.find === item.find && x.replace === replace)) list.push({ find: item.find, replace });
     if (list.length > 60) list.splice(0, list.length - 60);
   },
+  /* the judge's head to head of two versions of one passage (checker.js) —
+   * kept while both versions are there */
+  setDuel: (key, row) => (c) => {
+    const p = findPassage(c, row.pid);
+    if (!p || !findVersion(p, row.x) || !findVersion(p, row.y)) return;
+    c.duels = c.duels || {};
+    c.duels[key] = JSON.parse(JSON.stringify(row));
+  },
   /* what was kept for passages and versions no longer in the chapter goes */
   pruneChecks: () => (c) => {
     for (const pid of Object.keys(c.checksLeft || {})) if (!findPassage(c, pid)) delete c.checksLeft[pid];
+    for (const [key, d] of Object.entries(c.duels || {})) {
+      const p = d && findPassage(c, d.pid);
+      if (!p || !findVersion(p, d.x) || !findVersion(p, d.y)) delete c.duels[key];
+    }
     if (!c.checks) return;
     for (const pid of Object.keys(c.checks)) {
       const p = findPassage(c, pid);

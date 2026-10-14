@@ -34,13 +34,40 @@ def answer_for(body):
     if "Check these passages from" in last_user:
         # the checker: a fix for the stand-in's own stock words, wherever they stand
         edits = []
-        for m in re.finditer(r"\[(\d+\.\d+)\] ([\s\S]*?)(?=\n\n\[\d+\.\d+\] |\n\"\"\"|$)", last_user):
+        # (only the passages to check: the story before them and the request's own words are not passages)
+        checked = last_user.split("Check these passages from", 1)[1].split("Suggest only what is worth changing", 1)[0]
+        for m in re.finditer(r"\[(\d+\.\d+)\] ([\s\S]*?)(?=\n\n\[\d+\.\d+\] |\n\"\"\"|$)", checked):
             num, text = m.group(1), m.group(2)
             if "patient and unhurried" in text:
                 edits.append({"passage": num, "kind": "humanize", "find": "patient and unhurried", "replace": "patient, unhurried", "why": "lighter without the and"})
             if "letters anymore" in text:
                 edits.append({"passage": num, "kind": "grammar", "find": "letters anymore", "replace": "letters any more", "why": "two words in British English"})
-        return json.dumps({"edits": edits})
+        if "Then judge each passage" not in last_user:
+            return json.dumps({"edits": edits})
+        # the judge: every check passed — but a passage that ends on what it all meant fails "ending",
+        # and one that says what a look meant fails "shown" too
+        grades = []
+        for m in re.finditer(r"\[(\d+\.\d+)\] ([\s\S]*?)(?=\n\n\[\d+\.\d+\] |\n\"\"\"|$)", checked):
+            num, text = m.group(1), m.group(2)
+            checks = {k: "yes" for k in ["opening", "canon", "shown", "pacing", "specific", "fresh", "sentences", "people", "moves", "ending"]}
+            faults = []
+            if "And she knew, at last, that she was home." in text:
+                checks["ending"] = "no"
+                faults.append({"check": "ending", "words": "And she knew, at last, that she was home.", "why": "closes on what it all meant"})
+            if "a look that meant he was sorry" in text:
+                checks["shown"] = "no"
+                faults.append({"check": "shown", "words": "a look that meant he was sorry", "why": "says what the look meant"})
+            grade = {"passage": num, "checks": checks, "faults": faults}
+            if faults:
+                grade["lift"] = "End on what Mara does next, and let his look stand without saying what it means."
+            grades.append(grade)
+        return json.dumps({"edits": edits, "grades": grades})
+    if "Which is the better page" in last_user:
+        # head to head: the page that has the lamp lit is the better, whichever side it stands on
+        a = last_user.split("Page A:")[-1].split("Page B:")[0]
+        b = last_user.split("Page B:")[-1]
+        better = "A" if "LAMP LIT" in a and "LAMP LIT" not in b else "B" if "LAMP LIT" in b and "LAMP LIT" not in a else "same"
+        return json.dumps({"better": better, "why": "the lamp is lit on that page"})
     if "for the writer to read before every page" in last_user:
         return json.dumps({"about": "A lighthouse keeper on a stormy coast and the letter that washed up at her feet.", "style": "Close third person on Mara, past tense; quiet, wry, salt-weathered."})
     if "Check every card against the book as it stands" in last_user:
@@ -93,6 +120,9 @@ def answer_for(body):
         words.insert(1, "(" + direction + ")")
     if "rest of this chapter" in last_user or "whole chapter" in last_user:
         words = words + words
+    # two writers, two pages: the thinking model lights the lamp (the judge's head to head tells them apart)
+    if body.get("model") == "fake-thinker" and "THE LAMP" in last_user:
+        words.append("LAMP LIT.")
     return "\n\n".join(words)
 
 

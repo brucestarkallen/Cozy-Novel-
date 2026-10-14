@@ -1063,13 +1063,72 @@ async def scenario_partner(b):
     errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
     check('no errors on the page', not errs, errs[:3])
 
+async def scenario_judge(b):
+    """the judge: ten checks and the words that fail them, stock wording counted, the benchmark box, two writers head to head"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Judged Book')
+    await add_conn(pg)
+    # his own words: a look explained, a stock phrase, an ending that says what it meant
+    await pg.fill('#direction', 'He gave her a look that meant he was sorry. Her voice was barely above a whisper. And she knew, at last, that she was home.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(300)
+    for i in range(80):
+        if await pg.get_attribute('#checkBubble', 'data-state') == 'found': break
+        await pg.wait_for_timeout(250)
+    await pg.click('#checkBubble')
+    await pg.wait_for_selector('.sheet.on .sug')
+    cards = await pg.locator('.sheet.on .sug').all_inner_texts()
+    # (the tag on each card shows in capitals)
+    grade = next((c for c in cards if 'UNDER YOUR MARK' in c.upper()), '')
+    check('a passage under his mark: its grade, each check it fails with the words that fail it, and Write it again toward 9',
+          '7 of 10 — under your 9' in grade and 'Shown' in grade and '“a look that meant he was sorry”' in grade and 'Ending' in grade and 'Fresh' in grade and '“voice was barely above a whisper”' in grade and 'Write it again toward 9' in grade, grade)
+    stock_card = next((c for c in cards if c.upper().startswith('HUMANIZE')), '')
+    check('the stock wording counted in it is offered to be written again', 'HUMANIZE' in stock_card.upper() and 'Write it again' in stock_card and 'Leave it' in stock_card and '“voice was barely above a whisper” is stock wording' in stock_card, cards)
+    summary = await pg.inner_text('.sheet.on .judgebox summary')
+    check('the judge box says how the book grades', summary.strip() == 'Graded 7 of 10 on average · 1 passage · 1 under your 9', summary)
+    await pg.click('.sheet.on .judgebox summary'); await pg.wait_for_timeout(200)
+    box = await pg.inner_text('.sheet.on .judgebox')
+    check('folded open: each writer, what it fails most, how it is judged', 'your own words' in box and 'Stock per 1,000 words' in box and 'Fails most: Shown 1 · Fresh 1 · Ending 1' in box and 'Ten checks a passage passes or fails' in box, box[:400])
+    # a tap on the words goes to them in the passage
+    await pg.locator('.sheet.on .sug:has-text("Under your mark") .faults button.quote >> nth=0').click()
+    await pg.wait_for_timeout(900)
+    lit = await pg.evaluate("(() => ({ glow: Boolean(document.querySelector('#passages .passage.found')), marked: CSS.highlights && CSS.highlights.has('found') ? [...CSS.highlights.get('found')][0].toString() : '' }))()")
+    check('the words of a failed check, tapped, are found in the passage', lit['glow'] and lit['marked'] == 'a look that meant he was sorry', lit)
+    # two writers for the same moment, read head to head
+    await write(pg, 'THE LAMP is lit.')
+    await add_conn(pg, 'fake-thinker')
+    await pg.click('.passage.selected .pctl button:has-text("Another take")')
+    await pg.wait_for_function("(() => { const v = document.querySelector('.passage.selected .pctl .ver > span'); return v && /2 \\/ 2/.test(v.textContent) && !document.querySelector('.passage.streaming'); })()", timeout=15000)
+    duels = []
+    for i in range(120):
+        duels = [x for x in reqs() if 'Which is the better page' in json.dumps(x['body'].get('messages') or [])]
+        if len(duels) >= 2: break
+        await pg.wait_for_timeout(250)
+    await pg.wait_for_timeout(800)
+    check('the two takes are read head to head, both ways round', len(duels) == 2, len(duels))
+    await pg.click('#checkBubble')
+    await pg.wait_for_selector('.sheet.on .judgebox')
+    await pg.click('.sheet.on .judgebox summary'); await pg.wait_for_timeout(200)
+    rows = await pg.evaluate("[...document.querySelectorAll('.sheet.on .judgebox tr')].map((r) => [...r.children].map((c) => c.textContent.trim()))")
+    head = rows[0] if rows else []
+    byw = {r[0].split(' · ')[0]: r for r in rows[1:]}
+    check('the benchmark shows who won: the take that lit the lamp, both readings agreeing', 'Head to head' in head and byw.get('fake-thinker', [''])[-1] == '1–0–0' and byw.get('fake-writer', [''])[-1] == '0–1–0', rows)
+    box = await pg.inner_text('.sheet.on .judgebox')
+    check('a judge that is the very model it grades is said so', 'judged by itself' in box and 'A judge leans toward its own writing' in box, box[-500:])
+    width = await pg.evaluate("(() => { const s = document.querySelector('.sheet.on .body') || document.querySelector('.sheet.on'); return [s.scrollWidth, s.clientWidth]; })()")
+    check('the box fits a phone: nothing wider than the sheet', width[0] <= width[1] + 1, width)
+    await close_sheet(pg)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (the judge)', not errs, errs[:5])
+    await pg.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_crafts, scenario_versions, scenario_partner, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_crafts, scenario_versions, scenario_partner, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

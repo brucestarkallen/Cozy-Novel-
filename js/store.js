@@ -144,7 +144,7 @@ export async function create(kind, id, data) {
 export function change(kind, id, fn, { now = false, checkpoint = false, delay = 500 } = {}) {
   const r = rec(kind, id);
   if (!r.loaded || !r.data) throw new Error(`${kind} ${id} is not open`);
-  if (r.deleted) return undefined;
+  if (r.deleted || r.removing) return undefined;
   const out = fn(r.data);
   r.pending.push({ fn, checkpoint });
   tellStatus();
@@ -169,10 +169,19 @@ function tell(r, why) { for (const fn of [...r.fns]) { try { fn(r.data, why); } 
 
 export async function remove(kind, id) {
   const r = rec(kind, id);
+  /* from now on it takes no new steps — a reading of the helper's landing
+   * while it goes would only be turned away by the phone ("deleted") — and a
+   * save already on its way lands before it goes */
+  r.removing = true;
   clearTimeout(r.timer);
   r.pending = [];
-  const { status: code } = await api('DELETE', `/api/store/${kind}/${id}`);
-  if (code !== 200) throw new Error('the phone could not delete it');
+  try {
+    if (r.saving) await saveNow(r).catch(() => {});
+    const { status: code } = await api('DELETE', `/api/store/${kind}/${id}`);
+    if (code !== 200) throw new Error('the phone could not delete it');
+  } finally {
+    r.removing = false;
+  }
   r.deleted = true; r.data = null; r.loaded = false;
   unjournal(r);
   /* a record still watched keeps its watchers, so if it is brought back they hear of it */

@@ -60,6 +60,7 @@ async function boot() {
       look: { ...DEFAULT_LOOK },
       created: Date.now(),
       checksFrom: Date.now(),
+      duelsFrom: Date.now(),
       narratorCarried: true,
     });
   }
@@ -74,6 +75,8 @@ async function boot() {
   if (lateSplitDue(house)) store.change('house', 'house', splitLate, { now: true });
   /* the checker reads what is written from now on; older writing only when he asks */
   if (!Number.isFinite(house.checksFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.checksFrom)) x.checksFrom = Date.now(); }, { now: true });
+  /* the judge reads two writers' takes head to head from now on — takes written before are never sent unasked */
+  if (!Number.isFinite(house.duelsFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.duelsFrom)) x.duelsFrom = Date.now(); }, { now: true });
   startChecking();
   applyLook(house.look);
   /* a change made here is already on screen; one made in another window is drawn */
