@@ -688,6 +688,8 @@ async def scenario_crafts(b):
       const r = await fetch('/api/store/house/house').then((x) => x.json());
       const data = r.data;
       data.instructions.system = old.w; data.instructions.narrator = old.n;
+      /* and the one note at the end of before 2.3.2, for the writer and the narrator alike */
+      data.instructions.late = 'MY OLD NOTE'; delete data.instructions.lateNarrator;
       await fetch('/api/store/house/house', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Base': String(r.rev) }, body: JSON.stringify({ data }) });
     }""", {'w': OLD_WRITING, 'n': OLD_NARRATOR})
     await pg.reload()
@@ -695,6 +697,7 @@ async def scenario_crafts(b):
     await pg.wait_for_timeout(1000)
     ins = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']['instructions']
     check('boxes still holding the old starting words get today’s when the app starts', ins['system'].startswith('You are a master novelist') and ins['narrator'] == 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.', (ins['system'][:60], ins['narrator'][:80]))
+    check('the one note at the end of before stays the book’s, and the scenes get their own copy of it', ins.get('late') == 'MY OLD NOTE' and ins.get('lateNarrator') == 'MY OLD NOTE', (ins.get('late'), ins.get('lateNarrator')))
     # ---- the Modules list, in Settings → Your instructions
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
@@ -702,6 +705,25 @@ async def scenario_crafts(b):
         await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(200)
     box = await pg.input_value('.sheet.on label.field:has(span:text-is("How you like it written")) textarea')
     check('How you like it written shows the master novelist', box.startswith('You are a master novelist'), box[:80])
+    # ---- a note at the end for the book, and one for scenes
+    book_note = '.sheet.on label.field:has(span:text-is("A note at the end — the book")) textarea'
+    scene_note = '.sheet.on label.field:has(span:text-is("A note at the end — scenes")) textarea'
+    shown = (await pg.input_value(book_note), await pg.input_value(scene_note))
+    await pg.fill(scene_note, 'SCENES ONLY')
+    # kept after the typing pause (half a second) and the save's own (under one more)
+    for _ in range(25):
+        await pg.wait_for_timeout(200)
+        ins = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']['instructions']
+        if ins.get('lateNarrator') == 'SCENES ONLY':
+            break
+    check('two boxes for the note at the end, each kept on its own', shown == ('MY OLD NOTE', 'MY OLD NOTE') and ins.get('late') == 'MY OLD NOTE' and ins.get('lateNarrator') == 'SCENES ONLY', (shown, ins.get('late'), ins.get('lateNarrator')))
+    await pg.fill(book_note, ''); await pg.fill(scene_note, '')
+    for _ in range(25):
+        await pg.wait_for_timeout(200)
+        ins = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']['instructions']
+        if ins.get('late') == '' and ins.get('lateNarrator') == '':
+            break
+    check('and both emptied, both are empty', ins.get('late') == '' and ins.get('lateNarrator') == '', (ins.get('late'), ins.get('lateNarrator')))
     names = await pg.locator('.sheet.on .modrow b').all_inner_texts()
     check('Modules lists the app’s in the order they ride', names == ['The novel craft', 'The scene craft', 'When the scene turns intimate', 'When words won’t carry it', 'The sound of a voice', 'Spectacle combat (for the anime arcs)'], names)
     lines = await pg.locator('.sheet.on .modrow small:not(.about)').all_inner_texts()

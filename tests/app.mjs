@@ -857,6 +857,60 @@ await test('a scene sends the narrator\'s own words first — nothing of his whe
   await putAway(b);
 });
 
+await test('a note at the end for the book and one for scenes: each rides last for its own, never for the partner; a house with the one note of before keeps it for both, then they are apart', async () => {
+  const b = await makeBook([['Mina waited at the gate.']]);
+  const lastSys = (r) => { const m = r.body.messages.at(-1); return m.role === 'system' ? m.content : ''; };
+  const has = (r, words) => JSON.stringify(r.body.messages).includes(words);
+  await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', narrator: 'NARR', late: 'BOOK NOTE', lateNarrator: 'SCENE NOTE', partner: '' } });
+  await reset();
+  await script([{ text: 'A page.' }, { text: 'The gate creaks.' }, { text: 'An answer.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mina' });
+  await talk.playSay({ playId: id, text: 'I wait.' });
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Thoughts?' });
+  const [w, p, t] = await requests();
+  assert.equal(lastSys(w), 'BOOK NOTE', 'the writer: the book\'s note, last');
+  assert.ok(!has(w, 'SCENE NOTE'), 'never the scenes\' note');
+  assert.equal(lastSys(p), 'SCENE NOTE', 'the narrator: the scenes\' note, last');
+  assert.ok(!has(p, 'BOOK NOTE'), 'never the book\'s note');
+  assert.ok(!has(t, 'BOOK NOTE') && !has(t, 'SCENE NOTE') && !lastSys(t), 'the partner: neither');
+  /* a scene turned into prose is the writer writing the book */
+  await reset();
+  await script([{ text: 'Prose.' }]);
+  const tr = talk.transcriptOf(store.peek('play', id));
+  await writer.playToProse({ novelId: b.novelId, chapterId: b.ids[0], play: store.peek('play', id), transcript: tr.text, mine: tr.mine });
+  const [prose] = await requests();
+  assert.ok(lastSys(prose) === 'BOOK NOTE' && !has(prose, 'SCENE NOTE'), 'a scene into prose: the book\'s note');
+  /* a house from before: one note, for both — the scenes keep it, once */
+  await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', narrator: 'NARR', late: 'OLD NOTE', partner: '' } });
+  assert.equal(prompts.lateSplitDue(store.peek('house', 'house')), true);
+  await reset();
+  await script([{ text: 'Rain.' }]);
+  await talk.playSay({ playId: id, text: 'I listen.' });
+  assert.equal(lastSys((await requests())[0]), 'OLD NOTE', 'before the split the scene is sent the one note, as before');
+  store.change('house', 'house', prompts.splitLate, { now: true });
+  await store.flush('house', 'house');
+  let ins = (await onPhone('house', 'house')).instructions;
+  assert.equal(ins.late, 'OLD NOTE');
+  assert.equal(ins.lateNarrator, 'OLD NOTE', 'the scenes\' box holds what the one box held');
+  assert.equal(prompts.lateSplitDue(store.peek('house', 'house')), false, 'once is all it takes');
+  /* from then on they are apart: the scenes' box emptied stays empty, and the book keeps its note */
+  store.change('house', 'house', (x) => { x.instructions.lateNarrator = ''; }, { now: true });
+  store.change('house', 'house', prompts.splitLate, { now: true });
+  await store.flush('house', 'house');
+  ins = (await onPhone('house', 'house')).instructions;
+  assert.equal(ins.lateNarrator, '', 'an emptied scenes box is never filled again');
+  await reset();
+  await script([{ text: 'Thunder.' }, { text: 'A page more.' }]);
+  await talk.playSay({ playId: id, text: 'I go in.' });
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Night.' });
+  const [p2, w2] = await requests();
+  assert.ok(!lastSys(p2) && !has(p2, 'OLD NOTE'), 'the scene: nothing at the end');
+  assert.equal(lastSys(w2), 'OLD NOTE', 'the book: its note still');
+  await setHouse();
+  await putAway(b);
+});
+
 await test('a line to the narrator rides after his move, in his voice, never as his character — and never into the prose', async () => {
   const b = await makeBook([['Mina waited at the gate.']]);
   const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Joon' });

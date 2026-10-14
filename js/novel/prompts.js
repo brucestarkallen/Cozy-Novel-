@@ -78,6 +78,29 @@ export function carryNarrator(house) {
   house.narratorCarried = true;
 }
 
+/* Before 2.3.2 one note at the end rode for the writer and the narrator
+ * alike; now each has its own box. Once, the scenes' box gets what the one
+ * box held, so his scenes are sent what they were sent before; from then on
+ * the two are apart (an emptied scenes box stays empty). */
+export function lateSplitDue(house) {
+  return Boolean(house) && typeof (house.instructions || {}).lateNarrator !== 'string';
+}
+export function splitLate(house) {
+  if (!house) return;
+  const ins = house.instructions || (house.instructions = {});
+  if (typeof ins.lateNarrator === 'string') return;
+  ins.lateNarrator = typeof ins.late === 'string' ? ins.late : '';
+}
+/* the note at the end for one of them: the writer's box, the scenes' box
+ * (the one box while a house from before has not been split yet), never
+ * the partner's */
+export function lateFor(instr, purpose) {
+  const ins = instr || {};
+  if (purpose === 'write') return String(ins.late || '').trim();
+  if (purpose === 'play') return String((typeof ins.lateNarrator === 'string' ? ins.lateNarrator : ins.late) || '').trim();
+  return '';
+}
+
 export const DEFAULT_PARTNER = `Talk the book over like a seasoned novelist and editor who loves this story and wants it to be as good as it can be: honest, specific and warm. Say what works and what doesn't, and why. When I'm stuck, offer two or three real ways forward rather than a list of ten, and think about what the people in it would truly do. Keep it short when short will do.`;
 
 /* ------------------------------------------------------- said plainly */

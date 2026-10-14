@@ -6,7 +6,8 @@
  * chapters ride as their summaries instead (never both) — then the notes, then
  * the chapter being written, which always rides whole while it fits. His
  * request is the last thing the writer reads, as in a SillyTavern preset;
- * his note at the end, when he wrote one, rides after it.
+ * his note at the end, when he wrote one, rides after it (the book's note for
+ * the writer, the scenes' note for the narrator).
  *
  * His instructions and the few lines after them are the system message. The
  * book and its notes ride there too — or, as he chooses (Settings → Your
@@ -23,7 +24,7 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor } from './prompts.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
 
@@ -223,7 +224,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const head = withHis([String(own || '').trim(), avoidLine(avoidList(house)), ...ride.always].filter(Boolean).join('\n\n'), frame);
   const opening = notesAs === 'system' ? '' : notesOpening(house, novel, notesAs, purpose);
   const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
-  const late = purpose === 'partner' ? '' : String(instr.late || '').trim();
+  /* his note at the end: the writer's, or the scenes' own (prompts.js lateFor) */
+  const late = lateFor(instr, purpose);
   const after = [];
   for (const t of turns) after.push({ role: t.role, content: t.content });
   if (request) after.push({ role: 'user', content: request });

@@ -307,7 +307,8 @@ function wordsGroup(hs) {
     field('How the partner talks', partner, 'Sent first, word for word, to your partner. Empty: nothing of yours is sent.'),
     back(partner, 'partner'),
     modulesField(hs),
-    field('A note at the end', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer or narrator is asked. Empty: nothing is sent.'),
+    field('A note at the end — the book', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer writes the book: a new page, Another take, Rewrite, Go on, a scene turned into prose. Empty: nothing is sent.'),
+    field('A note at the end — scenes', box('lateNarrator', 3, 'Optional. Rides after your move, like post-history instructions.'), 'Sent after your move each time the narrator tells a scene you play. Empty: nothing is sent.'),
     field('Words to avoid', box('avoid', 4, 'One to a line — for example:\na testament to\nshivers down her spine'), 'Words and phrases you never want in the book. The writer, the narrator and your partner are told them, after your own words; the checker marks any that slip through, with a way to write them again. Empty: nothing is sent.'),
     choose('notesAs', [
       ['system', 'The system message (the default)'],

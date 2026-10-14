@@ -15,7 +15,7 @@ import { openSettings, redrawSettings } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK } from './ui/look.js';
 import { bringOldBooks } from './legacy.js';
-import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, freshStarting, narratorCarryDue, carryNarrator } from './novel/prompts.js';
+import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, freshStarting, narratorCarryDue, carryNarrator, lateSplitDue, splitLate } from './novel/prompts.js';
 import { chapterLabel, novelSteps } from './novel/shape.js';
 import { plural, numberWords } from './util.js';
 import { talkBusy, repairStaleTurns as talkRepair } from './novel/talk.js';
@@ -56,7 +56,7 @@ async function boot() {
   if (!house) {
     house = await store.create('house', 'house', {
       connections: [], roles: {}, you: { name: '' },
-      instructions: { system: DEFAULT_WRITING, narrator: DEFAULT_NARRATOR, partner: DEFAULT_PARTNER, late: '' },
+      instructions: { system: DEFAULT_WRITING, narrator: DEFAULT_NARRATOR, partner: DEFAULT_PARTNER, late: '', lateNarrator: '' },
       look: { ...DEFAULT_LOOK },
       created: Date.now(),
       checksFrom: Date.now(),
@@ -70,6 +70,8 @@ async function boot() {
   /* a narrator box he emptied before 2.3 (it read his writing words then)
    * gets his writing words, once */
   if (narratorCarryDue(house)) store.change('house', 'house', carryNarrator, { now: true });
+  /* one note at the end for both, before 2.3.2: the scenes keep it in their own box, once */
+  if (lateSplitDue(house)) store.change('house', 'house', splitLate, { now: true });
   /* the checker reads what is written from now on; older writing only when he asks */
   if (!Number.isFinite(house.checksFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.checksFrom)) x.checksFrom = Date.now(); }, { now: true });
   startChecking();
