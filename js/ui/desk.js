@@ -102,6 +102,7 @@ export async function openChapter(novelId, chapterId) {
   if (then && then.show) requestAnimationFrame(() => requestAnimationFrame(() => showFound(then.passageId, then.show)));
   else restoreScroll();
   if (then && then.rewrite) rewriteSpan(then.rewrite);
+  if (then && then.rewriteWhole) rewritePassage(then.rewriteWhole);
 }
 
 /* ------------------------------------------------------------- found */
@@ -166,10 +167,18 @@ export function whenOpen(chapterId, then) {
   if (chapterId === S.chapterId && S.els.size) {
     if (then.show) showFound(then.passageId, then.show);
     if (then.rewrite) rewriteSpan(then.rewrite);
+    if (then.rewriteWhole) rewritePassage(then.rewriteWhole);
     return;
   }
   S.then = { chapterId, ...then };
   hooks.goChapter(chapterId);
+}
+/* a whole passage written again with a note (the judge's way to lift it) */
+export function rewritePassage({ chapterId, passageId, note = '' }) {
+  if (busy()) { toast('The writer is busy — try again once it has finished.'); return; }
+  if (chapterId !== S.chapterId) { whenOpen(chapterId, { rewriteWhole: { chapterId, passageId, note } }); return; }
+  S.selected = passageId;
+  run(() => writer.rewrite({ novelId: S.novelId, chapterId, passageId, note }));
 }
 /* some words of a passage written again (a word he never wants) */
 export function rewriteSpan({ chapterId, passageId, start, end, note = '' }) {

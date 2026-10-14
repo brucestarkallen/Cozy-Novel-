@@ -11,7 +11,7 @@ import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, 
 import { numberWords, plural, timeAgo, nameKey } from '../util.js';
 import { showSent } from './sent.js';
 import { thinkBox, updateThinkBox } from './think.js';
-import { wordsOf, changesComing, editableOf } from '../novel/changes.js';
+import { wordsOf, changesComing, editableOf, partsOf } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
 import { paced, follower, streamLines } from './live.js';
 import { drawProse, growProse } from './prose.js';
@@ -340,6 +340,9 @@ function drawNotes() {
   const row = h('div.row');
   const u = n.memory && n.memory.undo;
   if (u && ((Array.isArray(u.cards) ? u.cards.length : u.notes) || (u.kept && Object.keys(u.kept).length))) row.append(h('button.btn.small', { title: 'Puts back only what the helper’s last reading changed — a card you edited since stays as you left it.', onclick: () => { if (archivist.undoLast(P.novelId)) toast('What that reading changed is put back — anything you edited since stays as you left it.'); drawSide(); } }, 'Undo the last reading'));
+  /* the auditor: the whole notes held against the book as it stands */
+  const au = (n.memory && n.memory.audit) || null;
+  row.append(h('button.btn.small', { title: `The helper holds every card against the book as it stands and puts right what an old version left or what drifted — your own words stay. It does this by itself every ${archivist.AUDIT_EVERY} readings${au && au.at ? `; last ${timeAgo(au.at)}${Number.isFinite(au.fixed) ? `, ${plural(au.fixed, 'card')} put right` : ''}` : ''}.`, disabled: Boolean(n.memory && n.memory.auditAsked), onclick: () => { archivist.askAudit(P.novelId); toast('The helper is checking the notes against the book.'); drawSide(); } }, n.memory && n.memory.auditAsked ? 'Checking the notes…' : 'Check the notes against the book'));
   row.append(h('button.btn.quiet.small', { title: 'The helper reads every chapter from the start and writes the notes and summaries afresh.', onclick: async () => {
     if (!(await confirmIt('Read the whole book again?', 'The helper reads every chapter from the start and writes the notes and summaries afresh — and, for a book set to Automatic, What it’s about and How it reads (never your own words, nor a correction of yours). What is there now can be put back with Undo.', 'Read it again'))) return;
     archivist.readAgain(P.novelId);
@@ -350,10 +353,10 @@ function drawNotes() {
   const lit = (n.memory && n.memory.lit) || (u && u.changed && u.changed.length ? { at: u.at, label: u.label, changed: u.changed } : null);
   const how = new Map((lit && lit.changed || []).map((c) => [c.kind + ':' + nameKey(c.name), c.how]));
   const gone = (lit && lit.changed || []).filter((c) => c.how === 'gone').map((c) => c.name);
-  card.append(h('p.notekey',
+  card.append(h('p.notekey', { title: 'Each version of a passage keeps its own notes: another take or a rewrite takes the old version’s notes back out, and the arrows bring a version’s notes back with it. A card you wrote or changed keeps your words — the helper only moves where they are now and how they stand with others.' },
     'Every card here goes to the writer before every page, lit or not. ',
-    lit ? h('span', h('b.lit', 'Lit'), ` — what the helper changed last (${lit.label}, ${timeAgo(lit.at)}): marked `, h('b', 'new'), ' or ', h('b', 'updated'), gone.length ? `; took out ${gone.slice(0, 6).join(', ')}${gone.length > 6 ? '…' : ''}` : '', '. ') : null,
-    h('b.yours', 'Yours'), ' — a card you wrote or changed (or your partner changed for you): the helper keeps where they are now and how they stand with others, never your words. Each version of a passage keeps its own notes: another take or a rewrite takes the old version’s notes back out, and the arrows bring a version’s notes back with it.'));
+    lit ? h('span', h('b.lit', 'Lit'), ` — changed by the helper last (${lit.label}, ${timeAgo(lit.at)})`, gone.length ? `; took out ${gone.slice(0, 6).join(', ')}${gone.length > 6 ? '…' : ''}` : '', '. ') : null,
+    h('b.yours', 'Yours'), ' — your own words, kept.'));
   ui.rightBody.append(card);
   for (const kind of NOTE_KINDS) {
     const cards = (n.notes && n.notes[kind]) || [];
@@ -393,21 +396,23 @@ function readingsSection() {
   const rows = archivist.readingsList(P.novelId);
   const sec = h('section.notesec' + (open ? '.open' : ''));
   const head = h('button.sechead', { 'aria-expanded': String(open), onclick: () => { const now = sec.classList.toggle('open'); head.setAttribute('aria-expanded', String(now)); keep(key, now ? 'open' : 'closed'); } },
-    h('span.chev', icon('chev', 14)), h('h3', 'Readings — each version’s notes'), h('span.count', String(rows.length)));
+    h('span.chev', icon('chev', 14)), h('h3', 'Each version’s notes'), h('span.count', String(rows.length)));
   const box = h('div.cards');
-  box.append(h('p.notekey', 'Every reading the helper made, newest first — the notes’ checkpoint for that version of that passage. Picking a version with the arrows brings its notes back. Put back takes out only what that reading changed (a card you or a later reading changed since stays); Read again puts it back and reads that passage afresh.'));
+  box.append(h('p.notekey', 'Newest first. The arrows on a passage bring its version’s notes back by themselves.'));
   if (!rows.length) box.append(h('p.notekey', 'None kept yet — each reading from now on is.'));
-  for (const r of rows.slice(0, 40)) {
+  /* the newest few; the rest one tap away */
+  const all = P.readingsAll === P.novelId;
+  for (const r of rows.slice(0, all ? 60 : 8)) {
     const what = r.changed.length ? r.changed.slice(0, 6).map((c) => `${c.how === 'new' ? 'new' : c.how === 'gone' ? 'took out' : 'updated'} ${c.name}`).join(', ') + (r.changed.length > 6 ? '…' : '') : 'changed nothing';
     const state = r.live ? 'in the notes now' : r.shown ? 'the version on show — not read into the notes yet' : 'an earlier version — its notes come back when you pick it';
     box.append(h('div.card.reading' + (r.live ? '.fresh' : ''),
       h('div.nm', r.label, h('span.ctag' + (r.live ? '.lit' : ''), r.live ? 'in the notes' : r.shown ? 'on show' : 'earlier version')),
-      h('div.ab', `${timeAgo(r.at)} · ${what}`),
-      h('div.nw', state),
+      h('div.ab', { title: state }, `${timeAgo(r.at)} · ${what}`),
       r.live ? h('div.row', { style: { display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' } },
         h('button.btn.small.quiet', { title: 'Takes out only what this reading changed; a card changed since stays as it is.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid)) toast('What that reading changed is put back — anything changed since stays as it is.'); drawSide(); } }, 'Put back'),
         h('button.btn.small.quiet', { title: 'Puts it back, then the helper reads that passage afresh.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid, { readAgain: true })) toast('Put back — the helper reads that passage again in a moment.'); drawSide(); } }, 'Read again')) : null));
   }
+  if (!all && rows.length > 8) box.append(h('button.btn.quiet.small', { onclick: () => { P.readingsAll = P.novelId; drawSide(); } }, `Show all ${rows.length}`));
   sec.append(head, box);
   return sec;
 }
@@ -511,7 +516,7 @@ const QUICK = [
   { label: 'Find what contradicts itself', hint: 'Names, looks, times, who knows what — by passage number, with a fix for each.',
     ask: 'Read the book for anything that contradicts itself — a name, a look, a time or a day, an injury, who knows what, where someone is — and show me each place by its passage number, with a fix for each in a changes block. Read whole any chapter you only have in short before you say it is wrong.' },
   { label: 'Four directions the story could go', hint: 'Four real ways forward from here, each with what it costs.',
-    ask: 'Give me four genuinely different directions the story could go from where it stands — each in a few lines: what happens, what it costs the people in it, and what it opens up later. No changes, just the four.' },
+    ask: 'Give me four genuinely different directions the story could go from where it stands — each in a few lines: what happens, what it costs the people in it, and what it opens up later — and each as a premise I could hand the writer, in its own direction block. No changes, just the four.' },
   { label: 'Read a character’s psychology…', hint: 'Type the name after it and send.', fill: 'Read the psychology of ' },
   { label: 'Critique this chapter', hint: 'An honest editor’s read of the chapter open now — what works, what drags, what rings false.',
     ask: 'Be my editor for the chapter open now. Read it whole and tell me honestly how the telling works: where it drags or rushes, where a scene lands or falls flat, the voice, the dialogue, anything unclear or that rings false — each by its passage number, with what would make it better. Say what works and why, too. No changes unless I ask for them.' },
@@ -622,7 +627,15 @@ function drawTurn(kind, id, turn) {
   if (turn.by !== 'you' && thinking) el.append(turnThinkBox(turn.id, thinking, Boolean(live && !live.text)));
   /* the narrator's telling is prose — a thought or a sound in italics is drawn in italics */
   if (kind === 'play' && turn.by !== 'you') { const w = h('div.words.tprose'); drawProse(w, shownWords(kind, turn, text, live)); el.append(w); }
-  else el.append(h('span.words', shownWords(kind, turn, text, live)));
+  else if (kind === 'talk' && turn.by !== 'you' && partsOf(text).some((x) => x.kind === 'direction')) {
+    /* each premise it offered, with its own Use as the next direction */
+    const w = h('div.words');
+    for (const part of partsOf(text)) {
+      if (part.kind === 'words') { w.append(h('span', part.text)); continue; }
+      w.append(h('div.direction', h('span', part.text), part.done && !(live || v.streaming) ? h('button.btn.small', { title: 'Puts this premise in the box under the page — change it as you like, then Write.', onclick: async () => { if (!(await desk.useAsDirection(part.text))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction') : null));
+    }
+    el.append(w);
+  } else el.append(h('span.words', shownWords(kind, turn, text, live)));
   /* his line to the narrator, not his character's */
   if (kind === 'play' && turn.by === 'you' && v.tell) el.append(h('div.tell', h('b', 'To the narrator: '), v.tell));
   if (live || v.streaming) return el;
@@ -636,20 +649,10 @@ function drawTurn(kind, id, turn) {
         h('span', { style: { alignSelf: 'center', fontSize: '12px', color: 'var(--chrome-soft)' } }, `${i + 1}/${turn.versions.length}`),
         h('button', { 'aria-label': 'The answer after', disabled: i >= turn.versions.length - 1, onclick: () => store.change(kind, id, turnSteps.pick(turn.id, turn.versions[i + 1].id), { now: true }) }, '›'));
     }
-    row.append(h('button', { onclick: async () => {
+    row.append(h('button', { title: 'Asks again for this answer; the one you have stays one arrow away.', onclick: async () => {
       const out = kind === 'talk' ? await talk.partnerAgain({ novelId: id, chapterId: P.chapterId, turnId: turn.id }) : await talk.playAgain({ playId: id, turnId: turn.id });
       if (out && !out.ok && out.error) toast(out.error, 6000);
     } }, 'Another answer'));
-    if (kind === 'talk') row.append(h('button', { onclick: async () => { if (!(await desk.useAsDirection(wordsOf(v.text)))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction'));
-    if (v.sent) row.append(h('button', { onclick: () => showSent(P.novelId, v.sent) }, 'What was sent'));
-    /* the answer as it came, its blocks and all (Cozy Tavern's "What it said, whole") */
-    if (kind === 'talk' && String(v.text || '').trim() !== wordsOf(v.text).trim()) row.append(h('button', { title: 'The answer as it came — its changes block and all.', onclick: () => showWhole(v.text) }, 'What it said, whole'));
-    if (kind === 'talk') row.append(h('button', { title: 'A new conversation with everything up to this answer; this one stays as it is.', disabled: talk.talkBusy('talk', id), onclick: async () => {
-      const out = await talk.copyConversation(id, turn.id);
-      if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
-      drawSide();
-      toast(`“${out.name}” is open — the first one is in the list.`, 4000);
-    } }, 'Branch from here'));
   } else if (kind === 'talk') {
     /* his words back in the box; this message and everything after it let go — with Undo */
     row.append(h('button', { title: 'Your words back in the box to change and send again; this message and everything after it are let go (the changes made stay in the book). With Undo.', disabled: talk.talkBusy('talk', id), onclick: async () => {
@@ -670,9 +673,23 @@ function drawTurn(kind, id, turn) {
       });
     } }, 'Edit and ask again'));
   }
+  /* the rest, under ⋯ — only what this answer has */
   const copyWords = turn.by === 'you' ? (v.text || '') : kind === 'talk' ? wordsOf(v.text) : sceneWords(v.text);
-  row.append(h('button', { onclick: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') }, 'Copy'));
-  row.append(h('button', { onclick: () => removeTurn(kind, id, turn) }, 'Remove'));
+  const mine = turn.by === 'you';
+  row.append(h('button.tmore', { 'aria-label': mine ? 'More for this message' : 'More for this answer', title: 'More', onclick: (e) => menu(e.currentTarget, [
+    !mine && kind === 'talk' ? { label: 'Branch from here', hint: 'A new conversation with everything up to this answer; this one stays as it is.', disabled: talk.talkBusy('talk', id), run: async () => {
+      const out = await talk.copyConversation(id, turn.id);
+      if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
+      drawSide();
+      toast(`“${out.name}” is open — the first one is in the list.`, 4000);
+    } } : null,
+    /* the answer as it came, its blocks and all (Cozy Tavern's "What it said, whole") */
+    !mine && kind === 'talk' && String(v.text || '').trim() !== wordsOf(v.text).trim() ? { label: 'What it said, whole', hint: 'The answer as it came — its changes block and all.', run: () => showWhole(v.text) } : null,
+    !mine && v.sent ? { label: 'What was sent', hint: 'Everything this answer was asked with, as it went out.', run: () => showSent(P.novelId, v.sent) } : null,
+    { label: 'Copy', hint: mine ? 'Your words, to paste anywhere.' : 'Its words, to paste anywhere.', run: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') },
+    '-',
+    { label: 'Remove', hint: mine ? 'This message goes from the conversation, with Undo.' : 'This answer goes from the conversation, with Undo; changes it made stay in the book.', danger: true, run: () => removeTurn(kind, id, turn) },
+  ]) }, icon('more', 16)));
   el.append(row);
   return el;
 }

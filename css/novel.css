@@ -758,3 +758,30 @@ body.reading .scroller { bottom: 12px; }
 .pane.right.full .convrow { position: sticky; top: 0; z-index: 2; background: var(--chrome-solid); padding-top: 8px; }
 /* what the partner said, whole: its blocks too */
 pre.whole { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 0; color: var(--chrome-ink); }
+/* a premise the partner offered, with its own Use as the next direction */
+.turn .words .direction { display: block; margin: 10px 0; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(216,150,58,.38); background: rgba(216,150,58,.08); }
+.turn .words .direction > span { display: block; white-space: pre-wrap; }
+.turn .words .direction .btn { margin-top: 8px; }
+.turn .words > span { white-space: pre-wrap; }
+.turn .tctl .tmore { width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+/* Usage and cost, as Cozy Tavern shows it: a period at a time, a small table */
+.usage-periods { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+.usage-period { height: 30px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--chrome-soft); font: 13px/1 var(--ui); }
+.usage-period.current { border-color: var(--accent); color: var(--chrome-ink); background: rgba(216,150,58,.12); }
+.usage-table { width: 100%; border-collapse: collapse; font: 13px/1.4 var(--ui); color: var(--chrome-ink); }
+.usage-table th { text-align: left; font-weight: 600; color: var(--chrome-soft); padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.usage-table td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.usage-table td.num, .usage-table th:not(:first-child) { text-align: right; white-space: nowrap; }
+.usage-table tr.usage-total td { font-weight: 600; border-bottom: 0; }
+.usage-averages { margin: 12px 0 6px; }
+.usage-avg-row { display: flex; justify-content: space-between; gap: 10px; font: 13px/1.5 var(--ui); color: var(--chrome-ink); }
+.usage-avg-row .num { color: var(--chrome-soft); text-align: right; }
+.stack-label { margin: 0 0 4px; font: 600 13px/1.4 var(--ui); color: var(--chrome-soft); }
+.usage-busiest { margin: 10px 0; }
+.usage-busiest summary { cursor: pointer; }
+.usage-shown { overflow-x: auto; }
+/* the judge: its mark on a passage, and the grades folded at the top of Suggestions */
+.sug .gradeaxes { display: block; margin-top: 4px; color: var(--chrome-soft); font-size: 12.5px; }
+.judgebox { margin: 4px 0 12px; }
+.judgebox summary { cursor: pointer; font: 600 13.5px/1.5 var(--ui); color: var(--chrome-ink); }
+.judgebox .usage-table { margin-top: 6px; }

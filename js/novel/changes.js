@@ -18,7 +18,7 @@ import * as store from '../store.js';
 import { chapterSteps, novelSteps, newVersion, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone } from '../util.js';
 import { parseLenient } from './jsonutil.js';
-import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE } from './prompts.js';
+import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE } from './prompts.js';
 import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
 
@@ -28,15 +28,40 @@ const BLOCK = (open, close) => new RegExp(`${open.replace(/[<>/]/g, (c) => `\\${
 
 /* the words of an answer, without its blocks — and, while one is still
  * coming, without the part of it that has come so far */
-export function wordsOf(text) {
+export function wordsOf(text, { keepDirections = false } = {}) {
   let t = String(text || '');
   t = t.replace(BLOCK(CHANGES_OPEN, CHANGES_CLOSE), '').replace(BLOCK(READ_OPEN, READ_CLOSE), '');
+  /* a premise it offered reads as words (its marks out) — kept marked only for the screen */
+  if (!keepDirections) t = t.replace(/<\/?direction>/gi, '');
   const open = t.search(/<(changes|read)>/i);
   if (open >= 0) t = t.slice(0, open);
   /* a fence it put around a block, left empty */
   t = t.replace(/```[a-z]*\s*```/gi, '');
   return t.replace(/^\s+/, '').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
 }
+/* the answer as it is shown: its words, and each premise it offered for the
+ * next page — [{kind: 'words'|'direction', text, done}] (a premise still
+ * coming is not done) */
+export function partsOf(text) {
+  const t = wordsOf(text, { keepDirections: true });
+  const out = [];
+  let at = 0;
+  const re = /<direction>([\s\S]*?)(<\/direction>|$)/gi;
+  for (const m of t.matchAll(re)) {
+    const before = t.slice(at, m.index).trim();
+    if (before) out.push({ kind: 'words', text: before });
+    const d = m[1].trim();
+    if (d) out.push({ kind: 'direction', text: d, done: Boolean(m[2]) });
+    at = m.index + m[0].length;
+    if (!m[2]) break;
+  }
+  const rest = t.slice(at).trim();
+  if (rest) out.push({ kind: 'words', text: rest });
+  return out;
+}
+/* the premises an answer offers */
+export function directionsIn(text) { return partsOf(text).filter((x) => x.kind === 'direction' && x.done).map((x) => x.text); }
+
 /* a changes block still on its way */
 export function changesComing(text) { return /<changes>/i.test(String(text || '')) && !/<\/changes>/i.test(String(text || '')); }
 

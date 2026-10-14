@@ -27,7 +27,7 @@ import { connFor, busy as writerBusy, setNotesWait } from './writer.js';
 import { parseFirstObject } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, passageNumbers, NOTE_KINDS } from './shape.js';
-import { helperFrame, notesRequest, summaryRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook } from './prompts.js';
+import { helperFrame, notesRequest, summaryRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 
@@ -579,6 +579,7 @@ export async function run(novelId) {
       await readChanges(novelId, conn);
       await summarise(novelId, conn);
       await keepTheBook(novelId, conn);
+      await auditNotes(novelId, conn);
       failures.delete(novelId);
       const left = pendingWork(novelId);
       if (left) nudge(novelId, 2000);
@@ -800,6 +801,9 @@ function keepReading(novelId, chapter, done, cards, kept, { mixed = false } = {}
   const reading = { sig: last.sig, mode, cards: clone(cards), kept: clone(kept), covers: done.map((c) => c.pid), at: Date.now(), label: readLabel(novel, chapter, done) };
   if (mode === 'change') reading.fromSig = last.was;
   store.change('novel', novelId, novelSteps.putReading(last.pid, vid, reading));
+  /* one more reading since the notes were last checked against the book */
+  const a = (novel.memory && novel.memory.audit) || null;
+  store.change('novel', novelId, novelSteps.setMemory({ audit: { at: a ? a.at || 0 : Date.now(), reads: (a ? a.reads || 0 : 0) + 1 } }));
   for (const c of done.slice(0, -1)) {
     const [v] = c.sig.split(SIG_SEP);
     store.change('novel', novelId, novelSteps.putReading(c.pid, v, { sig: c.sig, in: { pid: last.pid, vid, sig: last.sig } }));
@@ -961,6 +965,66 @@ async function keepTheBook(novelId, conn) {
     if (!keptByHelper(latest).includes(key) || (latest.kept && latest.kept[key])) continue;
     store.change('novel', novelId, novelSteps.setKept(key, { text: cleanText(got.obj[key]), at: Date.now() }));
   }
+  await store.flush('novel', novelId);
+}
+
+/* ------------------------------------------------- the notes' auditor */
+/* Cozy Tavern's ledger auditor, for a book: every few readings — and once
+ * for notes kept before there was one, and whenever he asks — the whole
+ * notes are held against the book as it stands, and whatever they still
+ * hold from words since rewritten or taken out, or have drifted on, is put
+ * right: with the reading's Undo, lit, his own cards keeping his words.
+ * Nothing waits on it: it runs once everything else is read. */
+export const AUDIT_EVERY = 6;
+export function auditDue(novel) {
+  const m = (novel && novel.memory) || {};
+  const notes = (novel && novel.notes) || {};
+  if (!NOTE_KINDS.some((k) => (notes[k] || []).length)) return false;
+  if (m.auditAsked) return true;
+  return Boolean(m.audit) && (m.audit.reads || 0) >= AUDIT_EVERY;
+}
+/* A book opened for the first time since there was an auditor: notes kept
+ * before then are checked against the book once — whatever an old version
+ * left in them goes, by itself */
+export function firstCheck(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel || (novel.memory && novel.memory.audit)) return false;
+  const has = NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length);
+  store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0 }, ...(has ? { auditAsked: true } : {}) }), { now: true });
+  return has;
+}
+/* Check the notes against the book, now (by hand, and for notes kept before the auditor) */
+export function askAudit(novelId, { soon = 300 } = {}) {
+  store.change('novel', novelId, novelSteps.setMemory({ auditAsked: true }), { now: true });
+  failures.delete(novelId);
+  blocked.delete(novelId);
+  nudge(novelId, soon);
+}
+async function auditNotes(novelId, conn) {
+  const novel = store.peek('novel', novelId);
+  if (!novel || !auditDue(novel) || pendingWork(novelId)) return;
+  const house = store.peek('house', 'house') || {};
+  const chapters = chaptersOf(novel);
+  setLight(novelId, 'reading', 'Checking the notes against the book…');
+  const frame = helperFrame(house, novel);
+  const fixed = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true })) + estimateTokens(aboutTheBook(novel, { plans: false, kept: false })) + 1600;
+  const room = readingRoom(conn, fixed);
+  const fit = fitBook({ novel, chapters, chapterId: null, current: null, room: Math.max(0, room) });
+  const his = NOTE_KINDS.flatMap((k) => ((novel.notes || {})[k] || []).filter((c) => c.updated && c.updated.by === 'you').map((c) => c.name));
+  const got = await askJson(conn, frame, auditRequest({ novel, bookText: bookText(fit.book), his }));
+  if (!got.ok) throw failed(got);
+  const latest = store.peek('novel', novelId);
+  if (!latest) return;
+  /* his own cards are never taken out by it */
+  const answer = { ...got.obj, gone: (Array.isArray(got.obj.gone) ? got.obj.gone : []).filter((g) => !((latest.notes || {})[g && g.kind] || []).some((c) => c.updated && c.updated.by === 'you' && nameKey(c.name) === nameKey(g.name))) };
+  const folded = foldNotes(latest.notes, answer, { chapterId: '', at: Date.now() });
+  const label = 'the notes checked against the book';
+  if (folded.cards.length) {
+    store.change('novel', novelId, novelSteps.applyCards(folded.cards));
+    const changed = changedOf(folded.cards).slice(0, 40);
+    store.change('novel', novelId, novelSteps.setMemory({ undo: { at: Date.now(), label, keep: false, cards: folded.cards, kept: {}, changed }, lit: { at: Date.now(), label, changed } }));
+  }
+  store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, fixed: folded.cards.length }, auditAsked: false }));
   await store.flush('novel', novelId);
 }
 

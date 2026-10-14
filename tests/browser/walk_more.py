@@ -870,7 +870,7 @@ async def scenario_versions(b):
     await pg.click('#notesBtn'); await pg.wait_for_timeout(400)
     key = await pg.inner_text('#sidePane .notekey >> nth=0') if await pg.locator('#sidePane .notekey').count() else ''
     lit = await pg.locator('#sidePane .card .ctag.lit').count()
-    check('the notes say every card goes to the writer, lit or not, and what lit means', 'Every card here goes to the writer before every page, lit or not' in key and 'what the helper changed last' in key, key[:200])
+    check('the notes say every card goes to the writer, lit or not, and what lit means', 'Every card here goes to the writer before every page, lit or not' in key and 'changed by the helper last' in key, key[:200])
     check('the cards the last reading changed are marked new', lit >= 3, lit)
     # his edit of the newest passage: the old version's notes go, the edit is read as new
     await pg.click('#sideClose'); await pg.wait_for_timeout(300)
@@ -892,7 +892,7 @@ async def scenario_versions(b):
     check('and cost no reading', readings() == before, (before, readings()))
     # the readings list: both versions, one in the notes, one an earlier version
     await pg.click('#notesBtn'); await pg.wait_for_timeout(400)
-    await pg.click('#sidePane .sechead:has(h3:text-is("Readings — each version’s notes"))'); await pg.wait_for_timeout(300)
+    await pg.click('#sidePane .sechead:has(h3:text-is("Each version’s notes"))'); await pg.wait_for_timeout(300)
     tags = await pg.locator('#sidePane .card.reading .ctag').all_inner_texts()
     check('the readings list shows each version: one in the notes, one an earlier version', sorted(t.lower() for t in tags) == ['earlier version', 'in the notes'], tags)
     # presets: saved, the box changed, used again
@@ -969,7 +969,7 @@ async def scenario_partner(b):
     await pg.click('#sideBody button:has-text("Undo all")'); await pg.wait_for_timeout(600)
     p1 = await pg.evaluate(first_words)
     check('Undo all puts every one back', p1.strip() == 'Rain hammered the glass. The sea was grey.' and await pg.locator('#sideBody .change.undone').count() == 2, p1)
-    await pg.click('#sideBody .turn.ai button:has-text("What it said, whole")'); await pg.wait_for_timeout(300)
+    await pg.click('#sideBody .turn.ai .tmore'); await pg.click('.menu-pop button:has-text("What it said, whole")'); await pg.wait_for_timeout(300)
     whole = await pg.inner_text('.sheet.on pre.whole')
     check('What it said, whole shows the block too', '<changes>' in whole and 'Two changes to the first passage.' in whole, whole[:80])
     await close_sheet(pg)
@@ -987,7 +987,7 @@ async def scenario_partner(b):
     p1 = await pg.evaluate(first_words)
     check('applied with his words; the other left', p1.strip() == 'Rain drummed on the glass. The sea was grey.' and await pg.locator('#sideBody .change.made:has-text("made with your words")').count() == 1 and await pg.locator('#sideBody .change.skipped').count() == 1, p1)
     # Branch from here: a new conversation up to that answer, its changes the first one's
-    await pg.click('#sideBody .turn.ai >> nth=-1 >> button:has-text("Branch from here")'); await pg.wait_for_timeout(500)
+    await pg.click('#sideBody .turn.ai >> nth=-1 >> .tmore'); await pg.click('.menu-pop button:has-text("Branch from here")'); await pg.wait_for_timeout(500)
     row = await pg.inner_text('#sideBody .convrow')
     note = await pg.locator('#sideBody .change .cwhy:has-text("In the conversation this one was copied from")').count()
     check('Branch from here opens a copy; its changes stay the first one\'s', 'Conversation 1 (branch)' in row and note == 1 and await pg.locator('#sideBody .change button').count() == 0 and await pg.locator('#sideBody .turn').count() == 4, (row, note))

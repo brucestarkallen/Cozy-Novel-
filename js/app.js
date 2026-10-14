@@ -156,6 +156,8 @@ async function showNovel(novelId, chapterId) {
   document.title = `${novel.meta.title} — Cozy Novel`;
   /* a page or a reply left being written by a window that closed is set right */
   repairNow(novelId);
+  /* notes kept before the auditor are checked against the book, once, by themselves */
+  archivist.firstCheck(novelId);
   /* the helper looks over what it has not read yet */
   archivist.nudge(novelId, 2500);
   /* opened to show something in it (a search found it in another book) */

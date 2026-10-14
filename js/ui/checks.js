@@ -10,6 +10,7 @@ import * as store from '../store.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, openSheet, confirmIt } from './dom.js';
 import { chapterLabel } from '../novel/shape.js';
+import { GRADE_AXES } from '../novel/prompts.js';
 import { findIn } from '../novel/search.js';
 import { plural } from '../util.js';
 import * as desk from './desk.js';
@@ -18,7 +19,7 @@ let bubble = null;
 let hooks = {};
 const C = { novelId: null, chapterId: null, offs: [], frame: 0, sheet: null };
 
-const KIND = { grammar: 'Grammar', humanize: 'Humanize', avoid: 'Words to avoid', continuity: 'Continuity' };
+const KIND = { grammar: 'Grammar', humanize: 'Humanize', avoid: 'Words to avoid', continuity: 'Continuity', craft: 'Craft', grade: 'Under your mark' };
 
 export function initChecks(el, appHooks) {
   bubble = el;
@@ -107,6 +108,17 @@ function drawSheet() {
     checker.checkBook(novelId);
   } }, 'Check the whole book'));
   if (row.childNodes.length) s.body.append(row);
+  /* the judge: the book's passages graded, and which writer writes best by it — folded */
+  const g = checker.gradesOf(novelId);
+  if (g.rows.length) {
+    const avg = Math.round((g.rows.reduce((t, r) => t + r.overall, 0) / g.rows.length) * 10) / 10;
+    const j = checker.judgeOf(store.peek('house', 'house') || {});
+    const under = j ? g.rows.filter((r) => r.overall < j.target).length : 0;
+    s.body.append(h('details.judgebox', h('summary', `Graded ${avg} on average · ${plural(g.rows.length, 'passage')}${j ? ` · ${under} under your ${j.target}` : ''}`),
+      h('table.usage-table', h('tr', h('th', 'Who wrote it'), h('th', 'Passages'), h('th', 'Average')),
+        ...g.models.map((m) => h('tr', h('td', m.model), h('td.num', String(m.n)), h('td.num', String(m.average))))),
+      h('p.say.quiet', 'The judge grades each passage as it is checked — prose, people, continuity, pacing, pull. Its mark and whether it grades are in Settings → Who does what.')));
+  }
   if (st.state === 'off') {
     s.body.append(h('div.btnrow', h('button.btn.small', { onclick: () => { s.close(); hooks.openSettings('roles'); } }, 'Open Who does what')));
   }
@@ -149,6 +161,21 @@ function card(novelId, x) {
     desk.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: item.find } });
   };
   el.append(h('div.sugtop', h('span.tag', KIND[item.kind] || 'Wording'), h('button.link', { onclick: show }, `Passage ${x.number}`)));
+  if (item.kind === 'grade') {
+    /* graded under his mark: the five, why, and what writing it again would need */
+    const gr = item.grade || {};
+    el.append(h('div.sugwhat', h('b', `${gr.overall} of 10 — under your ${item.target}`), h('small.gradeaxes', GRADE_AXES.filter(([k]) => Number.isFinite(gr[k])).map(([k, w]) => `${w} ${gr[k]}`).join(' · '))));
+    if (item.why) el.append(h('div.sugwhy', item.why));
+    if (item.lift) el.append(h('div.sugwhy', h('b', 'To reach it: '), item.lift));
+    el.append(h('div.btnrow',
+      item.lift ? h('button.btn.primary.small', { title: 'The writer writes the passage again with this as its note; the words before stay one arrow away.', onclick: () => {
+        if (C.sheet) C.sheet.close();
+        checker.leaveOne(x.chapterId, x.passageId, item.id, { remember: false });
+        desk.rewritePassage({ chapterId: x.chapterId, passageId: x.passageId, note: item.lift });
+      } }, `Write it again toward ${item.target}`) : null,
+      h('button.btn.quiet.small', { title: 'Keep the passage as it is.', onclick: () => checker.leaveOne(x.chapterId, x.passageId, item.id) }, 'Leave it')));
+    return el;
+  }
   if (typeof item.replace === 'string') {
     el.append(h('div.sugwhat', h('del', item.find), ' ', icon('right', 14), ' ', item.replace ? h('ins', item.replace) : h('i', '(taken out)')));
   } else {

@@ -22,9 +22,9 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, chapterText } from './shape.js';
 import { numberedText } from './context.js';
-import { checkerFrame, checkRequest, avoidList, avoidLine, notesText, aboutTheBook, CHECK_KINDS } from './prompts.js';
+import { checkerFrame, checkRequest, avoidList, avoidLine, notesText, aboutTheBook, CHECK_KINDS, GRADE_AXES } from './prompts.js';
 import { locate } from './changes.js';
 import { findIn } from './search.js';
 import { contextOf } from '../model/providers.js';
@@ -33,6 +33,19 @@ import { hashText, countWords, newId, plural, estimateTokens } from '../util.js'
 /* ------------------------------------------------------------ who checks */
 
 /* the checker's connection: his choice, or the helper's; "off" is nobody */
+/* The judge (Cozy Tavern's benchmark, for a novel): grades each passage in the
+ * checker's own reading — prose, people, continuity, pacing, pull, and the
+ * whole — on unless he turns it off; a passage under his mark (9 unless he
+ * sets another) comes with fixes that lift it and what writing it again would
+ * need. Behind the bubble like every suggestion: nothing changes until he says. */
+export function judgeOf(house) {
+  const j = (house && house.judge) || {};
+  if (j.on === false) return null;
+  const t = Number(j.target);
+  return { target: Number.isFinite(t) && t >= 1 && t <= 10 ? Math.round(t * 10) / 10 : 9 };
+}
+const score = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(10, Math.round(n * 10) / 10)) : null; };
+
 export function checkerConn(house) {
   const roles = (house && house.roles) || {};
   if (roles.checker === 'off') return null;
@@ -194,7 +207,7 @@ function retryLater(novelId) {
  * at once, and never more than the checker's model holds beside the notes */
 const BATCH_WORDS = 2500;
 function batchWords(conn, house, novel) {
-  const fixed = estimateTokens(checkerFrame(house, novel)) + estimateTokens(notesText(novel, { forHelper: true })) + estimateTokens(aboutTheBook(novel, { plans: false })) + 900;
+  const fixed = estimateTokens(checkerFrame(house, novel)) + estimateTokens(notesText(novel, { forHelper: true })) + estimateTokens(aboutTheBook(novel, { plans: false })) + 900 + (judgeOf(house) ? 450 : 0);
   const room = archivist.readingRoom(conn, fixed);
   if (room < 600) {
     const e = new Error(`its model holds ${contextOf(conn).toLocaleString()} tokens, too few to check the book beside its notes — choose one with more room for the checker`);
@@ -348,11 +361,23 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   const numbered = one && countWords(one[1].text) > limit
     ? archivist.partsOf(one[1].text, limit).map((part) => `[${one[0]}] ${part}`)
     : [numberedText(novel, chapter, batch.passages)];
+  /* the story right before them, so a slip against what was just written is caught —
+   * and the passages are the truth where the notes lag behind them */
+  const first = (chapter.passages || []).findIndex((p) => p.id === batch.passages[0].id);
+  const lead = first > 0 ? chapterText({ passages: chapter.passages.slice(0, first) }) : '';
+  /* as much of it as the room left beside the passages holds (up to 6,000 characters) */
+  const fixedNow = estimateTokens(system) + estimateTokens(notesText(novel, { forHelper: true })) + estimateTokens(aboutTheBook(novel, { plans: false })) + 900;
+  const spare = archivist.readingRoom(conn, fixedNow) - Math.max(...numbered.map((x) => estimateTokens(x)));
+  const keep = Math.max(0, Math.min(6000, Math.floor(spare * 0.4 * 3.5)));
+  const before = !keep ? '' : lead.length > keep ? '[…]\n' + lead.slice(-keep).replace(/^\S*\s+/, '') : lead;
   const edits = [];
+  const grades = [];
+  const judge = judgeOf(house);
   for (const words of numbered) {
-    const got = await archivist.askJson(conn, system, checkRequest({ novel, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid }), { want: (o) => Array.isArray(o.edits) });
+    const got = await archivist.askJson(conn, system, checkRequest({ novel, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, judge }), { want: (o) => Array.isArray(o.edits) });
     if (!got.ok) throw failed(got);
     edits.push(...got.obj.edits);
+    if (Array.isArray(got.obj.grades)) grades.push(...got.obj.grades);
   }
   /* what he left as it is (as the chapter stands now) is not offered for that passage again */
   const now = store.peek('chapter', chapter.id) || chapter;
@@ -387,11 +412,31 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     }
     for (const x of a.items) if (x.replace === null) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} on your list of words to avoid`;
   }
+  /* each passage's grade (a passage read in parts: the lowest of its parts) */
+  const graded = new Map();
+  if (judge) {
+    for (const g of grades) {
+      if (!g || typeof g !== 'object') continue;
+      const ref = String(g.passage === undefined ? '' : g.passage).replace(/[^\d.]/g, '');
+      const a = asked.get(ref) || (asked.size === 1 && !ref ? [...asked.values()][0] : null);
+      const overall = score(g.overall);
+      if (!a || overall === null) continue;
+      const was = graded.get(a.pid);
+      if (was && was.overall <= overall) continue;
+      const grade = { overall, why: clean(g.why), model: (picked((chapter.passages || []).find((p) => p.id === a.pid)) || {}).model || '' };
+      for (const [k] of GRADE_AXES) { const n = score(g[k]); if (n !== null) grade[k] = n; }
+      if (overall < judge.target && String(g.lift || '').trim()) grade.lift = String(g.lift).trim().slice(0, 1200);
+      graded.set(a.pid, grade);
+    }
+  }
   const at = Date.now();
   for (const a of asked.values()) {
     a.items.sort((x, y) => x.start - y.start);
     const items = a.items.map(({ start, end, ...rest }) => rest);
-    store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items }), { checkpoint: true });
+    const grade = graded.get(a.pid) || null;
+    /* under his mark: a suggestion of its own, to write it again toward it — or leave it */
+    if (grade && judge && grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: grade.why, lift: grade.lift || '', target: judge.target, grade });
+    store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}) }), { checkpoint: true });
   }
   await store.flush('chapter', chapter.id);
   tell(novelId);
@@ -432,6 +477,19 @@ function keepWords(novelId, w, next, rest) {
 }
 
 /* one suggestion, applied. {ok} or {ok: false, said} */
+/* the grades of the book's passages as they read now, by the model that wrote
+ * each — the benchmark: which writer writes best, by this judge */
+export function gradesOf(novelId) {
+  const rows = [];
+  for (const c of chaptersOf(novelId)) for (const p of c.passages || []) {
+    const e = entryFor(c, p);
+    if (e && e.grade) rows.push({ chapterId: c.id, passageId: p.id, ...e.grade });
+  }
+  const byModel = new Map();
+  for (const r of rows) { const k = r.model || 'your own words'; const t = byModel.get(k) || { n: 0, sum: 0 }; t.n++; t.sum += r.overall; byModel.set(k, t); }
+  return { rows, models: [...byModel.entries()].map(([model, t]) => ({ model, n: t.n, average: Math.round((t.sum / t.n) * 10) / 10 })).sort((a, b) => b.average - a.average) };
+}
+
 export function applyOne(novelId, chapterId, passageId, itemId) {
   const w = where(chapterId, passageId);
   if (w.why) return { ok: false, said: w.why };

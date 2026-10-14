@@ -1075,6 +1075,46 @@ await test('the readings kept stay within bounds: six newest versions of a passa
   await putAway(b);
 });
 
+await test('the notes\' auditor: notes kept before it are checked against the book once, by themselves — what an old version left goes, his own cards stay, with Undo', async () => {
+  const b = await makeBook([['Mara kept the light.', 'The stranger said nothing at all.']], { manual: true });
+  /* notes from before 2.4: an old take's facts, with no reading kept to take them back */
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people: [{ id: 'pe-j', name: 'Jovan', about: 'Says his name aloud: Oda Jovan.' }, { id: 'pe-m', name: 'Mara', about: 'HIS WORDS: the keeper.', updated: { by: 'you', at: 1 } }], places: [], lore: [{ id: 'lo-1', name: 'Jovan named himself', about: 'Mara heard him say Oda Jovan.' }], threads: [] }), { now: true });
+  markAllSeen(b);
+  assert.equal(archivist.firstCheck(b.novelId), true, 'notes from before the auditor: checked once');
+  assert.equal(archivist.firstCheck(b.novelId), false, 'only once');
+  await script([{ text: JSON.stringify({ people: [{ name: 'Jovan', about: 'A stranger who gives no name.' }, { name: 'Mara', about: 'NOT HIS' }], gone: [{ kind: 'lore', name: 'Jovan named himself' }, { kind: 'people', name: 'Mara' }] }) }]);
+  await archivist.run(b.novelId);
+  const asks = (await requests()).map((r) => r.body.messages.at(-1).content);
+  assert.equal(asks.length, 1);
+  assert.ok(asks[0].includes(prompts.AUDIT_ASK) && asks[0].includes('The stranger said nothing at all.') && asks[0].includes('Says his name aloud') && asks[0].includes('Mara — this card is mine, written or changed by me'), asks[0].slice(-1200));
+  const n = b.novel();
+  assert.equal(n.notes.people.find((c) => c.name === 'Jovan').about, 'A stranger who gives no name.');
+  assert.deepEqual(n.notes.lore, [], 'the old take\'s fact goes');
+  assert.equal(n.notes.people.find((c) => c.name === 'Mara').about, 'HIS WORDS: the keeper.', 'his card: never taken out, never his words changed');
+  assert.equal(n.memory.auditAsked, false);
+  assert.equal(n.memory.audit.reads, 0);
+  /* with the reading's Undo */
+  assert.equal(archivist.undoLast(b.novelId), true);
+  assert.equal(b.novel().notes.lore[0].name, 'Jovan named himself');
+  /* not again until it is due: every few readings, or when he asks */
+  await reset();
+  await archivist.run(b.novelId);
+  assert.equal((await requests()).length, 0);
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { at: 1, reads: archivist.AUDIT_EVERY } }), { now: true });
+  assert.equal(archivist.auditDue(b.novel()), true, 'due after enough readings');
+  await putAway(b);
+});
+
+await test('the partner offers each premise in its own block, shown with Use as the next direction; its words read whole elsewhere', () => {
+  const text = 'Two ways.\n\n<direction>Jovan says nothing and pulls Yuki clear.</direction>\n\nOr:\n<direction>Yuki runs.</direction>';
+  assert.deepEqual(changes.partsOf(text).map((x) => [x.kind, x.text]), [['words', 'Two ways.'], ['direction', 'Jovan says nothing and pulls Yuki clear.'], ['words', 'Or:'], ['direction', 'Yuki runs.']]);
+  assert.deepEqual(changes.directionsIn(text), ['Jovan says nothing and pulls Yuki clear.', 'Yuki runs.']);
+  assert.ok(!changes.wordsOf(text).includes('<direction>') && changes.wordsOf(text).includes('Yuki runs.'));
+  assert.deepEqual(changes.directionsIn('Coming: <direction>half'), [], 'one still coming is not offered yet');
+  const frame = prompts.partnerFrame({}, { meta: { title: 'T' }, brief: '' });
+  assert.ok(frame.includes('you as my writing partner') && frame.includes('<direction>') && frame.includes('You don’t write the next pages'));
+});
+
 await test('the readings listed newest first; Put back takes out only what one reading changed; Read again reads that passage afresh', async () => {
   const b = await makeBook([['Mara kept the light.', 'A wolf came to the door.']], { manual: true });
   await script([
@@ -2242,7 +2282,9 @@ await test('writing from before the checker began, or brought in from a file, is
   await checker.runCheck(b.novelId);
   let r = await requests();
   assert.equal(r.length, 1);
-  let ask = r[0].body.messages.at(-1).content;
+  /* what is checked: the passages under "Check these passages" — the story before them rides as context */
+  const checked = (m) => m.slice(m.indexOf('Check these passages from'));
+  let ask = checked(r[0].body.messages.at(-1).content);
   assert.ok(ask.includes('New words of his.') && !ask.includes('Old words from before.') && !ask.includes('Brought in from a file.') && !ask.includes('More old words.'), ask);
   const st = checker.stateOf(b.novelId);
   assert.equal(st.state, 'clean');
@@ -2253,7 +2295,7 @@ await test('writing from before the checker began, or brought in from a file, is
   await checker.runCheck(b.novelId);
   r = await requests();
   assert.equal(r.length, 1);
-  ask = r[0].body.messages.at(-1).content;
+  ask = checked(r[0].body.messages.at(-1).content);
   assert.ok(ask.includes('Old words from before.') && ask.includes('Brought in from a file.') && !ask.includes('More old words.') && !ask.includes('New words of his.'), ask);
   await reset();
   checker.checkBook(b.novelId);
@@ -2411,6 +2453,35 @@ await test('a look at the book comes soon after a change, and a later change nev
   t.timers.delete(id);
 });
 
+await test('the judge grades each passage in the checker\'s reading; one under his mark comes behind the bubble with what would lift it; off, nothing is graded', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { target: 8.5 } });
+  const b = await makeBook([['Mara kept the light.', 'The sea was grey and the sea was grey.']]);
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.2', kind: 'craft', find: 'and the sea was grey', replace: 'and colder than it looked', why: 'said once' }], grades: [
+    { passage: '1.1', prose: 9, people: 9, continuity: 9, pacing: 9, pull: 9, overall: 9, why: 'Clean.' },
+    { passage: '1.2', prose: 5, people: 6, continuity: 8, pacing: 5, pull: 4, overall: 5.5, why: 'It repeats itself.', lift: 'Give the sea one sharp image and let Mara react.' }] }) }]);
+  await checker.runCheck(b.novelId);
+  const ask = (await requests())[0].body.messages.at(-1).content;
+  assert.ok(ask.includes('Then grade each passage as a page of a finished novel') && ask.includes('under 8.5 overall'), 'his mark is asked for');
+  const s = checker.suggestions(b.novelId);
+  const grade = s.find((x) => x.item.kind === 'grade');
+  assert.ok(grade && grade.number === 2 && grade.item.grade.overall === 5.5 && grade.item.lift.startsWith('Give the sea'), JSON.stringify(s.map((x) => x.item.kind)));
+  assert.ok(s.some((x) => x.item.kind === 'craft'), 'its fixes that lift it');
+  assert.equal(s.filter((x) => x.item.kind === 'grade').length, 1, 'the one at 9 is not offered');
+  const g = checker.gradesOf(b.novelId);
+  assert.equal(g.rows.length, 2);
+  /* Apply all puts in the fixes and leaves the grade to him */
+  assert.equal(checker.applyAll(b.novelId), 1);
+  /* off: nothing graded */
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  await reset();
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'One more.' });
+  await script([{ text: '{"edits": []}' }]);
+  await checker.runCheck(b.novelId);
+  assert.ok(!(await requests())[0].body.messages.at(-1).content.includes('Then grade each passage'));
+  await setHouse();
+  await putAway(b);
+});
+
 await test('the checker uses its own connection when he picks one', async () => {
   await setHouse({}, { checksFrom: 0, roles: { writer: 'c-w', checker: 'c-x' } });
   store.change('house', 'house', (x) => { x.connections.push({ ...CONN, id: 'c-x', name: 'Checker', model: 'scripted-checker' }); }, { now: true });
@@ -2422,7 +2493,8 @@ await test('the checker uses its own connection when he picks one', async () => 
 });
 
 await test('a passage longer than the checker\'s model holds at once is read in parts, all of it kept for the passage; a model too small says so and is not asked', async () => {
-  await setHouse({ context: 6000 }, { checksFrom: 0 });
+  /* (the judge off: its grading takes room of its own — this is about the parts) */
+  await setHouse({ context: 6000 }, { checksFrom: 0, judge: { on: false } });
   const para = (i) => `Paragraph ${i} goes on about the sea and the light and the long night watch, word after word, until the lamp burns low and the keeper sleeps.`;
   const b = await makeBook([[Array.from({ length: 36 }, (_, i) => para(i + 1)).join('\n\n'), 'A short one.']]);
   await script([
@@ -2434,10 +2506,11 @@ await test('a passage longer than the checker\'s model holds at once is read in 
   const parts = asks.filter((a) => a.includes('[1.1] '));
   assert.ok(parts.length >= 2 && parts.length <= 4, `${parts.length} parts`);
   assert.ok(parts[0].includes('[1.1] Paragraph 1 goes') && !parts[0].includes('Paragraph 36 goes') && parts.at(-1).includes('Paragraph 36 goes'), 'the passage in order, in parts');
-  assert.ok(asks.some((a) => a.includes('[1.2] A short one.') && !a.includes('Paragraph')), 'the next passage in a checking of its own');
+  /* the checked passages: under "Check these passages" (the story before them rides as context) */
+  assert.ok(asks.some((a) => { const c = a.slice(a.indexOf('Check these passages from')); return c.includes('[1.2] A short one.') && !c.includes('Paragraph'); }), 'the next passage in a checking of its own');
   assert.deepEqual(checker.suggestions(b.novelId).map((x) => x.item.replace).sort(), ['Paragraph twenty goes', 'Paragraph two goes']);
   assert.equal(checker.waiting(b.novelId), 0);
-  await setHouse({ context: 4000 }, { checksFrom: 0 });
+  await setHouse({ context: 4000 }, { checksFrom: 0, judge: { on: false } });
   writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'One more.' });
   await reset();
   await checker.runCheck(b.novelId);

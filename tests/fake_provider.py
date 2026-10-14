@@ -43,6 +43,8 @@ def answer_for(body):
         return json.dumps({"edits": edits})
     if "for the writer to read before every page" in last_user:
         return json.dumps({"about": "A lighthouse keeper on a stormy coast and the letter that washed up at her feet.", "style": "Close third person on Mara, past tense; quiet, wry, salt-weathered."})
+    if "Check every card against the book as it stands" in last_user:
+        return "{}"
     if "Update the notes for what this changes" in last_user:
         kept = {}
         if '"about": "what the book is about' in last_user:
@@ -75,7 +77,7 @@ def answer_for(body):
             return '<changes>[{"passage": "1.1", "find": "Rain hammered the glass", "replace": "Rain lashed the glass", "why": "a harder verb"}, {"passage": "1.1", "find": "The sea was grey", "replace": "The sea was black", "why": "darker"}]</changes>\n\nTwo changes to the first passage.'
         if "CHANGE THE PASSAGE" in last_user:
             return '<changes>[{"passage": "1.1", "find": "Rain hammered the glass", "replace": "Rain lashed the glass", "why": "a harder verb for the storm"}]</changes>\n\nI made the rain harder in the first line.'
-        return "Maybe the letter is from her brother — the one who went to sea and never wrote."
+        return "Maybe the letter is from her brother — the one who went to sea and never wrote.\n\n<direction>Mara learns the letter is from her brother, who went to sea and never wrote.</direction>"
     if "playing a scene from it" in system:
         told = "The wind howls along the cliff path. *Crack!* A shutter slams somewhere above. At the bottom of the steps, a stranger waits with his collar turned up against the rain."
         if "three different things" in system:

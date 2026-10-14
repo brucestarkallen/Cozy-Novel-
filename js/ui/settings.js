@@ -455,11 +455,25 @@ function rolesGroup(hs, open) {
     roleSel('writer', 'The writer', 'Writes the pages, the other takes, the rewrites, and narrates the scenes you play. The writer button under the page switches it too.', false),
     roleSel('partner', 'The partner', 'Talks the book over with you.', true),
     roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true),
-    field('The checker', checkSel, 'Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. Writing from before it began is checked only when you ask. A quick, inexpensive model is perfect here.'));
+    field('The checker', checkSel, 'Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. Writing from before it began is checked only when you ask. A quick, inexpensive model is perfect here.'),
+    judgeField(hs));
   return g;
 }
 
 /* ------------------------------------------------------------ usage and cost */
+/* the judge (in the checker's reading): on or off, and his mark */
+function judgeField(hs) {
+  const j = hs.judge || {};
+  const on = h('input', { type: 'checkbox', checked: j.on !== false });
+  on.addEventListener('change', () => changeHouse((x) => { x.judge = { ...(x.judge || {}), on: on.checked }; }, { now: true }));
+  const mark = h('input', { type: 'text', inputmode: 'decimal', value: Number.isFinite(Number(j.target)) && j.target ? String(j.target) : '', placeholder: '9', style: { maxWidth: '90px' } });
+  mark.addEventListener('input', typing(() => { const n = Number(mark.value.trim().replace(',', '.')); changeHouse((x) => { x.judge = { ...(x.judge || {}) }; if (mark.value.trim() && Number.isFinite(n) && n >= 1 && n <= 10) x.judge.target = n; else delete x.judge.target; }); }, 400));
+  return h('div.field',
+    h('label.toggle', on, h('span', 'The judge grades each passage')),
+    h('em', 'In the checker’s own reading: prose, people, continuity, pacing, pull, 0–10. A passage under your mark comes behind the bubble with fixes that lift it and Write it again toward your mark — nothing changes until you say. Its grades show which writer writes best.'),
+    field('Your mark', mark, 'Under this, a passage is offered to be lifted (empty: 9).'));
+}
+
 /* Every call to a model — the writer, the helper, the checker, the partner,
  * the narrator — counted on the phone as it lands (Cozy Tavern's meter), by
  * connection and model; the money from the prices set on each connection. */
@@ -467,13 +481,12 @@ function rolesGroup(hs, open) {
 function usageGroup(hs) {
   const g = group('Usage and cost', { key: 'set.usage' });
   const box = h('div', h('p.say', 'Looking…'));
-  g.body.append(h('p.say', 'Every call to a model — the writer and the helper, the checker, your partner, the narrator — counted as it lands: tokens in and out, by connection and model. Set each connection’s prices above to see the money.'), box,
+  g.body.append(h('p.say', 'Every call to a model — the writer, the helper, the checker, your partner, the narrator — counted as it lands. Set each connection’s prices above to see the money.'), box,
     h('div.btnrow', h('button.btn.quiet.small', { title: 'The counts start again from nothing; your books and connections are not touched.', onclick: async () => {
       if (!(await confirmIt('Clear the counts?', 'Usage and cost starts again from nothing. Your books and connections are not touched.', 'Clear them', { danger: true }))) return;
       await store.api('POST', '/api/usage/clear', { body: {} }).catch(() => {});
       fillUsage(box, house());
-    } }, 'Clear the counts')),
-    h('p.say.quiet', 'Clear the counts: Usage and cost starts again from nothing.'));
+    } }, 'Clear the counts')));
   fillUsage(box, hs);
   return g;
 }
@@ -485,49 +498,87 @@ export function costOf(row, conn) {
   return (((row.in || 0) - cached) * conn.priceIn + cached * cachedPrice + (row.out || 0) * conn.priceOut) / 1e6;
 }
 
+/* Cozy Tavern's Usage and cost (M457, M510): one period at a time — Today,
+ * Last 7 days, Last 30 days — as a small table, each connection and model a
+ * row with the total; what it comes to per day, week and month at the rate so
+ * far; and the busiest day per model, folded until he opens it. */
+const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 1 : 2).replace(/\.?0+$/, '') + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n || 0)));
+const money = (c) => (c === null || c === undefined ? '—' : '$' + (c >= 100 ? c.toFixed(0) : c >= 1 ? c.toFixed(2) : c.toFixed(3)));
+const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+let usagePeriod = 'today';
 async function fillUsage(box, hs) {
   const { status, data } = await store.api('GET', '/api/usage').catch(() => ({ status: 0 }));
   box.textContent = '';
   if (status !== 200 || !data) { box.append(h('p.say', 'The counts could not be read just now — the phone did not answer.')); return; }
   const days = data.days || {};
-  const d = new Date();
-  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const month = today.slice(0, 7);
+  const keys = Object.keys(days).sort();
+  if (!keys.length) { box.append(h('p.say', 'Nothing counted yet — every call from now on is.')); return; }
+  const now = new Date();
+  const since = (n) => { const d = new Date(now); d.setDate(d.getDate() - (n - 1)); return dayKey(d); };
   const conns = hs.connections || [];
-  const connOf = (key) => { const [url, model] = [key.slice(0, key.lastIndexOf('|')), key.slice(key.lastIndexOf('|') + 1)]; return conns.find((c) => String(c.url || '') === url && String(c.model || '') === model) || null; };
-  const sum = (pick) => {
-    const out = new Map();
-    for (const [day, rows] of Object.entries(days)) {
-      if (!pick(day)) continue;
-      for (const [key, r] of Object.entries(rows || {})) {
-        const t = out.get(key) || { calls: 0, in: 0, out: 0, cached: 0, estimated: 0 };
+  const connOf = (key) => { const url = key.slice(0, key.lastIndexOf('|')); const model = key.slice(key.lastIndexOf('|') + 1); return conns.find((c) => String(c.url || '') === url && String(c.model || '') === model) || null; };
+  const sum = (from) => {
+    const rows = new Map();
+    for (const day of keys) {
+      if (from && day < from) continue;
+      for (const [key, r] of Object.entries(days[day] || {})) {
+        const t = rows.get(key) || { calls: 0, in: 0, out: 0, cached: 0, estimated: 0 };
         for (const k of ['calls', 'in', 'out', 'cached', 'estimated']) t[k] += Number(r[k]) || 0;
-        out.set(key, t);
+        rows.set(key, t);
       }
     }
-    return out;
+    const list = [...rows.entries()].map(([key, r]) => { const c = connOf(key); return { ...r, name: c ? connName(c) : 'A connection no longer here', model: key.slice(key.lastIndexOf('|') + 1), cost: costOf(r, c) }; })
+      .sort((a, b) => (b.in + b.out) - (a.in + a.out));
+    const total = list.reduce((t, r) => ({ calls: t.calls + r.calls, in: t.in + r.in, out: t.out + r.out, cost: r.cost === null ? t.cost : (t.cost || 0) + r.cost, unpriced: t.unpriced || r.cost === null }), { calls: 0, in: 0, out: 0, cost: null, unpriced: false });
+    return { rows: list, total };
   };
-  const periods = [['Today', (day) => day === today], ['This month', (day) => day.startsWith(month)], ['Everything kept', () => true]];
-  let any = false;
-  for (const [label, pick] of periods) {
-    const rows = [...sum(pick).entries()].sort((a, b) => b[1].in + b[1].out - (a[1].in + a[1].out));
-    if (!rows.length) continue;
-    any = true;
-    let total = 0;
-    let priced = true;
-    const list = h('ul.list.usage');
-    for (const [key, r] of rows) {
-      const c = connOf(key);
-      const money = costOf(r, c);
-      if (money === null) priced = false; else total += money;
-      const model = key.slice(key.lastIndexOf('|') + 1);
-      list.append(h('li', h('div.grow', `${c ? connName(c) : 'A connection no longer here'}${c && c.model ? '' : ` — ${model}`}`,
-        h('small', `${plural(r.calls, 'call')} · ${r.in.toLocaleString()} in${r.cached ? ` (${r.cached.toLocaleString()} from its cache)` : ''} · ${r.out.toLocaleString()} out${r.estimated ? ` · ${plural(r.estimated, 'call')} counted by the app (the provider gave no count)` : ''}`)),
-        h('b', money === null ? '—' : `$${money < 0.01 ? money.toFixed(4) : money.toFixed(2)}`)));
-    }
-    box.append(h('h4.usagehead', `${label}${priced ? ` — $${total < 0.01 ? total.toFixed(4) : total.toFixed(2)}` : total > 0 ? ` — $${total.toFixed(2)} for the ones with prices` : ''}`), list);
+  const table = (p) => {
+    const t = h('table.usage-table', h('tr', h('th', 'Connection · model'), h('th', 'In'), h('th', 'Out'), h('th', 'Cost')));
+    if (!p.rows.length) t.append(h('tr', h('td.quiet', { colSpan: 4 }, 'No calls in this time.')));
+    for (const r of p.rows) t.append(h('tr', h('td', `${r.name} · ${r.model}${r.estimated ? ' ≈' : ''}`), h('td.num', `${tok(r.in)}${r.cached ? ` (${tok(r.cached)} cached)` : ''}`), h('td.num', tok(r.out)), h('td.num', r.cost === null ? 'no price' : money(r.cost))));
+    if (p.rows.length) t.append(h('tr.usage-total', h('td', `Total (${plural(p.total.calls, 'call')})`), h('td.num', tok(p.total.in)), h('td.num', tok(p.total.out)), h('td.num', `${money(p.total.cost)}${p.total.unpriced && p.total.cost !== null ? ' +' : ''}`)));
+    return t;
+  };
+  const periods = [['today', 'Today', since(1)], ['week', 'Last 7 days', since(7)], ['month', 'Last 30 days', since(30)]];
+  const pick = h('div.usage-periods');
+  const shown = h('div.usage-shown');
+  const choose = (key) => {
+    usagePeriod = key;
+    for (const b of pick.querySelectorAll('button')) b.classList.toggle('current', b.dataset.period === key);
+    shown.textContent = '';
+    shown.append(table(sum(periods.find((x) => x[0] === key)[2])));
+  };
+  for (const [key, words] of periods) pick.append(h('button.usage-period', { type: 'button', 'data-period': key, onclick: () => choose(key) }, words));
+  box.append(pick, shown);
+  choose(usagePeriod);
+  /* at the rate so far, over the days since the first one counted */
+  const first = new Date(`${keys[0]}T00:00:00`);
+  const span = Math.max(1, Math.round((new Date(`${dayKey(now)}T00:00:00`) - first) / 86400000) + 1);
+  const all = sum(null).total;
+  const per = (n) => `${tok((all.in / span) * n)} in · ${tok((all.out / span) * n)} out · ${all.cost === null ? 'set prices to see the cost' : money((all.cost / span) * n) + (all.unpriced ? ' (some connections have no price)' : '')}`;
+  box.append(h('div.usage-averages', h('p.stack-label', `At the rate so far (over ${plural(span, 'day')})`),
+    ...[['Per day', 1], ['Per week', 7], ['Per month', 30]].map(([w, n]) => h('div.usage-avg-row', h('span', w), h('span.num', per(n))))));
+  /* the busiest day per model — folded until he opens it */
+  const busiest = new Map();
+  for (const day of keys) for (const [key, r] of Object.entries(days[day] || {})) {
+    const b = busiest.get(key);
+    const size = (Number(r.in) || 0) + (Number(r.out) || 0);
+    if (!b || size > b.size) busiest.set(key, { day, size, r: { calls: Number(r.calls) || 0, in: Number(r.in) || 0, out: Number(r.out) || 0, cached: Number(r.cached) || 0 } });
   }
-  if (!any) box.append(h('p.say', 'Nothing counted yet — every call from now on is.'));
+  const fold = h('details.usage-busiest', h('summary.stack-label', 'Your busiest day, per model — and a month of days like it'));
+  try { fold.open = localStorage.getItem('cozynovel.usageBusiest') === 'open'; } catch (_) { /* a private window */ }
+  fold.addEventListener('toggle', () => { try { localStorage.setItem('cozynovel.usageBusiest', fold.open ? 'open' : 'closed'); } catch (_) { /* fine */ } });
+  const bt = h('table.usage-table', h('tr', h('th', 'Connection · model'), h('th', 'Busiest day'), h('th', 'That day'), h('th', 'A month like it')));
+  for (const [key, b] of busiest) {
+    const c = connOf(key);
+    const cost = costOf(b.r, c);
+    const when = new Date(`${b.day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    bt.append(h('tr', h('td', `${c ? connName(c) : 'A connection no longer here'} · ${key.slice(key.lastIndexOf('|') + 1)}`), h('td', when),
+      h('td.num', `${tok(b.r.in)} in · ${tok(b.r.out)} out · ${cost === null ? 'no price' : money(cost)}`),
+      h('td.num', `${tok(b.r.in * 30)} in · ${tok(b.r.out * 30)} out · ${cost === null ? 'no price' : money(cost * 30)}`)));
+  }
+  fold.append(bt);
+  box.append(fold, h('p.say.quiet', '≈ where a provider gave no count, the app counted the tokens itself.'));
 }
 
 /* ------------------------------------------------------------ his words */

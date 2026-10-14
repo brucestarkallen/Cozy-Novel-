@@ -122,7 +122,7 @@ async def scenario_main(b):
     check('the partner answers', 'brother' in said, said)
     pbody = completions()[-1]['body']
     check('the partner reads the book too', any('Mara' in (m.get('content') or '') for m in pbody['messages'] if m['role'] == 'system'), '')
-    await pg.click('.turn.ai .tctl button:has-text("Use as the next direction")')
+    await pg.click('.turn.ai .direction button:has-text("Use as the next direction")')
     await pg.wait_for_timeout(400)
     check('Use as the next direction fills the box', 'brother' in await pg.input_value('#direction'), await pg.input_value('#direction'))
     await pg.fill('#direction', '')
