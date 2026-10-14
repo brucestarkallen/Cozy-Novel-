@@ -12,7 +12,11 @@
  *             book as it stands (by 'you' once he corrected it); prefs
  *             {length, outcome: 'me' (absent: the writer decides), sound:
  *             'novel' (absent: Comic), at: the chapter last open}
- *   chapter { id, novelId, name, nameBy, passages:[passage], summary, retired:[] }
+ *             memory {seen, removed, undo, lit, readings}: what the helper
+ *             has read (seen[chapter][passage] = its signature), the last
+ *             reading's Undo, what to light on the notes (lit), and what each
+ *             reading of each version changed (readings.js)
+ *   chapter { id, novelId, name, nameBy, passages:[passage], summary, summaries:[{fp,text,at}], retired:[] }
  *   passage { id, by:'ai'|'you'|'break', pick, versions:[version] }
  *   version { id, text, at, how, ask, conn, model, thinking, cut, stopped, notes, usage, ms, sent, streaming }
  *   talk    { id:novelId, novelId, turns:[turn] }          the partner
@@ -263,6 +267,46 @@ export const novelSteps = {
       else if (cur && same(cur, c.after)) list[i] = JSON.parse(JSON.stringify(c.before));
     }
   },
+  /* cards moved by id, each only where it still reads as it did (readings.js):
+   * a version's notes taken back out, or laid on again — never over a card
+   * changed meanwhile */
+  moveCards: (moves) => (n) => {
+    n.notes = n.notes || {};
+    const same = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+    for (const m of moves || []) {
+      const list = n.notes[m.kind] || (n.notes[m.kind] = []);
+      const i = list.findIndex((x) => x.id === m.id);
+      const cur = i >= 0 ? list[i] : null;
+      if (!same(cur, m.from)) continue;
+      if (!m.to) { if (i >= 0) list.splice(i, 1); }
+      else if (i >= 0) list[i] = JSON.parse(JSON.stringify(m.to));
+      else list.push(JSON.parse(JSON.stringify(m.to)));
+    }
+  },
+  /* what the helper keeps of the book, moved the same way */
+  moveKept: (moves) => (n) => {
+    n.kept = { ...(n.kept || {}) };
+    const same = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+    for (const m of moves || []) {
+      if (!same(n.kept[m.key], m.from)) continue;
+      if (m.to) n.kept[m.key] = JSON.parse(JSON.stringify(m.to)); else delete n.kept[m.key];
+    }
+  },
+  /* what one reading of one version of a passage changed (readings.js) */
+  putReading: (pid, vid, reading) => (n) => {
+    n.memory = n.memory || {};
+    const all = n.memory.readings || (n.memory.readings = {});
+    all[pid] = { ...(all[pid] || {}), [vid]: JSON.parse(JSON.stringify(reading)) };
+  },
+  dropReadings: (list) => (n) => {
+    const all = n.memory && n.memory.readings;
+    if (!all) return;
+    for (const [pid, vid] of list || []) {
+      if (!all[pid]) continue;
+      if (vid === '*') delete all[pid];
+      else { delete all[pid][vid]; if (!Object.keys(all[pid]).length) delete all[pid]; }
+    }
+  },
   setMemory: (patch) => (n) => { n.memory = { ...(n.memory || {}), ...patch }; },
   /* What it's about / How it reads: Manual or Automatic, and what the helper keeps */
   setAuto: (key, on) => (n) => { n.auto = { ...(n.auto || {}), [key]: Boolean(on) }; },
@@ -330,6 +374,14 @@ export const chapterSteps = {
     if (j >= 0) c.passages.splice(j + 1, 0, p); else c.passages.push(p);
   },
   setSummary: (summary) => (c) => { c.summary = summary; },
+  /* the summaries of the chapter as it read before (each by its words'
+   * fingerprint): a version brought back brings its summary back too */
+  clearSummaries: () => (c) => { c.summaries = []; },
+  keepSummary: (entry) => (c) => {
+    const list = (c.summaries = (c.summaries || []).filter((x) => x.fp !== entry.fp));
+    list.push(JSON.parse(JSON.stringify(entry)));
+    if (list.length > 6) list.splice(0, list.length - 6);
+  },
   retire: (entry) => (c) => {
     c.retired = c.retired || [];
     if (!c.retired.some((x) => x.key === entry.key)) c.retired.push(entry);

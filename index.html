@@ -71,7 +71,7 @@
         </article>
         <button class="btn small follow" id="followBtn" hidden>Follow the writing &darr;</button>
       </section>
-      <button class="checkbubble" id="checkBubble" data-state="clean" aria-label="Suggestions"></button>
+      <button class="checkbubble" id="checkBubble" data-state="clean" aria-label="Suggestions" title="The checker: green all good, blue checking, yellow suggestions waiting, red trouble, grey nobody checks"></button>
       <div class="scroller" id="scroller" hidden><div class="tip" aria-hidden="true"></div><div class="thumb" role="slider" tabindex="0" aria-label="Passage" aria-valuemin="1"></div></div>
     </div>
 
@@ -97,12 +97,12 @@
       </div>
       <div class="say-row">
         <textarea id="direction" rows="1" placeholder="What happens next?" aria-label="What happens next" autocapitalize="sentences" spellcheck="true"></textarea>
-        <button class="btn primary" id="writeBtn">Write</button>
+        <button class="btn primary" id="writeBtn" title="Write what the box says happens next (empty: the story carries on)">Write</button>
       </div>
       <div class="crow">
-        <button class="chip" id="lengthBtn" aria-label="How much to write"></button>
-        <button class="chip" id="outcomeBtn" aria-label="Who decides how it turns out"></button>
-        <button class="chip" id="writerBtn" aria-label="Who writes"></button>
+        <button class="chip" id="lengthBtn" aria-label="How much to write" title="How much the writer writes for one Write"></button>
+        <button class="chip" id="outcomeBtn" aria-label="Who decides how it turns out" title="Writer decides: it carries your premise to where it lands. I decide: it stops right before it is settled"></button>
+        <button class="chip" id="writerBtn" aria-label="Who writes" title="Which connection writes the pages"></button>
         <span class="grow"></span>
         <button class="chip mine" id="mineBtn" title="Put the words in the box onto the page as your own">Add as my words</button>
       </div>

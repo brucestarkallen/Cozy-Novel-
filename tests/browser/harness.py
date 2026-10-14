@@ -49,18 +49,18 @@ async def new_book(pg, title='The Lantern Keeper', brief='A lighthouse keeper on
 async def add_conn(pg, model='fake-writer'):
     if 'Choose a writer' not in await pg.inner_text('#writerBtn'):
         await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
-        await pg.fill('.sheet input[placeholder="deepseek-chat"]', model)
+        await pg.fill('.sheet label.field:has(> span:text-is("Model")) input', model)
         await pg.wait_for_timeout(700)
         await pg.click('.sheet .head button[aria-label=Close]')
         await pg.wait_for_timeout(300)
         return
     await pg.click('#writerBtn')
     await pg.click('.menu-pop button:has-text("Add a connection")')
-    await pg.click('.sheet button:has-text("New")')
+    await pg.click('.sheet button:has-text("Add a connection")')
     await pg.click('.menu-pop button:has-text("Anything else")')
     await pg.fill('.sheet input[placeholder="https://api.deepseek.com/v1"]',f'http://127.0.0.1:{PROV}/v1')
     await pg.fill('.sheet input[type=password]','test-key')
-    await pg.fill('.sheet input[placeholder="deepseek-chat"]',model)
+    await pg.fill('.sheet label.field:has(> span:text-is("Model")) input',model)
     await pg.wait_for_timeout(700)
     await pg.click('.sheet .head button[aria-label=Close]')
     await pg.wait_for_timeout(300)

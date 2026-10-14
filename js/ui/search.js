@@ -5,7 +5,8 @@
 
 import * as store from '../store.js';
 import { searchBook } from '../novel/search.js';
-import { h, openSheet } from './dom.js';
+import { h, openSheet, toast } from './dom.js';
+import * as talk from '../novel/talk.js';
 import { plural, debounce } from '../util.js';
 import * as desk from './desk.js';
 import { showCard, showTurn } from './panes.js';
@@ -101,7 +102,14 @@ function go(f, q, sheet) {
   }
   if (f.where === 'note') return inBook(() => showCard(f.kind, f.cardId));
   if (f.where === 'book') return inBook(() => hooks.openBook(f.novelId));
-  if (f.where === 'talk') return inBook(() => showTurn('talk', f.novelId, f.turnId));
+  if (f.where === 'talk') return inBook(async () => {
+    /* in a conversation not open now: that one opens first */
+    if (f.convId) {
+      const out = await talk.openConversation(f.novelId, f.convId);
+      if (!out.ok && !/not there any more/.test(out.error || '')) { toast(`It couldn’t open that conversation: ${out.error}.`, 5000); return; }
+    }
+    showTurn('talk', f.novelId, f.turnId);
+  });
   if (f.where === 'play') return inBook(() => showTurn('play', f.playId, f.turnId));
   return undefined;
 }

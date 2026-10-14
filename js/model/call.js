@@ -20,9 +20,10 @@ import {
   buildRequest, readAnswer, readChunk, wireOf, learnedFacts, learnKey, lessonFrom, familyStyle, cannotStopThinking,
   THINKING_FIELDS, REASONING_REFUSAL, PREFILL_REFUSAL, CONTEXT_REFUSAL, REPLY_TOO_LONG, COMPLETION_FIELD_REFUSAL,
   KNOB_FIELDS, knobRefused, hasLateSystem, hermesLike, prefillGap, contextFrom, inputFrom, replyLimitFrom, contextOf,
-  modelsUrl, headersFor, reportedIdentity, spokenAs, describePrefill, prefillProfile, deepseekBetaBase,
+  modelsUrl, headersFor, reportedIdentity, spokenAs, describePrefill, prefillProfile, deepseekBetaBase, structuredPlanFor, prefillPlan,
 } from './providers.js';
 import { estimateTokens } from '../util.js';
+import { makeStructuredDecoder, STRUCTURED_REFUSAL, unwrapStructured, readTemplate } from './structured.js';
 
 /* ------------------------------------------------------------- lessons */
 
@@ -47,6 +48,7 @@ export function learn(conn, fact) {
     contextGuess: fact.context ? fact.contextGuess === true : Boolean(was && was.contextGuess),
     maxOut: fact.maxOut || (was && was.maxOut) || null,
     completionField: fact.completionField === true || Boolean(was && was.completionField),
+    structuredDownAt: fact.structuredDownAt || (was && was.structuredDownAt) || null,
   };
   conn.learned = next;
   for (const fn of learners) { try { fn(conn.id, next); } catch (_) { /* a listener's trouble is not the call's */ } }
@@ -188,7 +190,7 @@ export function countOf(u) {
  * of JSON (the phone's server answers every refusal so); a provider that
  * ignored "stream" is read whole; an error in the middle of a stream is an
  * error, never a finished answer. */
-export async function readReply(wire, res, { onText, onThinking } = {}) {
+export async function readReply(wire, res, { onText, onThinking, onNote } = {}) {
   const reader = res && res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
   const whole = (data) => {
     if (data && data.error) {
@@ -199,6 +201,10 @@ export async function readReply(wire, res, { onText, onThinking } = {}) {
     }
     const a = readAnswer(wire, data);
     a.usage = countOf(data && data.usage);
+    a.sources = [];
+    for (const b of (data && Array.isArray(data.content) ? data.content : [])) if (b && b.type === 'web_search_tool_result' && Array.isArray(b.content)) for (const r of b.content) if (r && r.url && !a.sources.some((x) => x.url === r.url)) a.sources.push({ url: r.url, title: r.title || r.url });
+    const msg = data && data.choices && data.choices[0] && data.choices[0].message;
+    for (const x of (msg && Array.isArray(msg.annotations) ? msg.annotations : [])) { const c = x && (x.url_citation || x); if (c && c.url && !a.sources.some((y) => y.url === c.url)) a.sources.push({ url: c.url, title: c.title || c.url }); }
     a.reason = typeof a.finish === 'string' ? a.finish : '';
     const cut = splitThink(a.text);
     if (cut.thinking) { a.text = cut.text; a.thinking = [a.thinking, cut.thinking].filter(Boolean).join('\n\n'); }
@@ -213,6 +219,9 @@ export async function readReply(wire, res, { onText, onThinking } = {}) {
   }
   const decoder = new TextDecoder();
   let buffer = '', raw = '', sse = false, text = '', thinking = '', cut = false, ended = false, midError = null, usage = null, reason = '';
+  /* the provider's own web search: what it looked at (Claude's results, OpenRouter's citations) */
+  const sources = [];
+  const source = (url, title) => { if (url && !sources.some((x) => x.url === url)) sources.push({ url: String(url), title: String(title || url) }); };
   let pending = '';   /* an event whose words came over more than one data: line */
   const split = makeThinkSplitter((kind, s) => {
     if (kind === 'thinking') { thinking += s; if (onThinking) onThinking(s); } else { text += s; if (onText) onText(s); }
@@ -249,6 +258,15 @@ export async function readReply(wire, res, { onText, onThinking } = {}) {
     if (obj.type === 'message_start' && obj.message && obj.message.usage) usage = { ...(usage || {}), ...obj.message.usage };
     if (obj.type === 'message_stop') ended = true;
     if (obj.type === 'message_delta' && obj.delta && obj.delta.stop_reason) { ended = true; reason = String(obj.delta.stop_reason); }
+    if (obj.type === 'content_block_start' && obj.content_block) {
+      if (obj.content_block.type === 'server_tool_use' && onNote) onNote('Searching the web…');
+      if (obj.content_block.type === 'web_search_tool_result' && Array.isArray(obj.content_block.content)) for (const r of obj.content_block.content) if (r && r.url) source(r.url, r.title);
+    }
+    {
+      const ch = obj.choices && obj.choices[0];
+      const ann = (ch && ch.delta && ch.delta.annotations) || (ch && ch.message && ch.message.annotations) || null;
+      if (Array.isArray(ann)) for (const a of ann) { const c = a && (a.url_citation || a); if (c && c.url) source(c.url, c.title); }
+    }
     const choice = obj.choices && obj.choices[0];
     if (choice && choice.finish_reason) { ended = true; reason = String(choice.finish_reason); }
     const part = readChunk(wire, obj);
@@ -278,12 +296,12 @@ export async function readReply(wire, res, { onText, onThinking } = {}) {
   split.end();
   const late = splitThink(text);
   if (late.thinking) { text = late.text; thinking = [thinking, late.thinking].filter(Boolean).join('\n\n'); }
-  if (midError) { const e = errorOf(midError); return { finish: 'error', error: e.message, status: e.status, midStream: true, text, thinking, reason, usage: countOf(usage) }; }
+  if (midError) { const e = errorOf(midError); return { finish: 'error', error: e.message, status: e.status, midStream: true, text, thinking, reason, usage: countOf(usage), sources }; }
   if (!text && !thinking && !ended) return { finish: 'error', error: 'the answer stopped before anything came', status: 0, text: '', thinking: '' };
   /* words came, then the line simply closed — no "finished" from the provider:
    * kept, and said to be possibly cut */
   const quiet = !ended && !cut;
-  return { text, thinking, finish: cut ? 'length' : 'stop', usage: countOf(usage), reason, quiet };
+  return { text, thinking, finish: cut ? 'length' : 'stop', usage: countOf(usage), reason, quiet, sources };
 }
 
 /* WHAT WAS SENT, kept as it went: the body's lists and objects copied, its
@@ -296,6 +314,28 @@ export function snapshotBody(body) {
     else out[k] = v;
   }
   return out;
+}
+
+/* ------------------------------------------------------------ usage */
+/* Every call counted as it lands, on the phone (Settings → Usage and cost):
+ * the provider's own count, or the app's estimate when it gave none. */
+export function noteUsage(conn, usage, sent, text) {
+  try {
+    const u = usage || null;
+    const counted = Boolean(u && Number.isFinite(u.in));
+    const d = new Date();
+    const spec = {
+      url: String((conn && conn.url) || ''), model: String((conn && conn.model) || ''),
+      in: counted ? u.in : Math.max(0, Number((sent && sent.tokens) || 0)),
+      out: u && Number.isFinite(u.out) ? u.out : estimateTokens(String(text || '')),
+      cached: (u && Number.isFinite(u.cached) && u.cached) || 0,
+      estimated: !counted,
+      day: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+    };
+    if (!spec.url || !spec.model) return;
+    const p = fetch('/api/usage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(spec) });
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch (_) { /* counting never stands in a page's way */ }
 }
 
 /* ------------------------------------------------------------ the call */
@@ -329,7 +369,7 @@ export async function ask(conn, opts = {}) {
   }
   const stream = opts.stream !== false;
   const notes = [];
-  let flags = { noPrefill: false, noUsage: false, maxCap: 0 };
+  let flags = { noPrefill: false, noUsage: false, maxCap: 0, noStructured: Boolean(opts.noStructured) };
   let lessons = 0;
   let keyMended = false;
   let transientTries = 0;
@@ -345,9 +385,10 @@ export async function ask(conn, opts = {}) {
     /* a request the builder knows cannot fit this model (its room, as a
      * lesson may just have taught it) is never sent: the builder's reason is */
     if (shape && shape.refuse) return { ok: false, text: '', thinking: '', notes, error: shape.refuse, status: lastStatus || 0 };
-    const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined });
+    const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined, noStructured: flags.noStructured, noSearch: Boolean(opts.noSearch) });
     if (req.prefill && req.prefill.note && !notes.includes(req.prefill.note)) notes.push(req.prefill.note);
-    const sent = { url: req.url, model: req.body && req.body.model, body: snapshotBody(req.body), at: Date.now(), tokens: sizeOf(shape) };
+    if (req.structured && req.structured.note && !notes.includes(req.structured.note)) notes.push(req.structured.note);
+    const sent = { url: req.url, model: req.body && req.body.model, body: snapshotBody(req.body), at: Date.now(), tokens: sizeOf(shape), ...(req.structured ? { structured: true } : {}) };
     /* the started reply and the started thought are part of what comes back */
     let lead = req.prefill && req.prefill.applied ? String(req.prefill.content || '') : '';
     let thoughtLead = req.prefill && req.prefill.applied ? String(req.prefill.seed || '') : '';
@@ -372,6 +413,24 @@ export async function ask(conn, opts = {}) {
       thinking += s;
       if (opts.onThinking) opts.onThinking(s);
     };
+    /* STRUCTURED: the answer is JSON ({"response":"…"}) — its words are read
+     * out of it as they stream, the hidden part held back, and a <think>…</think>
+     * the template made it write goes to the thinking box (Tavern M580, M586) */
+    let decoder = null;
+    let onWords = emitText;
+    if (req.structured) {
+      decoder = makeStructuredDecoder({ hidden: req.structured.hidden });
+      let sep = false;
+      let begun = false;
+      const splitter = makeThinkSplitter((kind, t) => {
+        if (kind === 'thinking') { let x = t; if (!sep) { sep = true; if (thinking && !/\n\s*$/.test(thinking)) x = '\n\n' + x; } emitThinking(x); return; }
+        let x = t;
+        if (!begun) { x = x.replace(/^\s+/, ''); if (!x) return; begun = true; }
+        emitText(x);
+      });
+      onWords = (raw) => { const w = decoder.feed(raw); if (w) splitter.feed(w); };
+      onWords.end = () => { const w = decoder.end ? decoder.end() : ''; if (w) splitter.feed(w); splitter.end(); };
+    }
     let out;
     try {
       const res = await fetch('/api/call', {
@@ -383,12 +442,15 @@ export async function ask(conn, opts = {}) {
       if (!res.ok) {
         out = { finish: 'error', error: res.status === 403 ? 'the phone’s server turned the call away' : `the phone’s server answered ${res.status}`, status: 0, text: '', thinking: '' };
       } else {
-        out = await readReply(req.wire, res, { onText: emitText, onThinking: emitThinking });
+        out = await readReply(req.wire, res, { onText: onWords, onThinking: emitThinking, onNote: (n) => { if (!notes.includes(n)) notes.push(n); } });
+        if (decoder && onWords.end) onWords.end();
       }
     } catch (e) {
       if ((e && e.name === 'AbortError') || (opts.signal && opts.signal.aborted)) {
         sent.ms = Date.now() - sent.at;
         if (opts.onSent) opts.onSent(sent);
+        /* what streamed before Stop was paid for too */
+        if (String(text + thinking).trim()) noteUsage(conn, null, sent, text + thinking);
         return { ok: false, stopped: true, text, thinking, notes, error: 'stopped', sent, cut: true };
       }
       out = { finish: 'error', error: 'the phone’s server could not be reached (is Cozy Novel still running in Termux?)', status: 0, phone: true, text, thinking };
@@ -422,6 +484,15 @@ export async function ask(conn, opts = {}) {
           lessons++;
           continue;
         }
+      }
+      /* a model that takes no structured answer: remembered for its model, and
+       * the page goes again with the prefill as written (Tavern M580) */
+      if (req.structured && !flags.noStructured && lessons < 12 && (fourHundred || lastStatus === 404) && STRUCTURED_REFUSAL.test(lastError || String(lastStatus))) {
+        learn(conn, { structuredDownAt: Date.now() });
+        notes.push(`This model would not take a structured prefill (${String(lastError || lastStatus).slice(0, 120)}), so the page went with the prefill as written — and it goes so for this model from now on.`);
+        flags = { ...flags, noStructured: true };
+        lessons++;
+        continue;
       }
       if (fourHundred && lessons < 12) {
         /* the reply's length, named the way this address wants it */
@@ -559,6 +630,7 @@ export async function ask(conn, opts = {}) {
         permanent: !transient && lastStatus !== 0 };
     }
     if (opts.onSent) opts.onSent(sent);
+    noteUsage(conn, out.usage, sent, text + thinking);
     /* a request whose thinking seed opened the thinking on purpose says nothing about Off */
     const opened = Boolean(req.prefill && req.prefill.applied && req.prefill.keepThinkingOpen && (conn.thinking === 'off' || conn.thinking === false));
     if (!opened) noticeOff(conn, thinking);
@@ -566,7 +638,7 @@ export async function ask(conn, opts = {}) {
     const extra = { thinkTokens: Number(out.thinkTokens) || 0, hiddenThought: Boolean(out.hiddenThought) };
     if (out.finish === 'error') {
       /* broken off partway: what arrived is kept, and said to be cut */
-      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, ...extra };
+      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra };
     }
     const reason = out.reason || '';
     const blocked = BLOCKED.test(reason);
@@ -574,8 +646,9 @@ export async function ask(conn, opts = {}) {
     const quiet = Boolean(out.quiet && String(text).trim());
     if (blocked && String(text).trim()) notes.push(`The provider stopped the answer here (its reason: ${reason}).`);
     else if (quiet && !byLength) notes.push('The answer ended without the provider saying it was finished, so it may have been cut short.');
+    if (out.sources && out.sources.length) notes.push(`It looked things up: ${out.sources.length} page${out.sources.length === 1 ? '' : 's'}.`);
     return { ok: true, text, thinking, cut: byLength || blocked || quiet, cutBy: blocked ? 'filter' : byLength ? 'length' : quiet ? 'quiet' : undefined,
-      finish: out.finish, reason, usage: out.usage || null, notes, sent, ...extra };
+      finish: out.finish, reason, usage: out.usage || null, notes, sent, sources: out.sources || [], ...extra };
   }
 }
 
@@ -678,23 +751,148 @@ export async function listModels(conn) {
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 }
 
-/* DOES IT WORK, AND DOES IT THINK AT THE LEVEL SET? Sends exactly what a page
- * sends for the thinking, and says plainly what came back. */
-export async function tryConnection(conn) {
+/* DOES IT WORK, AND DOES IT THINK AT THE LEVEL SET? (Tavern M351, M373) Sends
+ * exactly what a page sends for the thinking — never the page's structured
+ * schema nor its web search, which would answer for themselves — and says
+ * plainly what came back; when a level gave no thinking, asks once more at
+ * the top level, so he is told whether it is this LEVEL or this ADDRESS that
+ * gives none. Then one streamed answer, timed: how soon its first words came
+ * and how fast it writes. */
+export const SPEED_ASK = 'Write three short paragraphs, about three hundred words in all, of rain on a window at night.';
+export const SPEED_MAX_TOKENS = 1200;
+
+export function speedWords(m) {
+  if (!m) return '';
+  const secs = (ms) => (ms < 1000 ? (ms / 1000).toFixed(2) : (ms / 1000).toFixed(1)) + ' s';
+  if (m.firstMs === null) return 'Speed: nothing streamed back to time (' + secs(m.totalMs) + ' in all).';
+  const rate = m.tps !== null ? (m.estimated ? 'about ' : '') + Math.round(m.tps) + ' tokens a second' : 'too short an answer to time its writing';
+  return 'Speed: first words after ' + secs(m.firstMs) + ' · ' + rate + ' (' + m.tokens.toLocaleString() + (m.estimated ? ' tokens, estimated from its length' : ' tokens') + ' in ' + secs(m.totalMs) + ').';
+}
+
+/* one streamed answer, timed, with his own settings */
+export async function measureSpeed(conn, { now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) } = {}) {
+  const t0 = now();
+  let first = null;
+  let words = '';
+  const mark = () => { if (first === null) first = now() - t0; };
+  const out = await ask(conn, { build: () => ({ messages: [{ role: 'user', content: SPEED_ASK }], maxTokens: SPEED_MAX_TOKENS }), stream: true, noStructured: true, noSearch: true,
+    onText: (t) => { mark(); words += t; }, onThinking: (t) => { mark(); words += t; } });
+  if (!out.ok) return null;
+  const totalMs = now() - t0;
+  const counted = out.usage && Number.isFinite(out.usage.out) ? out.usage.out : null;
+  const tokens = counted !== null ? counted : estimateTokens(words);
+  const writing = first === null ? 0 : totalMs - first;
+  const tps = first !== null && writing >= 250 && tokens >= 20 ? tokens / (writing / 1000) : null;
+  return { firstMs: first === null ? null : Math.round(first), totalMs: Math.round(totalMs), tokens, estimated: counted === null, tps };
+}
+
+export async function tryConnection(conn, { speed = true } = {}) {
   const level = conn && conn.thinking ? String(conn.thinking) : '';
-  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: false, worker: false });
+  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: false, worker: false, noStructured: true, noSearch: true });
   const first = await go(conn);
   if (!first.ok) return { ok: false, words: `Not working — ${first.error}` };
   const answered = String(first.text || '').trim();
   const said = answered ? ` It answered “${answered.slice(0, 30)}”.` : ` It wrote no answer — ${emptyWhy(first, first.thinking)}.`;
   const at = level ? `Asked at “${level}” (${spokenAs(conn)})` : 'Asked with nothing said about thinking, so the model decided';
   const pf = describePrefill(conn);
+  let verdict;
+  let thinks = false;
+  if (String(first.thinking || '').trim()) { thinks = true; verdict = `${at} — ${first.thinking.trim().length.toLocaleString()} characters of thinking came back. Thinking works on this connection.`; }
+  else if (first.thinkTokens > 0) { thinks = true; verdict = `${at} — it reported ${first.thinkTokens.toLocaleString()} thinking tokens, so the model DID think — this address keeps the words to itself.`; }
+  else if (first.hiddenThought) { thinks = true; verdict = `${at} — it thought, and the provider kept the thinking hidden.`; }
+  else if (level === 'off' || !level) verdict = `${at} — it answered without thinking.`;
+  else if (level === 'max') verdict = `${at} — the answer came, but NO thinking with it. At the top level too, so this address sends no thinking back at all — the model may still think inside it.`;
+  else {
+    /* none at this level: once more at the top, to tell the level from the address */
+    const top = await go({ ...conn, thinking: 'max' });
+    const back = top.ok && (String(top.thinking || '').trim() || top.thinkTokens > 0 || top.hiddenThought);
+    verdict = `${at} — the answer came, but NO thinking with it.` + (!top.ok ? ' (The top level was refused, so it could not be compared.)'
+      : back ? ` Asked again at “max” — ${String(top.thinking || '').trim() ? `${String(top.thinking).trim().length.toLocaleString()} characters came back` : top.thinkTokens > 0 ? `${top.thinkTokens.toLocaleString()} thinking tokens were reported` : 'it thought, kept hidden'}. So it is this LEVEL that gives none here, not the address: choose a higher one.`
+        : ' Nor at “max” — this address sends no thinking back at any level, though the model may still think inside it.');
+  }
+  const m = speed ? await measureSpeed(conn) : null;
   const tail = (pf ? ` Prefill: ${pf}` : '') + (first.notes.length ? ' ' + first.notes.join(' ') : '');
-  if (String(first.thinking || '').trim()) return { ok: true, thinks: true, words: `Working. ${at} — ${first.thinking.trim().length.toLocaleString()} characters of thinking came back.${said}${tail}` };
-  if (first.thinkTokens > 0) return { ok: true, thinks: true, words: `Working. ${at} — it thought ${first.thinkTokens.toLocaleString()} tokens' worth and kept the thinking to itself.${said}${tail}` };
-  if (first.hiddenThought) return { ok: true, thinks: true, words: `Working. ${at} — it thought, and the provider kept the thinking hidden.${said}${tail}` };
-  if (level === 'off' || !level) return { ok: true, thinks: false, words: `Working. ${at} — it answered without thinking.${said}${tail}` };
-  return { ok: true, thinks: false, words: `Working. ${at} — no thinking came back (the address may keep it to itself).${said}${tail}` };
+  return { ok: true, thinks, speed: m, words: `Working. ${verdict}${said}${m ? ' ' + speedWords(m) : ''}${tail}` };
+}
+
+/* "Test it" — THE PREFILL'S OWN PROBE (Tavern M22-D, M328, M329, M587): a tiny
+ * exchange with the prefill applied exactly as a page applies it — the
+ * thinking dial, the seed, the two field names, the beta address — and the
+ * reply READ: did the model think on from the seed, did the reply go on from
+ * his words. Set to Structured, it asks the structured way, with the very
+ * schema a page carries. A refusal teaches the connection, as on a page; a
+ * fresh yes lifts an old refusal (clearDown). Returns {ok, words, clearDown}. */
+async function rawCall(req) {
+  try {
+    const res = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream: false }) });
+    if (!res.ok) return { ok: false, status: 0, detail: `the phone’s server answered ${res.status}` };
+    let data = null;
+    try { data = await res.json(); } catch (_) { return { ok: false, status: 0, detail: 'the answer could not be read' }; }
+    if (data && data.error) return { ok: false, status: Number(data.status) || 0, detail: String((data.error === 'provider' || data.error === 'transport' ? data.detail : data.detail || data.error) || ''), transport: data.error === 'transport' };
+    return { ok: true, data };
+  } catch (_) {
+    return { ok: false, status: 0, detail: '', phone: true };
+  }
+}
+export async function testPrefill(conn) {
+  const prefill = String((conn && conn.prefill) || '');
+  if (!prefill.trim()) return { ok: false, words: 'There’s no prefill to try — write one first.' };
+  /* a refusal of before is set aside for the probe: it asks afresh */
+  const fresh = { ...conn, learned: conn.learned ? { ...conn.learned, prefillDownAt: null, structuredDownAt: null } : conn.learned };
+  const plan = structuredPlanFor(fresh);
+  if (plan) {
+    const req = buildRequest(fresh, { messages: [{ role: 'user', content: 'Write one short paragraph of a story — a gate at dawn.' }], maxTokens: 600, stream: false, noSearch: true });
+    const r = await rawCall(req);
+    if (!r.ok) {
+      if (r.phone) return { ok: false, words: 'The phone’s server could not be reached (is Cozy Novel still running in Termux?).' };
+      if (STRUCTURED_REFUSAL.test(r.detail || String(r.status))) {
+        learn(conn, { structuredDownAt: Date.now() });
+        return { ok: false, words: `This model would not take a structured prefill (${plainError(r.detail, r.status).slice(0, 140)}) — its pages will get the prefill as written.` };
+      }
+      return { ok: false, words: `It refused the test — ${plainError(r.detail, r.status, { transport: r.transport })}.` };
+    }
+    const said = (readAnswer(req.wire, r.data).text) || '';
+    const words = unwrapStructured(said, { hidden: plan.hidden });
+    const opening = readTemplate(plan.template).shown.split(/\[\[/)[0].replace(/<\/?think>/g, '').trim();
+    let held = false;
+    try { held = new RegExp(plan.schema.properties.response.pattern).test(unwrapStructured(said)); } catch (_) { held = false; }
+    if (held) return { ok: true, clearDown: true, words: 'Structured works on this model — its answer opened ' + (opening ? 'with “' + opening.slice(0, 60) + '”' : 'as your template asks') + ': “' + words.replace(/\s+/g, ' ').slice(0, 120) + '…”' };
+    return { ok: false, words: 'The model answered, but not in the shape asked (the provider did not hold it to the schema): “' + String(said).replace(/\s+/g, ' ').slice(0, 120) + '”. Its pages may not open with your words — As written may serve better here.' };
+  }
+  const req = buildRequest(fresh, { messages: [{ role: 'user', content: 'A' }, { role: 'assistant', content: 'B' }, { role: 'user', content: 'C' }], maxTokens: 8, stream: false, noSearch: true, noStructured: true });
+  if (!req.prefill || !req.prefill.applied) {
+    const why = prefillPlan(fresh).why;
+    return { ok: false, words: why ? `${why} Nothing was sent.` : 'This address has no known way to start the reply for it — nothing was sent.' };
+  }
+  const seeded = Boolean(req.prefill.seed);
+  const body = req.body;
+  if (seeded) {
+    /* room for a first few words of thinking to come back and be seen */
+    for (const k of ['max_tokens', 'max_completion_tokens']) if (k in body) body[k] = 96;
+  } else {
+    for (const k of ['reasoning', 'reasoning_effort', 'thinking', 'enable_thinking', 'model_options', 'output_config']) delete body[k];
+  }
+  const r = await rawCall(req);
+  if (!r.ok) {
+    if (r.phone) return { ok: false, words: 'The phone’s server could not be reached (is Cozy Novel still running in Termux?).' };
+    if ((r.status === 400 || r.status === 422) && PREFILL_REFUSAL.test(r.detail)) {
+      learn(conn, { prefillDownAt: Date.now() });
+      return { ok: false, words: 'Won’t take a prefill — sent without it from here on, until the model changes.' };
+    }
+    return { ok: false, words: `It refused the test — ${plainError(r.detail, r.status, { transport: r.transport })}.` };
+  }
+  const got = readAnswer(req.wire, r.data);
+  const thought = String(got.thinking || '').trim();
+  const saidBack = String(got.text || '').trim();
+  const clip = (t) => (t.length > 70 ? t.slice(0, 70) + '…' : t);
+  if (seeded) {
+    if (thought) return { ok: true, clearDown: true, words: 'Working — the model took your seed and thought on from it: “…' + clip(thought) + '”' };
+    if (saidBack) return { ok: false, words: 'Accepted, but NO thinking came back — this model answered straight away (“' + clip(saidBack) + '”), so a seed steers nothing here. It may not think, or this address drops the thinking field.' };
+    return { ok: false, words: 'Accepted, but nothing came back in this short probe — it cannot tell whether the seed was used.' };
+  }
+  const started = String(req.prefill.content || '');
+  if (saidBack && started && saidBack.startsWith(started)) return { ok: true, clearDown: true, words: 'Took it — this address echoes your words back before going on (the app never doubles them).' };
+  return { ok: true, clearDown: true, words: saidBack ? 'Working — the reply went on from your words: “' + clip(started) + '” → “' + clip(saidBack) + '”' : 'Took it — the address accepted a started reply (nothing came back in this short probe to show).' };
 }
 
 export { wireOf };

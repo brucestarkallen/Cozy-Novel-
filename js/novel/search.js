@@ -121,10 +121,14 @@ export function searchBook({ novel, chapters = {}, talk = null, plays = [], quer
   }
   for (const [field, words] of BOOK_WORDS) if (novel[field]) add({ where: 'book', label: words, group: 'About this book', field }, novel[field]);
   /* the words a turn shows: the partner's without its blocks, the narrator's without its offers */
-  for (const t of (talk && talk.turns) || []) {
-    const v = picked(t);
-    const shown = v && (t.by === 'you' ? v.text : wordsOf(v.text));
-    if (shown) add({ where: 'talk', label: t.by === 'you' ? 'You' : 'Your partner', group: 'Partner', turnId: t.id }, shown);
+  /* every conversation with the partner: the open one, and the others (a tap opens that one) */
+  const talks = talk ? [{ convId: null, name: '', turns: talk.turns || [] }, ...(talk.convs || []).map((c) => ({ convId: c.id, name: c.name || '', turns: c.turns || [] }))] : [];
+  for (const c of talks) {
+    for (const t of c.turns) {
+      const v = picked(t);
+      const shown = v && (t.by === 'you' ? v.text : wordsOf(v.text));
+      if (shown) add({ where: 'talk', label: t.by === 'you' ? 'You' : 'Your partner', group: c.convId ? `Partner — ${c.name}` : 'Partner', turnId: t.id, ...(c.convId ? { convId: c.convId } : {}) }, shown);
+    }
   }
   for (const p of plays || []) {
     for (const t of p.turns || []) {

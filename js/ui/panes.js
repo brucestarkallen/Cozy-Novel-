@@ -11,7 +11,7 @@ import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, 
 import { numberWords, plural, timeAgo, nameKey } from '../util.js';
 import { showSent } from './sent.js';
 import { thinkBox, updateThinkBox } from './think.js';
-import { wordsOf, changesComing } from '../novel/changes.js';
+import { wordsOf, changesComing, editableOf } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
 import { paced, follower, streamLines } from './live.js';
 import { drawProse, growProse } from './prose.js';
@@ -161,7 +161,7 @@ export function showTurn(kind, id, turnId) {
 }
 export function closeRight(fromBack = false) {
   if (!P.rightOpen) return;
-  if (fullKind() === 'scene') leaveFull();
+  if (fullKind() === 'scene' || fullKind() === 'partner') leaveFull();
   P.rightOpen = false;
   ui.right.classList.remove('open');
   if (!P.leftOpen) ui.scrim.classList.remove('on');
@@ -215,18 +215,18 @@ function chapterMenu(anchor, id, i) {
   const n = store.peek('novel', P.novelId);
   const c = store.peek('chapter', id);
   menu(anchor, [
-    { label: 'Name it', run: async () => {
+    { label: 'Name it', hint: 'A name of yours stays: the helper never renames it.', run: async () => {
       const name = await askText('Name the chapter', { value: (c && c.name) || '', placeholder: 'A short name', yes: 'Name it' });
       if (name === null) return;
       /* cleared by him: it stays without a name (the helper does not name it again) */
       store.change('chapter', id, chapterSteps.setName(name.trim().slice(0, 120), 'you'), { now: true });
     } },
-    i > 0 ? { label: 'Move it earlier', run: () => { store.change('novel', P.novelId, novelSteps.moveChapter(id, i - 1), { now: true }); } } : null,
-    i < n.order.length - 1 ? { label: 'Move it later', run: () => { store.change('novel', P.novelId, novelSteps.moveChapter(id, i + 1), { now: true }); } } : null,
-    { label: 'Earlier copies of this chapter', run: () => earlierCopies(id) },
-    c && c.summary && c.summary.text ? { label: 'Its summary', run: () => { const s = openSheet(chapterLabel(n, c)); s.body.append(h('p', { style: { lineHeight: '1.6', whiteSpace: 'pre-wrap' } }, c.summary.text)); } } : null,
+    i > 0 ? { label: 'Move it earlier', hint: 'One place up the book.', run: () => { store.change('novel', P.novelId, novelSteps.moveChapter(id, i - 1), { now: true }); } } : null,
+    i < n.order.length - 1 ? { label: 'Move it later', hint: 'One place down the book.', run: () => { store.change('novel', P.novelId, novelSteps.moveChapter(id, i + 1), { now: true }); } } : null,
+    { label: 'Earlier copies of this chapter', hint: 'Bring the chapter back as it was at an earlier time.', run: () => earlierCopies(id) },
+    c && c.summary && c.summary.text ? { label: 'Its summary', hint: 'What rides for this chapter once the book is longer than the model holds.', run: () => { const s = openSheet(chapterLabel(n, c)); s.body.append(h('p', { style: { lineHeight: '1.6', whiteSpace: 'pre-wrap' } }, c.summary.text)); } } : null,
     '-',
-    n.order.length > 1 ? { label: 'Remove the chapter', danger: true, run: () => removeChapter(id) } : null,
+    n.order.length > 1 ? { label: 'Remove the chapter', hint: 'To Recently deleted for thirty days.', danger: true, run: () => removeChapter(id) } : null,
   ]);
 }
 
@@ -311,6 +311,7 @@ function drawSide() {
   if (!ui) return;
   /* full screen belongs to a scene: anything else beside the page goes back to its column */
   if (fullKind() === 'scene' && !(P.side === 'play' && P.playId)) leaveFull();
+  if (fullKind() === 'partner' && P.side !== 'partner') leaveFull();
   keepTyped();
   /* the notes drawn again (the helper read something) stay where he had scrolled them */
   const scroll = ui.right.dataset.tab === P.side && P.side === 'notes' ? ui.rightBody.scrollTop : 0;
@@ -338,18 +339,22 @@ function drawNotes() {
   const card = h('div.lightcard', l.words);
   const row = h('div.row');
   const u = n.memory && n.memory.undo;
-  if (u && ((Array.isArray(u.cards) ? u.cards.length : u.notes) || (u.kept && Object.keys(u.kept).length))) row.append(h('button.btn.small', { onclick: () => { if (archivist.undoLast(P.novelId)) toast('What that reading changed is put back — anything you edited since stays as you left it.'); drawSide(); } }, 'Undo the last reading'));
-  row.append(h('button.btn.quiet.small', { onclick: async () => {
+  if (u && ((Array.isArray(u.cards) ? u.cards.length : u.notes) || (u.kept && Object.keys(u.kept).length))) row.append(h('button.btn.small', { title: 'Puts back only what the helper’s last reading changed — a card you edited since stays as you left it.', onclick: () => { if (archivist.undoLast(P.novelId)) toast('What that reading changed is put back — anything you edited since stays as you left it.'); drawSide(); } }, 'Undo the last reading'));
+  row.append(h('button.btn.quiet.small', { title: 'The helper reads every chapter from the start and writes the notes and summaries afresh.', onclick: async () => {
     if (!(await confirmIt('Read the whole book again?', 'The helper reads every chapter from the start and writes the notes and summaries afresh — and, for a book set to Automatic, What it’s about and How it reads (never your own words, nor a correction of yours). What is there now can be put back with Undo.', 'Read it again'))) return;
     archivist.readAgain(P.novelId);
     drawSide();
   } }, 'Read the whole book again'));
   card.append(row);
-  if (u && u.changed && u.changed.length && (Date.now() - u.at) < 30 * 60 * 1000) {
-    card.append(h('div', { style: { marginTop: '8px', fontSize: '12.5px' } }, `Last reading (${u.label}, ${timeAgo(u.at)}): ` + u.changed.slice(0, 8).map((c) => `${c.how === 'new' ? 'new' : c.how === 'gone' ? 'took out' : 'updated'} ${c.name}`).join(', ') + (u.changed.length > 8 ? '…' : '')));
-  }
+  /* what the light on a card means — every card is sent, lit or not */
+  const lit = (n.memory && n.memory.lit) || (u && u.changed && u.changed.length ? { at: u.at, label: u.label, changed: u.changed } : null);
+  const how = new Map((lit && lit.changed || []).map((c) => [c.kind + ':' + nameKey(c.name), c.how]));
+  const gone = (lit && lit.changed || []).filter((c) => c.how === 'gone').map((c) => c.name);
+  card.append(h('p.notekey',
+    'Every card here goes to the writer before every page, lit or not. ',
+    lit ? h('span', h('b.lit', 'Lit'), ` — what the helper changed last (${lit.label}, ${timeAgo(lit.at)}): marked `, h('b', 'new'), ' or ', h('b', 'updated'), gone.length ? `; took out ${gone.slice(0, 6).join(', ')}${gone.length > 6 ? '…' : ''}` : '', '. ') : null,
+    h('b.yours', 'Yours'), ' — a card you wrote or changed (or your partner changed for you): the helper keeps where they are now and how they stand with others, never your words. Each version of a passage keeps its own notes: another take or a rewrite takes the old version’s notes back out, and the arrows bring a version’s notes back with it.'));
   ui.rightBody.append(card);
-  const fresh = new Set((u && u.changed || []).map((c) => c.kind + ':' + nameKey(c.name)));
   for (const kind of NOTE_KINDS) {
     const cards = (n.notes && n.notes[kind]) || [];
     const key = 'notes.' + kind;
@@ -360,8 +365,12 @@ function drawNotes() {
     const box = h('div.cards');
     const sorted = kind === 'threads' ? [...cards].sort((a, b) => (a.open === false) - (b.open === false)) : cards;
     for (const c of sorted) {
-      box.append(h('div.card' + (fresh.has(kind + ':' + nameKey(c.name)) ? '.fresh' : '') + (kind === 'threads' && c.open === false ? '.closed' : ''), { onclick: () => editCard(kind, c.id) },
-        h('div.nm', c.name + (kind === 'threads' && c.open === false ? ' — closed' : '')),
+      const state = how.get(kind + ':' + nameKey(c.name));
+      const mine = Boolean(c.updated && c.updated.by === 'you');
+      box.append(h('div.card' + (state ? '.fresh' : '') + (kind === 'threads' && c.open === false ? '.closed' : ''), { onclick: () => editCard(kind, c.id) },
+        h('div.nm', c.name + (kind === 'threads' && c.open === false ? ' — closed' : ''),
+          state ? h('span.ctag.lit', state === 'new' ? 'new' : 'updated') : null,
+          mine ? h('span.ctag.yours', 'yours') : null),
         c.aka && c.aka.length ? h('div.aka', 'also ' + c.aka.join(', ')) : null,
         c.about ? h('div.ab', c.about) : null,
         kind === 'people' && c.ties ? h('div.nw.ties', h('b', 'With others'), c.ties) : null,
@@ -371,6 +380,36 @@ function drawNotes() {
     sec.append(head, box);
     ui.rightBody.append(sec);
   }
+  ui.rightBody.append(readingsSection());
+}
+
+/* Each reading the helper made — the notes' checkpoints, one for every
+ * version of every passage it read, newest first: what it read and what it
+ * changed, with Put back (only what it changed, wherever the card still
+ * reads so) and Read again (put back, and that passage read afresh). */
+function readingsSection() {
+  const key = 'cozynovel.fold.notes.readings';
+  const open = kept(key) === 'open';
+  const rows = archivist.readingsList(P.novelId);
+  const sec = h('section.notesec' + (open ? '.open' : ''));
+  const head = h('button.sechead', { 'aria-expanded': String(open), onclick: () => { const now = sec.classList.toggle('open'); head.setAttribute('aria-expanded', String(now)); keep(key, now ? 'open' : 'closed'); } },
+    h('span.chev', icon('chev', 14)), h('h3', 'Readings — each version’s notes'), h('span.count', String(rows.length)));
+  const box = h('div.cards');
+  box.append(h('p.notekey', 'Every reading the helper made, newest first — the notes’ checkpoint for that version of that passage. Picking a version with the arrows brings its notes back. Put back takes out only what that reading changed (a card you or a later reading changed since stays); Read again puts it back and reads that passage afresh.'));
+  if (!rows.length) box.append(h('p.notekey', 'None kept yet — each reading from now on is.'));
+  for (const r of rows.slice(0, 40)) {
+    const what = r.changed.length ? r.changed.slice(0, 6).map((c) => `${c.how === 'new' ? 'new' : c.how === 'gone' ? 'took out' : 'updated'} ${c.name}`).join(', ') + (r.changed.length > 6 ? '…' : '') : 'changed nothing';
+    const state = r.live ? 'in the notes now' : r.shown ? 'the version on show — not read into the notes yet' : 'an earlier version — its notes come back when you pick it';
+    box.append(h('div.card.reading' + (r.live ? '.fresh' : ''),
+      h('div.nm', r.label, h('span.ctag' + (r.live ? '.lit' : ''), r.live ? 'in the notes' : r.shown ? 'on show' : 'earlier version')),
+      h('div.ab', `${timeAgo(r.at)} · ${what}`),
+      h('div.nw', state),
+      r.live ? h('div.row', { style: { display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' } },
+        h('button.btn.small.quiet', { title: 'Takes out only what this reading changed; a card changed since stays as it is.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid)) toast('What that reading changed is put back — anything changed since stays as it is.'); drawSide(); } }, 'Put back'),
+        h('button.btn.small.quiet', { title: 'Puts it back, then the helper reads that passage afresh.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid, { readAgain: true })) toast('Put back — the helper reads that passage again in a moment.'); drawSide(); } }, 'Read again')) : null));
+  }
+  sec.append(head, box);
+  return sec;
 }
 
 function editCard(kind, id) {
@@ -435,9 +474,10 @@ async function drawPartner() {
   if (t) talk.repairStaleTurns('talk', novelId);
   if (!P.offs.talkSub) { P.offs.push(store.subscribe('talk', novelId, () => { if (P.side === 'partner' && !drawnAlready('talk', novelId)) drawPartnerSoon(); })); P.offs.talkSub = true; }
   ui.rightBody.textContent = '';
+  ui.rightBody.append(conversationRow(novelId, t));
   const box = h('div.talk');
   const turns = (t && t.turns) || [];
-  if (!turns.length) box.append(h('p.hint', `Talk the book over — a stuck scene, what someone would really do, where it could go next. Your partner knows the whole book and the notes, and when you ask, it makes the change itself: a passage (by its number on the page, like “Chapter Two, passage 3”), a chapter’s name, what the book is about, a card in the notes. Every change shows here with its Undo.`));
+  if (!turns.length) box.append(h('p.hint', `Talk the book over — a stuck scene, what someone would really do, where it could go next. Your partner knows the whole book and the notes, and when you ask, it makes the change itself: a passage (by its number on the page, like “Chapter Two, passage 3”), the same words across chapters, a name everywhere at once, a chapter’s name or summary, what the book is about, a card in the notes, a module’s words. Every change shows here with its Undo. Quick asks (⋯ beside Send) checks the notes against the book, tidies them, finds what contradicts itself, and more.`));
   for (const turn of turns) box.append(drawTurn('talk', novelId, turn));
   ui.rightBody.append(box);
   const ta = h('textarea', { rows: 1, placeholder: 'Ask your partner…', 'aria-label': 'Ask your partner' });
@@ -454,12 +494,38 @@ async function drawPartner() {
   } }, working ? 'Stop' : 'Send');
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
   ui.rightFoot.hidden = false;
-  ui.rightFoot.append(ta, h('div.crow', turns.length ? h('button.btn.quiet.small', { onclick: clearTalk }, 'Start over') : null, h('span.grow'), send));
+  const quick = h('button.btn.quiet.small', { 'aria-label': 'Quick asks', title: 'Quick asks — ready-made requests for your partner', disabled: working, onclick: (e) => quickAsks(e.currentTarget, ta, send) }, icon('more', 16), 'Quick asks');
+  ui.rightFoot.append(ta, h('div.crow', turns.length ? h('button.btn.quiet.small', { title: 'This conversation’s talk goes and it begins again — the changes it made stay in the book. With Undo.', disabled: working, onclick: clearTalk }, 'Start over') : null, h('span.grow'), quick, send));
   autoGrow(ta, 0.3);
   restoreTyped('talk:' + novelId);
   P.drawn = 'talk:' + novelId + turnsSig(t);
   placeSide();
 }
+/* Ready-made requests for the partner (Cozy Tavern's housekeeper's quick asks,
+ * made for a book): sent at once, or put in the box for a name. */
+const QUICK = [
+  { label: 'Check the notes against the book', hint: 'It reads the book and its notes and puts right what the notes get wrong or leave out.',
+    ask: 'Read the whole book and its notes. Find anything the notes get wrong or leave out — a name, how someone looks, where someone is now, how two people stand, who knows what, a thread the story has closed or one still open — and put each right in the notes with a changes block, every change with its why. Read whole any chapter you need before you judge; never guess from a summary.' },
+  { label: 'Tidy the notes', hint: 'Cards that are the same merged, what the book no longer holds taken out — nothing true lost.',
+    ask: 'Tidy the notes without losing anything: merge cards that are the same person, place or thing (the others they go by kept), take out what the book no longer holds, close threads the story has resolved, and keep every fact that is still true — as a changes block, each change with its why.' },
+  { label: 'Find what contradicts itself', hint: 'Names, looks, times, who knows what — by passage number, with a fix for each.',
+    ask: 'Read the book for anything that contradicts itself — a name, a look, a time or a day, an injury, who knows what, where someone is — and show me each place by its passage number, with a fix for each in a changes block. Read whole any chapter you only have in short before you say it is wrong.' },
+  { label: 'Four directions the story could go', hint: 'Four real ways forward from here, each with what it costs.',
+    ask: 'Give me four genuinely different directions the story could go from where it stands — each in a few lines: what happens, what it costs the people in it, and what it opens up later. No changes, just the four.' },
+  { label: 'Read a character’s psychology…', hint: 'Type the name after it and send.', fill: 'Read the psychology of ' },
+  { label: 'Critique this chapter', hint: 'An honest editor’s read of the chapter open now — what works, what drags, what rings false.',
+    ask: 'Be my editor for the chapter open now. Read it whole and tell me honestly how the telling works: where it drags or rushes, where a scene lands or falls flat, the voice, the dialogue, anything unclear or that rings false — each by its passage number, with what would make it better. Say what works and why, too. No changes unless I ask for them.' },
+  { label: 'What the next chapter should do', hint: 'Where the book stands and what the next chapter needs to carry.',
+    ask: 'Tell me where the book stands now — what is set up and unresolved, what each of the main people wants, what the reader is waiting for — and what the next chapter should do to carry it. A short, honest answer.' },
+];
+function quickAsks(anchor, ta, send) {
+  menu(anchor, [{ label: 'Quick asks', header: true }, ...QUICK.map((q) => ({ label: q.label, hint: q.hint, run: () => {
+    if (q.fill) { ta.value = q.fill; ta.dispatchEvent(new Event('input')); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); return; }
+    ta.value = q.ask; ta.dispatchEvent(new Event('input'));
+    send.click();
+  } }))]);
+}
+
 function drawPartnerSoon() { if (!partnerFrame) partnerFrame = requestAnimationFrame(() => { partnerFrame = 0; if (P.side === 'partner') drawPartner(); }); }
 
 function giveBack(key, words) {
@@ -469,10 +535,62 @@ function giveBack(key, words) {
 }
 
 async function clearTalk() {
-  if (!(await confirmIt('Start the conversation over?', 'This conversation goes to Recently deleted (Settings → Backups) for thirty days.', 'Start over'))) return;
-  await store.remove('talk', P.novelId).catch(() => {});
-  await talk.ensureTalk(P.novelId);
+  const novelId = P.novelId;
+  if (!(await confirmIt('Start the conversation over?', 'Its talk goes and it begins again; the changes it made stay in the book. (Undo brings the talk back.)', 'Start over'))) return;
+  const out = await talk.startOver(novelId);
+  if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
   drawSide();
+  undoToast('The conversation begins again.', () => { out.undo(); drawSide(); });
+}
+
+/* The partner's conversations (Cozy Tavern's housekeeper sessions): the
+ * open one by name — a tap lists the others, newest used first, and what can
+ * be done with this one — New conversation beside it, and full screen. */
+function conversationRow(novelId, t) {
+  const c = talk.partnerConversations(novelId);
+  const busy = talk.talkBusy('talk', novelId);
+  const full = fullKind() === 'partner';
+  const empty = !((t && t.turns) || []).length && !(t && t.named);
+  return h('div.convrow',
+    h('button.btn.quiet.small.convpick', { title: 'Your conversations with your partner: open another, rename, copy or remove this one', 'aria-label': `Conversation: ${c.open.name}`, onclick: (e) => conversationMenu(e.currentTarget, novelId) }, h('span.convname', c.open.name), icon('down', 14)),
+    h('button.btn.quiet.small', { 'aria-label': 'New conversation', title: 'New conversation — a fresh one for a new question; this one stays in the list', disabled: busy || empty, onclick: async () => {
+      const out = await talk.newConversation(novelId);
+      if (!out.ok) toast(`It couldn’t: ${out.error}.`, 5000);
+      drawSide();
+    } }, icon('plus', 14), 'New'),
+    h('span.grow'),
+    h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: partnerFull }, icon(full ? 'shrink' : 'expand', 18)));
+}
+function conversationMenu(anchor, novelId) {
+  const c = talk.partnerConversations(novelId);
+  const busy = talk.talkBusy('talk', novelId);
+  const run = (fn, done) => async () => {
+    const out = await fn();
+    if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
+    drawSide();
+    if (done) done(out);
+  };
+  menu(anchor, [
+    { label: 'Conversations', header: true },
+    { label: `${c.open.name} — open now`, checked: true, disabled: true },
+    ...c.others.map((x) => ({ label: x.name, hint: `${plural(x.n, 'message')} · last used ${timeAgo(x.at)}`, disabled: busy, run: run(() => talk.openConversation(novelId, x.id)) })),
+    '-',
+    { label: 'Rename this conversation', hint: 'A name to know it by in this list.', run: async () => {
+      const name = await askText('Rename the conversation', { value: c.open.name, yes: 'Rename' });
+      if (name === null || name === undefined || name.trim() === c.open.name) return;
+      const out = await talk.renameConversation(novelId, name);
+      if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
+      drawSide();
+    } },
+    { label: 'Copy this conversation', hint: 'A copy to take another way; this one stays as it is.', disabled: busy || !c.open.n, run: run(() => talk.copyConversation(novelId), (out) => toast(`“${out.name}” is open — the first one is in the list.`, 4000)) },
+    { label: 'Remove this conversation', hint: 'It goes from the list, with Undo; the changes it made stay in the book.', danger: true, disabled: busy || (!c.open.n && !c.others.length), run: run(() => talk.removeConversation(novelId), (out) => undoToast(`“${out.name}” is removed.`, () => { out.undo(); drawSide(); })) },
+  ]);
+}
+/* the partner over the whole screen */
+function partnerFull() {
+  if (fullKind() === 'partner') { leaveFull(); return; }
+  enterFull('partner', () => { ui.right.classList.add('full'); drawSideSoon(); },
+    () => { ui.right.classList.remove('full'); drawSideSoon(); });
 }
 
 /* which replies' thinking he unfolded, so a redraw keeps them open */
@@ -524,6 +642,33 @@ function drawTurn(kind, id, turn) {
     } }, 'Another answer'));
     if (kind === 'talk') row.append(h('button', { onclick: async () => { if (!(await desk.useAsDirection(wordsOf(v.text)))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction'));
     if (v.sent) row.append(h('button', { onclick: () => showSent(P.novelId, v.sent) }, 'What was sent'));
+    /* the answer as it came, its blocks and all (Cozy Tavern's "What it said, whole") */
+    if (kind === 'talk' && String(v.text || '').trim() !== wordsOf(v.text).trim()) row.append(h('button', { title: 'The answer as it came — its changes block and all.', onclick: () => showWhole(v.text) }, 'What it said, whole'));
+    if (kind === 'talk') row.append(h('button', { title: 'A new conversation with everything up to this answer; this one stays as it is.', disabled: talk.talkBusy('talk', id), onclick: async () => {
+      const out = await talk.copyConversation(id, turn.id);
+      if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
+      drawSide();
+      toast(`“${out.name}” is open — the first one is in the list.`, 4000);
+    } }, 'Branch from here'));
+  } else if (kind === 'talk') {
+    /* his words back in the box; this message and everything after it let go — with Undo */
+    row.append(h('button', { title: 'Your words back in the box to change and send again; this message and everything after it are let go (the changes made stay in the book). With Undo.', disabled: talk.talkBusy('talk', id), onclick: async () => {
+      const out = await talk.editAndAskAgain(id, turn.id);
+      if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
+      drawSide();
+      requestAnimationFrame(() => {
+        const ta = ui.rightFoot.querySelector('textarea');
+        if (ta) { ta.value = out.text; ta.dispatchEvent(new Event('input')); ta.focus(); }
+      });
+      undoToast('Your words are in the box.', () => {
+        /* the message is back where it was: the box lets go of the words it was handed, unless he changed them */
+        const ta = ui.rightFoot.querySelector('textarea');
+        if (ta && ta.value === out.text) { ta.value = ''; ta.dispatchEvent(new Event('input')); }
+        if (typed.value === out.text) typed.value = '';
+        out.undo();
+        drawSide();
+      });
+    } }, 'Edit and ask again'));
   }
   const copyWords = turn.by === 'you' ? (v.text || '') : kind === 'talk' ? wordsOf(v.text) : sceneWords(v.text);
   row.append(h('button', { onclick: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') }, 'Copy'));
@@ -537,13 +682,21 @@ function drawTurn(kind, id, turn) {
 const clip = (t, n = 140) => { const s = String(t || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 function whatChanged(c) {
   const op = c.op || {};
+  const u = c.status === 'made' && c.undo && c.undo.what === 'many' ? c.undo : null;
+  /* how many places a change across the book reached */
+  const reach = u ? ` (${[[u.passages, 'passage'], [u.chapters, 'chapter name'], [u.cards, 'card'], [u.book, 'of the book’s words']].filter(([l]) => l && l.length).map(([l, w]) => (w === 'of the book’s words' ? `${l.length} ${w}` : plural(l.length, w))).join(', ') || 'nowhere'})` : '';
+  if (op.rename && typeof op.rename === 'object') return h('span', h('del', clip(op.rename.from, 60)), ' → ', h('ins', clip(op.rename.to, 60)), reach);
+  if (op.passage !== undefined && op.remove === true) return 'taken out of the chapter';
   if (op.remove === true) return 'taken out of the notes';
-  if (op.find !== undefined) return h('span', h('del', clip(op.find, 90)), ' → ', h('ins', clip(op.replace !== undefined ? op.replace : op.text, 90) || '(taken out)'));
+  if (op.find !== undefined) return h('span', h('del', clip(op.find, 90)), ' → ', h('ins', clip(op.replace !== undefined ? op.replace : op.text, 90) || '(taken out)'), reach);
   if (op.passage !== undefined && op.text !== undefined) return `written anew (${plural(countWordsLoose(op.text), 'word')})`;
+  if (op.module !== undefined && op.text !== undefined) return `its words, whole (${plural(countWordsLoose(op.text), 'word')})`;
+  if (op.summary !== undefined) return h('span', h('ins', clip(op.text, 140)));
   if (op.book !== undefined) return op.add !== undefined ? h('span', 'a new paragraph: ', h('ins', clip(op.add))) : h('span', h('ins', clip(op.text)));
   if (op.chapter !== undefined) return h('span', 'named ', h('ins', clip(op.name, 80)));
   if (op.note !== undefined) {
     const bits = ['about', 'ties', 'now'].filter((k) => op[k] !== undefined).map((k) => `${k === 'ties' ? 'with others' : k === 'now' ? 'right now' : 'who they are'}: ${clip(op[k], 80)}`);
+    if (op.newName !== undefined) bits.unshift(`renamed ${clip(op.newName, 60)}`);
     if (typeof op.open === 'boolean') bits.push(op.open ? 'open again' : 'closed');
     return bits.join(' · ') || 'brought up to date';
   }
@@ -555,24 +708,73 @@ function changeList(novelId, turn, v) {
   const act = (fn, changeId) => async () => {
     const out = fn(novelId, turn.id, v.id, changeId);
     if (out && !out.ok && out.said) toast(`It couldn’t: ${out.said}.`, 5000);
+    else if (out && out.partly) toast(`Undone in part: ${out.said}.`, 6000);
     drawSideSoon();
   };
   for (const c of v.changes) {
     const mark = { made: '✓', waiting: '•', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
-    const state = { made: '', waiting: 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: 'undone', skipped: 'left as it was' }[c.status] || '';
+    const state = { made: c.edited ? 'made with your words' : '', waiting: 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: 'left as it was' }[c.status] || '';
     const row = h('div.change.' + c.status,
       h('div.chead', h('b', `${mark} ${c.label}`), state ? h('small', state) : null),
       c.status !== 'refused' ? h('div.cwhat', whatChanged(c)) : null,
       c.why ? h('div.cwhy', c.why) : null);
     const btns = h('div.cbtns');
-    if (c.status === 'made') btns.append(h('button', { onclick: act(talk.undoOneChange, c.id) }, 'Undo'));
-    if (c.status === 'waiting') btns.append(h('button.go', { onclick: act(talk.applyChange, c.id) }, 'Apply'), h('button', { onclick: act(talk.skipChange, c.id) }, 'Leave it'));
+    if (c.copied) {
+      /* copied with the conversation: it is undone or applied where it was made */
+      if (c.status === 'made' || c.status === 'waiting') row.append(h('div.cwhy', 'In the conversation this one was copied from — its Undo and Apply are there.'));
+    } else {
+      if (c.status === 'made') btns.append(h('button', { title: 'Put back what this change changed (only if nothing has changed it since).', onclick: act(talk.undoOneChange, c.id) }, 'Undo'));
+      if (c.status === 'waiting') {
+        btns.append(h('button.go', { title: 'Make this change in the book.', onclick: act(talk.applyChange, c.id) }, 'Apply'));
+        if (editableOf(c.op).length) btns.append(h('button', { title: 'Change its words yourself before it goes into the book.', onclick: () => editByHand(novelId, turn, v, c) }, 'Edit by hand'));
+        btns.append(h('button', { title: 'Leave the book as it is for this one.', onclick: act(talk.skipChange, c.id) }, 'Leave it'));
+      }
+    }
     if (btns.childNodes.length) row.append(btns);
     box.append(row);
   }
-  const waiting = v.changes.filter((c) => c.status === 'waiting');
-  if (waiting.length > 1) box.append(h('div.cbtns', h('button.go', { onclick: async () => { for (const c of waiting) talk.applyChange(novelId, turn.id, v.id, c.id); drawSideSoon(); } }, 'Apply all')));
+  const all = (how) => async () => {
+    const out = talk.settleAll(novelId, turn.id, v.id, how);
+    if (out.failed.length) toast(`${plural(out.failed.length, 'change')} couldn’t: ${out.failed[0]}.`, 6000);
+    else if (out.partly.length) toast(`Undone in part: ${out.partly[0]}.`, 6000);
+    drawSideSoon();
+  };
+  const live = v.changes.filter((c) => !c.copied);
+  const waiting = live.filter((c) => c.status === 'waiting');
+  const made = live.filter((c) => c.status === 'made');
+  if (waiting.length > 1) box.append(h('div.cbtns', h('button.go', { title: 'Every change waiting here, made in the book.', onclick: all('apply') }, 'Apply all'), h('button', { title: 'Leave the book as it is for every change waiting here.', onclick: all('skip') }, 'Leave all')));
+  if (made.length > 1) box.append(h('div.cbtns', h('button', { title: 'Every change this answer made, put back — the newest first; one changed since stays.', onclick: all('undo') }, 'Undo all')));
   return box;
+}
+
+/* Edit by hand (Cozy Tavern's card editor): the words a waiting change would
+ * write, his to change; Apply makes it with his words */
+function editByHand(novelId, turn, v, c) {
+  const fields = editableOf(c.op);
+  if (!fields.length) return;
+  const s = openSheet(`Edit by hand — ${c.label}`, { small: true });
+  const boxes = fields.map((f) => {
+    const ta = h(f.rows > 1 ? 'textarea' : 'input', f.rows > 1 ? { rows: f.rows } : { type: 'text' });
+    ta.value = f.value;
+    return { f, ta };
+  });
+  if (c.op && c.op.find !== undefined) s.body.append(h('p.say', 'In place of: ', h('del', clip(c.op.find, 300))));
+  for (const { f, ta } of boxes) s.body.append(field(f.label, ta));
+  if (c.why) s.body.append(h('p.say', c.why));
+  s.body.append(h('div.btnrow', h('button.btn.primary', { onclick: () => {
+    const patch = Object.fromEntries(boxes.map(({ f, ta }) => [f.key, ta.value]));
+    const out = talk.applyEdited(novelId, turn.id, v.id, c.id, patch);
+    if (out && !out.ok && out.said) { toast(`It couldn’t: ${out.said}.`, 5000); return; }
+    s.close();
+    drawSideSoon();
+  } }, 'Apply'), h('button.btn.quiet', { onclick: () => s.close() }, 'Cancel')));
+  setTimeout(() => { const first = boxes[0] && boxes[0].ta; if (first) first.focus(); }, 50);
+}
+
+/* the partner's answer as it came, its blocks and all */
+function showWhole(text) {
+  const s = openSheet('What it said, whole');
+  s.body.append(h('pre.whole', String(text || '')));
 }
 
 /* a turn taken out, with a few seconds to change his mind */
@@ -603,7 +805,8 @@ function showing(kind, id) { return kind === 'talk' ? P.side === 'partner' && id
 const writingHere = (v) => v.streaming && v.tab === store.CLIENT;
 function turnsSig(rec) {
   if (!rec) return '';
-  return JSON.stringify({ ...rec, turns: (rec.turns || []).map((t) => ((t.versions || []).some(writingHere)
+  /* the conversations put aside show only by name in the list (built when it opens) */
+  return JSON.stringify({ ...rec, convs: (rec.convs || []).map((c) => [c.id, c.name, (c.turns || []).length]), turns: (rec.turns || []).map((t) => ((t.versions || []).some(writingHere)
     ? { ...t, versions: t.versions.map((v) => (writingHere(v) ? { ...v, text: 0, thinking: 0, beat: 0 } : v)) }
     : t)) });
 }
@@ -735,8 +938,8 @@ function drawOnePlay(p) {
     h('div', { style: { flex: '1', minWidth: '0' } }, h('b', { style: { font: '600 18px/1.2 var(--display)' } }, `You play ${p.who}`), h('div', { style: { fontSize: '12.5px', color: 'var(--chrome-soft)' } }, c ? `From ${chapterLabel(n, c, { withName: false })}` : '')),
     h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: () => sceneFull() }, icon(full ? 'shrink' : 'expand', 18)),
     h('button.icon', { 'aria-label': 'More for this scene', onclick: (e) => menu(e.currentTarget, [
-      { label: 'Turn it all into prose (from the start)', run: () => toProse(p, true) },
-      { label: 'Remove this scene', danger: true, run: async () => {
+      { label: 'Turn it all into prose (from the start)', hint: 'The whole scene written into the chapter, not just what is new since last time.', run: () => toProse(p, true) },
+      { label: 'Remove this scene', hint: 'To Recently deleted; prose already written from it stays.', danger: true, run: async () => {
         if (!(await confirmIt('Remove this scene?', 'It goes to Recently deleted (Settings → Backups) for thirty days. Anything already turned into prose stays in the book.', 'Remove it', { danger: true }))) return;
         store.change('novel', P.novelId, novelSteps.removePlay(p.id), { now: true });
         await store.remove('play', p.id).catch(() => {});

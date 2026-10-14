@@ -715,3 +715,46 @@ body.reading .scroller { bottom: 12px; }
 .choice { text-align: left; padding: 9px 12px; border-radius: 12px; border: 1px solid rgba(216,150,58,.35); background: rgba(216,150,58,.08); color: var(--chrome-ink); font: 14px/1.45 var(--ui); }
 .choice:hover { background: rgba(216,150,58,.16); }
 
+
+/* the notes' key: what a lit card means, and a card of his */
+.notekey { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--chrome-soft); }
+.notekey b.lit { color: #e3a85a; font-weight: 600; }
+.notekey b.yours { color: var(--accent); font-weight: 600; }
+.card .ctag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px; font: 600 10.5px/1.6 var(--ui); letter-spacing: .06em; text-transform: uppercase; vertical-align: 3px; }
+.card .ctag.lit { background: rgba(216,150,58,.16); color: #e3a85a; }
+.card .ctag.yours { background: rgba(255,255,255,.08); color: var(--accent); }
+[data-theme="day"] .card .ctag.lit, [data-theme="day"] .notekey b.lit { color: #8a5310; }
+/* a menu item with its small line: what it does */
+.menu-pop button.hinted { flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 12px; }
+.menu-pop button .mhint { display: block; font-size: 12px; line-height: 1.35; color: var(--chrome-soft); font-weight: 400; white-space: normal; }
+.menu-pop button.danger .mhint { color: var(--chrome-soft); }
+.menu-pop button.hinted[aria-checked="true"]::after { position: absolute; right: 12px; }
+.menu-pop button.hinted { position: relative; }
+/* a switch under a box: its line beside it */
+.switchrow { margin-top: -6px; }
+.switchrow .toggle { padding: 4px 0; }
+.switchrow em { margin-top: 0; }
+.presetrow .btn { flex: none; }
+.presetrow .icon { flex: none; width: 36px; height: 36px; }
+.menu-pop { max-height: calc(100vh - 16px); overflow-y: auto; }
+/* the connection editor: Cozy Tavern's quiet lines, its template's example, the counts */
+.say.quiet { font-size: 12.5px; margin: -6px 0 12px; }
+.connform .toggle + .say.quiet, .prefillpart .toggle + .say.quiet { margin-top: -4px; }
+.preset-example { white-space: pre-wrap; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; color: var(--chrome-soft); }
+.quiet-details { margin: 6px 0 12px; }
+.quiet-details summary { cursor: pointer; font-size: 13px; color: var(--chrome-soft); padding: 6px 0; }
+.usagehead { margin: 14px 0 6px; font: 600 15px/1.2 var(--display); }
+.list.usage li b { flex: none; font-weight: 600; }
+.note.sources a { color: var(--accent); }
+.btnrow + .say.quiet { margin-top: 4px; }
+.btnrow + .field, .btnrow + label.field { margin-top: 12px; }
+/* the partner's conversations: the open one by name, New, full screen */
+.convrow { display: flex; align-items: center; gap: 4px; margin: 0 0 10px; flex-wrap: nowrap; min-width: 0; }
+.convrow .convpick { flex: 0 1 auto; min-width: 0; gap: 4px; }
+.convrow .convpick + .btn { flex: none; }
+.convrow .grow { flex: 1 1 0; min-width: 0; }
+.convrow .convname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.convrow .icon { flex: none; width: 36px; height: 36px; }
+.pane.right.full .convrow { position: sticky; top: 0; z-index: 2; background: var(--chrome-solid); padding-top: 8px; }
+/* what the partner said, whole: its blocks too */
+pre.whole { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 0; color: var(--chrome-ink); }

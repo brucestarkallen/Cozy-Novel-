@@ -364,9 +364,9 @@ function controls(p) {
   if (p.versions.length > 1) {
     const i = p.versions.indexOf(v);
     row.append(h('span.ver',
-      h('button', { 'aria-label': 'The version before', disabled: working || i <= 0, onclick: () => pickVersion(p, i - 1) }, icon('left', 16)),
+      h('button', { 'aria-label': 'The version before', title: 'The version before — its notes come back with it', disabled: working || i <= 0, onclick: () => pickVersion(p, i - 1) }, icon('left', 16)),
       h('span', `${i + 1} / ${p.versions.length}`),
-      h('button', { 'aria-label': 'The version after', disabled: working || i >= p.versions.length - 1, onclick: () => pickVersion(p, i + 1) }, icon('right', 16))));
+      h('button', { 'aria-label': 'The version after', title: 'The version after — its notes come back with it', disabled: working || i >= p.versions.length - 1, onclick: () => pickVersion(p, i + 1) }, icon('right', 16))));
   }
   if (live) {
     row.append(h('span', { style: { padding: '0 8px', color: 'var(--ink-faint)' } }, 'Being written…'));
@@ -374,11 +374,11 @@ function controls(p) {
   }
   /* a rewrite of selected words that stopped partway is written again, never carried on from the passage's end */
   const carry = v.cut && v.how !== 'selection';
-  if (carry) row.append(h('button.go', { disabled: working, onclick: () => run(() => writer.goOn({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Go on'));
-  if (writer.takeOf(p)) row.append(h('button', { disabled: working, onclick: () => run(() => writer.anotherTake({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Another take'));
-  row.append(h('button', { disabled: working, onclick: () => { S.rewriting = S.rewriting === p.id ? null : p.id; S.focusNext = 'rewrite'; drawPage(); } }, 'Rewrite…'));
-  row.append(h('button', { disabled: working, onclick: () => openEdit(p.id) }, 'Edit'));
-  row.append(h('button', { 'aria-label': 'More for this passage', onclick: (e) => passageMenu(e.currentTarget, p) }, icon('more', 18)));
+  if (carry) row.append(h('button.go', { title: 'Carry this passage on from its last word', disabled: working, onclick: () => run(() => writer.goOn({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Go on'));
+  if (writer.takeOf(p)) row.append(h('button', { title: 'The same request written again, as a new version — the notes it is written from are the ones before this passage', disabled: working, onclick: () => run(() => writer.anotherTake({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Another take'));
+  row.append(h('button', { title: 'Say what should change; the change becomes what happens, carried through the passage', disabled: working, onclick: () => { S.rewriting = S.rewriting === p.id ? null : p.id; S.focusNext = 'rewrite'; drawPage(); } }, 'Rewrite…'));
+  row.append(h('button', { title: 'Change the words yourself — a new version, the old one an arrow away', disabled: working, onclick: () => openEdit(p.id) }, 'Edit'));
+  row.append(h('button', { 'aria-label': 'More for this passage', title: 'More for this passage', onclick: (e) => passageMenu(e.currentTarget, p) }, icon('more', 18)));
   /* what to know about this version, in a line — first, its number on the page */
   const bits = [];
   const num = passageNumbers(c).get(p.id);
@@ -395,6 +395,7 @@ function controls(p) {
   if (bits.length) row.append(h('div.note', bits.join(' · ')));
   if (v.cut) row.append(h('div.note.warn', `It stopped partway${v.cutWhy ? ` (${v.cutWhy})` : ''}. ${carry ? 'Go on carries it on from the last word.' : 'Another take writes it again.'}`));
   if (v.notes && v.notes.length) row.append(h('div.note', v.notes.join(' ')));
+  if (v.sources && v.sources.length) row.append(h('div.note.sources', 'Looked up: ', ...v.sources.slice(0, 8).flatMap((x, k) => [k ? ' · ' : '', h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer' }, String(x.title || x.url).slice(0, 80))])));
   return row;
 }
 
@@ -422,15 +423,15 @@ function passageMenu(anchor, p) {
   const v = picked(p) || {};
   const i = c.passages.indexOf(p);
   menu(anchor, [
-    v.sent ? { label: 'What the writer was sent', run: () => showSent(S.novelId, v.sent) } : null,
-    { label: 'Copy the words', run: async () => { toast((await copyText(v.text || '')) ? 'Copied.' : 'It could not be copied.'); } },
+    v.sent ? { label: 'What the writer was sent', hint: 'Every word of the request this version was written from.', run: () => showSent(S.novelId, v.sent) } : null,
+    { label: 'Copy the words', hint: 'This passage as it shows, to paste anywhere.', run: async () => { toast((await copyText(v.text || '')) ? 'Copied.' : 'It could not be copied.'); } },
     '-',
-    { label: 'Write from here (a passage after this one)', disabled: busy(), run: () => { S.insertAfter = p.id; S.sel = null; drawComposer(); ui.direction.focus(); } },
-    { label: 'Add a scene break after this', run: () => { writer.addBreak({ chapterId: c.id, after: p.id }); } },
-    i > 0 ? { label: 'Start a new chapter from here', disabled: busy(), run: () => splitHere(p) } : null,
+    { label: 'Write from here (a passage after this one)', hint: 'A new passage between this one and the next, written to fit both.', disabled: busy(), run: () => { S.insertAfter = p.id; S.sel = null; drawComposer(); ui.direction.focus(); } },
+    { label: 'Add a scene break after this', hint: 'A * * * line: a new scene begins after it.', run: () => { writer.addBreak({ chapterId: c.id, after: p.id }); } },
+    i > 0 ? { label: 'Start a new chapter from here', hint: 'This passage and everything after it become the next chapter.', disabled: busy(), run: () => splitHere(p) } : null,
     '-',
-    p.versions.length > 1 ? { label: 'Remove this version', danger: true, run: () => removeVersion(p, v) } : null,
-    { label: 'Remove the passage', danger: true, run: () => removePassage(p) },
+    p.versions.length > 1 ? { label: 'Remove this version', hint: 'Only the version on show goes; its notes go with it.', danger: true, run: () => removeVersion(p, v) } : null,
+    { label: 'Remove the passage', hint: 'With Undo; anything only it put in the notes goes too.', danger: true, run: () => removePassage(p) },
   ]);
 }
 
@@ -438,6 +439,8 @@ function pickVersion(p, i) {
   const v = p.versions[i];
   if (!v) return;
   store.change('chapter', S.chapterId, chapterSteps.pick(p.id, v.id));
+  /* a version read before brings its own notes back at once (readings.js) */
+  archivist.settle(S.novelId);
   archivist.nudge(S.novelId, 8000);
   drawPage();
 }
@@ -484,6 +487,7 @@ function finishEdit(pid, text) {
 function removeVersion(p, v) {
   archivist.retireIfSeen(S.novelId, S.chapterId, p.id, v.id);
   store.change('chapter', S.chapterId, chapterSteps.removeVersion(p.id, v.id), { now: true });
+  archivist.settle(S.novelId);
   archivist.nudge(S.novelId);
   writer.recount(S.novelId);
   drawPage();
@@ -496,6 +500,7 @@ function removePassage(p) {
   const copy = JSON.parse(JSON.stringify(p));
   archivist.retireIfSeen(S.novelId, S.chapterId, p.id);
   store.change('chapter', S.chapterId, chapterSteps.removePassage(p.id), { now: true });
+  archivist.settle(S.novelId);
   archivist.nudge(S.novelId, 9000);
   writer.recount(S.novelId);
   S.undo = { chapterId: S.chapterId, passage: copy, after };
@@ -504,7 +509,11 @@ function removePassage(p) {
     const u = S.undo;
     if (!u) return;
     store.change('chapter', u.chapterId, chapterSteps.addPassage(u.passage, u.after), { now: true });
+    /* back in its place: nothing of it is taken out any more — and the
+     * notes it made, taken back when it went, come back at once */
+    store.change('chapter', u.chapterId, chapterSteps.clearRetired([u.passage.id]), { now: true });
     S.undo = null;
+    archivist.settle(S.novelId);
     archivist.nudge(S.novelId);
     writer.recount(S.novelId);
     drawPage();
@@ -608,7 +617,7 @@ function lengthMenu() {
   const cur = (n.prefs && n.prefs.length) || 'scene';
   menu(ui.lengthBtn, [
     { label: 'How much to write', header: true },
-    ...Object.entries(LENGTHS).map(([k, L]) => ({ label: L.label + (L.hint ? ` (${L.hint})` : L.words[0] ? ` (about ${L.words[0].toLocaleString()}–${L.words[1].toLocaleString()} words)` : ''), checked: k === cur, run: () => { store.change('novel', S.novelId, novelSteps.setPref('length', k)); drawComposer(); } })),
+    ...Object.entries(LENGTHS).map(([k, L]) => ({ label: L.label, hint: L.hint ? `${L.hint.charAt(0).toUpperCase()}${L.hint.slice(1)}.` : L.words[0] ? `About ${L.words[0].toLocaleString()}–${L.words[1].toLocaleString()} words.` : 'To where the chapter would naturally end.', checked: k === cur, run: () => { store.change('novel', S.novelId, novelSteps.setPref('length', k)); drawComposer(); } })),
   ]);
 }
 
@@ -619,7 +628,7 @@ function outcomeMenu() {
   const cur = outcomeOf(n);
   menu(ui.outcomeBtn, [
     { label: 'Who decides how it turns out', header: true },
-    ...Object.entries(OUTCOMES).map(([k, o]) => ({ label: `${o.label} — ${o.hint}`, checked: k === cur, run: () => {
+    ...Object.entries(OUTCOMES).map(([k, o]) => ({ label: o.label, hint: `${o.hint.charAt(0).toUpperCase()}${o.hint.slice(1)}.`, checked: k === cur, run: () => {
       store.change('novel', S.novelId, novelSteps.setPref('outcome', k === 'writer' ? '' : k), { now: true });
       drawComposer();
     } })),

@@ -175,6 +175,13 @@ export function spliceSelection(fullText, start, end, answer) {
   return { text: before + lead + a + trail + after, from: start + lead.length, to: start + lead.length + a.length };
 }
 
+/* The helper, while it is reading this book right now: a page waits for it
+ * five seconds at most, so its newest notes ride (Cozy Tavern M3); past that
+ * the page goes, and its notes say which passages they have not read yet
+ * (context.js). archivist.js sets this. */
+let notesWait = null;
+export function setNotesWait(fn) { notesWait = fn; }
+
 /* -------------------------------------------------------- the one loop */
 
 /* Write one version: kind 'new' (a passage), 'version' (another on a passage),
@@ -207,6 +214,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
    * one whose window closed */
   const beating = setInterval(() => { if (Date.now() - lastSave > 25000) checkpoint(); }, 30000);
   try {
+    if (notesWait) { try { await notesWait(novelId, 5000, ctl.signal); } catch (_) { /* it goes anyway */ } }
     const out = await ask(conn, {
       build: (c) => {
         const { novel, chapters } = bookNow(novelId);
@@ -252,6 +260,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       stopped: out.stopped ? true : undefined,
       cutWhy,
       notes: out.notes && out.notes.length ? out.notes : undefined,
+      /* what the provider's own web search looked at, when he let it look things up */
+      sources: out.sources && out.sources.length ? out.sources.slice(0, 20) : undefined,
       usage: out.usage || undefined,
       /* how big the request was: the provider's own count, or the app's when it gave none */
       tokensIn: out.usage && Number.isFinite(out.usage.in) ? out.usage.in : (out.sent && Number.isFinite(out.sent.tokens) ? out.sent.tokens : undefined),

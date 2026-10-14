@@ -55,6 +55,8 @@ def answer_for(body):
             "lore": [{"name": "The bottle", "about": "Green glass gone milky, a curl of paper inside that smells of tar and oranges."}],
             "threads": [{"name": "Who sent the letter?", "about": "A letter in a bottle washed up at dawn; nobody knows who wrote it.", "open": True}],
             "chapterName": "The Bottle",
+            # a version that says SECOND TAKE has a note of its own (each version its own notes)
+            **({"lore": [{"name": "The bottle", "about": "Green glass gone milky, a curl of paper inside that smells of tar and oranges."}, {"name": "The second take", "about": "Only this version holds it."}]} if "SECOND TAKE" in last_user.split("The notes as they stand:")[-1].split('New in')[-1] else {}),
         }})
     if "Summarise " in last_user and "for the book's notes" in last_user:
         return json.dumps({"summary": "Mara Venn finds a bottle at the tide line with a letter inside that smells of tar and oranges.", "name": "The Bottle"})
@@ -67,6 +69,10 @@ def answer_for(body):
     if "how it went" in last_user and "Narrator:" in last_user:
         return "Mara walked down to the shore, where the stranger stood with his collar up. “You found it,” he said. She did not ask how he knew."
     if "talking over our novel" in system:
+        if "TAKE OUT THE PASSAGE" in last_user:
+            return '<changes>[{"passage": "1.1", "remove": true, "why": "too quiet"}]</changes>\n\nIt can go.'
+        if "TWO CHANGES" in last_user:
+            return '<changes>[{"passage": "1.1", "find": "Rain hammered the glass", "replace": "Rain lashed the glass", "why": "a harder verb"}, {"passage": "1.1", "find": "The sea was grey", "replace": "The sea was black", "why": "darker"}]</changes>\n\nTwo changes to the first passage.'
         if "CHANGE THE PASSAGE" in last_user:
             return '<changes>[{"passage": "1.1", "find": "Rain hammered the glass", "replace": "Rain lashed the glass", "why": "a harder verb for the storm"}]</changes>\n\nI made the rain harder in the first line.'
         return "Maybe the letter is from her brother — the one who went to sea and never wrote."

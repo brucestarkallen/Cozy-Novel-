@@ -47,7 +47,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.3.2"
+VERSION = "2.4.0"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -58,6 +58,7 @@ HISTORY = HOME / "history"    # history/<kind>/<id>/<stamp>.json.gz — the copy
 TRASH = HOME / "trash"        # trash/<stamp>-<kind>-<id>.json.gz — deleted things, kept 30 days
 COPIES = HOME / "copies"      # copies/cozynovel-YYYY-MM-DD.json.gz — everything, once a day
 SENT = HOME / "sent"          # sent/<novel>/<key>.json.gz — what the model was sent
+USAGE = HOME / "usage.json"   # {"days": {"YYYY-MM-DD": {"<address>|<model>": {calls, in, out, cached, estimated}}}} — Usage and cost
 
 KINDS = ("house", "novel", "chapter", "talk", "play", "draft")
 # his settings, connections and instructions keep their earlier copies too; only
@@ -692,6 +693,58 @@ def set_generation(n):
     atomic_write_bytes(GENERATION, str(int(n)).encode("utf-8"))
 
 
+# ---------------------------------------------------------------- usage and cost
+# Every call to a model — the writer, the helper, the checker, the partner,
+# the narrator — counted as it lands, by address and model, day by day (Cozy
+# Tavern's meter). Settings → Usage and cost multiplies by the prices he set.
+
+USAGE_DAYS = 400
+
+
+def usage_read():
+    try:
+        d = json.loads(USAGE.read_text("utf-8"))
+        return d if isinstance(d, dict) and isinstance(d.get("days"), dict) else {"days": {}}
+    except FileNotFoundError:
+        return {"days": {}}
+    except Exception:
+        return {"days": {}}
+
+
+def _count(v):
+    try:
+        n = int(v)
+        return n if 0 <= n < 10**12 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def usage_add(spec):
+    if not isinstance(spec, dict):
+        return False
+    url = str(spec.get("url") or "")[:300]
+    model = str(spec.get("model") or "")[:200]
+    if not url or not model:
+        return False
+    day = str(spec.get("day") or time.strftime("%Y-%m-%d"))
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+        day = time.strftime("%Y-%m-%d")
+    key = url + "|" + model
+    with LOCK:
+        d = usage_read()
+        row = d["days"].setdefault(day, {}).setdefault(key, {"calls": 0, "in": 0, "out": 0, "cached": 0, "estimated": 0})
+        row["calls"] = _count(row.get("calls")) + 1
+        row["in"] = _count(row.get("in")) + _count(spec.get("in"))
+        row["out"] = _count(row.get("out")) + _count(spec.get("out"))
+        row["cached"] = _count(row.get("cached")) + _count(spec.get("cached"))
+        if spec.get("estimated"):
+            row["estimated"] = _count(row.get("estimated")) + 1
+        for old in sorted(d["days"].keys())[:-USAGE_DAYS]:
+            del d["days"][old]
+        atomic_write_bytes(USAGE, json.dumps(d).encode("utf-8"))
+    return True
+
+
 # ---------------------------------------------------------------- sent words
 
 def sent_put(nid, key, body):
@@ -1021,6 +1074,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json({"copies": copies_list()})
         if path == "/api/trash":
             return self.send_json({"trash": trash_list()})
+        if path == "/api/usage":
+            return self.send_json(usage_read())
         if path == "/api/legacy":
             if "peek=1" in (self.path.split("?", 1)[1] if "?" in self.path else ""):
                 stamp = legacy_stamp()
@@ -1173,6 +1228,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if isinstance(pair, list) and len(pair) == 2 and self.ok_id(pair[0], pair[1]):
                         out[pair[0] + "/" + pair[1]] = rev_of(pair[0], pair[1]) or -gone_rev(pair[0], pair[1])
             return self.send_json({"revs": out})
+        if path == "/api/usage":
+            ok = usage_add(self.read_body())
+            return self.send_json({"ok": ok}, 200 if ok else 400)
+        if path == "/api/usage/clear":
+            with LOCK:
+                atomic_write_bytes(USAGE, json.dumps({"days": {}}).encode("utf-8"))
+            return self.send_json({"ok": True})
         if path == "/api/hermes/key":
             spec = self.read_body() or {}
             return self.send_json({"key": hermes_key_for(spec.get("url") if isinstance(spec, dict) else None)})

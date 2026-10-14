@@ -58,7 +58,7 @@ async def scenario_back(b):
     # a sheet over a sheet, closed by Back twice
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
     await pg.wait_for_selector('.sheet.on')
-    await pg.click('.sheet.on button.btn.danger:has-text("Remove")')
+    await pg.click('.sheet.on button.btn.danger:has-text("Let go")')
     await pg.wait_for_timeout(300)
     check('a question opens over the settings', await pg.locator('.sheet.on').count() == 2, await pg.locator('.sheet.on').count())
     await pg.go_back(); await pg.wait_for_timeout(400)
@@ -170,9 +170,9 @@ async def scenario_thinking(b):
     await new_book(pg, title='Thoughts')
     await add_conn(pg)
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
-    await pg.fill('.sheet input[placeholder="deepseek-chat"]', 'fake-thinker')
+    await pg.fill('.sheet label.field:has(> span:text-is("Model")) input', 'fake-thinker')
     await pg.wait_for_timeout(600)
-    await pg.select_option('.sheet.on label.field:has(span:text-is("Thinking")) select', 'high')
+    await pg.select_option('.sheet.on label.field:has(span:text-is("Thinking — how long the writer weighs the page before writing")) select', 'high')
     await pg.wait_for_timeout(600)
     await close_sheet(pg)
     reset()
@@ -323,9 +323,9 @@ async def scenario_round(b):
     # the models on offer sit in a box like every other box (no white block)
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
     await pg.wait_for_selector('.sheet.on')
-    await pg.click('.sheet.on button:has-text("Show the models on offer")')
-    await pg.wait_for_selector('.sheet.on select[aria-label="Pick a model"]', state='visible', timeout=5000)
-    look = await pg.evaluate("(() => { const s = document.querySelector('.sheet.on select[aria-label=\"Pick a model\"]'); const c = getComputedStyle(s); return { inField: Boolean(s.closest('label.field')), bg: c.backgroundColor, radius: c.borderRadius } })()")
+    await pg.click('.sheet.on button:has-text("Fetch what’s on offer")')
+    await pg.wait_for_selector('.sheet.on select[aria-label="What’s on offer"]', state='visible', timeout=5000)
+    look = await pg.evaluate("(() => { const s = document.querySelector('.sheet.on select[aria-label=\"What’s on offer\"]'); const c = getComputedStyle(s); return { inField: Boolean(s.closest('label.field')), bg: c.backgroundColor, radius: c.borderRadius } })()")
     check('the models on offer: a box like the others, never a white block', look['inField'] and look['bg'] != 'rgb(255, 255, 255)' and look['radius'] == '12px', look)
     # Your instructions: the narrator's own box, with its starting words (2.3: his preset's own opening) and Back to the default
     await pg.click('.sheet.on .ghead:has-text("Your instructions")')
@@ -400,9 +400,9 @@ async def scenario_round(b):
     await pg.click('#sideClose'); await pg.wait_for_timeout(300)
     # a scene: the thinking streams open first, then folds; full screen over everything
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
-    await pg.fill('.sheet input[placeholder="deepseek-chat"]', 'fake-thinker')
+    await pg.fill('.sheet label.field:has(> span:text-is("Model")) input', 'fake-thinker')
     await pg.wait_for_timeout(600)
-    await pg.select_option('.sheet.on label.field:has(span:text-is("Thinking")) select', 'high')
+    await pg.select_option('.sheet.on label.field:has(span:text-is("Thinking — how long the writer weighs the page before writing")) select', 'high')
     await pg.wait_for_timeout(600)
     await close_sheet(pg)
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Scenes")')
@@ -506,7 +506,13 @@ async def scenario_follow(b):
         await pg.wait_for_timeout(16)
     await cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
     await pg.wait_for_timeout(500)
+    # the flick's glide comes to rest first (on a busy machine it runs past half a second)
     y1 = await pg.evaluate("document.querySelector('#pageWrap').scrollTop")
+    for _ in range(30):
+        await pg.wait_for_timeout(100)
+        y = await pg.evaluate("document.querySelector('#pageWrap').scrollTop")
+        if y == y1: break
+        y1 = y
     grew = await pg.evaluate("document.querySelector('.passage.streaming .prose').textContent.length")
     await pg.wait_for_timeout(1500)
     y2 = await pg.evaluate("document.querySelector('#pageWrap').scrollTop")
@@ -840,13 +846,204 @@ async def scenario_crafts(b):
     check('no page errors (crafts and modules)', not errs, errs[:5])
     await pg.close()
 
+async def scenario_versions(b):
+    """each version its own notes, the notes explained, the readings list, presets, the note switch, structured templates, quick asks"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Two Takes')
+    await add_conn(pg)
+    await write(pg, 'Mara finds a bottle.')
+    nid = await pg.evaluate("location.hash.split('/')[2]")
+    novel = lambda: pg.evaluate(f"fetch('/api/store/novel/{nid}').then((r) => r.json()).then((j) => j.data)")
+    readings = lambda: len([x for x in reqs() if 'Update the notes' in json.dumps(x['body'].get('messages') or [])])
+    lore = lambda n: sorted(c['name'] for c in (n.get('notes') or {}).get('lore', []))
+    async def until(test, t=15000):
+        for _ in range(t // 200):
+            n = await novel()
+            if test(n):
+                return n
+            await pg.wait_for_timeout(200)
+        return await novel()
+    n = await until(lambda n: len((n.get('notes') or {}).get('people', [])) > 0)
+    check('the helper read the first take', lore(n) == ['The bottle'], lore(n))
+    # the notes say what lit and yours mean, and that every card goes to the writer
+    await pg.click('#notesBtn'); await pg.wait_for_timeout(400)
+    key = await pg.inner_text('#sidePane .notekey >> nth=0') if await pg.locator('#sidePane .notekey').count() else ''
+    lit = await pg.locator('#sidePane .card .ctag.lit').count()
+    check('the notes say every card goes to the writer, lit or not, and what lit means', 'Every card here goes to the writer before every page, lit or not' in key and 'what the helper changed last' in key, key[:200])
+    check('the cards the last reading changed are marked new', lit >= 3, lit)
+    # his edit of the newest passage: the old version's notes go, the edit is read as new
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    await pg.click('#passages .passage >> nth=0'); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected .pctl button:has-text("Edit")')
+    await pg.fill('.editbox', 'SECOND TAKE: Mara finds a bottle and a second letter.')
+    await pg.click('.editrow button:has-text("Save")')
+    n = await until(lambda n: 'The second take' in lore(n))
+    check('the edit, read as new, has its own notes', lore(n) == ['The bottle', 'The second take'], lore(n))
+    before = readings()
+    # the arrows back to the first take: its notes come back, with no reading
+    # (the passage is still open from the edit; a click on its middle could land on Another take)
+    if not await pg.locator('.passage.selected').count():
+        await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected button[aria-label="The version before"]')
+    n = await until(lambda n: 'The second take' not in lore(n), 6000)
+    await pg.wait_for_timeout(1200)
+    check('the arrows bring the first take’s notes back at once', lore(n) == ['The bottle'], lore(n))
+    check('and cost no reading', readings() == before, (before, readings()))
+    # the readings list: both versions, one in the notes, one an earlier version
+    await pg.click('#notesBtn'); await pg.wait_for_timeout(400)
+    await pg.click('#sidePane .sechead:has(h3:text-is("Readings — each version’s notes"))'); await pg.wait_for_timeout(300)
+    tags = await pg.locator('#sidePane .card.reading .ctag').all_inner_texts()
+    check('the readings list shows each version: one in the notes, one an earlier version', sorted(t.lower() for t in tags) == ['earlier version', 'in the notes'], tags)
+    # presets: saved, the box changed, used again
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    if not await pg.locator('.sheet.on button:has-text("Save current preset")').is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(300)
+    sysbox = '.sheet.on label.field:has(span:text-is("How you like it written")) textarea'
+    await pg.fill(sysbox, 'BATMAN WRITES.')
+    await pg.wait_for_timeout(1200)
+    await pg.click('.sheet.on button:has-text("Save current preset")'); await pg.wait_for_timeout(300)
+    await pg.fill('.sheet.on >> nth=-1 >> input', 'Batman')
+    await pg.click('.sheet.on >> nth=-1 >> button:has-text("Save")'); await pg.wait_for_timeout(600)
+    await pg.fill(sysbox, 'SOMEONE ELSE WRITES.'); await pg.wait_for_timeout(1200)
+    await pg.click('.sheet.on .presetrow button:has-text("Use")'); await pg.wait_for_timeout(800)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    check('a preset saved and used again puts the words back exactly', house['instructions'].get('system') == 'BATMAN WRITES.' and await pg.input_value(sysbox) == 'BATMAN WRITES.' and [p['name'] for p in house.get('presets', [])] == ['Batman'], (house['instructions'].get('system'), [p['name'] for p in house.get('presets', [])]))
+    check('and is marked in use', await pg.locator('.sheet.on .presetrow .tag:has-text("in use")').count() == 1)
+    # words typed a moment ago, then The starting words at once: the typing is not written in afterwards over them
+    await pg.fill(sysbox, 'TYPED JUST NOW.')
+    await pg.click('.sheet.on button:has-text("The starting words")'); await pg.wait_for_timeout(1400)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    starting = await pg.evaluate("import('/js/novel/prompts.js').then((m) => m.DEFAULT_WRITING)")
+    check('a preset used right after typing is not written over by the typing', house['instructions'].get('system') == starting and await pg.input_value(sysbox) == starting and await pg.locator('.sheet.on .presetrow .tag:has-text("in use")').count() == 0, (house['instructions'].get('system') or '')[:40])
+    await pg.click('#toast button:has-text("Undo")'); await pg.wait_for_timeout(900)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    check('and its Undo brings back what was typed', house['instructions'].get('system') == 'TYPED JUST NOW.' and await pg.input_value(sysbox) == 'TYPED JUST NOW.', house['instructions'].get('system'))
+    # the note at the end switched off: kept, not sent
+    await pg.uncheck('.sheet.on .switchrow >> nth=0 >> input'); await pg.wait_for_timeout(800)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    check('Send it, unticked, switches the book’s note at the end off', house['instructions'].get('lateOff') is True, house['instructions'])
+    # the connection editor: Structured shows the ready-made templates
+    if not await pg.locator('.sheet.on label.field:has(> span:text-is("How it is sent")) select').is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Connections")'); await pg.wait_for_timeout(300)
+    await pg.select_option('.sheet.on label.field:has(> span:text-is("How it is sent")) select', 'structured'); await pg.wait_for_timeout(700)
+    await pg.select_option('.sheet.on label.field:has(> span:text-is("Ready-made template")) select', 'line')
+    await pg.fill('.sheet.on label.field:has(> span:has-text("Your words")) input', 'Yuhuu')
+    await pg.click('.sheet.on button:has-text("Put it in the prefill box")'); await pg.wait_for_timeout(900)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    c = house['connections'][0]
+    check('a ready-made template is written into the prefill box, set to Structured', c.get('prefill') == 'Yuhuu' and c.get('prefillMode') == 'structured', (c.get('prefill'), c.get('prefillMode')))
+    await close_sheet(pg)
+    # the partner's quick asks
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(400)
+    await pg.click('#sideFoot button:has-text("Quick asks")'); await pg.wait_for_timeout(200)
+    items = await pg.locator('.menu-pop button .mlabel').all_inner_texts()
+    check('the partner’s quick asks, each with its line', 'Check the notes against the book' in items and 'Tidy the notes' in items and await pg.locator('.menu-pop button .mhint').count() == len(items), items)
+    await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
+    errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
+    check('no errors on the page', not errs, errs[:3])
+
+async def scenario_partner(b):
+    """the partner as Cozy Tavern's housekeeper: Edit by hand, Apply all, Undo all, What it said whole, conversations, Branch from here, Edit and ask again, Start over, full screen, Critique"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Housekeeper')
+    await add_conn(pg)
+    await pg.fill('#direction', 'Rain hammered the glass. The sea was grey.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(400)
+    nid = await pg.evaluate("location.hash.split('/')[2]")
+    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { h.partnerApplies = 'wait'; }, { now: true }))")
+    first_words = "(() => { const p = document.querySelector('#passages .passage .prose'); return p ? p.textContent : '' })()"
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(300)
+    row = await pg.inner_text('#sideBody .convrow')
+    check('the open conversation shows by name, with New conversation', 'Conversation 1' in row and await pg.locator('#sideBody .convrow button[aria-label="New conversation"]').count() == 1, row)
+    await pg.fill('#sideFoot textarea', 'TWO CHANGES please.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .change.waiting', timeout=8000)
+    check('waiting changes: Apply, Edit by hand, Leave it — and Apply all, Leave all', await pg.locator('#sideBody .change.waiting button:has-text("Edit by hand")').count() == 2 and await pg.locator('#sideBody button:has-text("Apply all")').count() == 1 and await pg.locator('#sideBody button:has-text("Leave all")').count() == 1)
+    await pg.click('#sideBody button:has-text("Apply all")'); await pg.wait_for_timeout(500)
+    p1 = await pg.evaluate(first_words)
+    check('Apply all makes every one', p1.strip() == 'Rain lashed the glass. The sea was black.', p1)
+    await pg.click('#sideBody button:has-text("Undo all")'); await pg.wait_for_timeout(600)
+    p1 = await pg.evaluate(first_words)
+    check('Undo all puts every one back', p1.strip() == 'Rain hammered the glass. The sea was grey.' and await pg.locator('#sideBody .change.undone').count() == 2, p1)
+    await pg.click('#sideBody .turn.ai button:has-text("What it said, whole")'); await pg.wait_for_timeout(300)
+    whole = await pg.inner_text('.sheet.on pre.whole')
+    check('What it said, whole shows the block too', '<changes>' in whole and 'Two changes to the first passage.' in whole, whole[:80])
+    await close_sheet(pg)
+    # again: one by hand, one left
+    await pg.fill('#sideFoot textarea', 'TWO CHANGES again.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .turn.ai >> nth=1 >> .change.waiting', timeout=8000)
+    await pg.click('#sideBody .change.waiting >> nth=0 >> button:has-text("Edit by hand")')
+    await pg.wait_for_selector('.sheet.on textarea, .sheet.on input')
+    box = '.sheet.on label.field:has(span:text-is("The new words")) textarea'
+    check('Edit by hand shows the words it would write', await pg.input_value(box) == 'Rain lashed the glass', await pg.input_value(box))
+    await pg.fill(box, 'Rain drummed on the glass')
+    await pg.click('.sheet.on button:has-text("Apply")'); await pg.wait_for_timeout(500)
+    await pg.click('#sideBody .change.waiting button:has-text("Leave it")'); await pg.wait_for_timeout(400)
+    p1 = await pg.evaluate(first_words)
+    check('applied with his words; the other left', p1.strip() == 'Rain drummed on the glass. The sea was grey.' and await pg.locator('#sideBody .change.made:has-text("made with your words")').count() == 1 and await pg.locator('#sideBody .change.skipped').count() == 1, p1)
+    # Branch from here: a new conversation up to that answer, its changes the first one's
+    await pg.click('#sideBody .turn.ai >> nth=-1 >> button:has-text("Branch from here")'); await pg.wait_for_timeout(500)
+    row = await pg.inner_text('#sideBody .convrow')
+    note = await pg.locator('#sideBody .change .cwhy:has-text("In the conversation this one was copied from")').count()
+    check('Branch from here opens a copy; its changes stay the first one\'s', 'Conversation 1 (branch)' in row and note == 1 and await pg.locator('#sideBody .change button').count() == 0 and await pg.locator('#sideBody .turn').count() == 4, (row, note))
+    # the list: the first one, by name; open it again
+    await pg.click('#sideBody .convpick'); await pg.wait_for_timeout(200)
+    items = await pg.locator('.menu-pop button .mlabel').all_inner_texts()
+    check('the conversations list: the others, and rename, copy, remove', 'Conversation 1' in items and 'Rename this conversation' in items and 'Copy this conversation' in items and 'Remove this conversation' in items, items)
+    await pg.click('.menu-pop button:has(.mlabel:text-is("Conversation 1"))'); await pg.wait_for_timeout(500)
+    check('…and opening one shows its talk, its Undo there', 'Conversation 1' in await pg.inner_text('#sideBody .convrow') and await pg.locator('#sideBody .change.made button:has-text("Undo")').count() == 1 and await pg.locator('#sideBody .change.undone').count() == 2)
+    # New conversation
+    await pg.click('#sideBody .convrow button[aria-label="New conversation"]'); await pg.wait_for_timeout(400)
+    check('New conversation begins empty; the first stays in the list', 'Conversation 2' in await pg.inner_text('#sideBody .convrow') and await pg.locator('#sideBody .turn').count() == 0)
+    await pg.fill('#sideFoot textarea', 'A question about the letter.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .turn.ai:not(.streaming)', timeout=8000)
+    # Edit and ask again: his words back in the box, the message and its answer let go; Undo brings them back
+    await pg.click('#sideBody .turn.you button:has-text("Edit and ask again")'); await pg.wait_for_timeout(500)
+    back = await pg.input_value('#sideFoot textarea')
+    check('Edit and ask again: his words in the box, the talk let go', back == 'A question about the letter.' and await pg.locator('#sideBody .turn').count() == 0, back)
+    await pg.click('#toast button:has-text("Undo")'); await pg.wait_for_timeout(500)
+    check('…and Undo brings them back, the box empty again', await pg.locator('#sideBody .turn').count() == 2 and await pg.input_value('#sideFoot textarea') == '', await pg.input_value('#sideFoot textarea'))
+    # Start over, with Undo
+    await pg.click('#sideFoot button:has-text("Start over")')
+    await pg.click('.sheet.on button:has-text("Start over")'); await pg.wait_for_timeout(500)
+    gone = await pg.locator('#sideBody .turn').count()
+    await pg.click('#toast button:has-text("Undo")'); await pg.wait_for_timeout(500)
+    check('Start over empties it, and Undo brings it back', gone == 0 and await pg.locator('#sideBody .turn').count() == 2, gone)
+    # full screen, and back
+    await pg.click('#sideBody .convrow button[aria-label="Full screen"]'); await pg.wait_for_timeout(400)
+    full = await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')")
+    await pg.click('#sideBody .convrow button[aria-label="Leave full screen"]'); await pg.wait_for_timeout(400)
+    check('the partner goes full screen and comes back', full and not await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')"))
+    # a passage taken out is said as such
+    await pg.fill('#sideFoot textarea', 'TAKE OUT THE PASSAGE, please.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .turn.ai >> nth=-1 >> .change.waiting', timeout=8000)
+    what = await pg.inner_text('#sideBody .turn.ai >> nth=-1 >> .change.waiting .cwhat')
+    check('a passage the partner would take out is said to be taken out of the chapter', what.strip() == 'taken out of the chapter', what)
+    await pg.click('#sideBody .turn.ai >> nth=-1 >> .change.waiting button:has-text("Leave it")'); await pg.wait_for_timeout(300)
+    # Critique among the quick asks
+    await pg.click('#sideFoot button:has-text("Quick asks")'); await pg.wait_for_timeout(200)
+    items = await pg.locator('.menu-pop button .mlabel').all_inner_texts()
+    check('Critique this chapter is a quick ask', 'Critique this chapter' in items, items)
+    await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
+    t = (await pg.evaluate(f"fetch('/api/store/talk/{nid}').then((r) => r.json())"))['data']
+    check('every conversation is kept on the phone', sorted([t.get('name')] + [c['name'] for c in t.get('convs', [])]) == ['Conversation 1', 'Conversation 1 (branch)', 'Conversation 2'], [t.get('name')] + [c['name'] for c in t.get('convs', [])])
+    errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
+    check('no errors on the page', not errs, errs[:3])
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_crafts, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_crafts, scenario_versions, scenario_partner, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

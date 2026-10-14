@@ -1,4 +1,4 @@
-/* Cozy Novel — js/ui/full.js — FULL SCREEN, for the writing page or a scene,
+/* Cozy Novel — js/ui/full.js — FULL SCREEN, for the writing page, a scene or the partner,
  * one at a time. The browser's own bars go too where it allows. The phone's
  * Back, the button in the corner, or the browser leaving full screen by
  * itself (Back, Escape, a swipe) brings everything back.

@@ -15,6 +15,8 @@
  * (his Prefill Control extension); the rest of the dials are Tavern's M510.
  */
 
+import { structuredSchema, hiddenMatcher, asciiOnly, MIN_AFTER_DEFAULT, bannedPattern, readTemplate } from './structured.js';
+
 export const WORKER_ROOM = 2400;      /* a helper's answer needs this much room */
 export const ALWAYS_THINKS_FLOOR = 16000;
 export const DEFAULT_CONTEXT = 128000;
@@ -207,6 +209,8 @@ export function learnedFacts(conn, now = Date.now()) {
     maxOut: Number.isFinite(L.maxOut) && L.maxOut > 0 ? L.maxOut : 0,
     /* the reply's length named the way this address asks: max_completion_tokens */
     completionField: L.completionField === true,
+    /* this model would not take a structured prefill: its pages get the prefill as written (Tavern M580) */
+    structuredDown: Number.isFinite(L.structuredDownAt),
   };
 }
 
@@ -489,6 +493,32 @@ export function splitPrefill(text) {
   return { seed: m[1].trim(), content: raw.slice(m[0].length).replace(/^\s+/, '') };
 }
 
+/* A STRUCTURED TEMPLATE SENT AS WRITTEN (Cozy Tavern M582, M586, M587). A
+ * connection set to Structured goes as written where it cannot be held to a
+ * pattern — an address that takes no JSON-schema answers, a model that
+ * refused one, a worker — and a template's markers mean nothing to a model:
+ * "[[w:5-20]]" or "[[keep]]" would be sent as words and land at the head of
+ * his page. Only the plain words that open the shown part ride (the hidden
+ * part before [[keep]] and the markers go), up to the first marker; a
+ * thinking block, the same, as the seed. A template's own markers, known by
+ * name, are read so in As written too. */
+export const TEMPLATE_MARKER = /\[\[\s*(?:keep|end|stop|eos|pg|w|words|opt|options|line|lines|free|num|number|emotion|mood|name|action|thought|re|regex)\b[^\]\n]{0,400}\]\]/i;
+const ANY_MARKER = /\[\[[^\]\n]{1,400}\]\]/;
+function templated(conn, text) { return Boolean(conn) && /\[\[/.test(text) && (conn.prefillMode === 'structured' || TEMPLATE_MARKER.test(text)); }
+export function asWrittenOpening(conn, content) {
+  const text = String(content == null ? '' : content);
+  if (!templated(conn, text)) return text;
+  const tpl = readTemplate(text);
+  const at = tpl.shown.search(ANY_MARKER);
+  return (at === -1 ? tpl.shown : tpl.shown.slice(0, at)).replace(/^\s+/, '');
+}
+function asWrittenSeed(conn, seed) {
+  const text = String(seed || '');
+  if (!templated(conn, text)) return text;
+  const at = text.search(ANY_MARKER);
+  return (at === -1 ? text : text.slice(0, at)).replace(/\s+$/, '');
+}
+
 export const RESERVED_FIELDS = Object.freeze(['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'refusal', '__proto__', 'constructor', 'prototype']);
 export function fieldName(raw) {
   const name = String(raw == null ? '' : raw).trim();
@@ -533,7 +563,10 @@ export function prefillPlan(conn) {
   const text = String(conn && conn.prefill != null ? conn.prefill : '');
   if (!text.trim()) return { send: false, why: '' };
   const profile = prefillProfile(conn);
-  const { seed, content } = splitPrefill(text);
+  const written = splitPrefill(text);
+  const seed = asWrittenSeed(conn, written.seed);
+  /* a trailing space is never sent (some houses refuse it): prefillGap gives it back */
+  const content = asWrittenOpening(conn, written.content).replace(/\s+$/, '');
   const fields = prefillFields(conn);
   const effort = conn && typeof conn.thinking === 'string' ? conn.thinking : '';
   const facts = learnedFacts(conn);
@@ -557,6 +590,14 @@ export function prefillPlan(conn) {
 
 export function describePrefill(conn) {
   if (!String(conn && conn.prefill != null ? conn.prefill : '').trim()) return '';
+  if (conn.prefillMode === 'structured') {
+    if (!structuredOffered(conn)) return 'Structured is not taken at this address (it takes no JSON-schema answers), so it goes as written: ' + (describeWritten(conn) || 'nothing to send.');
+    if ((learnedFacts(conn) || {}).structuredDown) return 'This model would not take a structured prefill, so it goes as written: ' + (describeWritten(conn) || 'nothing to send.');
+    return 'Sent structured: the model writes your opening itself, held to it by the answer’s pattern — nothing is handed to it.';
+  }
+  return describeWritten(conn);
+}
+function describeWritten(conn) {
   if (prefillIsDown(conn)) return 'Not sent — this model refused a started reply, so it is not offered one any more (until the model or address changes).';
   const plan = prefillPlan(conn);
   if (!plan.send) return 'Not sent — ' + (plan.why || 'nothing to send.');
@@ -571,7 +612,9 @@ export function describePrefill(conn) {
 export function prefillGap(conn) {
   const raw = String(conn && conn.prefill != null ? conn.prefill : '');
   if (!raw.trim()) return '';
-  const m = raw.match(/\s+$/);
+  /* a template as written: the space before its first marker */
+  const { content } = splitPrefill(raw);
+  const m = (templated(conn, content) ? asWrittenOpening(conn, content) : raw).match(/\s+$/);
   return m ? m[0] : '';
 }
 
@@ -710,6 +753,36 @@ export function foldTurns(messages) {
   return out;
 }
 
+/* ------------------------------------- the structured prefill (Tavern M580) */
+/* Does this page go out structured? Only when he chose it for this
+ * connection, there is a prefill to ask for, the address takes JSON-schema
+ * answers, and this model has not refused one. The whole prefill is the
+ * template (a <think>…</think> in it is thinking the model writes itself). */
+export const STRUCTURED_NEVER = /deepseek|moonshot|z\.ai|bigmodel|siliconflow|ai21|cometapi/i;
+export function structuredOffered(conn) {
+  return Boolean(conn) && wireOf(conn) !== 'anthropic' && !STRUCTURED_NEVER.test(String(conn.url || ''));
+}
+export function structuredPlanFor(conn) {
+  const c = conn || {};
+  if (c.prefillMode !== 'structured' || !structuredOffered(c)) return null;
+  const facts = learnedFacts(c);
+  if (facts && facts.structuredDown) return null;
+  const reply = String(c.prefill == null ? '' : c.prefill).replace(/\s+$/, '');
+  if (!reply.trim()) return null;
+  const minChars = Number.isFinite(c.prefillMinChars) && c.prefillMinChars > 0 ? c.prefillMinChars : MIN_AFTER_DEFAULT;
+  const ban = bannedPattern(String(c.prefillBanned || ''));
+  const note = ban.tooBig ? `Your words it can never write are too many for one exact pattern (${ban.words.length} given) — the page went without them; fewer words ride.` : '';
+  return { template: reply, schema: structuredSchema(reply, { minChars, ascii: asciiOnly(c), banned: asciiOnly(c) ? '' : ban.pattern }), hidden: hiddenMatcher(reply), note };
+}
+
+/* ------------------------------------------------ let it look things up */
+/* The provider's own web search (Tavern M22-C): Claude's web_search tool, or
+ * OpenRouter's web plugin — nowhere else, so the switch shows only there.
+ * Pages, the partner and scenes ride with it; a helper never does. */
+export function searchOffered(conn) {
+  return Boolean(conn) && (wireOf(conn) === 'anthropic' || /openrouter\.ai/i.test(String(conn.url || '')));
+}
+
 /* Build the request one house understands. opts: {system, systemParts,
  * messages, maxTokens, maxCap, stream, worker, noPrefill, noUsage}. Returns
  * {url, headers, body, wire, prefill}. systemParts: the system as [the part
@@ -724,7 +797,11 @@ export function buildRequest(conn, opts = {}) {
   const fitted = foldTurns(lateSystemFitted(conn, messages));
   /* a request that already ends on the story's own words is a reply already started: no prefill on top of it */
   const endsOnAssistant = fitted.length && fitted[fitted.length - 1].role === 'assistant';
-  const pf = opts.noPrefill || worker || endsOnAssistant ? { messages: fitted, applied: false } : applyPrefill(fitted, conn);
+  /* a helper rides with the prefill only when he ticked "Workers riding this connection get it too" */
+  const noPrefill = opts.noPrefill || (worker && conn.prefillForWorkers !== true) || endsOnAssistant;
+  /* structured: his opening is asked of the model through the answer's schema — nothing is handed to it */
+  const structured = !noPrefill && !opts.noStructured && !worker ? structuredPlanFor(conn) : null;
+  const pf = noPrefill || structured ? { messages: fitted, applied: false } : applyPrefill(fitted, conn);
   const facts0 = learnedFacts(conn);
 
   if (wire === 'anthropic') {
@@ -786,13 +863,25 @@ export function buildRequest(conn, opts = {}) {
     body.stream = true;
     if (wire !== 'anthropic' && !opts.noUsage && !(facts && facts.drop.includes('stream_options'))) body.stream_options = { include_usage: true };
   }
+  if (structured) {
+    body.response_format = { type: 'json_schema', json_schema: { name: 'response', strict: true, schema: structured.schema } };
+    /* OpenRouter routes only to a provider that keeps the schema (one that ignores it may take the page otherwise) */
+    if (/openrouter\.ai/i.test(String(conn.url || ''))) body.provider = { ...(body.provider && typeof body.provider === 'object' ? body.provider : {}), require_parameters: true };
+  }
+  /* let it look things up: only when he ticked it, and never for a helper */
+  if (conn.searchOn === true && !worker && !opts.noSearch && searchOffered(conn)) {
+    const uses = Number.isFinite(conn.searchMaxUses) && conn.searchMaxUses > 0 ? Math.round(conn.searchMaxUses) : 0;
+    /* how many look-ups: only when he set it — otherwise the provider decides */
+    if (wire === 'anthropic') body.tools = [{ type: 'web_search_20250305', name: 'web_search', ...(uses ? { max_uses: uses } : {}) }];
+    else body.plugins = [{ id: 'web', ...(uses ? { max_results: uses } : {}) }];
+  }
 
   let url = endpoint(conn);
   if (pf.applied && prefillProfile(conn) === 'deepseek' && wire !== 'anthropic') {
     const beta = deepseekBetaBase(conn.url);
     if (beta) url = beta + '/chat/completions';
   }
-  return { url, headers: headersFor(conn), body, wire, house: wire, prefill: pf };
+  return { url, headers: headersFor(conn), body, wire, house: wire, prefill: pf, structured };
 }
 
 /* Pull the answer out, whichever shape came back. Thinking is kept on its own

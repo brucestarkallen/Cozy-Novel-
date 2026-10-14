@@ -30,7 +30,7 @@ async def close_sheet(pg):
 
 async def set_model(pg, model):
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections")')
-    await pg.fill('.sheet input[placeholder="deepseek-chat"]', model)
+    await pg.fill('.sheet label.field:has(> span:text-is("Model")) input', model)
     await pg.wait_for_timeout(700)
     await close_sheet(pg)
 
@@ -222,10 +222,10 @@ async def scenario_main(b):
     # learns about the model holds for all of them.
     reset()
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections")')
-    await pg.fill('.sheet input[placeholder="deepseek-chat"]', 'fake-picky')
-    await pg.click('.sheet .group button.ghead:has-text("More dials")')
+    await pg.fill('.sheet label.field:has(> span:text-is("Model")) input', 'fake-picky')
+    # every dial stands open on the form, as in Cozy Tavern's editor (no fold)
     await pg.fill('.sheet label.field:has(span:text-is("Top-k")) input', '40')
-    await pg.fill('.sheet label.field:has(span:text-is("Temperature")) input', '0.8')
+    await pg.fill('.sheet label.field:has(span:text-is("Temperature (0–2)")) input', '0.8')
     await pg.wait_for_timeout(800)
     await close_sheet(pg)
     asked = lambda words: [x for x in completions() if words in json.dumps(x['body'].get('messages') or [])]

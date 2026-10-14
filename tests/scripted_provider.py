@@ -75,6 +75,15 @@ class H(BaseHTTPRequestHandler):
                 beh = {"text": "echo"}
         if "status" in beh:
             return self.js({"error": {"message": beh.get("message", "error")}}, beh["status"])
+        if body.get("stream") is not True and not beh.get("sse"):
+            # asked without streaming: one JSON answer, as a provider gives it
+            msg = {"role": "assistant", "content": beh.get("text", "")}
+            if beh.get("think"):
+                msg["reasoning_content"] = beh["think"]
+            out = {"choices": [{"message": msg, "finish_reason": beh.get("finish", "stop")}]}
+            if beh.get("usage"):
+                out["usage"] = beh["usage"]
+            return self.js(out)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Connection", "close")

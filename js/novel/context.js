@@ -24,7 +24,8 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords } from './prompts.js';
+import { notesBefore, unread } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
 
@@ -175,6 +176,30 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
   return { book, used: cost + laterCost, whole: earlier.length - k, short: k - omitted };
 }
 
+/* The passages the notes have not read yet, up to the point being written
+ * (for the partner and a scene: anywhere in the book) — the words that say
+ * so, or ''. The passage being written again is not counted. */
+export function notesBehind(novel, chapters, chapter, target = {}, purpose = 'write') {
+  let point = {};
+  if (purpose === 'write' && chapter && chapter.id) {
+    const list = chapter.passages || [];
+    if (target.mark || target.before) point = { chapterId: chapter.id, before: target.mark || target.before, skip: target.mark || target.before };
+    else if (target.through) {
+      const i = list.findIndex((p) => p.id === target.through);
+      point = { chapterId: chapter.id, before: i >= 0 && list[i + 1] ? list[i + 1].id : null, skip: target.through };
+      if (!point.before) point = { skip: target.through };
+    }
+  }
+  const rows = unread(novel, chapters, point);
+  const groups = [];
+  for (const r of rows) {
+    const label = chapterLabel(novel, chapters[r.chapterId], { withName: false });
+    const g = groups[groups.length - 1];
+    if (g && g.id === r.chapterId) g.ns.push(r.n); else groups.push({ id: r.chapterId, label, ns: [r.n] });
+  }
+  return notReadWords(groups);
+}
+
 /* The narrator's own words, from "How the narrator tells scenes": its
  * starting words until he sets his own; emptied, nothing of his is sent —
  * like the partner's box. (Before 2.3 an emptied box sent "How you like it
@@ -215,7 +240,14 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   else if (purpose === 'partner') { own = instr.partner; frame = partnerFrame(house, novel, { notesAs }); }
   else if (purpose === 'play') { own = narratorWords(instr); frame = playFrame(house, novel, play || {}, label, { notesAs }); }
   const about = aboutTheBook(novel, { plans: true });
-  const notes = notesText(novel);
+  /* the notes as they stood at the point being written (readings.js): a
+   * passage written again — another take, a rewrite, his selected words — is
+   * never handed the notes its old version made */
+  const again = purpose === 'write' && chapter.id ? (target.mark || target.before || '') : '';
+  const notesNow = again ? { ...novel, notes: notesBefore(novel, chapter.id, again) } : novel;
+  /* and which passages up to that point they have not read yet, said at their top */
+  const kept = notesText(notesNow);
+  const notes = kept ? [notesBehind(novel, chapters, chapter, target, purpose), kept].filter(Boolean).join('\n\n') : '';
   /* the modules (modules.js): the ones that always ride, and the ones his words woke */
   const ride = ridingFor(house, novel, purpose, wakesOn(moment));
   const woken = ride.woken.join('\n\n');

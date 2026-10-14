@@ -251,8 +251,9 @@ export function menu(anchor, items) {
     if (!it) continue;
     if (it === '-') { pop.append(h('hr')); continue; }
     if (it.label && it.header) { pop.append(h('div.label', it.label)); continue; }
-    pop.append(h('button' + (it.danger ? '.danger' : ''), { role: it.checked !== undefined ? 'menuitemradio' : 'menuitem', 'aria-checked': it.checked === undefined ? undefined : String(Boolean(it.checked)), disabled: it.disabled,
-      onclick: (e) => { e.stopPropagation(); closeMenu(); if (it.run) it.run(); } }, it.label));
+    /* each item can say in a small line what it does (Cozy Tavern's quiet lines) */
+    pop.append(h('button' + (it.danger ? '.danger' : '') + (it.hint ? '.hinted' : ''), { role: it.checked !== undefined ? 'menuitemradio' : 'menuitem', 'aria-checked': it.checked === undefined ? undefined : String(Boolean(it.checked)), disabled: it.disabled,
+      onclick: (e) => { e.stopPropagation(); closeMenu(); if (it.run) it.run(); } }, it.hint ? h('span.mlabel', it.label) : it.label, it.hint ? h('small.mhint', it.hint) : null));
   }
   pop.addEventListener('keydown', (e) => {
     const list = Array.from(pop.querySelectorAll('button:not([disabled])'));

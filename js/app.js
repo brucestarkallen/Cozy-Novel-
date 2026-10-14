@@ -11,7 +11,7 @@ import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
 import { initDesk, openChapter, drawComposer, deskState } from './ui/desk.js';
 import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight } from './ui/panes.js';
-import { openSettings, redrawSettings } from './ui/settings.js';
+import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK } from './ui/look.js';
 import { bringOldBooks } from './legacy.js';
@@ -80,7 +80,7 @@ async function boot() {
   store.subscribe('house', 'house', (data, why) => {
     if (data) applyLook(data.look);
     drawComposer(); drawBar();
-    if (why === 'remote') redrawSettings();
+    if (why === 'remote') redrawSettings(); else freshenPresets();
     /* a helper chosen (or changed) starts on whatever it has not read */
     if (A.novelId) archivist.nudge(A.novelId, 3000);
   });
@@ -293,12 +293,12 @@ function writerMenu(anchor) {
 /* what has no button of its own on the bar */
 function moreMenu(anchor) {
   menu(anchor, [
-    { label: 'Scenes', run: () => showSide('play') },
-    { label: 'About this book', run: () => openBook(A.novelId, { onGone: () => toShelf() }) },
-    { label: 'Full screen', run: fullPage },
-    { label: 'Reading mode', run: readingMode },
+    { label: 'Scenes', hint: 'Step into the story as one of its people; the narrator plays everyone else.', run: () => showSide('play') },
+    { label: 'About this book', hint: 'What it’s about, how it reads, where it’s headed, Sound, taking it out as a file.', run: () => openBook(A.novelId, { onGone: () => toShelf() }) },
+    { label: 'Full screen', hint: 'The page and the box, nothing above them.', run: fullPage },
+    { label: 'Reading mode', hint: 'Only the page, for reading.', run: readingMode },
     '-',
-    { label: 'Settings', run: () => openSettings() },
+    { label: 'Settings', hint: 'Connections, who does what, your instructions and presets, how it looks, backups.', run: () => openSettings() },
   ]);
 }
 

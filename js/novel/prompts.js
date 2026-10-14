@@ -96,8 +96,9 @@ export function splitLate(house) {
  * the partner's */
 export function lateFor(instr, purpose) {
   const ins = instr || {};
-  if (purpose === 'write') return String(ins.late || '').trim();
-  if (purpose === 'play') return String((typeof ins.lateNarrator === 'string' ? ins.lateNarrator : ins.late) || '').trim();
+  /* switched off (Send it, unticked): his words stay in the box, nothing is sent */
+  if (purpose === 'write') return ins.lateOff ? '' : String(ins.late || '').trim();
+  if (purpose === 'play') return ins.lateNarratorOff ? '' : String((typeof ins.lateNarrator === 'string' ? ins.lateNarrator : ins.late) || '').trim();
   return '';
 }
 
@@ -133,6 +134,23 @@ export function notesText(novel, { forHelper = false } = {}) {
   if (open.length) out.push('Threads still open\n' + open.map((c) => line(c)).join('\n'));
   if (shut.length) out.push('Threads that have closed\n' + shut.map((c) => line(c)).join('\n'));
   return out.join('\n\n');
+}
+
+/* The notes have not read the newest passages yet (he wrote on while the
+ * helper was still reading, or it has not come round to them): said at the
+ * top of the notes, with which passages, and that the passages are right
+ * where the two differ — Cozy Tavern's "Not in these notes yet" (M752).
+ * groups: [{label: 'Chapter Two', ns: [4, 5]}] in book order. */
+export function notReadWords(groups) {
+  const all = (groups || []).filter((g) => g.ns && g.ns.length);
+  const count = all.reduce((a, g) => a + g.ns.length, 0);
+  if (!count) return '';
+  const one = count === 1;
+  const nums = (ns) => (ns.length === 1 ? `passage ${ns[0]}` : ns.length === 2 ? `passages ${ns[0]} and ${ns[1]}` : `passages ${ns[0]}–${ns[ns.length - 1]}`);
+  const which = count > 8
+    ? `the newest ${count} passages, from ${all[0].label}, passage ${all[0].ns[0]} on`
+    : all.map((g) => `${g.label}, ${nums(g.ns)}`).join('; ');
+  return `Not in these notes yet: ${which} — written after the notes were last brought up to date. Where ${one ? 'that passage shows' : 'those passages show'} a change (who is where, the time, what someone has, knows or feels), ${one ? 'the passage is' : 'the passages are'} right.`;
 }
 
 /* What it's about and how it reads: his own words, set by hand ("Manual"),
@@ -394,17 +412,21 @@ const partnerChanges = (applies) => `When I ask for a change — or you see one 
 ${CHANGES_OPEN}[
   {"passage": "2.3", "find": "the exact words", "replace": "the new words", "why": "…"},
   {"passage": "2.3", "text": "the whole passage, written anew", "why": "…"},
+  {"passage": "2.4", "remove": true, "why": "…"},
+  {"replace_all": true, "find": "…", "replace": "…", "chapters": "2-5", "why": "…"},
+  {"rename": {"from": "Oda Jovan", "to": "Jovan Oda"}, "why": "…"},
   {"chapter": 2, "name": "its new name", "why": "…"},
+  {"summary": 2, "text": "…", "why": "…"},
   {"book": "about", "find": "…", "replace": "…", "why": "…"},
-  {"note": "people", "name": "…", "about": "…", "ties": "…", "now": "…", "why": "…"},
-  {"note": "threads", "name": "…", "open": false, "why": "…"},
-  {"note": "places", "name": "…", "remove": true, "why": "…"}
+  {"note": "people", "name": "…", "about": "…", "ties": "…", "now": "…", "newName": "…", "why": "…"},
+  {"note": "places", "name": "…", "remove": true, "why": "…"},
+  {"module": "The novel craft", "find": "…", "replace": "…", "why": "…"}
 ]${CHANGES_CLOSE}
 
-- "2.3" is passage 3 of Chapter Two, numbered as on the page. Quote "find" exactly as it stands — enough of it to be found in one place only. A passage written anew becomes a new version of it; my earlier words stay, one arrow away.
-- "book" is "title", "subtitle", "about" (what it’s about), "style" (how it reads) or "plans" (where it’s headed) — with "find" and "replace", or "text" for the whole of it, or "add" for a new paragraph at its end.
-- "note" is "people", "places", "lore" (things worth remembering) or "threads": a card added or brought up to date — only the parts you give change — or, with "remove": true, taken out of the notes.
-- For a chapter you only have in short, ask for it whole with ${READ_OPEN}[2]${READ_CLOSE} — it comes back to you, and you go on from there.
+- "2.3" is passage 3 of Chapter Two, as on the page. Quote "find" exactly as it stands — enough to be found in one place only. A passage written anew is a new version; my earlier words stay one arrow away. "replace_all" changes the same words wherever they stand in the chapters named ("2-5", "3" or "all"); "rename" changes a name everywhere at once — passages, chapter names, the notes, the book's words — never an ordinary word.
+- "book" is "title", "subtitle", "about", "style" or "plans", with "find" and "replace", "text" for all of it, or "add" for a paragraph at its end. "summary" is the chapter's summary that rides once the book outgrows the room.
+- "note" is "people", "places", "lore" or "threads" (with "open": false once resolved): only the parts you give change; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
+- To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Oda Jovan"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - Only quote what you can see; never make up a passage or a fact. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block.`;
 
 export function partnerFrame(house, novel, { notesAs = 'system' } = {}) {

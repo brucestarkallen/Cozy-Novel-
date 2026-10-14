@@ -4,10 +4,12 @@
 
 import * as store from '../store.js';
 import { h, openSheet, field, group, toast, undoToast, confirmIt, download, pickFile, menu, icon } from './dom.js';
-import { PRESETS, LEVELS, spokenAs, describePrefill, learnedFacts, contextOf, alwaysThinks, cannotStopThinking } from '../model/providers.js';
-import { listModels, tryConnection } from '../model/call.js';
+import { PRESETS, LEVELS, spokenAs, describePrefill, learnedFacts, contextOf, alwaysThinks, cannotStopThinking, wireOf, presetOf, budgetFor, searchOffered, structuredOffered, prefillFields } from '../model/providers.js';
+import { listModels, tryConnection, testPrefill } from '../model/call.js';
+import { STRUCTURED_PRESETS, fillPreset, presetWords, bannedPattern, MIN_AFTER_DEFAULT } from '../model/structured.js';
 import { connFor, connName } from '../novel/writer.js';
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from '../novel/prompts.js';
+import { voiceOf, presetsOf, presetInUse, presetSteps, cleanVoice, cleanName, voiceLine, startingVoice, FORMAT as PRESET_FORMAT } from '../novel/presets.js';
 import { listModules, moduleOf, builtinOf, moduleSteps, rideLine, READERS, READER_WORDS, RIDES, RIDES_WORDS } from '../novel/modules.js';
 import { newId, debounce, timeAgo, plural } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
@@ -20,6 +22,17 @@ let editingId = null;
 function house() { return store.peek('house', 'house') || {}; }
 function changeHouse(fn, opts = {}) { store.change('house', 'house', fn, { delay: 400, ...opts }); }
 
+/* A save that waits for his typing pause. Whatever draws the sheet again, or
+ * uses or saves a preset, lands every save still waiting first: words typed a
+ * moment ago are never drawn over, nor written in afterwards over a preset
+ * just put in the boxes. */
+const waiting = new Set();
+function typing(fn, ms) {
+  const d = debounce(() => { waiting.delete(d); fn(); }, ms);
+  return () => { waiting.add(d); d(); };
+}
+function landTyping() { for (const d of [...waiting]) d.now(); }
+
 export function openSettings(focus = '') {
   sheet = openSheet('Settings', { onClose: () => { sheet = null; } });
   draw(focus);
@@ -27,6 +40,7 @@ export function openSettings(focus = '') {
 
 function draw(focus = '') {
   if (!sheet) return;
+  landTyping();
   const scroll = sheet.body.scrollTop;
   /* what is open stays open when the sheet is drawn again */
   const open = new Set([...sheet.body.querySelectorAll('section.group[data-key]:not(.fold)')].map((g) => g.dataset.key));
@@ -38,6 +52,7 @@ function draw(focus = '') {
   sheet.body.append(
     connectionsGroup(hs, focus === 'connections'),
     rolesGroup(hs, focus === 'connections'),
+    usageGroup(hs),
     wordsGroup(hs),
     lookGroup(hs),
     backupsGroup(),
@@ -49,30 +64,63 @@ function draw(focus = '') {
 }
 
 /* ------------------------------------------------------------ connections */
+/* Cozy Tavern's connection editor, field for field and in its words (its
+ * Settings → Connections), saved as he types: who writes with you, the
+ * thinking and every dial, the prefill — as written or structured, with its
+ * ready-made templates and its own Test it — looking things up, the prices
+ * for Usage and cost. What he leaves empty is not sent. */
 
-const THINK_WORDS = { '': 'Not set — the model decides', off: 'Off', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+const THINK_WORDS = {
+  '': 'Not set — nothing is sent',
+  off: 'Off — straight to the words',
+  low: 'Low — a quick weighing',
+  medium: 'Medium — a considered weighing',
+  high: 'High — a deep weighing',
+  xhigh: 'XHigh — a long, deep weighing',
+  max: 'Max — everything it has',
+};
+const MODEL_HINT = {
+  claude: 'e.g. claude-sonnet-4-6, claude-opus-4-5', openai: 'e.g. gpt-4o, gpt-4o-mini', openrouter: 'e.g. anthropic/claude-sonnet-4-6',
+  zai: 'e.g. glm-4.6, glm-4.5-air', gemini: 'e.g. gemini-2.5-pro, gemini-2.5-flash', deepseek: 'e.g. deepseek-chat, deepseek-reasoner',
+  moonshot: 'e.g. kimi-k2-thinking', synthetic: 'e.g. hf:deepseek-ai/DeepSeek-V3', hermes: 'hermes-agent — or a profile’s name', custom: 'Whatever the endpoint calls it',
+};
+/* the thinking room, in Cozy Tavern's words for each kind of address */
+function roomWords(c) {
+  const model = String(c.model || '').toLowerCase();
+  const url = String(c.url || '').toLowerCase();
+  if (wireOf(c) === 'anthropic') {
+    if (/deepseek/.test(url + ' ' + model)) return 'DeepSeek has thinking LEVELS and no thinking room — a number here is never sent; the level above is.';
+    return 'Claude takes a thinking room (no less than 1,024 tokens — a smaller number is sent as 1,024). Set, it replaces the level above; empty, the level decides.';
+  }
+  if (/openrouter\.ai/.test(url)) {
+    if (/^(anthropic|google)\//.test(model)) return 'Through OpenRouter this model takes a thinking room (OpenRouter keeps it between 1,024 and 32,000). Set, it replaces the level above; empty, the level decides.';
+    return 'Through OpenRouter only Claude and Gemini models take a thinking room. For this model a number here is never sent — OpenRouter would only turn it into a level of its own choosing in place of yours; the level above is what is sent.';
+  }
+  return 'This address has thinking LEVELS and no thinking room — a number here is never sent; the level above is what decides how long it thinks.';
+}
 
 function connectionsGroup(hs, open) {
   const conns = [...(hs.connections || [])].sort((a, b) => connName(a).localeCompare(connName(b)));
   if (!editingId || !conns.some((c) => c.id === editingId)) editingId = (conns[0] || {}).id || null;
   const g = group('Connections', { key: 'set.connections', open: open || !conns.length, note: conns.length ? plural(conns.length, 'connection') : 'none yet' });
-  g.body.append(h('p.say', 'What you set here is exactly what is sent — your temperature, your top-p, your thinking. What you leave empty is not sent at all, so the provider does what it normally does. Keys stay on this phone.'));
+  g.body.append(h('p.say', 'Who writes with you. The key lives only on this phone and travels nowhere but to them. What you set here is exactly what is sent — your temperature, your top-p, your thinking; what you leave empty is not sent at all, so the provider does what it normally does.'));
   const pick = h('select', { 'aria-label': 'Which connection' });
   for (const c of conns) pick.append(h('option', { value: c.id, selected: c.id === editingId }, `${connName(c)}${c.model && c.name ? ` — ${c.model}` : ''}`));
   pick.addEventListener('change', () => { editingId = pick.value; draw(); });
   const row = h('div.btnrow',
     conns.length ? h('label.field', { style: { flex: '1', minWidth: '200px', margin: '0' } }, pick) : null,
-    h('button.btn.small', { onclick: (e) => presetMenu(e.currentTarget) }, icon('plus', 15), 'New'),
-    conns.length ? h('button.btn.quiet.small', { onclick: () => copyConnection(editingId) }, 'Copy') : null);
-  g.body.append(row);
+    h('button.btn.small', { title: 'A new connection, started from a provider', onclick: (e) => presetMenu(e.currentTarget) }, icon('plus', 15), 'Add a connection'),
+    conns.length ? h('button.btn.quiet.small', { title: 'A second connection with this one’s provider, key, address and dials — change its model and name.', onclick: () => copyConnection(editingId) }, 'Copy') : null);
+  g.body.append(row, h('p.say.quiet', conns.length
+    ? 'Your connections, A to Z — pick one to change it. Add a connection starts one from a provider; Copy makes a second with this one’s provider, key, address and dials, to change its model and name.'
+    : 'No connections yet. Add one: pick your provider, paste your key, pick a model.'));
   const c = conns.find((x) => x.id === editingId);
   if (c) g.body.append(connectionForm(c));
-  else g.body.append(h('p.say', 'Add one to start writing: pick your provider under New, paste your key, pick a model.'));
   return g;
 }
 
 function presetMenu(anchor) {
-  menu(anchor, [{ label: 'Which provider?', header: true }, ...PRESETS.map((p) => ({ label: p.name, run: () => {
+  menu(anchor, [{ label: 'Start from', header: true }, ...PRESETS.map((p) => ({ label: p.name, hint: p.url ? p.url.replace(/^https?:\/\//, '') : 'Any address that talks like OpenAI', run: () => {
     const id = newId('c');
     const taken = (house().connections || []).map((x) => x.name);
     let name = p.id === 'custom' ? 'My connection' : p.name;
@@ -92,7 +140,7 @@ function copyConnection(id) {
   const c = (house().connections || []).find((x) => x.id === id);
   if (!c) return;
   const copy = JSON.parse(JSON.stringify(c));
-  delete copy.learned; delete copy.tested; delete copy.modelHf; delete copy.modelEfforts; delete copy.modelContext;
+  delete copy.learned; delete copy.tested; delete copy.prefillTested; delete copy.modelHf; delete copy.modelEfforts; delete copy.modelContext;
   copy.id = newId('c');
   copy.name = `${connName(c)} (copy)`;
   changeHouse((hs) => { hs.connections.push(copy); }, { now: true });
@@ -102,49 +150,64 @@ function copyConnection(id) {
 }
 
 function connectionForm(c) {
-  const box = h('div');
+  const box = h('div.connform');
+  /* what the form says right now: the saved connection with what is being typed laid over it */
+  const typed = {};
+  const now = () => ({ ...((house().connections || []).find((x) => x.id === c.id) || c), ...typed });
   const set = (patch, { redraw = false } = {}) => {
+    for (const [k, v] of Object.entries(patch)) typed[k] = v === '' || v === null ? undefined : v;
     changeHouse((hs) => {
       const live = (hs.connections || []).find((x) => x.id === c.id);
       if (!live) return;
-      const before = JSON.stringify([live.url, live.model, live.key, live.thinking, live.thinkingBudget, live.prefill]);
+      const keys = ['url', 'model', 'key', 'thinking', 'thinkingBudget', 'prefill', 'prefillMode', 'prefillMinChars', 'prefillBanned', 'prefillFlagField', 'prefillReasoningField', 'prefillKeepThinking', 'searchOn'];
+      const before = JSON.stringify(keys.map((k) => live[k]));
       for (const [k, v] of Object.entries(patch)) { if (v === undefined || v === '' || v === null) delete live[k]; else live[k] = v; }
-      if (JSON.stringify([live.url, live.model, live.key, live.thinking, live.thinkingBudget, live.prefill]) !== before) delete live.tested;
+      const after = JSON.stringify(keys.map((k) => live[k]));
+      if (after !== before) { delete live.tested; delete live.prefillTested; }
     });
     if (redraw) draw();
   };
   const text = (key, placeholder, { type = 'text', after = null } = {}) => {
     const inp = h('input', { type, placeholder, value: c[key] ?? '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
-    inp.addEventListener('input', debounce(() => { set({ [key]: inp.value.trim() }); if (after) after(inp.value.trim()); }, 400));
+    inp.addEventListener('input', typing(() => { set({ [key]: inp.value.trim() }); if (after) after(inp.value.trim()); }, 400));
     return inp;
   };
-  const num = (key, placeholder, step = 'any') => {
-    const inp = h('input', { type: 'number', inputmode: 'decimal', step, placeholder, value: Number.isFinite(c[key]) ? c[key] : '' });
-    inp.addEventListener('input', debounce(() => {
-      const s = inp.value.trim();
+  const num = (key, placeholder, { whole = false } = {}) => {
+    const inp = h('input', { type: 'text', inputmode: whole ? 'numeric' : 'decimal', placeholder, value: Number.isFinite(c[key]) ? String(c[key]) : '', autocomplete: 'off' });
+    inp.addEventListener('input', typing(() => {
+      const s = inp.value.trim().replace(',', '.');
       if (s === '') { set({ [key]: undefined }); return; }
       const n = Number(s);
-      if (Number.isFinite(n)) set({ [key]: n });
+      if (Number.isFinite(n)) set({ [key]: whole ? Math.round(n) : n });
     }, 400));
     return inp;
   };
-  box.append(field('Name', text('name', 'What to call it', { after: () => {} })));
-  box.append(field('Address', text('url', 'https://api.deepseek.com/v1'), 'The provider’s address — the preset fills it in.'));
-  box.append(field('Key', text('key', 'Your API key', { type: 'password' })));
-  const model = text('model', 'deepseek-chat');
-  const pick = h('select', { 'aria-label': 'Pick a model' });
-  /* inside a field, so it wears the same look as every other box here */
-  const pickBox = h('label.field', { hidden: true, style: { marginTop: '8px' } }, pick);
+  const tick = (key, label, on, onChange) => {
+    const inp = h('input', { type: 'checkbox', checked: on });
+    inp.addEventListener('change', () => onChange(inp.checked));
+    return h('label.toggle', inp, h('span', label));
+  };
+  const quiet = (words) => h('p.say.quiet', words);
+  const kind = wireOf(c) === 'anthropic' ? 'claude' : presetOf(c);
+
+  /* ---- who it is */
+  box.append(field('Call it', text('name', 'e.g. Claude at home')));
+  const urlHint = quiet(wireOf(c) === 'anthropic' ? 'Leave as-is unless you know otherwise.' : 'Usually ends in /v1 — left off, it is added for you.');
+  box.append(field('Address', text('url', 'https://api.deepseek.com/v1')), urlHint);
+  box.append(field('Key', text('key', 'The key they gave you', { type: 'password' })));
+  const model = text('model', (PRESETS.find((p) => p.id === kind) || {}).model || 'the model’s name');
+  const pick = h('select', { 'aria-label': 'What’s on offer' });
+  const pickBox = h('label.field', { hidden: true, style: { marginTop: '8px' } }, h('span', 'What’s on offer'), pick);
   const say = h('p.say', { hidden: true });
   const list = h('button.btn.small', { onclick: async () => {
-    list.disabled = true; say.hidden = false; say.className = 'say'; say.textContent = 'Asking which models it offers…';
+    list.disabled = true; say.hidden = false; say.className = 'say'; say.textContent = 'Asking what’s on offer…';
     await store.flush('house', 'house');
-    const r = await listModels((house().connections || []).find((x) => x.id === c.id) || c);
+    const r = await listModels(now());
     list.disabled = false;
-    if (!r.ok) { say.className = 'say bad'; say.textContent = `The list did not come: ${r.error}. The model name above still stands.`; return; }
-    if (!r.models.length) { say.textContent = 'The list came back empty — type the model name above.'; return; }
+    if (!r.ok) { say.className = 'say bad'; say.textContent = `The offer wouldn’t come through: ${r.error}. The model name above still stands.`; return; }
+    if (!r.models.length) { say.textContent = 'The list came back empty — the model name above still stands.'; return; }
     pick.textContent = '';
-    pick.append(h('option', { value: '' }, `${r.models.length} on offer — pick one`));
+    pick.append(h('option', { value: '' }, 'Choose one…'));
     for (const m of r.models) pick.append(h('option', { value: m.id }, m.id + (m.context ? ` (${Math.round(m.context / 1000)}k)` : '')));
     pickBox.hidden = false;
     pick.onchange = () => {
@@ -153,50 +216,75 @@ function connectionForm(c) {
       model.value = m.id;
       set({ model: m.id, modelHf: m.hf || undefined, modelEfforts: m.efforts || undefined, modelContext: m.context || undefined }, { redraw: true });
     };
-    say.textContent = 'Picking one fills the model name, and keeps what the provider says about it (its room, its thinking levels).';
-  } }, 'Show the models on offer');
-  model.addEventListener('input', debounce(() => { if (model.value.trim() !== c.model) set({ modelHf: undefined, modelEfforts: undefined, modelContext: undefined }); }, 400));
-  box.append(field('Model', model), h('div.btnrow', list), pickBox, say);
+    say.textContent = `${r.models.length.toLocaleString()} on offer. Pick one and it fills the model field — and keeps what the provider says about it (its room, its thinking levels).`;
+  } }, 'Fetch what’s on offer');
+  model.addEventListener('input', typing(() => { if (model.value.trim() !== c.model) set({ modelHf: undefined, modelEfforts: undefined, modelContext: undefined }); }, 400));
+  box.append(field('Model', model), quiet(MODEL_HINT[kind] || MODEL_HINT.custom), h('div.btnrow', list), pickBox, say);
 
-  /* thinking */
+  /* ---- thinking */
   const think = h('select');
-  for (const l of ['', ...LEVELS]) think.append(h('option', { value: l, selected: (c.thinking || '') === l }, THINK_WORDS[l]));
+  for (const l of ['', ...LEVELS]) think.append(h('option', { value: l, selected: (c.thinking || '') === l }, THINK_WORDS[l] || l));
   think.addEventListener('change', () => set({ thinking: think.value || undefined }, { redraw: true }));
-  const facts = learnedFacts(c);
   const said = spokenAs(c);
-  const thinkHint = (c.thinking || alwaysThinks(c.model) || cannotStopThinking(c)) ? `${said.charAt(0).toUpperCase()}${said.slice(1)}.` : 'Nothing about thinking is sent until you choose a level.';
-  box.append(field('Thinking', think, thinkHint));
+  box.append(field('Thinking — how long the writer weighs the page before writing', think),
+    quiet('A level this address can’t name is spoken as the nearest one it can — never a name the endpoint rejects. If the address ever refuses the thinking settings, the page is sent again without them, and none are sent for a day.'),
+    quiet((c.thinking || alwaysThinks(c.model) || cannotStopThinking(c)) ? `For this connection: ${said}.` : 'Not set: nothing about thinking is sent until you choose a level.'));
+  box.append(field('Thinking room, in tokens (optional)', num('thinkingBudget', budgetFor({ ...c, thinkingBudget: 2048 }).sent ? 'Leave empty to follow the level' : 'Not used by this address', { whole: true })), quiet(roomWords(c)));
 
-  const dials = h('div.fieldrow',
-    field('Temperature', num('temperature', 'not set')),
-    field('Top-p', num('topP', 'not set')),
-    field('Longest reply (tokens)', num('maxTokens', 'not set', '1')),
-    field('Room (context tokens)', num('context', `${contextOf({ ...c, context: undefined }).toLocaleString()} if empty`, '1')));
-  box.append(dials, h('p.say', 'The room is how much the model can read at once; past it, the oldest chapters ride as their summaries. Empty: what the provider says, or 128,000.'));
+  /* ---- the dials */
+  box.append(h('div.fieldrow',
+    field('Temperature (0–2)', num('temperature', 'Their own default')),
+    field('Top-p (0–1)', num('topP', 'Their own default'))));
+  const claude = wireOf(c) === 'anthropic';
+  box.append(h('div.fieldrow',
+    field('Top-k', num('topK', 'Their own default', { whole: true })),
+    claude ? null : field('Min-p (0–1)', num('minP', 'Their own default')),
+    claude ? null : field('Presence penalty', num('presencePenalty', 'Their own default')),
+    claude ? null : field('Frequency penalty', num('frequencyPenalty', 'Their own default')),
+    claude ? null : field('Repetition penalty', num('repetitionPenalty', 'Their own default')),
+    claude ? null : field('Seed', num('seed', 'None', { whole: true }))));
+  if (!claude) box.append(quiet('The three penalties make the model avoid words it has already written — sound effects too (*CLANG!*, “hah… hah…”). If the sounds thin out, keep them at 0 or low.'));
+  else box.append(quiet('Claude takes top-k and nothing else of these; with its thinking on it takes no top-k, and its temperature is 1.'));
+  const stop = h('textarea', { rows: 2, spellcheck: 'false', placeholder: 'Leave empty to send none' });
+  stop.value = Array.isArray(c.stop) ? c.stop.join('\n') : '';
+  stop.addEventListener('input', typing(() => { const lines = stop.value.split('\n').filter((l) => l !== ''); set({ stop: lines.length ? lines : undefined }); }, 500));
+  box.append(field('Stop text, one per line', stop, 'The reply ends where one of these would be written. The helper and the checker never get them (a stop can end a JSON answer halfway).'));
+  box.append(h('div.fieldrow',
+    field('Longest reply, in tokens', num('maxTokens', 'The provider’s own', { whole: true })),
+    field('The model’s room, in tokens', num('context', `${contextOf({ ...c, context: undefined }).toLocaleString()} if empty`, { whole: true }))));
+  box.append(quiet('Longest reply: empty, nothing is sent (Claude, which must be told one, gets what the length you ask for needs); a model that thinks gets room to think and write. The room is how much the model can read at once — past it, the oldest chapters ride as their summaries; empty, what the provider says, or its usual size.'));
 
-  const more = group('More dials', { key: 'set.conn.more' },
-    h('div.fieldrow',
-      field('Top-k', num('topK', 'not set', '1')),
-      field('Min-p', num('minP', 'not set')),
-      field('Presence penalty', num('presencePenalty', 'not set')),
-      field('Frequency penalty', num('frequencyPenalty', 'not set')),
-      field('Repetition penalty', num('repetitionPenalty', 'not set')),
-      field('Thinking room (Claude)', num('thinkingBudget', 'not set', '1'))),
-    field('Prefill — start the reply for it', (() => {
-      const ta = h('textarea', { rows: 3, placeholder: 'Words the reply begins with. Start with <think> to seed its thinking instead.' });
-      ta.value = c.prefill || '';
-      ta.addEventListener('input', debounce(() => set({ prefill: ta.value || undefined }), 500));
-      return ta;
-    })(), describePrefill(c) || 'Empty: nothing is started for it.'),
+  /* ---- what it costs */
+  box.append(h('div.fieldrow',
+    field('Input price, $ per million tokens', num('priceIn', 'e.g. 3')),
+    field('Output price, $ per million tokens', num('priceOut', 'e.g. 15')),
+    field('Cached input price, $ per million', num('priceCached', 'e.g. 0.3'))),
+    quiet('Never sent — for Usage and cost below. Cached input is what the provider serves from its cache; empty, the input price.'));
+
+  /* ---- looking things up */
+  if (searchOffered(c)) {
+    box.append(tick('searchOn', 'Let it look things up (web search)', c.searchOn === true, (on) => set({ searchOn: on ? true : undefined }, { redraw: true })));
+    if (c.searchOn === true) box.append(field(claude ? 'At most how many look-ups per reply' : 'At most how many pages it reads per reply', num('searchMaxUses', 'not set', { whole: true }), 'Empty: nothing is sent, and the provider decides.'));
+    box.append(quiet(`${claude ? 'Claude’s own web search' : 'OpenRouter’s web plugin'}: for the pages, your partner and the scenes — never the helper or the checker. What it looked at is listed under the passage.`));
+  } else {
+    box.append(quiet('Looking things up: this address has no looking-things-up of its own — the switch rests. (Web search rides a provider’s own tool: Claude’s native search, or OpenRouter’s web plugin.)'));
+  }
+
+  /* ---- the prefill */
+  box.append(prefillPart(c, { set, now, quiet, tick }));
+
+  /* ---- how the address talks */
+  box.append(group('How the address talks', { key: 'set.conn.shape' },
     field('How the address talks', (() => {
       const sel = h('select');
       for (const [v, l] of [['', 'Found from the address'], ['openai', 'Like OpenAI (most providers)'], ['anthropic', 'Like Claude (Anthropic)']]) sel.append(h('option', { value: v, selected: (c.shape || '') === v }, l));
       sel.addEventListener('change', () => set({ shape: sel.value || undefined }, { redraw: true }));
       return sel;
-    })(), 'Only for an unusual address that talks the way Claude’s does.'));
-  box.append(more);
+    })(), 'Only for an unusual address that talks the way Claude’s does.')));
 
-  if (facts && (facts.efforts || facts.drop.length || facts.offThinks || facts.down || facts.noLateSystem || facts.prefillDown || facts.context || facts.maxOut || facts.completionField)) {
+  /* ---- what the model taught */
+  const facts = learnedFacts(c);
+  if (facts && (facts.efforts || facts.drop.length || facts.offThinks || facts.down || facts.noLateSystem || facts.prefillDown || facts.context || facts.maxOut || facts.completionField || facts.structuredDown)) {
     const bits = [];
     if (facts.maxOut) bits.push(`gives at most ${facts.maxOut.toLocaleString()} tokens in one reply`);
     if (facts.completionField) bits.push('takes the reply’s length as “max_completion_tokens”');
@@ -206,25 +294,28 @@ function connectionForm(c) {
     if (facts.down) bits.push('refused thinking today, so none is sent until tomorrow');
     if (facts.noLateSystem) bits.push('takes no system message after the request');
     if (facts.prefillDown) bits.push('will not continue a started reply');
+    if (facts.structuredDown) bits.push('will not take a structured prefill');
     if (facts.context) bits.push(`holds about ${facts.context.toLocaleString()} tokens`);
     box.append(h('p.say', 'What the model taught the app about itself: ' + bits.join(' · ') + '.'),
-      h('div.btnrow', h('button.btn.quiet.small', { onclick: () => { set({ learned: undefined }, { redraw: true }); toast('Forgotten — the next request asks afresh.'); } }, 'Forget what it taught')));
+      h('div.btnrow', h('button.btn.quiet.small', { onclick: () => { set({ learned: undefined }, { redraw: true }); toast('Forgotten — the next request asks afresh.'); } }, 'Forget what it taught')),
+      quiet('Forget what it taught: the next request asks with everything you set, as if for the first time.'));
   }
 
-  const result = h('p.say' + (c.tested ? (c.tested.ok ? '.good' : '.bad') : ''), c.tested ? `Tried ${timeAgo(c.tested.at)}: ${c.tested.words}` : '');
-  const tryBtn = h('button.btn.primary.small', { onclick: async () => {
-    tryBtn.disabled = true; tryBtn.textContent = 'Trying…';
+  /* ---- test, let go */
+  const result = h('p.say' + (c.tested ? (c.tested.ok ? '.good' : '.bad') : ''), c.tested ? `Tested ${timeAgo(c.tested.at)}: ${c.tested.words}` : '');
+  const testBtn = h('button.btn.primary.small', { onclick: async () => {
+    testBtn.disabled = true; testBtn.textContent = 'Listening for an answer…';
     await store.flush('house', 'house');
-    const live = (house().connections || []).find((x) => x.id === c.id) || c;
-    const out = await tryConnection(live);
-    tryBtn.disabled = false; tryBtn.textContent = 'Try it';
+    const out = await tryConnection(now());
+    testBtn.disabled = false; testBtn.textContent = 'Test';
     result.className = 'say ' + (out.ok ? 'good' : 'bad');
     result.textContent = out.words;
     set({ tested: { at: Date.now(), ok: out.ok, words: out.words } });
-  } }, 'Try it');
-  box.append(h('div.btnrow', tryBtn,
+    toast(out.ok ? `“${connName(c)}” answered — the connection works.` : 'No answer came back — the address, key or model may be off.');
+  } }, 'Test');
+  box.append(h('div.btnrow', testBtn,
     h('button.btn.danger.small', { onclick: async () => {
-      if (!(await confirmIt('Remove this connection?', `“${connName(c)}” and its key go. Your books are not touched.`, 'Remove it', { danger: true }))) return;
+      if (!(await confirmIt(`Let go of “${connName(c)}”?`, 'The key on this phone goes with it. Your books are not touched.', 'Let go', { danger: true }))) return;
       changeHouse((hs) => {
         hs.connections = (hs.connections || []).filter((x) => x.id !== c.id);
         for (const k of Object.keys(hs.roles || {})) if (hs.roles[k] === c.id) delete hs.roles[k];
@@ -232,8 +323,114 @@ function connectionForm(c) {
       }, { now: true });
       editingId = null;
       draw('connections');
-    } }, 'Remove')), result);
+    } }, 'Let go')),
+    quiet('Test sends exactly what a page sends for the thinking and says whether thinking came back (asking again at the top level when it did not), then times one answer — how soon its first words came and how fast it writes. Let go removes this connection and its key.'),
+    result);
   return box;
+}
+
+/* The prefill, as Cozy Tavern carries it: as written (a started reply, or a
+ * thinking seed) or structured (the model writes the opening itself, held to
+ * it by the answer's pattern), its ready-made templates, the words it can
+ * never write, the two field names, and its own Test it. */
+function prefillPart(c, { set, now, quiet, tick }) {
+  const part = h('div.prefillpart');
+  const ta = h('textarea', { rows: 3, spellcheck: 'false', placeholder: 'The reply opens with these words already written…' });
+  ta.value = c.prefill || '';
+  const hint = h('p.say');
+  const sayHint = () => { const d = describePrefill({ ...now(), prefill: ta.value }); hint.textContent = d || 'Empty: nothing is started for it.'; };
+  ta.addEventListener('input', typing(() => { set({ prefill: ta.value || undefined }); sayHint(); }, 500));
+  part.append(field('Start the reply for it (optional — the prefill)', ta),
+    quiet('Open it with <think> and it seeds the model’s THINKING instead of its reply — <think>Right, where were we. Let me look at what Bruce just asked for… — the model carries the thought on in your words, then writes the page itself. Anything after </think> starts the reply, as before.'),
+    hint);
+  sayHint();
+
+  const offered = structuredOffered(c);
+  const mode = h('select');
+  for (const [v, l] of [['', 'As written — a started reply, or a thinking seed'], ['structured', 'Structured — the model writes the opening itself']]) mode.append(h('option', { value: v, selected: (c.prefillMode || '') === v }, l));
+  mode.addEventListener('change', () => set({ prefillMode: mode.value || undefined }, { redraw: true }));
+  part.append(h('div.fieldrow',
+    field('How it is sent', mode),
+    field('At least this many characters after it', (() => {
+      const inp = h('input', { type: 'text', inputmode: 'numeric', placeholder: String(MIN_AFTER_DEFAULT), value: Number.isFinite(c.prefillMinChars) ? String(c.prefillMinChars) : '' });
+      inp.addEventListener('input', typing(() => { const n = Number(inp.value.trim()); set({ prefillMinChars: inp.value.trim() && Number.isFinite(n) && n >= 1 ? Math.min(10000, Math.round(n)) : undefined }); }, 400));
+      return inp;
+    })())));
+  const structured = c.prefillMode === 'structured';
+  if (structured) {
+    if (!offered) part.append(quiet('This address takes no JSON-schema answers (Claude, DeepSeek, Kimi, Z.ai and a few others), so here the prefill goes as written.'));
+    /* the ready-made templates */
+    const tpl = h('select');
+    tpl.append(h('option', { value: '' }, 'Choose one…'));
+    for (const p of STRUCTURED_PRESETS) tpl.append(h('option', { value: p.id }, p.name));
+    const words = h('input', { type: 'text', maxlength: 600, autocomplete: 'off', spellcheck: 'true', placeholder: 'e.g. Yuhuu Hulk is here Bruce story is good' });
+    const wordsLabel = h('span', 'Your words');
+    const guide = h('p.say.quiet', { hidden: true });
+    const example = h('pre.preset-example', { hidden: true });
+    const saidPut = h('span.say.quiet', { hidden: true });
+    const showTpl = () => {
+      const p = STRUCTURED_PRESETS.find((x) => x.id === tpl.value);
+      wordsLabel.textContent = !p ? 'Your words' : p.needsWords ? 'Your words' : (p.build('x') === p.build('') ? 'Your words (not used by this one)' : 'Your words (optional)');
+      guide.hidden = !p; example.hidden = !p;
+      if (p) { guide.textContent = p.guide + ' A page will look like this:'; example.textContent = p.example(presetWords(words.value)); }
+    };
+    tpl.addEventListener('change', showTpl);
+    words.addEventListener('input', showTpl);
+    part.append(field('Ready-made template', tpl), h('label.field', wordsLabel, words), guide, example,
+      h('div.btnrow', h('button.btn.small', { onclick: () => {
+        if (!tpl.value) { saidPut.hidden = false; saidPut.textContent = 'Choose a template first.'; return; }
+        const out = fillPreset(tpl.value, words.value);
+        if (out.error) { saidPut.hidden = false; saidPut.textContent = out.error; return; }
+        ta.value = out.prefill;
+        set({ prefill: out.prefill, prefillMode: 'structured' });
+        sayHint();
+        saidPut.hidden = false; saidPut.textContent = 'Written into the prefill box — it is kept as it stands.';
+      } }, 'Put it in the prefill box'), saidPut));
+    /* the words it can never write */
+    const banned = h('textarea', { rows: 2, spellcheck: 'false', placeholder: 'ozone\ntapestry' });
+    banned.value = c.prefillBanned || '';
+    const banNote = h('p.say.quiet');
+    const sayBan = () => {
+      const b = bannedPattern(banned.value);
+      banNote.textContent = !b.words.length ? '' : b.tooBig ? `Too many for one exact pattern (${b.words.length}) — the list would not be sent. Keep it to the few that matter most.`
+        : `${b.words.length} word${b.words.length === 1 ? '' : 's'} — it cannot write ${b.words.length === 1 ? 'it' : 'any of them'} after your opening (any capitals). Claude routes on OpenRouter take no such list.`;
+    };
+    banned.addEventListener('input', typing(() => { set({ prefillBanned: banned.value.trim() ? banned.value : undefined }); sayBan(); }, 500));
+    sayBan();
+    part.append(field('Words it can never write after your opening (structured only — one per line)', banned), banNote,
+      quiet('Structured: the reply must begin with your words, and the model writes them itself — it is not handed them, so it cannot refuse at the first word or ignore them. Only addresses that take JSON-schema answers (OpenAI, and on OpenRouter the models that list structured outputs) can; one that refuses is remembered for its model and gets the prefill as written. A <think>…</think> at the start is a thinking block the model must write itself — it goes in the thinking box, beside the model’s own thinking. Inside your words: [[keep]] hides everything before it; [[w:2-5]] words, [[opt:a|b]] one of these, [[line]], [[lines:2-4]], [[num]], [[number:1-100]], [[emotion]], [[name]], [[action]], [[thought]], [[re:…]], and [[end]] to end the reply there.'));
+  }
+  part.append(
+    tick('prefillKeepThinking', 'Keep the thinking open when a seed is sent', c.prefillKeepThinking !== false, (on) => set({ prefillKeepThinking: on ? undefined : false })),
+    quiet('On: a thinking seed sent with Thinking at Off asks for the lightest thinking, so the seed has a channel to land in.'),
+    tick('prefillForWorkers', 'Workers riding this connection get it too', c.prefillForWorkers === true, (on) => set({ prefillForWorkers: on ? true : undefined })),
+    quiet('Off (usual): the helper and the checker on this connection get no prefill — their answers are JSON, which a started reply can break. On: they get it as written.'));
+  const auto = prefillFields({ ...c, prefillFlagField: '', prefillReasoningField: '' });
+  const names = h('details.quiet-details', h('summary', 'The two field names (only if your address needs others)'),
+    h('div.fieldrow',
+      field('Continuation flag', (() => { const i = h('input', { type: 'text', maxlength: 40, autocomplete: 'off', spellcheck: 'false', placeholder: auto.flag || 'none', value: c.prefillFlagField || '' }); i.addEventListener('input', typing(() => set({ prefillFlagField: i.value.trim() || undefined }), 400)); return i; })()),
+      field('Thinking field', (() => { const i = h('input', { type: 'text', maxlength: 40, autocomplete: 'off', spellcheck: 'false', placeholder: auto.reasoning || 'none', value: c.prefillReasoningField || '' }); i.addEventListener('input', typing(() => set({ prefillReasoningField: i.value.trim() || undefined }), 400)); return i; })())),
+    quiet('Empty uses this address’s own (shown greyed); type none to send no such field.'));
+  part.append(names);
+  const verdict = h('p.say' + (c.prefillTested ? (c.prefillTested.ok ? '.good' : '.bad') : ''), c.prefillTested ? `Tested ${timeAgo(c.prefillTested.at)}: ${c.prefillTested.words}` : '');
+  const testIt = h('button.btn.small', { onclick: async () => {
+    testIt.disabled = true;
+    verdict.className = 'say'; verdict.textContent = 'Asking, just a whisper of a request…';
+    await store.flush('house', 'house');
+    const live = now();
+    const out = await testPrefill(live);
+    testIt.disabled = false;
+    verdict.className = 'say ' + (out.ok ? 'good' : 'bad');
+    verdict.textContent = out.words;
+    const patch = { prefillTested: { at: Date.now(), ok: out.ok, words: out.words } };
+    /* a fresh yes lifts an old refusal; a refusal it taught is kept on the connection */
+    if (out.clearDown && live.learned) patch.learned = { ...live.learned, prefillDownAt: null, structuredDownAt: null };
+    else if (!out.ok && live.learned) patch.learned = live.learned;
+    set(patch);
+    toast(out.ok ? 'The prefill took.' : 'The prefill wouldn’t take — the words above say why.');
+  } }, 'Test it');
+  part.append(h('div.btnrow', testIt), quiet('Test it sends a tiny exchange with the prefill exactly as a page sends it — the thinking dial, the seed, the two field names; set to Structured, the very schema a page carries — and reads what came back.'), verdict);
+  return part;
 }
 
 function rolesGroup(hs, open) {
@@ -262,6 +459,77 @@ function rolesGroup(hs, open) {
   return g;
 }
 
+/* ------------------------------------------------------------ usage and cost */
+/* Every call to a model — the writer, the helper, the checker, the partner,
+ * the narrator — counted on the phone as it lands (Cozy Tavern's meter), by
+ * connection and model; the money from the prices set on each connection. */
+
+function usageGroup(hs) {
+  const g = group('Usage and cost', { key: 'set.usage' });
+  const box = h('div', h('p.say', 'Looking…'));
+  g.body.append(h('p.say', 'Every call to a model — the writer and the helper, the checker, your partner, the narrator — counted as it lands: tokens in and out, by connection and model. Set each connection’s prices above to see the money.'), box,
+    h('div.btnrow', h('button.btn.quiet.small', { title: 'The counts start again from nothing; your books and connections are not touched.', onclick: async () => {
+      if (!(await confirmIt('Clear the counts?', 'Usage and cost starts again from nothing. Your books and connections are not touched.', 'Clear them', { danger: true }))) return;
+      await store.api('POST', '/api/usage/clear', { body: {} }).catch(() => {});
+      fillUsage(box, house());
+    } }, 'Clear the counts')),
+    h('p.say.quiet', 'Clear the counts: Usage and cost starts again from nothing.'));
+  fillUsage(box, hs);
+  return g;
+}
+
+export function costOf(row, conn) {
+  if (!conn || !Number.isFinite(conn.priceIn) || !Number.isFinite(conn.priceOut)) return null;
+  const cachedPrice = Number.isFinite(conn.priceCached) ? conn.priceCached : conn.priceIn;
+  const cached = Math.min(row.cached || 0, row.in || 0);
+  return (((row.in || 0) - cached) * conn.priceIn + cached * cachedPrice + (row.out || 0) * conn.priceOut) / 1e6;
+}
+
+async function fillUsage(box, hs) {
+  const { status, data } = await store.api('GET', '/api/usage').catch(() => ({ status: 0 }));
+  box.textContent = '';
+  if (status !== 200 || !data) { box.append(h('p.say', 'The counts could not be read just now — the phone did not answer.')); return; }
+  const days = data.days || {};
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const month = today.slice(0, 7);
+  const conns = hs.connections || [];
+  const connOf = (key) => { const [url, model] = [key.slice(0, key.lastIndexOf('|')), key.slice(key.lastIndexOf('|') + 1)]; return conns.find((c) => String(c.url || '') === url && String(c.model || '') === model) || null; };
+  const sum = (pick) => {
+    const out = new Map();
+    for (const [day, rows] of Object.entries(days)) {
+      if (!pick(day)) continue;
+      for (const [key, r] of Object.entries(rows || {})) {
+        const t = out.get(key) || { calls: 0, in: 0, out: 0, cached: 0, estimated: 0 };
+        for (const k of ['calls', 'in', 'out', 'cached', 'estimated']) t[k] += Number(r[k]) || 0;
+        out.set(key, t);
+      }
+    }
+    return out;
+  };
+  const periods = [['Today', (day) => day === today], ['This month', (day) => day.startsWith(month)], ['Everything kept', () => true]];
+  let any = false;
+  for (const [label, pick] of periods) {
+    const rows = [...sum(pick).entries()].sort((a, b) => b[1].in + b[1].out - (a[1].in + a[1].out));
+    if (!rows.length) continue;
+    any = true;
+    let total = 0;
+    let priced = true;
+    const list = h('ul.list.usage');
+    for (const [key, r] of rows) {
+      const c = connOf(key);
+      const money = costOf(r, c);
+      if (money === null) priced = false; else total += money;
+      const model = key.slice(key.lastIndexOf('|') + 1);
+      list.append(h('li', h('div.grow', `${c ? connName(c) : 'A connection no longer here'}${c && c.model ? '' : ` — ${model}`}`,
+        h('small', `${plural(r.calls, 'call')} · ${r.in.toLocaleString()} in${r.cached ? ` (${r.cached.toLocaleString()} from its cache)` : ''} · ${r.out.toLocaleString()} out${r.estimated ? ` · ${plural(r.estimated, 'call')} counted by the app (the provider gave no count)` : ''}`)),
+        h('b', money === null ? '—' : `$${money < 0.01 ? money.toFixed(4) : money.toFixed(2)}`)));
+    }
+    box.append(h('h4.usagehead', `${label}${priced ? ` — $${total < 0.01 ? total.toFixed(4) : total.toFixed(2)}` : total > 0 ? ` — $${total.toFixed(2)} for the ones with prices` : ''}`), list);
+  }
+  if (!any) box.append(h('p.say', 'Nothing counted yet — every call from now on is.'));
+}
+
 /* ------------------------------------------------------------ his words */
 
 /* the starting words of each box, for Back to the default */
@@ -274,7 +542,7 @@ function wordsGroup(hs) {
     const ta = h('textarea', { rows, placeholder });
     /* a box he never touched shows the words that are sent for it: its starting words */
     ta.value = typeof ins[key] === 'string' ? ins[key] : (STARTING[key] || '');
-    ta.addEventListener('input', debounce(() => changeHouse((x) => { x.instructions = x.instructions || {}; x.instructions[key] = ta.value; }), 500));
+    ta.addEventListener('input', typing(() => changeHouse((x) => { x.instructions = x.instructions || {}; x.instructions[key] = ta.value; }), 500));
     return ta;
   };
   /* every box with starting words can have them back */
@@ -293,12 +561,13 @@ function wordsGroup(hs) {
     return field(label, sel, hint);
   };
   const name = h('input', { type: 'text', value: (hs.you && hs.you.name) || '', placeholder: 'e.g. Bruce' });
-  name.addEventListener('input', debounce(() => changeHouse((x) => { x.you = { ...(x.you || {}), name: name.value.trim() }; }), 500));
+  name.addEventListener('input', typing(() => changeHouse((x) => { x.you = { ...(x.you || {}), name: name.value.trim() }; }), 500));
   const sys = box('system', 9, 'How you like your stories written…');
   sys.classList.add('tall');
   const narr = box('narrator', 7, 'How the narrator tells the scenes you play…');
   const partner = box('partner', 5, 'A way of talking, or a persona, for your writing partner…');
   g.body.append(
+    presetsField(hs),
     field('Your name', name, 'How your notes and the helper speak of you (“Bruce here.”, “a novel Bruce is writing”).'),
     field('How you like it written', sys, 'Sent first, word for word, to the writer — like the main prompt of a SillyTavern preset. Who the writer is, your voice, your rules, a persona if you like. The novel craft rides right after it (Modules, below).'),
     back(sys, 'system'),
@@ -307,8 +576,10 @@ function wordsGroup(hs) {
     field('How the partner talks', partner, 'Sent first, word for word, to your partner. Empty: nothing of yours is sent.'),
     back(partner, 'partner'),
     modulesField(hs),
-    field('A note at the end — the book', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer writes the book: a new page, Another take, Rewrite, Go on, a scene turned into prose. Empty: nothing is sent.'),
-    field('A note at the end — scenes', box('lateNarrator', 3, 'Optional. Rides after your move, like post-history instructions.'), 'Sent after your move each time the narrator tells a scene you play. Empty: nothing is sent.'),
+    field('A note at the end — the book', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer writes the book: a new page, Another take, Rewrite, Go on, a scene turned into prose. Empty, or Send it off: nothing is sent.'),
+    sendIt('lateOff', ins.lateOff, 'Send it', 'Off: your words stay in the box, and nothing is sent until you switch it back on.'),
+    field('A note at the end — scenes', box('lateNarrator', 3, 'Optional. Rides after your move, like post-history instructions.'), 'Sent after your move each time the narrator tells a scene you play. Empty, or Send it off: nothing is sent.'),
+    sendIt('lateNarratorOff', ins.lateNarratorOff, 'Send it', 'Off: your words stay in the box, and nothing is sent until you switch it back on.'),
     field('Words to avoid', box('avoid', 4, 'One to a line — for example:\na testament to\nshivers down her spine'), 'Words and phrases you never want in the book. The writer, the narrator and your partner are told them, after your own words; the checker marks any that slip through, with a way to write them again. Empty: nothing is sent.'),
     choose('notesAs', [
       ['system', 'The system message (the default)'],
@@ -320,6 +591,137 @@ function wordsGroup(hs) {
       ['wait', 'When I press Apply'],
     ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.', 'Your partner’s changes land'));
   return g;
+}
+
+/* a note's switch: ticked, it is sent; off, his words wait in the box */
+function sendIt(key, off, label, hint) {
+  const inp = h('input', { type: 'checkbox', checked: !off });
+  inp.addEventListener('change', () => changeHouse((x) => { x.instructions = x.instructions || {}; if (inp.checked) delete x.instructions[key]; else x.instructions[key] = true; }, { now: true }));
+  return h('div.field.switchrow', h('label.toggle', inp, h('span', label)), h('em', hint));
+}
+
+/* ------------------------------------------------------------ presets */
+/* Cozy Tavern's saved voices (presets.js): his boxes, both notes at the end,
+ * words to avoid and his name, saved together under a name and used again
+ * with one tap. */
+
+/* what the presets row shows: which presets, and which one is in the boxes */
+function presetsKey(hs) {
+  const on = presetInUse(hs);
+  return JSON.stringify([presetsOf(hs).map((p) => [p.id, p.name, p.at]), on ? on.id : null]);
+}
+
+/* The row stays true to the boxes as he types (each box's save lands after
+ * his typing pause): drawn again only when what it shows changes. It holds
+ * only buttons — nothing under his fingers is touched. */
+export function freshenPresets() {
+  if (!sheet) return;
+  const old = sheet.body.querySelector('.presetsfield');
+  if (!old) return;
+  const hs = house();
+  if (old.dataset.key !== presetsKey(hs)) old.replaceWith(presetsField(hs));
+}
+
+function presetsField(hs) {
+  const list = presetsOf(hs);
+  const on = presetInUse(hs);
+  const wrap = h('div.field.presetsfield', { 'data-key': presetsKey(hs) });
+  const rows = h('div.modlist');
+  for (const p of list) {
+    rows.append(h('div.modrow.presetrow', { 'data-id': p.id },
+      h('span.grow', h('b', p.name), h('small', voiceLine(p.voice)), h('small.about', `Saved ${timeAgo(p.at)}`)),
+      on && on.id === p.id ? h('span.tag', 'in use') : h('button.btn.small', { title: 'Every box, both notes at the end, words to avoid and your name become this preset’s — with Undo.', onclick: () => usePresetNow(p) }, 'Use'),
+      h('button.icon', { 'aria-label': `More for ${p.name}`, onclick: (e) => presetMenu2(e.currentTarget, p) }, icon('more', 18))));
+  }
+  wrap.append(h('span', 'Presets'),
+    list.length ? rows : h('p.say', 'None saved yet. Save what is in the boxes below as a preset — a Batman, a Light Yagami — and change between them with one tap.'),
+    h('div.btnrow',
+      h('button.btn.small.primary', { title: 'Keeps what is in the boxes below right now under a name: How you like it written, How the narrator tells scenes, How the partner talks, both notes at the end, Words to avoid and your name.', onclick: savePresetNow }, icon('plus', 15), 'Save current preset'),
+      h('button.btn.quiet.small', { title: 'A preset taken out as a file, brought back in here.', onclick: bringPreset }, 'Bring a preset in'),
+      h('button.btn.quiet.small', { title: 'Every box back to its starting words, the notes at the end and words to avoid empty — with Undo.', onclick: () => usePresetNow(null) }, 'The starting words')),
+    h('em', 'A preset holds How you like it written, How the narrator tells scenes, How the partner talks, both notes at the end, Words to avoid and your name. Using one puts every one of them back exactly as it was saved. Whether each note at the end is sent, and the modules, stay as they are.'));
+  return wrap;
+}
+
+async function askName(title, value = '', ok = 'Save') {
+  return new Promise((resolve) => {
+    let out = null;
+    const s = openSheet(title, { small: true, onClose: () => resolve(out) });
+    const inp = h('input', { type: 'text', value, maxlength: 40, placeholder: 'e.g. Batman' });
+    const go = () => { const v = cleanName(inp.value); if (!v) { toast('It needs a name.'); return; } out = v; s.close(); };
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    s.body.append(field('Name', inp), h('div.btnrow', h('button.btn.primary', { onclick: go }, ok)));
+    setTimeout(() => inp.focus(), 50);
+  });
+}
+
+async function savePresetNow() {
+  landTyping();
+  await store.flush('house', 'house');
+  const hs = house();
+  const on = presetInUse(hs) || presetsOf(hs).find((p) => p.id === hs.presetOn);
+  const name = await askName('Save current preset', on ? on.name : '');
+  if (!name) return;
+  const same = presetsOf(house()).find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (same && !(await confirmIt(`Save over “${same.name}”?`, 'A preset with this name is there already: it becomes what is in the boxes now.', 'Save over it'))) return;
+  const id = same ? same.id : newId('vp');
+  changeHouse(presetSteps.save(id, name, voiceOf(house()), Date.now()), { now: true });
+  toast(same ? `“${name}” is saved over.` : `Saved as “${name}”.`);
+  draw();
+}
+
+function usePresetNow(p) {
+  /* what he typed a moment ago is in the boxes first — Undo brings it back */
+  landTyping();
+  const before = voiceOf(house());
+  const wasOn = house().presetOn || null;
+  const voice = p ? cleanVoice(p.voice) : startingVoice(before.name);
+  changeHouse(presetSteps.use(voice, p ? p.id : null), { now: true });
+  draw();
+  undoToast(p ? `Using “${p.name}”.` : 'The starting words are back in every box.', () => { changeHouse(presetSteps.use(before, wasOn), { now: true }); draw(); });
+}
+
+function presetMenu2(anchor, p) {
+  menu(anchor, [
+    { label: 'Save what is in the boxes over it', run: async () => {
+      if (!(await confirmIt(`Save over “${p.name}”?`, 'It becomes what is in the boxes now.', 'Save over it'))) return;
+      landTyping();
+      await store.flush('house', 'house');
+      changeHouse(presetSteps.save(p.id, p.name, voiceOf(house()), Date.now()), { now: true }); toast(`“${p.name}” is saved over.`); draw();
+    } },
+    { label: 'Rename', run: async () => {
+      const name = await askName('Rename the preset', p.name, 'Rename');
+      if (!name || name === p.name) return;
+      if (presetsOf(house()).some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) { toast(`Another preset is called “${name}” already.`); return; }
+      changeHouse(presetSteps.rename(p.id, name), { now: true }); draw();
+    } },
+    { label: 'Take it out as a file', run: () => {
+      download(`${p.name.replace(/[^\w -]+/g, '').trim() || 'preset'}.cozynovel-preset.json`, JSON.stringify({ format: PRESET_FORMAT, name: p.name, at: p.at, voice: p.voice }, null, 2), 'application/json');
+    } },
+    '-',
+    { label: 'Remove', danger: true, run: () => {
+      const row = JSON.parse(JSON.stringify(p));
+      changeHouse(presetSteps.remove(p.id), { now: true }); draw();
+      undoToast(`“${p.name}” is removed.`, () => { changeHouse(presetSteps.restore(row), { now: true }); draw(); });
+    } },
+  ]);
+}
+
+async function bringPreset() {
+  const file = await pickFile('.json,application/json');
+  if (!file) return;
+  let data = null;
+  try { data = JSON.parse(await file.text()); } catch (_) { data = null; }
+  const voice = data && data.format === PRESET_FORMAT ? cleanVoice(data.voice) : null;
+  if (!voice) { toast('That file is not a Cozy Novel preset.'); return; }
+  const name = cleanName(data.name) || 'A preset brought in';
+  const same = presetsOf(house()).find((p) => p.name.toLowerCase() === name.toLowerCase());
+  const id = newId('vp');
+  changeHouse(presetSteps.save(id, same ? `${name} (brought in)` : name, voice, Date.now()), { now: true });
+  /* saving marks it as the one in use; bringing it in does not use it */
+  changeHouse((x) => { if (x.presetOn === id) delete x.presetOn; }, { now: true });
+  toast(`“${same ? `${name} (brought in)` : name}” is in your presets — Use puts it in the boxes.`);
+  draw();
 }
 
 /* ------------------------------------------------------------ modules */
@@ -341,8 +743,20 @@ function modulesField(hs) {
   return h('div.field',
     h('span', 'Modules'),
     list,
-    h('div.btnrow', h('button.btn.small', { onclick: addModule }, icon('plus', 15), 'Add your own module')),
-    h('em', 'They ride right after your own words above — each to the writer, the narrator or your partner, as it says — in this order. The app’s come with it, made from your Cozy Tavern preset: change one and it’s yours, and Back to the default puts it back. Off: not sent at all.'));
+    h('div.btnrow',
+      h('button.btn.small', { title: 'A module of your own: its name, who reads it, when it rides, its words.', onclick: addModule }, icon('plus', 15), 'Add your own module'),
+      h('button.btn.quiet.small', { disabled: !listModules(hs).some((m) => m.builtin && m.changed), title: 'Every module of the app’s back as it came — its words, who reads it, when it rides. Your own modules stay.', onclick: allModulesBack }, 'All back to the default')),
+    h('em', 'They ride right after your own words above — each to the writer, the narrator or your partner, as it says — in this order. The app’s come with it, made from your Cozy Tavern preset: change one and it’s yours, and Back to the default (in the module) puts it back. Off: not sent at all.'));
+}
+
+async function allModulesBack() {
+  const changed = listModules(house()).filter((m) => m.builtin && m.changed);
+  if (!changed.length) return;
+  if (!(await confirmIt('All back to the default?', `${changed.map((m) => m.name).join(', ')} — each back as it came: the app’s words, who reads it, when it rides. Your own modules stay. (Undo puts yours back.)`, 'All back to the default'))) return;
+  const rows = JSON.parse(JSON.stringify(house().modules || {}));
+  for (const m of changed) changeHouse(moduleSteps.remove(m.id), { now: true });
+  draw();
+  undoToast('The app’s modules are as they came.', () => { for (const m of changed) if (rows[m.id]) changeHouse(moduleSteps.restore(m.id, rows[m.id]), { now: true }); draw(); });
 }
 
 function addModule() {
@@ -408,8 +822,9 @@ function openModule(id, { fresh = false } = {}) {
   const drawButtons = () => {
     buttons.textContent = '';
     const m = now();
-    if (base && m.changed) {
-      buttons.append(h('button.btn.quiet.small', { onclick: async () => {
+    if (base) {
+      /* always there, as in Cozy Tavern: greyed while the module is as it came */
+      buttons.append(h('button.btn.quiet.small', { disabled: !m.changed, title: m.changed ? 'The app’s words come back, with who reads it and when it rides as they came.' : 'Nothing is changed — it is as it came.', onclick: async () => {
         if (m.ownWords && !(await confirmIt('Back to the default?', 'Your words for this module go, and the app’s come back — with who reads it and when it rides as they came. (Copy yours first if you want to keep them.)', 'Back to the default'))) return;
         for (const x of savers) x.cancel();
         changeHouse(moduleSteps.remove(id), { now: true });
