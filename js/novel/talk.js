@@ -16,7 +16,7 @@ import * as store from '../store.js';
 import { ask, emptyWhy } from '../model/call.js';
 import { wireOf } from '../model/providers.js';
 import { estimateTokens } from '../util.js';
-import { assemble, requiredLength } from './context.js';
+import { assemble, requiredLength, SAFETY } from './context.js';
 import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText } from './shape.js';
@@ -89,9 +89,74 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
   return out;
 }
 
+/* His last few turns, in his own words only — his moves and his lines to the
+ * narrator, or his messages to the partner — up to the reply being written:
+ * what wakes a rule (crafts.js wakesOn); never the narrator's telling nor the
+ * partner's answers. A scene's own premise — where he said it starts — goes
+ * with them for the whole scene, as a premise does on the page until a scene
+ * break (shape.js hisWordsBefore). */
+export const HIS_TURNS = 3;
+export function hisLast(record, upto = null) {
+  const out = [];
+  for (const t of (record && record.turns) || []) {
+    if (upto && t.id === upto) break;
+    if (t.by !== 'you') continue;
+    const v = picked(t) || {};
+    const words = [String(v.text || ''), String(v.tell || '')].filter((x) => x.trim()).join('\n');
+    if (words) out.push(words);
+  }
+  return [String((record && record.from) || '').trim(), ...out.slice(-HIS_TURNS)].filter(Boolean).join('\n');
+}
+
+/* The chapters the partner asked to read whole, when they are more than its
+ * model holds beside everything else: the short ones go whole, and what they
+ * leave is shared among the long ones, each keeping its opening and its end,
+ * the middle said to be left out. Never more than the budget. tokens: what
+ * the chapters' words come to as sent. */
+const CUT_MARK = '[… the middle of this chapter is left out here: the whole of it is more than fits beside everything else …]';
+export function fitRead(rows, budget) {
+  const cost = rows.map((r) => (r.missing ? 0 : estimateTokens(r.text)));
+  const whole = cost.reduce((a, b) => a + b, 0);
+  if (whole <= budget) return { rows, cut: false, tokens: whole };
+  const share = new Array(rows.length).fill(0);
+  let left = Math.max(0, Math.floor(budget));
+  let n = rows.length;
+  for (const i of rows.map((_, k) => k).sort((a, b) => cost[a] - cost[b])) {
+    share[i] = Math.min(cost[i], Math.floor(left / n));
+    left -= share[i];
+    n -= 1;
+  }
+  let tokens = 0;
+  const out = rows.map((r, i) => {
+    if (r.missing || share[i] >= cost[i]) { tokens += cost[i]; return r; }
+    const room = share[i] - estimateTokens(CUT_MARK) - 10;
+    if (room < 120) { tokens += estimateTokens(CUT_MARK); return { ...r, text: CUT_MARK }; }
+    const chars = Math.floor((r.text.length * room) / cost[i]);
+    const head = r.text.slice(0, Math.floor(chars * 0.6)).replace(/\s+\S*$/, '');
+    const tail = r.text.slice(-Math.floor(chars * 0.4)).replace(/^\S*\s+/, '');
+    const text = `${head}\n\n${CUT_MARK}\n\n${tail}`;
+    tokens += estimateTokens(text);
+    return { ...r, text };
+  });
+  return { rows: out, cut: true, tokens };
+}
+
 async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, length = 'scene' }) {
-  /* the chapters the partner asked to read whole, and its words before it asked */
-  const extra = [];
+  /* the chapters the partner asked to read whole, and its words before it
+   * asked — fitted to the room that is left when they are more than it holds */
+  const asks = [];
+  /* every chapter it asked for, in every round, fitted together */
+  const extraOf = (budget = Infinity) => {
+    const all = asks.flatMap((x) => x.rows);
+    const f = fitRead(all, budget);
+    let k = 0;
+    const messages = asks.flatMap((x) => {
+      const rows = f.rows.slice(k, k + x.rows.length);
+      k += x.rows.length;
+      return [{ role: 'assistant', content: x.said }, { role: 'user', content: readBack(rows, { cut: f.cut }) }];
+    });
+    return { messages, tokens: f.tokens };
+  };
   const read = [];
   const key = `${kind}/${id}`;
   const house = store.peek('house', 'house') || {};
@@ -122,8 +187,22 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           const { novel, chapters } = bookNow(novelId);
           const rec = store.peek(kind, id);
           const args = buildArgs(rec, c);
-          const a = assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra], length });
-          return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse };
+          const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length });
+          let extra = extraOf();
+          let a = made(extra);
+          if (asks.length) {
+            /* what it asked to read, beside everything else that has to go —
+             * his words, the book's words and notes, the chapter open (down
+             * to its start and the words before the point), the talk and the
+             * answer's room — is more than the model holds: they share what
+             * is left */
+            const mustGo = a.stats.fixed - extra.tokens - a.stats.current + Math.min(a.stats.current, 1000);
+            const left = contextOf(c) - a.stats.reserve - SAFETY - mustGo - 300;
+            if (extra.tokens > left) { extra = extraOf(Math.max(0, left)); a = made(extra); }
+          }
+          /* the chapters it asked for give way to a smaller room, like the book */
+          const least = a.stats.least - extra.tokens;
+          return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least };
         },
         stream: true,
         signal: ctl.signal,
@@ -142,7 +221,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       const asked = kind === 'talk' && out.ok && !out.cut && round < 3 ? readsOf(out.text || text) : [];
       if (!asked.length) break;
       const rows = readRows(novelId, asked);
-      extra.push({ role: 'assistant', content: String(out.text || text).trim() || '(I asked to read them.)' }, { role: 'user', content: readBack(rows) });
+      asks.push({ said: String(out.text || text).trim() || '(I asked to read them.)', rows });
       read.push(...rows.filter((r) => !r.missing).map((r) => r.label));
       text = '';
       thinking = '';
@@ -256,7 +335,7 @@ export async function partnerSay({ novelId, chapterId, text }) {
   store.change('talk', novelId, turnSteps.addTurn(mine));
   store.change('talk', novelId, turnSteps.addTurn(reply), { now: true });
   const out = await runTurn({ kind: 'talk', id: novelId, novelId, turnId: reply.id, versionId: reply.versions[0].id, role: 'partner',
-    buildArgs: (rec, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(rec, { upto: reply.id, conn: c }), request: '' }) });
+    buildArgs: (rec, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(rec, { upto: reply.id, conn: c }), request: '', moment: hisLast(rec, reply.id) }) });
   if (!out.ok && !replied('talk', novelId, reply.id)) {
     try { store.change('talk', novelId, turnSteps.removeTurn(mine.id), { now: true }); } catch (_) { /* gone */ }
     return { ...out, giveBack: t };
@@ -278,7 +357,7 @@ export async function partnerAgain({ novelId, chapterId, turnId }) {
   const v = newVersion({ streaming: true });
   store.change('talk', novelId, turnSteps.addVersion(turnId, v), { now: true });
   return runTurn({ kind: 'talk', id: novelId, novelId, turnId, versionId: v.id, role: 'partner',
-    buildArgs: (r, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(r, { upto: turnId, conn: c }), request: '' }) });
+    buildArgs: (r, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(r, { upto: turnId, conn: c }), request: '', moment: hisLast(r, turnId) }) });
 }
 
 /* ---------------------------------------------------------------- play */
@@ -302,12 +381,14 @@ function playArgs(playRec, upto) {
     /* what was already turned into prose rides as the book, not again as the talk */
     const turns = turnsFor(p, { upto, conn: c, openWith: p.turned ? '' : opening, after: p.turned || null });
     const target = { chapterId: p.chapterId, through: p.after || undefined };
+    /* his last moves, his words only: what wakes a rule */
+    const moment = hisLast(p, upto);
     /* the narrator opens the scene when he has not said anything yet — or,
      * once what was played is in the book, carries it on from there */
-    if (!turns.length) return { purpose: 'play', play: p, target, turns: [], request: p.turned ? playOnwards({ who: p.who }) : opening };
+    if (!turns.length) return { purpose: 'play', play: p, target, turns: [], request: p.turned ? playOnwards({ who: p.who }) : opening, moment };
     /* the narrator spoke last and he said nothing: it carries on */
-    if (turns[turns.length - 1].role === 'assistant') return { purpose: 'play', play: p, target, turns, request: 'Go on.' };
-    return { purpose: 'play', play: p, target, turns, request: '' };
+    if (turns[turns.length - 1].role === 'assistant') return { purpose: 'play', play: p, target, turns, request: 'Go on.', moment };
+    return { purpose: 'play', play: p, target, turns, request: '', moment };
   };
 }
 
@@ -381,14 +462,19 @@ export function transcriptOf(play, { fromStart = false } = {}) {
   }
   const who = play.who || 'their character';
   const lines = [];
+  /* his own words in it — where he said it starts, his moves and his lines
+   * to the narrator — what wakes a rule when it is written into prose
+   * (writer.js), as they did while he played it (hisLast) */
+  const mine = String(play.from || '').trim() ? [String(play.from).trim()] : [];
   for (const t of turns.slice(start)) {
     const v = picked(t);
     /* what happened in it: his character's lines and the narrator's telling —
      * never his lines to the narrator, nor the ways it offered */
     const raw = String((v && v.text) || '');
     const text = (t.by === 'you' ? raw : sceneWords(raw)).trim();
+    if (t.by === 'you') mine.push(...[text, String((v && v.tell) || '').trim()].filter(Boolean));
     if (!text) continue;
     lines.push(t.by === 'you' ? `${who}: ${text}` : `Narrator: ${text}`);
   }
-  return { text: lines.join('\n\n'), lastId: turns.length ? turns[turns.length - 1].id : null, count: lines.length };
+  return { text: lines.join('\n\n'), mine: mine.join('\n'), lastId: turns.length ? turns[turns.length - 1].id : null, count: lines.length };
 }

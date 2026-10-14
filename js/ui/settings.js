@@ -439,7 +439,7 @@ function openModule(id, { fresh = false } = {}) {
   s.body.append(
     field('Name', name),
     h('div.field', h('span', 'Who reads it'), who, say),
-    field('When it rides', rides, 'Intimate and fight: it wakes by itself when your words or the page right before the point being written turn to it, and rides nearer the page.'),
+    field('When it rides', rides, 'Intimate and fight: it wakes by itself when your own words turn to it — what you ask for, and what you asked for or wrote last before that point (a scene break starts afresh); in a scene, where it starts and your last three moves — and rides nearer the page. What the writer wrote never wakes it.'),
     field('Its words', words, base ? 'The app’s words, from your preset — change anything and they are yours, sent exactly as you leave them. Empty: nothing is sent.' : 'Sent word for word, right after your own instructions. Empty: nothing is sent.'),
     buttons);
   if (fresh) name.focus();

@@ -63,6 +63,7 @@ const checker = await import(path.join(ROOT, 'js/novel/checker.js'));
 const search = await import(path.join(ROOT, 'js/novel/search.js'));
 const modules = await import(path.join(ROOT, 'js/novel/modules.js'));
 const crafts = await import(path.join(ROOT, 'js/novel/crafts.js'));
+const util = await import(path.join(ROOT, 'js/util.js'));
 const { picked } = shape;
 
 async function script(queue) { await realFetch(PROVIDER + '/script', { method: 'POST', body: JSON.stringify({ queue }) }); }
@@ -1078,9 +1079,11 @@ await test('a model too small for his instructions and the modules is told so in
   const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
   assert.equal(out.ok, false);
   assert.equal((await requests()).length, 1, 'the one the model refused, and no other');
-  assert.match(out.error, /holds about 8,000 tokens, and your instructions with the modules for the writer take about [\d,]+ of them/);
-  assert.match(out.error, /Settings → Who does what/);
-  assert.match(out.error, /Settings → Your instructions → Modules/);
+  /* the model's own number, what takes it, and the ways out */
+  assert.match(out.error, /^this model holds about 8,000 tokens, but your instructions with the modules for the writer \(about ([\d,]+)\) and the room for its answer \(about 4,000\) need about ([\d,]+) before any of the book/);
+  const [, mine, need] = out.error.match(/\(about ([\d,]+)\) and .* need about ([\d,]+)/).map((x) => x && Number(String(x).replace(/,/g, '')));
+  assert.equal(need, mine + 4000, 'the parts add up to what it says they need');
+  assert.match(out.error, /give the writer a model with more room \(Settings → Who does what → The writer\), or switch off a module the writer reads \(Settings → Your instructions → Modules\)$/);
   assert.equal(b.ch().passages.length, 1, 'no empty passage is left on the page');
   /* a room he set himself is believed at once: nothing is sent at all */
   await reset();
@@ -1093,6 +1096,68 @@ await test('a model too small for his instructions and the modules is told so in
   await script([{ text: 'She waited.' }]);
   const fine = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
   assert.equal(fine.ok, true, fine.error);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('too small, said for what really takes the room: his Longest reply first when it tips it; a partner with no modules is not told to switch one off; a scene\'s narrator is the writer\'s connection', async () => {
+  const b = await makeBook([['Now.']]);
+  const hs = store.peek('house', 'house');
+  const build = (conn, purpose, house = hs) => context.assemble({ house, novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn, purpose, target: { chapterId: b.ids[0] }, play: { who: 'Mara' }, request: 'Go.' });
+  /* the instructions fit his 32,000; with his Longest reply of 16,000 on top they do not */
+  const tips = build({ ...CONN, context: 32000, maxTokens: 16000 }, 'write');
+  assert.match(tips.refuse, /^this model holds about 32,000 tokens, but your instructions with the modules for the writer \(about [\d,]+\) and the room for its answer \(about 16,000, your Longest reply\) need about [\d,]+ before any of the book — lower Longest reply on its connection \(Settings → Connections\), give the writer a model/);
+  assert.equal(build({ ...CONN, context: 32000, maxTokens: 4000 }, 'write').refuse, '', 'a smaller Longest reply fits');
+  /* a thinking model's room to think is named as that — lowering Longest reply would not help */
+  const thinks = build({ ...CONN, context: 32000, maxTokens: 4000, thinking: 'high' }, 'write');
+  assert.match(thinks.refuse, /the room for its answer \(about 16,000, with its thinking\)/, thinks.refuse);
+  assert.ok(!thinks.refuse.includes('Longest reply'), thinks.refuse);
+  /* his instructions alone are more than it holds: lowering Longest reply is not offered */
+  const huge = build({ ...CONN, context: 16000, maxTokens: 3000 }, 'write');
+  assert.ok(huge.refuse && !huge.refuse.includes('Longest reply on its connection'), huge.refuse);
+  /* the partner reads no module of the app's: none to switch off */
+  const partner = build({ ...CONN, context: 1600 }, 'partner');
+  assert.match(partner.refuse, /your instructions for your partner \(about [\d,]+\) and the room for its answer/);
+  assert.match(partner.refuse, /give your partner a model with more room \(Settings → Who does what → The partner\)$/);
+  assert.ok(!partner.refuse.includes('module'), partner.refuse);
+  /* a module of his that rides for the partner: that one can be switched off */
+  const withMine = { ...hs, modules: { 'm-p': { custom: true, at: 1, name: 'Mine', text: 'MY PARTNER RULES. '.repeat(40), to: ['partner'], rides: 'always' } } };
+  assert.match(build({ ...CONN, context: 1600 }, 'partner', withMine).refuse, /your instructions with the modules for your partner .* or switch off a module your partner reads/);
+  /* a scene: the narrator, told by the writer's connection */
+  assert.match(build({ ...CONN, context: 8000 }, 'play').refuse, /for the narrator \(about [\d,]+\).*give the writer, who tells your scenes, a model with more room \(Settings → Who does what → The writer\), or switch off a module the narrator reads/);
+  /* a long talk is named when it is what takes the room */
+  const talkBig = context.assemble({ house: { ...hs, ...CRAFTS_OFF }, novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn: { ...CONN, context: 6000 }, purpose: 'partner', target: { chapterId: b.ids[0] },
+    turns: [{ role: 'user', content: 'Read this. ' + 'A long pasted page of words. '.repeat(700) }], request: '' });
+  assert.match(talkBig.refuse, /, the talk so far \(about [\d,]+\) and the room for its answer .* or send a shorter message, or Start over$/);
+  await putAway(b);
+});
+
+await test('"too long" at the size the model says it holds: the book is fitted smaller and sent, never refused with a number of the app\'s own guessing', async () => {
+  const para = 'The storm came in off the water like a held breath let go. '.repeat(60);
+  const b = await makeBook([[para], [para], [para], [para], [para], [para], [para], [para], [para], [para], ['Now.']]);
+  /* the crafts ride: the instructions alone are most of 32,768 */
+  await setHouse({ context: 32768 });
+  await script([{ status: 400, message: "This model's maximum context length is 32768 tokens. However, your messages resulted in 33500 tokens." }, { text: 'It fits now.' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[10], direction: 'She waits.' });
+  assert.equal(out.ok, true, out.error);
+  const r = await requests();
+  assert.equal(r.length, 2);
+  const size = (x) => JSON.stringify(x.body.messages).length;
+  assert.ok(size(r[1]) < size(r[0]), `${size(r[0])} -> ${size(r[1])}`);
+  const sys = r[1].body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+  assert.ok(sys.includes(modules.builtinOf('novel-craft').text), 'his instructions and the craft went whole');
+  const learned = store.peek('house', 'house').connections[0].learned.context;
+  assert.ok(learned < 32768 && learned > 24576, `fitted to ${learned}: never below what has to go`);
+  /* and the next page fits from the start */
+  await reset();
+  await script([{ text: 'Again.' }, { text: 'A long one.' }]);
+  const next = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[10], direction: 'She waits.' });
+  assert.equal(next.ok, true, next.error);
+  assert.equal((await requests()).length, 1);
+  /* a longer page needs more answer room than that guess leaves: it is sent, never refused for a number of the app's own guessing */
+  const longer = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[10], direction: 'She waits.', length: 'chapter' });
+  assert.equal(longer.ok, true, longer.error);
+  assert.equal((await requests()).length, 2);
   await setHouse();
   await putAway(b);
 });
@@ -1536,43 +1601,135 @@ await test('the writer reads the novel craft right after his own words, in the p
   await putAway(b);
 });
 
-await test('a rule that wakes rides only when the moment turns to it — his words, or the page right before the point — nearer the page, never in the kept part', async () => {
+await test('a rule wakes from his own words only — what he asks for, the premise he is carrying on, a passage of his, his moves — never from the prose; nearer the page, never in the kept part', async () => {
+  const FIGHT = '## How A Fight Sounds';
+  const HEAT = '## When The Scene Turns Intimate';
+  const woke = (sys) => ({ fight: sys.includes(FIGHT), heat: sys.includes(HEAT) });
   const b = await makeBook([['Mara climbed to the lamp.']]);
   await script([{ text: 'Quiet.' }, { text: 'Steel.' }, { text: 'Heat.' }]);
   await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.' });
   await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Jovan fights Kenjaku.' });
   await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'They make love by the fire.' });
   const [quiet, fight, heat] = (await requests()).map(systemOf);
-  assert.ok(!quiet.includes('## How A Fight Sounds') && !quiet.includes('## When The Scene Turns Intimate'), 'a quiet page wakes nothing');
-  assert.ok(fight.includes('## How A Fight Sounds') && !fight.includes('## When The Scene Turns Intimate'), 'a fight in his words');
+  assert.deepEqual(woke(quiet), { fight: false, heat: false }, 'a quiet premise wakes nothing');
+  assert.ok(fight.includes(FIGHT) && !fight.includes(HEAT), 'a fight in his words');
   assert.ok(!fight.includes("## When Words Won't Carry It"), 'the contest\'s board is the narrator\'s; the writer\'s is in its craft');
-  assert.ok(heat.includes('## When The Scene Turns Intimate') && heat.includes('## How It Sounds') && heat.indexOf('## How It Sounds') > heat.indexOf('## When The Scene Turns Intimate'), 'intimacy: the rule, then how it sounds');
-  /* the page itself wakes it, with no words from him */
-  const b2 = await makeBook([['Kenjaku lunged, and Yuki parried the blow.']]);
+  assert.ok(heat.includes(HEAT) && heat.includes('## How It Sounds') && heat.indexOf('## How It Sounds') > heat.indexOf(HEAT), 'intimacy: the rule, then how it sounds');
+  /* the writer's prose never wakes one — however it reads */
+  const b2 = await makeBook([['Kenjaku lunged, and Yuki parried the blow. He shot him a look and cocked his head; the cat curled up between her legs.']]);
   await reset();
   await script([{ text: 'More.' }]);
   await writer.writeNext({ novelId: b2.novelId, chapterId: b2.ids[0] });
-  assert.ok(systemOf((await requests())[0]).includes('## How A Fight Sounds'), 'the page right before the point');
+  assert.deepEqual(woke(systemOf((await requests())[0])), { fight: false, heat: false }, 'the page is not his words');
+  /* asking for nothing new, the premise he is still carrying on: through every page written from it, until a scene break */
+  const b3 = await makeBook([['Mara climbed to the lamp.', { text: 'Steel rang on steel.', ask: { direction: 'Jovan fights Kenjaku.', length: 'scene' } }]]);
+  await reset();
+  await script([{ text: 'More steel.' }, { text: 'And more.' }, { text: 'A new morning.' }, { text: 'Rewritten.' }, { text: 'Taken again.' }]);
+  await writer.writeNext({ novelId: b3.novelId, chapterId: b3.ids[0] });
+  await writer.writeNext({ novelId: b3.novelId, chapterId: b3.ids[0] });
+  writer.addBreak({ chapterId: b3.ids[0] });
+  await writer.writeNext({ novelId: b3.novelId, chapterId: b3.ids[0] });
+  const fought = b3.ch().passages[1].id;
+  /* a rewrite of the fight with a quiet note is still the fight; Another take of a page carried on from it too */
+  await writer.rewrite({ novelId: b3.novelId, chapterId: b3.ids[0], passageId: fought, note: 'He never says a word.' });
+  await writer.anotherTake({ novelId: b3.novelId, chapterId: b3.ids[0], passageId: b3.ch().passages[2].id });
+  const [on1, on2, after, rewritten, again] = (await requests()).map(systemOf).map(woke);
+  assert.ok(on1.fight && on2.fight, 'carried on from his premise, page after page');
+  assert.ok(!after.fight, 'a scene break begins a new scene');
+  assert.ok(rewritten.fight && again.fight, 'a rewrite and another take of the fight');
+  /* a passage of his own is his words; one brought in from a file is his book, not words for this moment */
+  const b4 = await makeBook([['A quiet start.']]);
+  writer.addMine({ novelId: b4.novelId, chapterId: b4.ids[0], text: 'She straddled him.' });
+  await reset();
+  await script([{ text: 'Then.' }, { text: 'Later.' }, { text: 'Rewritten, with the fight.' }, { text: 'After the fight.' }]);
+  await writer.writeNext({ novelId: b4.novelId, chapterId: b4.ids[0] });
+  store.change('chapter', b4.ids[0], shape.chapterSteps.addPassage(shape.newPassage('you', 'He cocked the pistol and drew his sword; she straddled the wall.', { how: 'imported' })), { now: true });
+  await writer.writeNext({ novelId: b4.novelId, chapterId: b4.ids[0] });
+  /* — but the note he gives it in a rewrite is his: for the rewrite, and for the pages carried on after it */
+  const brought4 = b4.ch().passages.at(-2);
+  assert.equal(picked(brought4).how, 'imported');
+  await writer.rewrite({ novelId: b4.novelId, chapterId: b4.ids[0], passageId: brought4.id, note: 'Jovan fights Kenjaku.' });
+  await writer.writeNext({ novelId: b4.novelId, chapterId: b4.ids[0] });
+  const [mine, brought, broughtRewrite, broughtAfter] = (await requests()).map(systemOf).map(woke);
+  assert.ok(mine.heat, 'his own passage');
+  assert.deepEqual(brought, { fight: false, heat: false }, 'a passage brought in from a file is not read for it');
+  assert.deepEqual(broughtRewrite, { fight: true, heat: false }, 'his note in a rewrite of it is his words');
+  assert.deepEqual(broughtAfter, { fight: true, heat: false }, 'and is carried on, as a premise is');
+  /* a direction rides with what he carries on; a rewrite of a passage of his reads his words in it, and no further back */
+  const b5 = await makeBook([[{ text: 'Morning.', ask: { direction: 'They make love by the fire.', length: 'scene' } }, 'Later.']]);
+  writer.addMine({ novelId: b5.novelId, chapterId: b5.ids[0], text: 'Jovan draws his sword and attacks Kenjaku.' });
+  await reset();
+  await script([{ text: 'Slowly.' }, { text: 'More vivid.' }]);
+  await writer.writeNext({ novelId: b5.novelId, chapterId: b5.ids[0], direction: 'Go slowly.' });
+  const his = b5.ch().passages.find((x) => x.by === 'you').id;
+  await writer.rewrite({ novelId: b5.novelId, chapterId: b5.ids[0], passageId: his, note: 'more vivid' });
+  const [carried, ownRewrite] = (await requests()).map(systemOf).map(woke);
+  assert.ok(carried.fight && !carried.heat, 'his direction, with his passage right before it');
+  assert.ok(ownRewrite.fight && !ownRewrite.heat, 'his own words in the passage he rewrites — never a premise further back');
   /* where it rides: in the part that moves, before the notes and the chapter */
   store.change('novel', b2.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: 'NOTED PERSON', about: 'x' })), { now: true });
-  const a = context.assemble({ house: store.peek('house', 'house'), novel: b2.novel(), chapters: { [b2.ids[0]]: b2.ch() }, conn: CONN, purpose: 'write', target: { chapterId: b2.ids[0] }, request: 'Go.' });
-  assert.ok(!a.systemParts[0].includes('## How A Fight Sounds'), 'never in the kept part');
-  assert.ok(a.systemParts[1].startsWith('## How A Fight Sounds') && a.systemParts[1].indexOf('NOTED PERSON') > 0, 'woken rules, then the notes');
+  const a = context.assemble({ house: store.peek('house', 'house'), novel: b2.novel(), chapters: { [b2.ids[0]]: b2.ch() }, conn: CONN, purpose: 'write', target: { chapterId: b2.ids[0] }, request: 'Go.', moment: 'Jovan fights Kenjaku.' });
+  assert.ok(!a.systemParts[0].includes(FIGHT), 'never in the kept part');
+  assert.ok(a.systemParts[1].startsWith(FIGHT) && a.systemParts[1].indexOf('NOTED PERSON') > 0, 'woken rules, then the notes');
   /* the book as his notes: still the system's, as its last part */
-  const a2 = context.assemble({ house: { ...store.peek('house', 'house'), notesAs: 'user' }, novel: b2.novel(), chapters: { [b2.ids[0]]: b2.ch() }, conn: CONN, purpose: 'write', target: { chapterId: b2.ids[0] }, request: 'Go.' });
+  const a2 = context.assemble({ house: { ...store.peek('house', 'house'), notesAs: 'user' }, novel: b2.novel(), chapters: { [b2.ids[0]]: b2.ch() }, conn: CONN, purpose: 'write', target: { chapterId: b2.ids[0] }, request: 'Go.', moment: 'Jovan fights Kenjaku.' });
   assert.equal(a2.systemParts.length, 2);
-  assert.ok(a2.systemParts[1].startsWith('## How A Fight Sounds') && a2.system.endsWith(a2.systemParts[1]));
-  assert.ok(!a2.messages.some((m) => m.role !== 'system' && m.content.includes('## How A Fight Sounds')), 'a rule never rides as his words');
-  /* a scene: his move wakes the narrator's board and how a fight sounds */
+  assert.ok(a2.systemParts[1].startsWith(FIGHT) && a2.system.endsWith(a2.systemParts[1]));
+  assert.ok(!a2.messages.some((m) => m.role !== 'system' && m.content.includes(FIGHT)), 'a rule never rides as his words');
+  /* a scene: his move wakes the narrator's board and how a fight sounds; the narrator's telling never does */
+  /* where he said a scene starts is his first word in it */
+  const duel = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Jovan', from: 'A duel on the bridge at dawn.' });
+  await reset();
+  await script([{ text: 'Mist on the bridge.' }, { text: 'He waits too.' }, { text: 'The wind.' }, { text: 'Still.' }, { text: 'The duel at dawn, in prose.' }]);
+  await talk.playSay({ playId: duel, text: '' });
+  for (const move of ['I wait.', 'I watch him.', 'I breathe.']) await talk.playSay({ playId: duel, text: move });
+  const duelAsks = (await requests()).map(systemOf);
+  assert.ok(duelAsks[0].includes(FIGHT) && duelAsks[0].includes("## When Words Won't Carry It"), 'the narrator opens a duel with the board and how a fight sounds');
+  assert.ok(duelAsks[3].includes(FIGHT) && duelAsks[3].includes("## When Words Won't Carry It"), 'and keeps them for the whole scene, three quiet moves on');
+  const duelTr = talk.transcriptOf(store.peek('play', duel));
+  await writer.playToProse({ novelId: b.novelId, chapterId: b.ids[0], play: store.peek('play', duel), transcript: duelTr.text, mine: duelTr.mine });
+  assert.equal((await requests()).length, 5);
+  assert.ok(systemOf((await requests())[4]).includes(FIGHT), 'and so does the duel written into prose');
   const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Jovan' });
   await reset();
-  await script([{ text: 'The wind.' }, { text: 'Steel rings.' }]);
+  await script([{ text: 'He shot him a look; she cocked her head, the cat curled up between her legs.' }, { text: 'The wind.' }, { text: 'Steel rings.' }, { text: 'Steel again.' }]);
   await talk.playSay({ playId: id, text: '' });
+  await talk.playSay({ playId: id, text: 'I wait.' });
   await talk.playSay({ playId: id, text: 'I draw my sword and attack him.' });
-  const [p0, p1] = (await requests()).map(systemOf);
-  assert.ok(!p0.includes("## When Words Won't Carry It"), 'nothing woke it yet');
-  assert.ok(p1.includes("## When Words Won't Carry It") && p1.includes('## How A Fight Sounds'), 'his move did');
-  await putAway(b); await putAway(b2);
+  await talk.playSay({ playId: id, text: 'I keep going.' });
+  const [p0, p1, p2, p3] = (await requests()).map(systemOf);
+  assert.ok(!p0.includes("## When Words Won't Carry It") && !p1.includes(FIGHT) && !p1.includes(HEAT), 'the narrator\'s words woke nothing');
+  assert.ok(p2.includes("## When Words Won't Carry It") && p2.includes(FIGHT), 'his move did');
+  assert.ok(p3.includes(FIGHT), 'and his last moves still do');
+  /* a scene written into prose: his moves in it */
+  await reset();
+  await script([{ text: 'The duel, in prose.' }]);
+  const tr = talk.transcriptOf(store.peek('play', id));
+  assert.ok(tr.mine.includes('I draw my sword and attack him.') && !tr.mine.includes('shot him a look'), tr.mine);
+  await writer.playToProse({ novelId: b.novelId, chapterId: b.ids[0], play: store.peek('play', id), transcript: tr.text, mine: tr.mine });
+  assert.ok(systemOf((await requests())[0]).includes(FIGHT), 'his moves in the scene');
+  assert.equal(picked(b.ch().passages.at(-1)).ask.mine, tr.mine, 'kept beside it, for another take');
+  await putAway(b); await putAway(b2); await putAway(b3); await putAway(b4); await putAway(b5);
+});
+
+await test('the words that wake a rule: premises and moves wake it; plain English that only sounds like a fight or sex never does', () => {
+  const fight = ['Jovan fights Kenjaku.', 'Jovan and Kenjaku fight.', 'They fight.', 'They fought.', 'Jovan keeps fighting.', 'The battle begins at dawn.', 'Kenjaku attacks Yuki.', 'He draws his sword.', 'She punches him.', 'They duel on the bridge.', 'A fight breaks out in the tavern.', 'Jovan fought Kenjaku to a standstill.', 'I draw my sword and attack him.', 'Jovan fights to the death.', 'She fires at him.', 'She shot him.', 'Kenjaku lunges.', 'Jovan fights the demons at the gate.',
+    /* real premises that only start like an idiom */
+    'Kenjaku stabs at Jovan\'s throat.', 'They mount an attack on the castle.', 'She fights the fear demon.', 'Jovan fights the Grief Curse.', 'He fights a cold-blooded assassin.', 'He fights the tear-stained soldier.', 'Jovan fights panic-stricken guards.', 'They have a fight to the death.'];
+  const calm = ['He shot him a look.', 'It hit her then.', 'It struck him that she was gone.', 'A stab of guilt.', 'She had a panic attack.', 'He died of a heart attack.', 'He dodged the question.', 'She was fighting a smile.', 'He fought with his conscience.', 'They had a fight about money.', 'She is fighting a cold.', 'They tackled the problem together.', 'She fired him.', 'He fights back tears.', 'She fights the urge to call.', 'He cocks his head.', 'She mounts her horse.', 'She undressed and slipped into the bath.', 'He graduated summa cum laude.', 'Dick laughed.', 'Jovan fights his demons.', 'Jovan talks about his sensei, and Sano cries.', 'Jovan stays silent and saves Yuki without a word.',
+    /* arguments are not fights */
+    'They fought about money.', 'They fought over the will.', 'Her parents fought.', 'Mara and her mother clashed.', 'They clash over the wedding plans.', 'They had a big fight.', 'It was a long fight.', 'She keeps fighting for custody.', 'They had a fight.', 'He took a stab at the answer.', 'She undressed for bed.'];
+  const heat = ['They make love by the fire.', 'She straddles him.', 'He undresses her slowly.', 'They had sex.', 'She mounts him.', 'They sleep together.', 'He thrusts into her.', 'Mara undresses Jovan.', 'He undresses the girl slowly.', 'Yuki undressed Jovan and pulled him to the bed.'];
+  for (const t of fight) assert.deepEqual(crafts.wakesOn(t), { intimate: false, fight: true }, t);
+  for (const t of calm) assert.deepEqual(crafts.wakesOn(t), { intimate: false, fight: false }, t);
+  for (const t of heat) assert.equal(crafts.wakesOn(t).intimate, true, t);
+  /* the app's own words around his never wake one */
+  for (const t of [prompts.playOpening({ who: 'Jovan' }), prompts.playOnwards({ who: 'Jovan' })]) assert.deepEqual(crafts.wakesOn(t), { intimate: false, fight: false }, t);
+  /* and they read a long text in a blink */
+  const long = 'He shot him a look and the stab of guilt came back. '.repeat(4000);
+  const t0 = Date.now();
+  crafts.wakesOn(long);
+  assert.ok(Date.now() - t0 < 500, `${Date.now() - t0} ms`);
 });
 
 await test('Sound: Comic sends his law with sound effects in asterisks; Novel the same two lanes, the sounds written into the sentences — each book its own, and the checker is told it is the book\'s style', async () => {
@@ -1720,6 +1877,104 @@ await test('boxes still holding the starting words of before get today\'s — th
   assert.equal(ins.system, OLD_WRITING + ' Mine.');
   assert.equal(ins.narrator, '', 'an emptied box stays empty');
   await setHouse();
+});
+
+await test('a scene break or an empty page after a passage is not text to bridge to: another take and a page written there are asked as the chip says', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.', { text: 'Steel rang.', ask: { direction: 'Jovan fights Kenjaku.', length: 'scene' } }, '---']]);
+  store.change('novel', b.novelId, shape.novelSteps.setPref('outcome', 'me'), { now: true });
+  await script([{ text: 'Again.' }, { text: 'After it.' }, { text: 'Between.' }]);
+  const steel = b.ch().passages[1].id;
+  await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: steel });
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], after: steel });
+  /* with words after it, it is between */
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], after: b.ch().passages[0].id });
+  const asks = (await requests()).map(askOf);
+  for (const a of asks.slice(0, 2)) {
+    assert.ok(a.includes('How it turns out is mine to decide') && !a.includes('between the text before it and the text that follows it'), a);
+  }
+  assert.ok(asks[2].includes('between the text before it and the text that follows it') && !asks[2].includes('How it turns out'), asks[2]);
+  await putAway(b);
+});
+
+await test('a narrator box he emptied before 2.3 gets his own writing words, once — never the starting words — and one emptied after stays empty', async () => {
+  await setHouse({}, { instructions: { system: 'MY OWN VOICE FOR EVERY PAGE.', narrator: '', partner: '', late: '' } });
+  assert.equal(prompts.narratorCarryDue(store.peek('house', 'house')), true);
+  store.change('house', 'house', prompts.carryNarrator, { now: true });
+  await store.flush('house', 'house');
+  let hs = await onPhone('house', 'house');
+  assert.equal(hs.instructions.narrator, 'MY OWN VOICE FOR EVERY PAGE.', 'his scenes keep the voice they had');
+  assert.equal(hs.narratorCarried, true);
+  /* emptied again from now on: it stays empty, and sends nothing of his */
+  store.change('house', 'house', (x) => { x.instructions.narrator = ''; }, { now: true });
+  assert.equal(prompts.narratorCarryDue(store.peek('house', 'house')), false);
+  store.change('house', 'house', prompts.carryNarrator, { now: true });
+  await store.flush('house', 'house');
+  hs = await onPhone('house', 'house');
+  assert.equal(hs.instructions.narrator, '', 'done once');
+  const b = await makeBook([['Mina waited at the gate.']]);
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Joon' });
+  await script([{ text: 'The gate creaks.' }]);
+  await talk.playSay({ playId: id, text: '' });
+  const sys = systemOf((await requests())[0]);
+  assert.ok(sys.startsWith('## The Telling') && !sys.includes('MY OWN VOICE'), sys.slice(0, 80));
+  /* the starting words in his writing box are never carried: they say the writer writes the main character too */
+  for (const system of [prompts.DEFAULT_WRITING, OLD_WRITING, '']) {
+    await setHouse({}, { instructions: { system, narrator: '', partner: '', late: '' } });
+    store.change('house', 'house', prompts.carryNarrator, { now: true });
+    assert.equal(store.peek('house', 'house').instructions.narrator, '', system.slice(0, 30));
+  }
+  /* a box of spaces was empty to 2.2 too */
+  await setHouse({}, { instructions: { system: 'MY OWN VOICE.', narrator: '   ', partner: '', late: '' } });
+  store.change('house', 'house', prompts.carryNarrator, { now: true });
+  assert.equal(store.peek('house', 'house').instructions.narrator, 'MY OWN VOICE.');
+  /* a box he wrote in is his */
+  await setHouse({}, { instructions: { system: 'MY OWN VOICE.', narrator: 'MY NARRATOR.', partner: '', late: '' } });
+  store.change('house', 'house', prompts.carryNarrator, { now: true });
+  assert.equal(store.peek('house', 'house').instructions.narrator, 'MY NARRATOR.');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the room for the chapters the partner asked for: the short ones whole, the long ones sharing what is left — never more than the budget', () => {
+  const words = (n) => Array.from({ length: n }, (_, i) => `word${i}`).join(' ');
+  const rows = [{ label: 'Chapter One', text: words(150) }, { label: 'Chapter Two', text: words(20000) }, { label: 'Chapter Three', text: words(9000) }];
+  const cost = rows.map((r) => util.estimateTokens(r.text));
+  const f = talk.fitRead(rows, 20000);
+  assert.equal(f.cut, true);
+  assert.equal(f.rows[0].text, rows[0].text, 'the short one whole');
+  const got = f.rows.map((r) => util.estimateTokens(r.text));
+  assert.ok(f.tokens <= 20000 && got.reduce((a, b) => a + b, 0) <= 20000, `${got} within 20,000`);
+  assert.ok(got[1] > 9000 && got[2] > 9000, `what the short one left is shared: ${got}`);
+  assert.ok(f.rows[1].text.startsWith('word0 word1') && f.rows[1].text.includes('left out here') && f.rows[1].text.endsWith(`word${19999}`), 'its opening and its end');
+  /* many asked for, little room: never past the budget */
+  const many = Array.from({ length: 30 }, (_, i) => ({ label: `Chapter ${i}`, text: words(3000) }));
+  const g = talk.fitRead(many, 3000);
+  assert.ok(g.rows.reduce((a, r) => a + util.estimateTokens(r.text), 0) <= 3000 + 30 * 40, 'within the budget, a short line each at most');
+  assert.equal(talk.fitRead(rows, 1e9).cut, false, 'room enough: all whole');
+  assert.deepEqual(cost.length, 3);
+});
+
+await test('chapters the partner asks to read, more than its model holds beside everything else, are sent cut to fit — their openings and ends — and the answer goes on', async () => {
+  const long = Array.from({ length: 500 }, (_, i) => `Line ${i} of a long chapter, said slowly.`).join(' ');
+  const b = await makeBook([['THE OPENING OF ONE. ' + long + ' THE END OF ONE.'], ['The second.']]);
+  /* What it's about and the notes are long too: they go whatever happens, and the reading fits beside them */
+  store.change('novel', b.novelId, (n) => { n.brief = 'A BRIEF. ' + 'The keeper and the sea and the letter. '.repeat(120); }, { now: true });
+  for (let i = 0; i < 12; i++) store.change('novel', b.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: `PERSON ${i}`, about: 'Someone the keeper knows from the harbour, with a long story. '.repeat(6) })), { now: true });
+  await setHouse({ context: 12000 }, CRAFTS_OFF);
+  await script([{ text: 'Let me look first. <read>[1]</read>' }, { text: 'Having read it: it works.' }]);
+  const out = await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[1], text: 'How is chapter one?' });
+  assert.equal(out.ok, true, out.error);
+  const r = await requests();
+  assert.equal(r.length, 2);
+  const back = r[1].body.messages.at(-1).content;
+  assert.ok(back.includes('THE OPENING OF ONE.') && back.includes('THE END OF ONE.') && back.includes('the middle of this chapter is left out here'), back.slice(0, 300));
+  assert.ok(back.includes('as much of each as fits here'), back.slice(-200));
+  const sent = r[1].body.messages.reduce((n, m) => n + util.estimateTokens(String(m.content)) + 8, 0);
+  assert.ok(sent + 6000 <= 12000, `it fits the model's 12,000 with the answer's 6,000: ${sent} tokens sent`);
+  assert.ok(systemOf(r[1]).includes('PERSON 11') || r[1].body.messages.some((m) => String(m.content).includes('PERSON 11')), 'the notes went with it');
+  assert.equal(picked(store.peek('talk', b.novelId).turns.at(-1)).text, 'Having read it: it works.');
+  await setHouse();
+  await putAway(b);
 });
 
 await test('every module of the app\'s, woken or not, speaks in words that never name a machine', async () => {

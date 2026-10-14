@@ -60,6 +60,24 @@ export function freshStarting(house) {
   if (STARTING_BEFORE.narrator.includes(ins.narrator)) ins.narrator = DEFAULT_NARRATOR;
 }
 
+/* Before 2.3 an emptied narrator box meant "the narrator reads How you like
+ * it written"; from 2.3 an emptied box sends nothing of his. So once, a
+ * narrator box he emptied before then gets his own writing words — never
+ * starting words, which now tell the writer it writes the main character
+ * too — and his scenes keep the voice he gave them. The house remembers it
+ * is done (narratorCarried): a box he empties from now on stays empty. */
+export function narratorCarryDue(house) {
+  return Boolean(house) && !house.narratorCarried;
+}
+export function carryNarrator(house) {
+  if (!house || house.narratorCarried) return;
+  const ins = house.instructions;
+  const his = Boolean(ins && typeof ins.system === 'string' && ins.system.trim() && ins.system !== DEFAULT_WRITING && !STARTING_BEFORE.system.includes(ins.system));
+  /* emptied: nothing in it but spaces, as 2.2 read it */
+  if (his && typeof ins.narrator === 'string' && !ins.narrator.trim()) ins.narrator = ins.system;
+  house.narratorCarried = true;
+}
+
 export const DEFAULT_PARTNER = `Talk the book over like a seasoned novelist and editor who loves this story and wants it to be as good as it can be: honest, specific and warm. Say what works and what doesn't, and why. When I'm stuck, offer two or three real ways forward rather than a list of ten, and think about what the people in it would truly do. Keep it short when short will do.`;
 
 /* ------------------------------------------------------- said plainly */
@@ -375,10 +393,10 @@ export function partnerFrame(house, novel, { notesAs = 'system' } = {}) {
 }
 
 /* the chapters it asked for, sent back whole */
-export function readBack(rows) {
+export function readBack(rows, { cut = false } = {}) {
   return [
     rows.map((r) => `${r.label}${r.missing ? ' — not in the book' : ''}\n\n${r.text}`).join('\n\n\n'),
-    'Here they are, whole. Go on with your answer.',
+    cut ? 'Here they are — as much of each as fits here beside everything else, the rest left out where it says so. Go on with your answer.' : 'Here they are, whole. Go on with your answer.',
   ].join('\n\n');
 }
 

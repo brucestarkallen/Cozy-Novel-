@@ -94,9 +94,10 @@ export function rideLine(m) {
 const READER_OF = { write: 'writer', play: 'narrator', partner: 'partner' };
 
 /* What rides for one of them this time — always: the part that stays the
- * same page after page, right after his own words; woken: what this moment
+ * same page after page, right after his own words; woken: what his words
  * woke (it rides nearer the page, so the part that stays the same stays the
- * same). wake: {intimate, fight}, from the words of the moment. A module he
+ * same). wake: {intimate, fight}, from his own words (crafts.js wakesOn —
+ * never the page). A module he
  * emptied sends nothing. The sound law rides for the two who tell the story,
  * as the book's Sound switch writes it: always its two lanes, how a fight
  * sounds once one starts, and how sex sounds with the intimate rule. */

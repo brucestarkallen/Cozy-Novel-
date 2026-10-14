@@ -97,6 +97,66 @@ export function passageText(passage) {
   const v = picked(passage);
   return v ? String(v.text || '') : '';
 }
+/* a passage with words on the page (a scene break, or a page that never got
+ * a word, is none) */
+export function hasWords(passage) {
+  return Boolean(passage && passage.by !== 'break' && String((picked(passage) || {}).text || '').trim());
+}
+
+/* The words of his that set a passage going — what wakes a rule for what is
+ * written from it (crafts.js wakesOn). A passage he typed is his words (one
+ * brought in from a file is his book, not words for this moment; and, as
+ * Cozy Tavern reads a typed move, a wall of pasted text is not read for it).
+ * One the writer wrote: what he asked for in it — the premise, a rewrite's
+ * note, his moves in a scene written into prose. '' when it carried none of
+ * his: the writer just went on. */
+const HIS_WORDS_MAX = 6000;
+export function hisWordsIn(passage) {
+  if (!passage || passage.by === 'break') return '';
+  const shown = picked(passage) || {};
+  const versions = passage.versions || [];
+  const note = (shown.how === 'rewrite' || shown.how === 'selection') && shown.ask && shown.ask.note ? String(shown.ask.note) : '';
+  if (passage.by === 'you') {
+    /* brought in from a file: only a note he gave it in a rewrite is his */
+    if ((versions[0] || {}).how === 'imported') return note.trim();
+    /* his own words: the version on show when it is his (typed, or his
+     * edit), else the one of his it was rewritten from — never a rewrite
+     * the writer made of it */
+    const isMine = (v) => Boolean(v && (v.how === 'mine' || v.how === 'edit'));
+    const from = versions.find((v) => v.id === (shown.from || shown.base));
+    const mine = isMine(shown) ? shown : isMine(from) ? from : [...versions].reverse().find(isMine);
+    const t = mine ? String(mine.text || '') : '';
+    return [t.length > HIS_WORDS_MAX ? '' : t, note].map((x) => x.trim()).filter(Boolean).join('\n');
+  }
+  const parts = [];
+  const first = versions.find((v) => v.ask && String(v.ask.direction || '').trim());
+  if (first) parts.push(first.ask.direction);
+  if (note) parts.push(note);
+  const scene = shown.how === 'play' && shown.ask ? shown : versions.find((v) => v.how === 'play' && v.ask);
+  if (scene) parts.push(scene.ask.mine || movesIn(scene.ask.transcript, scene.ask.who));
+  return parts.map((x) => String(x || '').trim()).filter(Boolean).join('\n');
+}
+/* his lines in a scene's transcript (talk.js transcriptOf), for a scene
+ * written into prose before his own words were kept beside it */
+function movesIn(transcript, who) {
+  const lead = `${String(who || '').trim() || 'their character'}: `;
+  return String(transcript || '').split(/\n{2,}/).filter((l) => l.startsWith(lead)).map((l) => l.slice(lead.length)).join('\n');
+}
+/* His words for a point in a chapter: the nearest passage at or before
+ * index that carries some — the premise he is still carrying on. A passage
+ * of his own is the moment itself and ends the search; so do a scene break
+ * and the chapter's start, where a new scene begins. */
+export function hisWordsBefore(list, index) {
+  const ps = list || [];
+  for (let i = Math.min(index, ps.length - 1); i >= 0; i--) {
+    const p = ps[i];
+    if (!p) continue;
+    if (p.by === 'break') return '';
+    const w = hisWordsIn(p);
+    if (w || p.by === 'you') return w;
+  }
+  return '';
+}
 export function chapterText(chapter, { upto = null, from = null } = {}) {
   const list = (chapter && chapter.passages) || [];
   let a = 0, b = list.length;

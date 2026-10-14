@@ -830,7 +830,7 @@ async function toProse(p, fromStart) {
   if (!wide()) closeRight();
   hooks.goChapter(chapterId);
   toast('Writing the scene into the chapter…');
-  const out = await writer.playToProse({ novelId: P.novelId, chapterId, play: p, transcript: tr.text, length: (n.prefs && n.prefs.length) || 'scene' });
+  const out = await writer.playToProse({ novelId: P.novelId, chapterId, play: p, transcript: tr.text, mine: tr.mine, length: (n.prefs && n.prefs.length) || 'scene' });
   if (out && out.ok) {
     /* the scene goes on from the prose now in the book: what was turned rides as the book, not again as talk */
     store.change('play', p.id, turnSteps.set({ turned: tr.lastId, updated: Date.now(), ...(out.passageId ? { after: out.passageId, chapterId } : {}) }), { now: true });

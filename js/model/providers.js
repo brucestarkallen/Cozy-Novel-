@@ -200,6 +200,9 @@ export function learnedFacts(conn, now = Date.now()) {
     down: Number.isFinite(L.downAt) && now - L.downAt <= REFUSAL_MEMORY_MS,
     prefillDown: Number.isFinite(L.prefillDownAt),
     context: Number.isFinite(L.context) && L.context > 0 ? L.context : 0,
+    /* that room is this app's own guess after a "too long" that named no
+     * smaller size — the book is fitted to it, but nothing is refused for it */
+    contextGuess: L.contextGuess === true,
     /* the longest reply the model said it can give */
     maxOut: Number.isFinite(L.maxOut) && L.maxOut > 0 ? L.maxOut : 0,
     /* the reply's length named the way this address asks: max_completion_tokens */

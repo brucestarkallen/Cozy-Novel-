@@ -47,7 +47,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -1332,6 +1332,16 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 128   # many tabs saving at once are queued, never refused
+
+    def handle_error(self, request, client_address):
+        # A page that went away before its answer — a tab he or Android closed
+        # mid-save, a kept-alive line the browser let go — is no fault here: a
+        # save it carried landed whole or not at all, and the page (or its
+        # journal) asks again. Nothing about it goes into the log the launcher
+        # shows him when the server will not start; anything else still does.
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def _ref_files():

@@ -43,6 +43,8 @@ export function learn(conn, fact) {
     downAt: fact.downAt || (was && was.downAt) || null,
     prefillDownAt: fact.prefillDownAt || (was && was.prefillDownAt) || null,
     context: fact.context || (was && was.context) || null,
+    /* a room of this app's own guessing, or the model's own number */
+    contextGuess: fact.context ? fact.contextGuess === true : Boolean(was && was.contextGuess),
     maxOut: fact.maxOut || (was && was.maxOut) || null,
     completionField: fact.completionField === true || Boolean(was && was.completionField),
   };
@@ -445,21 +447,40 @@ export async function ask(conn, opts = {}) {
           /* the book fitted to a smaller room — kept only when that really
            * makes the request smaller, so a request that cannot shrink is
            * never asked again and again */
-          const next = said && said < now ? said : Math.floor(now * 0.75);
-          if (typeof opts.build === 'function' && next >= 2000 && next < now) {
-            const trial = { ...conn, learned: { ...((learnedFacts(conn) && conn.learned) || {}), for: learnKey(conn), at: Date.now(), context: next } };
-            const trialShape = shapeOf(trial);
-            /* the size the model said cannot hold even the part that has to go
-             * (his instructions and the modules): its number is kept, and the
-             * builder's reason is said — nothing more is sent */
-            if (said && trialShape && trialShape.refuse) {
+          /* the request built again for a smaller room — the model's own number, or a guess */
+          const trialAt = (size, guess) => shapeOf({ ...conn, learned: { ...((learnedFacts(conn) && conn.learned) || {}), for: learnKey(conn), at: Date.now(), context: size, contextGuess: guess } });
+          /* the size the model said it holds, when that is less than the room
+           * the request was made for */
+          let next = said && said < now ? said : 0;
+          let trialShape = null;
+          if (typeof opts.build === 'function' && next >= 2000) {
+            trialShape = trialAt(next, false);
+            /* that size cannot hold even the part that has to go (his
+             * instructions, the modules, the talk, the room for the answer):
+             * its number is kept, and the builder's reason — made for that
+             * size — is said; nothing more is sent */
+            if (trialShape && trialShape.refuse) {
               learn(conn, { context: said });
               if (opts.onSent) opts.onSent(sent);
               return { ok: false, text: '', thinking: '', notes, error: trialShape.refuse, status: lastStatus, sent, permanent: true };
             }
+          }
+          if (typeof opts.build === 'function' && !next) {
+            /* no size said, or one no smaller than the room: the model counts
+             * the request bigger than this app does — the book is fitted a
+             * quarter smaller, and never below what has to go with it (a
+             * guess is never a reason to refuse) */
+            const least = Number(shape && shape.least) || 0;
+            next = Math.max(Math.floor(now * 0.75), least > 0 ? least + 2000 : 0);
+            trialShape = next >= 2000 && next < now ? trialAt(next, true) : null;
+            if (trialShape && trialShape.refuse) trialShape = null;
+          }
+          if (trialShape && next >= 2000 && next < now) {
             const trialSize = sizeOf(trialShape);
             if (trialSize < sizeOf(shape) * 0.97) {
-              learn(conn, { context: next });
+              /* the model's own number, or this app's guess — a guess fits the
+               * book, but is never a reason to refuse a page (context.js) */
+              learn(conn, { context: next, contextGuess: next !== said });
               notes.push(`The model said the request was longer than it holds, so the book was fitted to ${next.toLocaleString()} tokens and sent again.`);
               mended = true;
               /* and when even the fitted request leaves less than the reply's room, the reply gets what is left */

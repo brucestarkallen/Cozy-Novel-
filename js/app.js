@@ -15,7 +15,7 @@ import { openSettings, redrawSettings } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK } from './ui/look.js';
 import { bringOldBooks } from './legacy.js';
-import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, freshStarting } from './novel/prompts.js';
+import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, freshStarting, narratorCarryDue, carryNarrator } from './novel/prompts.js';
 import { chapterLabel, novelSteps } from './novel/shape.js';
 import { plural, numberWords } from './util.js';
 import { talkBusy, repairStaleTurns as talkRepair } from './novel/talk.js';
@@ -60,12 +60,16 @@ async function boot() {
       look: { ...DEFAULT_LOOK },
       created: Date.now(),
       checksFrom: Date.now(),
+      narratorCarried: true,
     });
   }
   /* a box still holding the starting words of before 2.3 — never touched —
    * gets today's: the master novelist, his preset's own opening for the
    * narrator (a box he wrote in keeps his words) */
   if (startingIsOld(house)) store.change('house', 'house', freshStarting, { now: true });
+  /* a narrator box he emptied before 2.3 (it read his writing words then)
+   * gets his writing words, once */
+  if (narratorCarryDue(house)) store.change('house', 'house', carryNarrator, { now: true });
   /* the checker reads what is written from now on; older writing only when he asks */
   if (!Number.isFinite(house.checksFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.checksFrom)) x.checksFrom = Date.now(); }, { now: true });
   startChecking();

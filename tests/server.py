@@ -16,6 +16,7 @@ import shutil
 import signal
 import socket
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
@@ -101,6 +102,7 @@ def main():
             print(out[-3000:])
     run_first_cozynovel()
     run_update_lands()
+    run_pages_leave()
     shutil.rmtree(home, ignore_errors=True)
     print("\nserver: %d passed, %d failed" % (len(passed), len(failed)))
     sys.exit(1 if failed else 0)
@@ -417,6 +419,35 @@ def run_update_lands():
             time.sleep(0.25)
         for d in (folder, home):
             shutil.rmtree(d, ignore_errors=True)
+
+
+def run_pages_leave():
+    """Android closes a tab — or he does — while its save is on the way. The
+    server goes on serving, and writes nothing about the page that left into
+    the log the launcher shows him when the server will not start."""
+    print("pages that go away before their answer")
+    home = Path(tempfile.mkdtemp(prefix="cozynovel-home-"))
+    port = PORT + 9
+    srv = start(home, port=port)
+    try:
+        for i in range(40):
+            s = socket.create_connection(("127.0.0.1", port))
+            body = json.dumps({"data": {"novelId": "n-1", "passages": [{"id": "p1"}], "n": i}}).encode()
+            head = ("PUT /api/store/chapter/c-gone-%d HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Client: tab-gone\r\n"
+                    "Origin: http://127.0.0.1:%d\r\nX-Base: 0\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n"
+                    % (i, port, port, len(body))).encode()
+            s.sendall(head + body)
+            # gone at once, the way a closed tab goes: a reset, not a goodbye
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            s.close()
+        time.sleep(0.5)
+        st, out = Page(port).ask("GET", "/api/version")
+        check("the server still answers after forty pages left mid-save", st == 200 and isinstance(out, dict) and out.get("version"), (st, out))
+    finally:
+        srv.terminate()
+        log = srv.stdout.read().decode()
+        shutil.rmtree(home, ignore_errors=True)
+    check("and writes nothing about the pages that left into its log", "Traceback" not in log and "Error" not in log, log[-1500:])
 
 
 if __name__ == "__main__":

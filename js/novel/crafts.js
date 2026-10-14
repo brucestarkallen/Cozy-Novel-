@@ -404,20 +404,53 @@ ${HIGH_INTENSITY_NOVEL}`,
 /* --------------------------------------------- when a rule wakes, by the words */
 /* Cozy Tavern's own patterns (modules.js M85-002, laws.js M510-7): plain
  * words that mean the moment is a fight, or that it has turned intimate — a
- * curse alone is not intent, a naked blade is not a body. They read a move
- * typed in a scene ("I draw my sword", "I straddle her"); a novel's premise
- * and its pages say it in the third person and the past tense ("Jovan fights
- * Kenjaku", "she straddled him", "they made love"), so those forms wake them
- * too (the _MORE patterns). Read over what he asked and the words right
- * before the point being written (context.js). */
+ * curse alone is not intent, a naked blade is not a body. They read HIS words
+ * only, as Cozy Tavern reads only the move he typed ("I draw my sword", "I
+ * straddle her"): what he asks for now, the words of his that set going what
+ * he is carrying on, his last moves in a scene (writer.js, talk.js). Never a
+ * page — prose is full of looks shot, heads cocked and stabs of guilt. A
+ * novel's premise says it in the third person and the past tense ("Jovan
+ * fights Kenjaku", "she straddled him", "they made love"), so those forms
+ * wake them too (the _MORE patterns); the plain English that only sounds like
+ * it is set aside first (IDIOMS). */
 const INTIMACY_RE = /\b(cocks?|pussy|cunt|dick|tits|nipples?|clit|cums?|cumming|blowjob|handjob|fucks?\s+(?:her|him|me|them)|fucking\s+(?:her|him|me|them)|straddl(?:e|es|ing)|undress(?:es|ing|ed)?|strips?\s+(?:her|him)\s+naked|(?:her|him|me|myself)\s+naked|naked\s+(?:body|skin|chest|breasts)|thrusts?\s+(?:into|inside)|grind(?:s|ing)?\s+(?:on|against)|make\s+love|have\s+sex|sex\s+with|mount(?:s|ing)?\s+(?:her|him)|between\s+(?:her|his)\s+(?:legs|thighs))\b/i;
 const COMBAT_RE = /\b(?:attack(?:s|ed|ing)?\b(?!\s+(?:of|on)\s+(?:nerves|panic))|punch(?:es|ed|ing)?\s+(?:him|her|them|it|at|back|through)|kick(?:s|ed|ing)?\s+(?:him|her|them|at)|strik(?:e|es|ing)\s+(?:him|her|them|at|first|back)|stab(?:s|bed|bing)?|slash(?:es|ed|ing)?|lung(?:e|es|ed|ing)|tackl(?:e|es|ed|ing)|headbutt(?:s|ed|ing)?|uppercut|draw(?:s|ing)?\s+(?:my|his|her|the)\s+(?:sword|blade|zanpakuto|katana|knife|dagger|gun|pistol|weapon)|swing(?:s|ing)?\s+(?:my|his|her|the)\s+(?:sword|blade|zanpakuto|katana|staff|fist|axe|hammer)|(?:shoot|shoots|shot|fire|fires|fired)\s+(?:at\s+)?(?:him|her|them)|hit(?:s|ting)?\s+(?:him|her|them)\b|fight(?:s|ing)?\s+(?:him|her|them|back)|bankai|shikai|parr(?:y|ies|ied|ying)\b|dodg(?:e|es|ed|ing)\b|grappl(?:e|es|ed|ing)\b|counter-?attack(?:s|ed|ing)?\b|duel(?:s|ed|ing|led|ling)?\s+(?:him|her|them|with)\b|spar(?:s|red|ring)?\s+(?:with|against)\b|block(?:s|ed|ing)?\s+(?:his|her|their|the)\s+(?:blade|sword|strike|blow|punch|kick|swing|attack|slash|thrust)|(?:we|i|they)\s+fight\b(?!\s+(?:for|over|about|to\s+keep))|(?:chok|strangl|throttl)(?:e|es|ed|ing)\s+(?:him|her|them)|slam(?:s|med|ming)?\s+(?:him|her|them)\s+(?:into|against|down))/i;
 const INTIMACY_MORE_RE = /\b(?:straddled\s+(?:him|her|me)|fucked\s+(?:her|him|me|them|you)|fucks?\s+you|fucking\s+you|(?:made|making|makes)\s+love|(?:had|having)\s+sex|stripped\s+(?:her|him|me)\s+naked|undressed\s+(?:her|him|me)|(?:sleep|sleeps|sleeping|slept)\s+together)\b/i;
-/* a fight named in a premise or a page: fights/fought/battled/duelled someone
- * — never "fought back tears", "fights the urge", "a fight for the farm" —
- * a fight, the battle, the duel; a blade drawn or swung, a blow struck */
-const FIGHT_MORE_RE = /\b(?:(?:fights?|fought|fighting|battles?|battled|battling|duels?|duell?ed|duell?ing|brawl(?:s|ed|ing)?)\s+(?:(?:with|against)\s+)?(?!(?:with|against|for|over|about|of|to|off|back|on|through|down|it|this|that|tears?|sleep|time|the\s+urge|an?\s+urge|temptation|nausea|exhaustion|panic|fear)\b)[a-z]|(?:the|a|their|his|her|our|this)\s+(?:fight|battle|duel|brawl|skirmish|showdown|sword\s?fight|fist\s?fight)\b(?!\s+(?:for|over|of\s+wills))|drew\s+(?:my|his|her|their|the)\s+(?:sword|blade|zanpakuto|katana|knife|dagger|gun|pistol|weapon)|swung\s+(?:my|his|her|their|the)\s+(?:sword|blade|zanpakuto|katana|staff|fist|axe|hammer)|struck\s+(?:him|her|them|at|first|back))/i;
+/* a fight named in a premise: fights/fought/battled/duelled someone — never
+ * "fought back tears", "fights the urge", "a fight for the farm" — a fight,
+ * the battle, the duel; two who fight, one who keeps fighting or fights to
+ * the death; a blade drawn or swung, a blow struck */
+const FIGHT_MORE_RE = /\b(?:(?:fights?|fought|fighting|battles?|battled|battling|duels?|duell?ed|duell?ing|brawl(?:s|ed|ing)?)\s+(?:(?:with|against)\s+)?(?!(?:with|against|for|over|about|of|to|off|back|on|through|down|it|this|that|tears?|sleep|time|the\s+urge|an?\s+urge|temptation|nausea|exhaustion|panic|fear)\b(?!-))[a-z]|(?:the|a|their|his|her|our|this)\s+(?:fight|battle|duel|brawl|skirmish|showdown|sword\s?fight|fist\s?fight)\b(?!\s+(?:for|over|about|of\s+wills))|(?:keeps?|kept|start(?:s|ed)?|begins?|began|continues?|continued)\s+(?:to\s+)?(?:fight|fighting|battle|battling|duel|duell?ing|brawl|brawling)\b(?!\s+(?:for|about|over|with|against|to\s+keep)\b)|(?:fights?|fought|fighting|battles?|battled|battling)\s+(?:on|to\s+the\s+(?:death|last))\b|\band\s+[a-z][\w'-]*\s+(?:fight|fought|duel|duell?ed|battle|battled)\s*(?:[.!?;]|$)|(?:we|i|they|you|both|two)\s+(?:fought|duel|duell?ed|battle|battled|clash|clashed|brawl|brawled|spar|sparred)\b(?!\s+(?:for|about|over|with\s+words|to\s+keep)\b)|drew\s+(?:my|his|her|their|the)\s+(?:sword|blade|zanpakuto|katana|knife|dagger|gun|pistol|weapon)|swung\s+(?:my|his|her|their|the)\s+(?:sword|blade|zanpakuto|katana|staff|fist|axe|hammer)|struck\s+(?:him|her|them|at|first|back))/i;
+/* plain English that only sounds like a fight or like sex — set aside before
+ * the patterns read his words: a head cocked, a horse mounted, a look shot, a
+ * stab of guilt, a heart attack, a question dodged, a problem tackled, "it
+ * struck him", a smile fought, a fight about money or one they "had", a man
+ * named Dick. Each only as the whole idiom: "fights the fear demon",
+ * "stabs at his throat", "mount an attack", "undresses him" still wake. */
+const IDIOMS = [
+  /\bcock(?:s|ed|ing)?\s+(?:his|her|their|my|your|its|a|an|the|one)\s+(?:head|heads|eyebrow|eyebrows|brow|ear|ears|hat|hip|gun|guns|pistol|rifle|revolver|shotgun|crossbow|bow|hammer|trigger|weapon|fist)\b/gi,
+  /\bmount(?:s|ed|ing)?\s+(?:her|his|their|my|your|the|a)\s+(?:horse|horses|steed|mare|stallion|pony|mount|bike|motorbike|motorcycle|dragon|wyvern|griffin|gryphon|camel|saddle|stairs|steps|throne|stage|podium)\b/gi,
+  /\b(?:(?:summa|magna)\s+)?cum\s+laude\b/gi,
+  /\b(?:shot|shoots?|shooting|fired|fires?|firing)\s+(?:him|her|them|me|us)\s+(?:a|an|another)\s+(?:look|glance|glare|smile|grin|wink|nod|text|message|question)\b/gi,
+  /\bfir(?:e|es|ed|ing)\s+(?:him|her|them|me|us)\b/gi,
+  /\b(?:panic|heart|anxiety|asthma|allergy|allergic)\s+attacks?\b/gi,
+  /\bstabs?\s+of\b/gi,
+  /\b(?:take|takes|took|taking|have|has|had|make|makes|made)\s+(?:a|another)\s+stab\s+at\b/gi,
+  /\bstabbing\s+(?:pain|pains|ache|sensation|headache)\b/gi,
+  /\bdodg(?:e|es|ed|ing)\s+(?:the|a|his|her|their|my|that|this|every|any)\s+(?:question|questions|issue|subject|topic|call|calls|responsibility)\b/gi,
+  /\btackl(?:e|es|ed|ing)\s+(?:the|a|this|that|his|her|their|every)\s+(?:problem|problems|issue|issues|task|tasks|job|question|questions|subject|challenge|challenges|mess|paperwork)\b/gi,
+  /\bit\s+(?:struck|strikes|hit|hits)\s+(?:him|her|them|me|us)\b/gi,
+  /\bhit(?:s|ting)?\s+(?:him|her|them)\s+up\b/gi,
+  /\b(?:fights?|fought|fighting|battles?|battled|battling|struggles?|struggled|struggling)\s+(?:(?:back|with|against)\s+)?(?:a|an|the|his|her|their|my|your|its)?\s*(?:smile|grin|laugh|laughter|yawn|blush|tear|tears|sob|sobs|cold|flu|fever|infection|cough|conscience|instincts?|impulses?|feelings?|emotions?|nerves|nausea|exhaustion|fatigue|sleep|panic|fear|fears|temptation|urges?|cravings?|addiction|habit|disease|illness|cancer|depression|despair|grief|guilt|himself|herself|themselves|myself|yourself)\b(?=\s*(?:$|[.,;:!?)\u2014]|(?:and|but|or|as|while|so|that|of|in|at|to|for|with|back|down|off|away|again|anymore|once|all|every|tonight|today|now|then)\b))/gi,
+  /\b(?:fights?|fought|fighting|battles?|battled|battling|struggles?|struggled|struggling)\s+(?:(?:with|against)\s+)?(?:his|her|their|my|your|its|inner)\s+(?:own\s+)?demons\b/gi,
+  /\b(?:a|the|their|his|her|our|this|that)\s+(?:fight|battle|row|argument)\s+(?:about|over)\b/gi,
+  /\b(?:had|have|has|having)\s+(?:a|another|their|this|that)\s+(?:(?:big|huge|bad|little|terrible|real|blazing|screaming)\s+)?(?:fight|row|argument)\b(?!\s+to\s+the\s+(?:death|last|finish)\b)/gi,
+  /\bundress(?:es|ed|ing)?\b(?=\s*(?:$|[.,;:!?)\u2014]|(?:and|for|to|in|before|after|then|herself|himself|themselves|myself|yourself)\b))/gi,
+  /\bgrappl(?:e|es|ed|ing)\s+with\s+(?:the|a|his|her|their)?\s*(?:idea|question|problem|news|loss|grief|guilt|fear|truth|decision|thought|thoughts|feelings?|emotions?)\b/gi,
+  /\bDick\b/g,
+];
 export function wakesOn(text) {
-  const t = String(text || '');
+  let t = String(text || '');
+  for (const re of IDIOMS) t = t.replace(re, ' ');
   return { intimate: INTIMACY_RE.test(t) || INTIMACY_MORE_RE.test(t), fight: COMBAT_RE.test(t) || FIGHT_MORE_RE.test(t) };
 }

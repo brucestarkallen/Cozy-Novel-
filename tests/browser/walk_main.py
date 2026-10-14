@@ -216,6 +216,11 @@ async def scenario_main(b):
     allp = ' '.join(await pg.locator('#passages .passage .prose').all_inner_texts())
     check('only the selected words are rewritten', 'amber glow' in allp and 'Rain lit with a slow, amber glow the glass' in allp.replace('\n', ' '), allp[:300])
     # ---- a dial the model refuses is learned
+    # Counted from before the dial is set, and by the words asked for: the
+    # checker rides the same connection and reads the rewritten passage a few
+    # seconds after it, so it can meet the refusal first — and what one of them
+    # learns about the model holds for all of them.
+    reset()
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections")')
     await pg.fill('.sheet input[placeholder="deepseek-chat"]', 'fake-picky')
     await pg.click('.sheet .group button.ghead:has-text("More dials")')
@@ -223,14 +228,19 @@ async def scenario_main(b):
     await pg.fill('.sheet label.field:has(span:text-is("Temperature")) input', '0.8')
     await pg.wait_for_timeout(800)
     await close_sheet(pg)
-    reset()
+    asked = lambda words: [x for x in completions() if words in json.dumps(x['body'].get('messages') or [])]
+    n0 = await pg.locator('#passages .passage').count()
+    e0 = await pg.locator('.endcard.error').count()
     await write(pg, 'A quiet moment.')
-    r = completions()
-    check('his temperature is sent exactly', all(x['body'].get('temperature') == 0.8 for x in r), [x['body'].get('temperature') for x in r])
-    check('a refused dial is dropped and the page still comes', len(r) == 2 and 'top_k' in r[0]['body'] and 'top_k' not in r[1]['body'], [('top_k' in x['body']) for x in r])
+    r = asked('A quiet moment.')
+    picky = [x for x in reqs() if x['path'].endswith('/chat/completions') and x['body'].get('model') == 'fake-picky']
+    came = await pg.locator('#passages .passage').count() == n0 + 1 and await pg.locator('.endcard.error').count() <= e0
+    check('his temperature is sent exactly', r and all(x['body'].get('temperature') == 0.8 for x in r), [x['body'].get('temperature') for x in r])
+    check('a refused dial is dropped and the page still comes', any('top_k' in x['body'] for x in picky) and r and 'top_k' not in r[-1]['body'] and came,
+          ([('top_k' in x['body'], 'checker' if checking(x) else 'page') for x in picky], came))
     reset()
     await write(pg, 'Another quiet moment.')
-    r = completions()
+    r = asked('Another quiet moment.')
     check('the next request leaves the refused dial out from the start', len(r) == 1 and 'top_k' not in r[0]['body'], [('top_k' in x['body']) for x in r])
     await set_model(pg, 'fake-writer')
     # ---- remove a passage, undo
@@ -329,8 +339,20 @@ async def scenario_main(b):
     await pg.click('#bookTitle'); await pg.wait_for_timeout(300)
     chs = await pg.text_content('#chaptersBody')
     check('with both its chapters', 'Chapter One' in chs and 'Chapter Two' in chs, chs[:200])
+    # A save from an older copy is answered 409 with the newer copy, and the page
+    # plays its unsaved steps over that and saves again (tests/server.py,
+    # js/store.js): two windows — or a page and its own reload — saving one record
+    # close together can always cross. Chromium reports each such answer as a
+    # console error; it is the store doing its work, not a page error, so a few,
+    # each one an answer from the store, are set aside. Anything else fails here,
+    # and so does a run of crossings.
+    said409 = 'error: Failed to load resource: the server responded with a status of 409 (Conflict)'
+    crossed = [l for l in logs if l.startswith('HTTP 409 ') and '/api/store/' in l]
     errs = [l for l in logs if l.startswith('PAGEERROR') or l.startswith('error')]
-    check('no page errors along the way', not errs, errs[:5])
+    for _ in crossed:
+        if said409 in errs:
+            errs.remove(said409)
+    check('no page errors along the way', not errs and len(crossed) <= 3, (errs[:5], crossed[:5]))
     await pg.close()
 
 async def scenario_small(b):

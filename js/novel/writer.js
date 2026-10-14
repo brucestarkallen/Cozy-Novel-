@@ -15,7 +15,7 @@ import { ask, emptyWhy } from '../model/call.js';
 import { wireOf } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, picked, chapterLabel, countBook, chapterText, outcomeOf } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 
 /* -------------------------------------------------------------- roles */
@@ -211,7 +211,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       build: (c) => {
         const { novel, chapters } = bookNow(novelId);
         const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '' });
-        return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse };
+        return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least };
       },
       stream: true,
       signal: ctl.signal,
@@ -344,14 +344,32 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
   if (!chapter) return { ok: false, error: 'that chapter is not in the book any more' };
   const list = chapter.passages || [];
   const at = after ? list.findIndex((p) => p.id === after) : -1;
-  const between = at >= 0 && at < list.length - 1;
+  /* between two passages only when words follow it (a scene break or an
+   * empty page after it is not text to bridge to) */
+  const between = at >= 0 && list.slice(at + 1).some(hasWords);
+  /* what wakes a rule: what he asks for, with the words he is carrying on —
+   * the premise, or a passage of his, right before the point */
+  const moment = [direction, hisWordsBefore(list, at >= 0 ? at : list.length - 1)].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
   const empty = !list.slice(0, at >= 0 ? at + 1 : list.length).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
   const passage = newPassage('ai', '', { how: 'write', ask: { direction, length }, streaming: true });
   store.change('chapter', chapterId, chapterSteps.addPassage(passage, at >= 0 ? after : null), { now: true });
   const request = writeRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), direction, length, empty,
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel) });
   return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length,
-    build: { target: { chapterId, before: passage.id }, request, moment: direction } });
+    build: { target: { chapterId, before: passage.id }, request, moment } });
+}
+
+/* What wakes a rule for a passage written again or carried on: his note for
+ * it, with the words of his that made it — a passage of his is his words
+ * itself, and ends the search — or else the premise it carried on. Never
+ * the writer's prose (crafts.js). Read before a new version is added: the
+ * passage then shows the words being written again. */
+function momentOf(chapter, passage, note = '') {
+  const list = (chapter && chapter.passages) || [];
+  const i = list.indexOf(passage);
+  const own = hisWordsIn(passage);
+  const carried = own || passage.by === 'you' ? own : hisWordsBefore(list, i - 1);
+  return [note, carried].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
 }
 
 /* nothing comes after this passage anywhere in the book: no passage with
@@ -397,22 +415,21 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
   }
   const list = chapter.passages;
   const i = list.indexOf(p);
-  const between = i < list.length - 1;
+  const between = list.slice(i + 1).some(hasWords);
   const length = take.ask.length || 'scene';
+  /* what wakes a rule: his words that made it, or the premise it carried on */
+  const moment = momentOf(chapter, p);
   const version = newVersion({ how: take.how === 'play' ? 'play' : 'another', ask: { ...take.ask }, streaming: true });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const label = chapterLabel(book.novel, chapter, { withName: false });
   let request;
-  let moment;
   if (take.how === 'play') {
     request = playToProseRequest({ chapterLabel: label, who: take.ask.who || 'their character', transcript: take.ask.transcript, length });
-    moment = take.ask.transcript;
   } else {
     const empty = !list.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
     /* how it turns out, as the chip says now */
     request = writeRequest({ chapterLabel: label, direction: take.ask.direction || '', length, empty,
       firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel) });
-    moment = take.ask.direction || '';
   }
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: version.how, length,
     build: { target: { chapterId, before: passageId }, request, moment } });
@@ -428,13 +445,15 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   if (!p) return { ok: false, error: 'that passage is not there any more' };
   const from = fromVersion || picked(p) || {};
   const text = String(from.text || '');
+  /* what wakes a rule, read before the new version shows */
+  const moment = momentOf(chapter, p, note);
   const version = newVersion({ how: 'rewrite', ask: { note }, streaming: true, from: from.id });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = rewriteRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text, last: lastInBook(book, chapterId, passageId) });
   const words = countWords(text);
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
     length: words > 2600 ? 'chapter' : words > 1500 ? 'long' : 'scene',
-    build: { target: { chapterId, mark: passageId }, request, moment: `${note}\n${text}` } });
+    build: { target: { chapterId, mark: passageId }, request, moment } });
 }
 
 /* Only the words he selected, rewritten; the rest of the passage untouched. */
@@ -449,12 +468,14 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   const full = String(baseV.text || '');
   if (!(Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= full.length)) return { ok: false, error: 'select the words to rewrite first' };
   const marked = full.slice(0, start) + MARK_OPEN + full.slice(start, end) + MARK_CLOSE + full.slice(end);
+  /* what wakes a rule, read before the new version shows */
+  const moment = momentOf(chapter, p, note);
   const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
     splice: (answer) => spliceSelection(full, start, end, answer),
-    build: { target: { chapterId, mark: passageId }, request, moment: `${note}\n${full}` } });
+    build: { target: { chapterId, mark: passageId }, request, moment } });
 }
 
 /* The words a carried-on passage gets. The model was asked to begin by
@@ -488,6 +509,8 @@ export async function goOn({ novelId, chapterId, passageId }) {
    * of the passage: carrying the passage on from its end would leave it cut there */
   if (v.how === 'selection') return { ok: false, error: 'a rewrite of selected words can’t be carried on — Another take writes it again' };
   const original = { text: String(v.text || ''), cut: v.cut, cutWhy: v.cutWhy, stopped: v.stopped };
+  /* what wakes a rule: the words of his that made it, or the premise it carried on */
+  const moment = momentOf(chapter, p);
   const i = chapter.passages.indexOf(p);
   const between = chapter.passages.slice(i + 1).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
   store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, { streaming: true, cut: undefined, cutWhy: undefined, stopped: undefined }), { now: true });
@@ -502,22 +525,23 @@ export async function goOn({ novelId, chapterId, passageId }) {
   const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail, direction: asked, change, outcome: settled ? '' : outcomeOf(book.novel) });
   return runVersion({ novelId, chapterId, passageId, versionId: v.id, original, mode: 'append', how: 'go on', length: (v.ask && v.ask.length) || 'scene',
     splice: (answer) => ({ text: original.text + joinOn(original.text, answer) }),
-    build: { target: { chapterId, through: passageId }, request, moment: [asked, change].filter(Boolean).join('\n') } });
+    build: { target: { chapterId, through: passageId }, request, moment } });
 }
 
 /* A scene he played, written into the chapter as prose. */
-export async function playToProse({ novelId, chapterId, play, transcript, length = 'scene' }) {
+export async function playToProse({ novelId, chapterId, play, transcript, mine = '', length = 'scene' }) {
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
   const chapter = book.chapters[chapterId];
   if (!chapter) return { ok: false, error: 'that chapter is not in the book any more' };
   const who = play.who || 'their character';
-  const passage = newPassage('ai', '', { how: 'play', ask: { play: play.id, who, transcript, length }, streaming: true });
+  /* his own moves in it are kept beside it: what wakes a rule, now and for another take */
+  const passage = newPassage('ai', '', { how: 'play', ask: { play: play.id, who, transcript, length, ...(String(mine || '').trim() ? { mine } : {}) }, streaming: true });
   store.change('chapter', chapterId, chapterSteps.addPassage(passage), { now: true });
   const request = playToProseRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), who, transcript, length });
   return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'play', length,
-    build: { target: { chapterId, before: passage.id }, request, moment: transcript } });
+    build: { target: { chapterId, before: passage.id }, request, moment: hisWordsIn(passage) } });
 }
 
 /* His own words, as a passage. */
