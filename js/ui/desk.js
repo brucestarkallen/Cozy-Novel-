@@ -364,7 +364,9 @@ function select(pid) {
   drawPage();
 }
 
-function busy() { return writer.busy(S.novelId); }
+/* the writer busy with something of his — a page the app writes by itself (the
+ * judge's lift) never holds his hand: anything he asks goes first (run) */
+function busy() { return writer.busy(S.novelId) && !writer.autoBusy(S.novelId); }
 
 function controls(p) {
   const c = chapter();
@@ -720,6 +722,7 @@ function outcomeMenu() {
 }
 
 async function run(fn) {
+  await writer.yieldAuto(S.novelId);
   S.error = null;
   S.followId = null;
   F.start();
@@ -844,14 +847,17 @@ function onLive(ev) {
     pending.delete(ev.passageId);
     if (ev.chapterId === S.chapterId) {
       drawPage();
-      /* the finished page, drawn whole: still with him if he was following it */
-      toBottomSoon(ev.passageId);
+      /* the finished page, drawn whole: still with him if he was following it
+       * (a page the app wrote by itself never moves his) */
+      if (!ev.auto) toBottomSoon(ev.passageId);
     }
     if (S.followId === ev.passageId) S.followId = null;
     return;
   }
   S.live.set(ev.passageId, { text: ev.text, thinking: ev.thinking });
   if (ev.chapterId !== S.chapterId) return;
+  /* the app's own lift is painted where it stands; the page stays where he has it */
+  if (ev.auto) { pending.set(ev.passageId, ev); livePaint.ask(); return; }
   S.followId = ev.passageId;
   /* what is being written is what is shown with its controls */
   if (S.selected !== ev.passageId && !S.editing) { S.selected = ev.passageId; S.rewriting = null; pending.set(ev.passageId, ev); drawSoon(); return; }
@@ -871,8 +877,9 @@ function flushLive() {
     const prose = el.querySelector(':scope > .prose');
     if (prose && ev.text) growProse(prose, ev.text, { tint });
   }
+  const his = [...pending.values()].some((ev) => !ev.auto);
   pending.clear();
-  if (F.follow()) SC.self = Date.now();
+  if (his && F.follow()) SC.self = Date.now();
   placeScrollerSoon();
 }
 

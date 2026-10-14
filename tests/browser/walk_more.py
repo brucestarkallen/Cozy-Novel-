@@ -1122,13 +1122,60 @@ async def scenario_judge(b):
     check('no page errors (the judge)', not errs, errs[:5])
     await pg.close()
 
+async def scenario_auto(b):
+    """by itself: the checker's fixes put in, and a passage under the mark written again, from Who does what"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Book That Mends')
+    await add_conn(pg)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    grp = '.sheet.on .group[data-key="set.roles"]'
+    if not await pg.locator(f'{grp} label.toggle:has-text("Apply the checker")').is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Who does what")'); await pg.wait_for_timeout(200)
+    fix = pg.locator(f'{grp} label.toggle:has-text("Apply the checker’s fixes by themselves") input')
+    lift = pg.locator(f'{grp} label.toggle:has-text("Write a passage under your mark again by itself") input')
+    check('Who does what has both switches, off to begin with', await fix.count() == 1 and await lift.count() == 1 and not await fix.is_checked() and not await lift.is_checked())
+    await fix.check(); await lift.check(); await pg.wait_for_timeout(500)
+    await close_sheet(pg)
+    # a page the judge passes: its fix goes in by itself
+    await write(pg, 'The tide turns.')
+    for i in range(120):
+        prose = await pg.inner_text('#passages .passage >> nth=-1')
+        if 'patient, unhurried' in prose: break
+        await pg.wait_for_timeout(250)
+    check('the checker’s fix goes in by itself, the words before one arrow away', 'patient, unhurried' in prose and '2 / 2' in await pg.inner_text('#passages .passage >> nth=-1 >> .pctl'), prose[:200])
+    # a page under the mark: written again by itself, toward it
+    await write(pg, 'He gave her a look that meant he was sorry. And she knew, at last, that she was home.')
+    for i in range(160):
+        prose = await pg.inner_text('#passages .passage >> nth=-1')
+        if 'A rewritten passage' in prose: break
+        await pg.wait_for_timeout(250)
+    asked = [x for x in reqs() if 'written again' in json.dumps(x['body'].get('messages') or []) and 'End on what Mara does next' in json.dumps(x['body'].get('messages') or [])]
+    check('a page under the mark is written again by itself, with what the judge said it needs', 'A rewritten passage' in prose and len(asked) == 1, (prose[:160], len(asked)))
+    await pg.wait_for_timeout(1500)
+    writ = await pg.inner_text('#writeBtn')
+    check('and the writer is his again', writ.strip() == 'Write', writ)
+    # both off again, for the walks after (the house is shared)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+    await pg.wait_for_selector('.sheet.on')
+    if not await pg.locator(f'{grp} label.toggle:has-text("Apply the checker")').is_visible():
+        await pg.click('.sheet.on .ghead:has-text("Who does what")'); await pg.wait_for_timeout(200)
+    await pg.locator(f'{grp} label.toggle:has-text("Apply the checker’s fixes by themselves") input').uncheck()
+    await pg.locator(f'{grp} label.toggle:has-text("Write a passage under your mark again by itself") input').uncheck()
+    await pg.wait_for_timeout(500)
+    await close_sheet(pg)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (by itself)', not errs, errs[:5])
+    await pg.close()
+
 async def main():
     import tempfile
     tmp = tempfile.mkdtemp()
     with Env() as env:
         async with async_playwright() as p:
             b = await p.chromium.launch()
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_crafts, scenario_versions, scenario_partner, lambda b: scenario_offline(b, env)):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, lambda b: scenario_bring_in(b, tmp), scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_partner, lambda b: scenario_offline(b, env)):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

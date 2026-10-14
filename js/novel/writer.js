@@ -40,7 +40,19 @@ export function onJob(fn) { jobFns.add(fn); return () => jobFns.delete(fn); }
 function tellJob(novelId) { for (const fn of jobFns) { try { fn(novelId, running.get(novelId) || null); } catch (e) { console.error(e); } } }
 export function jobOf(novelId) { return running.get(novelId) || null; }
 export function busy(novelId) { return running.has(novelId); }
-export function stop(novelId) { const j = running.get(novelId); if (j) j.ctl.abort(); }
+export function stop(novelId) { const j = running.get(novelId); if (j) { if (j.auto) j.yielded = true; j.ctl.abort(); } }
+/* a page the app is writing by itself (the judge's lift): his own hand comes first */
+export function autoBusy(novelId) { const j = running.get(novelId); return Boolean(j && j.auto); }
+/* Anything he asks the writer for, while the app writes by itself, goes first:
+ * the app's page stops and is taken away whole — the version it lifted from on
+ * show again — and his request runs. */
+export async function yieldAuto(novelId) {
+  const j = running.get(novelId);
+  if (!j || !j.auto) return;
+  j.yielded = true;
+  j.ctl.abort();
+  for (let i = 0; i < 200 && running.get(novelId) === j; i++) await new Promise((r) => setTimeout(r, 25));
+}
 export function anyRunning() { return running.size > 0; }
 
 /* live words for the screen while a version is being written */
@@ -186,13 +198,15 @@ export function setNotesWait(fn) { notesWait = fn; }
 
 /* Write one version: kind 'new' (a passage), 'version' (another on a passage),
  * 'append' (go on). Resolves {ok, error?, stopped?, notes?}. */
-async function runVersion({ novelId, chapterId, passageId, versionId, base = '', original = null, mode, build, how, splice = null, length = 'scene', purpose = 'write' }) {
+async function runVersion({ novelId, chapterId, passageId, versionId, base = '', original = null, mode, build, how, splice = null, length = 'scene', purpose = 'write', auto = false }) {
   const h = house();
   const conn = connFor(h, 'writer');
   const undo = () => undoEmpty(chapterId, passageId, versionId, mode, original);
   if (running.has(novelId) || !conn) { undo(); return preflight(novelId) || { ok: false, error: 'the writer could not start' }; }
   const ctl = new AbortController();
-  const job = { kind: how, chapterId, passageId, versionId, ctl, at: Date.now(), conn: connName(conn) };
+  const job = { kind: how, chapterId, passageId, versionId, ctl, at: Date.now(), conn: connName(conn), auto: Boolean(auto) };
+  /* what the page hears as words arrive: a page the app writes by itself says so (the page never follows it) */
+  const live = (ev) => tellLive(job.auto ? { ...ev, auto: true } : ev);
   running.set(novelId, job);
   tellJob(novelId);
   let text = '';
@@ -225,12 +239,12 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       signal: ctl.signal,
       onText: (s) => {
         text += s;
-        tellLive({ novelId, chapterId, passageId, versionId, text: shown(), thinking, phase: 'text' });
+        live({ novelId, chapterId, passageId, versionId, text: shown(), thinking, phase: 'text' });
         if (Date.now() - lastSave > 3000) checkpoint();
       },
       onThinking: (s) => {
         thinking += s;
-        tellLive({ novelId, chapterId, passageId, versionId, text: shown(), thinking, phase: 'thinking' });
+        live({ novelId, chapterId, passageId, versionId, text: shown(), thinking, phase: 'thinking' });
         /* a long, silent think still beats */
         if (Date.now() - lastSave > 20000) checkpoint();
       },
@@ -239,6 +253,12 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     const answer = mode === 'append' ? unfence(out.text || text).replace(/\s+$/, '') : tidyAnswer(out.text || text);
     const finalText = splice ? splice(answer).text : base + answer;
     const arrived = String(out.text || text).trim();
+    /* the app's own page, given way to his hand: taken away whole */
+    if (job.yielded) {
+      undo();
+      await store.flush('chapter', chapterId);
+      return { ok: false, stopped: true, yielded: true };
+    }
     if (!arrived) {
       /* nothing came: the empty version goes, and the reason is said */
       undo();
@@ -283,7 +303,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     return { ok: true, cut: patch.cut, notes: out.notes, passageId };
   } catch (e) {
     try {
-      if (!String(text || '').trim()) undo();
+      if (job.yielded || !String(text || '').trim()) undo();
       else store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: shown(), streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'something went wrong partway' }), { now: true });
     } catch (_) { /* the record is gone */ }
     return { ok: false, error: (e && e.message) || String(e) };
@@ -291,7 +311,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     clearInterval(beating);
     running.delete(novelId);
     tellJob(novelId);
-    tellLive({ novelId, chapterId, passageId, versionId, done: true });
+    live({ novelId, chapterId, passageId, versionId, done: true });
   }
 }
 
@@ -448,7 +468,7 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
 }
 
 /* A rewrite of a whole passage, with his note. */
-export async function rewrite({ novelId, chapterId, passageId, note = '', fromVersion = null }) {
+export async function rewrite({ novelId, chapterId, passageId, note = '', fromVersion = null, lift = 0 }) {
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -459,13 +479,17 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   const text = String(from.text || '');
   /* what wakes a rule, read before the new version shows */
   const moment = momentOf(chapter, p, note);
-  const version = newVersion({ how: 'rewrite', ask: { note }, streaming: true, from: from.id });
+  /* lift: the judge's own lift, the app writing it by itself (its try, 1 or 2) */
+  const version = newVersion({ how: 'rewrite', ask: { note }, streaming: true, from: from.id, ...(lift ? { lift } : {}) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = rewriteRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text, last: lastInBook(book, chapterId, passageId) });
   const words = countWords(text);
-  return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
+  const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
     length: words > 2600 ? 'chapter' : words > 1500 ? 'long' : 'scene',
-    build: { target: { chapterId, mark: passageId }, request, moment } });
+    build: { target: { chapterId, mark: passageId }, request, moment }, auto: Boolean(lift) });
+  /* given way to him: the version it lifted from is on show again */
+  if (out && out.yielded && from.id) store.change('chapter', chapterId, chapterSteps.pick(passageId, from.id), { now: true });
+  return out;
 }
 
 /* Only the words he selected, rewritten; the rest of the passage untouched. */

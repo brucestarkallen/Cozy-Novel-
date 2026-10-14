@@ -2667,6 +2667,102 @@ await test('takes written before the judge began reading them head to head are n
   await putAway(b);
 });
 
+await test('Apply the checker’s fixes by themselves: a writer’s passage gets its fixes as one new version; his own words, sentences to write again and writing from before it was switched on stay behind the bubble', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 }, ...HIS({ avoid: 'tar' }) });
+  const b = await makeBook([['Mara climbed the the stair.', 'The sea was grey and and cold. It smelled of tar.', { text: 'Old words here alot.', at: Date.now() - 100000 }]]);
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'My own words alot.' });
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' },
+    { passage: '1.2', kind: 'grammar', find: 'and and', replace: 'and', why: 'doubled' },
+    { passage: '1.3', kind: 'grammar', find: 'alot', replace: 'a lot', why: 'two words' },
+    { passage: '1.4', kind: 'grammar', find: 'alot', replace: 'a lot', why: 'two words' },
+  ] }) }]);
+  await checker.runCheck(b.novelId);
+  const ps = b.ch().passages;
+  assert.deepEqual(ps.map((p) => [picked(p).text, picked(p).how]), [
+    ['Mara climbed the stair.', 'suggested'],
+    ['The sea was grey and cold. It smelled of tar.', 'suggested'],
+    ['Old words here alot.', 'write'],
+    ['My own words alot.', 'mine'],
+  ], 'the writer’s new passages fixed by themselves; the old one and his own words as they were');
+  assert.equal(ps[0].versions.length, 2, 'the words before one arrow away');
+  assert.deepEqual(checker.suggestions(b.novelId).map((x) => [x.number, x.item.kind, x.item.replace]), [[2, 'avoid', null], [3, 'grammar', 'a lot'], [4, 'grammar', 'a lot']], 'what is his to decide stays behind the bubble');
+  await setHouse();
+  await putAway(b);
+});
+
+/* a grade answer: the first n checks failed, with what would lift it */
+const failing = (n, lift = 'Make it move.') => {
+  const checks = Object.fromEntries(prompts.JUDGE_CHECKS.map(([k], i) => [k, i < n ? 'no' : 'yes']));
+  return { passage: '1.1', checks, faults: prompts.JUDGE_CHECKS.slice(0, n).map(([k]) => ({ check: k, words: '', why: 'falls short' })), lift };
+};
+
+await test('Write a passage under his mark again by itself: toward the mark with what the judge said, twice at most, its fixes waiting; then the best-graded stays on show, once', async () => {
+  const on = { on: true, from: Date.now() - 1000 };
+  await setHouse({}, { checksFrom: 0, judge: { target: 9 }, autoLift: on, autoFix: on });
+  const ask = { direction: 'She lights it.', length: 'scene' };
+  const b = await makeBook([[{ text: 'Mara lit the lamp and and waited.', model: 'scripted', how: 'write', ask }]]);
+  const p = () => b.ch().passages[0];
+  const rewrites = async () => (await requests()).filter((x) => x.body.messages.at(-1).content.includes('Make it move.') || x.body.messages.at(-1).content.includes('Closer still.'));
+  /* graded 7: written again — the fix for the words it replaces waits */
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'grammar', find: 'and and', replace: 'and', why: 'doubled' }], grades: [failing(3)] }) }, { text: 'Mara lit the lamp. The wick caught.' }]);
+  await checker.runCheck(b.novelId);
+  await checker.forTests().lifting.get(b.novelId);
+  assert.equal((await rewrites()).length, 1, 'written again, with what the judge said it needs');
+  assert.deepEqual(p().versions.map((v) => [v.text, v.lift || 0]), [['Mara lit the lamp and and waited.', 0], ['Mara lit the lamp. The wick caught.', 1]], 'its fix was not put in: the words it was for are written again');
+  assert.equal(picked(p()).lift, 1);
+  /* the first try graded 8: once more */
+  await script([{ text: JSON.stringify({ edits: [], grades: [failing(2, 'Closer still.')] }) }, { text: 'Mara lit the lamp. The wick caught, and the room was hers.' }]);
+  await checker.runCheck(b.novelId);
+  await checker.forTests().lifting.get(b.novelId);
+  assert.deepEqual(p().versions.map((v) => v.lift || 0), [0, 1, 2]);
+  /* the second try graded 6: no third — the best (the first try, 8) stays on show */
+  await script([{ text: JSON.stringify({ edits: [], grades: [failing(4)] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.equal(checker.forTests().lifting.size, 0, 'never a third');
+  assert.equal(picked(p()).text, 'Mara lit the lamp. The wick caught.', 'the best-graded of the tries');
+  assert.ok(p().versions.find((v) => v.lift === 2).settled);
+  /* a version he picks afterwards is his: never put back */
+  store.change('chapter', b.ids[0], shape.chapterSteps.pick(p().id, p().versions[2].id), { now: true });
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal(picked(p()).lift, 2, 'his pick stands');
+  assert.equal((await requests()).length, 0, 'nothing more is asked');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('never written again by itself: his own words, a grade he left, writing from before it was switched on; and anything he asks the writer meanwhile goes first — the app’s page taken away whole', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { target: 9 } });
+  const ask = { direction: 'She lights it.', length: 'scene' };
+  const b = await makeBook([[{ text: 'A writer’s page.', model: 'scripted', how: 'write', ask }, { text: 'An old page.', model: 'scripted', how: 'write', ask, at: Date.now() - 100000 }]]);
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'My own page.' });
+  await script([{ text: JSON.stringify({ edits: [], grades: [{ ...failing(3), passage: '1.1' }, { ...failing(3), passage: '1.2' }, { ...failing(3), passage: '1.3' }] }) }]);
+  await checker.runCheck(b.novelId);
+  const card = checker.suggestions(b.novelId).find((x) => x.number === 1 && x.item.kind === 'grade');
+  checker.leaveOne(card.chapterId, card.passageId, card.item.id);
+  await setHouse({}, { checksFrom: 0, judge: { target: 9 }, autoLift: { on: true, from: Date.now() - 50000 } });
+  await reset();
+  checker.forTests().autoAfter(b.novelId);
+  assert.equal(checker.forTests().lifting.size, 0, 'none of the three');
+  assert.equal((await requests()).length, 0);
+  /* a lift on its way when he asks the writer for something: his goes first */
+  const b2 = await makeBook([[{ text: 'Another writer’s page.', model: 'scripted', how: 'write', ask }]]);
+  await script([{ text: JSON.stringify({ edits: [], grades: [failing(3)] }) }, { text: 'A slow page written again, word after word after word after word.', delay: 0.15, chunk: 3 }]);
+  await checker.runCheck(b2.novelId);
+  for (let i = 0; i < 100 && !writer.autoBusy(b2.novelId); i++) await sleep(10);
+  assert.ok(writer.autoBusy(b2.novelId), 'the app is writing it again');
+  const lift = checker.forTests().lifting.get(b2.novelId);
+  await writer.yieldAuto(b2.novelId);
+  const out = await lift;
+  assert.ok(out && out.yielded, JSON.stringify(out));
+  const q = b2.ch().passages[0];
+  assert.deepEqual([q.versions.length, picked(q).text, writer.busy(b2.novelId)], [1, 'Another writer’s page.', false], 'taken away whole, the page it lifted from on show, the writer free');
+  await setHouse();
+  await putAway(b);
+  await putAway(b2);
+});
+
 await test('the checker and the judge speak in words that never name a machine', async () => {
   const b = await makeBook([['Mara climbed to the lamp.']]);
   const house = store.peek('house', 'house');

@@ -20,7 +20,7 @@
  * connection turned away for good is not asked again until it changes. */
 
 import * as store from '../store.js';
-import { connFor, connById, busy as writerBusy, recount } from './writer.js';
+import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain } from './writer.js';
 import * as archivist from './archivist.js';
 import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, chapterText } from './shape.js';
 import { numberedText } from './context.js';
@@ -289,6 +289,8 @@ export async function runCheck(novelId) {
       }
       /* the judge's head to head, once the reading is done */
       if (judgeOf(store.peek('house', 'house') || {})) await runDuels(novelId, conn);
+      /* and what he switched on to happen by itself */
+      autoAfter(novelId);
       failures.delete(novelId);
       setState(novelId, null);
     } catch (e) {
@@ -873,4 +875,94 @@ export function checkBook(novelId) {
   schedule(novelId, 300);
 }
 
-export function forTests() { return { states, failures, blocked, timers }; }
+/* ------------------------------------------------------------ by itself */
+
+/* What he switched on to happen by itself (Settings → Who does what), each
+ * from when he switched it on: passages written before are never changed by
+ * themselves. null when off. */
+export function autoOf(house) {
+  const on = (x) => (x && x.on && Number.isFinite(x.from) ? x.from : null);
+  return { fix: on(house && house.autoFix), lift: on(house && house.autoLift) };
+}
+/* his own words are never changed by themselves; only what a writer wrote whole is written again */
+const HIS_HOW = ['mine', 'edit', 'imported'];
+const LIFTABLE = ['write', 'another', 'rewrite', 'play'];
+export const MAX_LIFTS = 2;
+const liftsOf = (p) => (p.versions || []).filter((v) => v.lift);
+const liftTried = new Set();
+const lifting = new Map();
+const checkOf = (c, p, v) => { const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id]; return e && e.sig === sigOf(v) ? e : null; };
+
+/* After each look at the book, passage by passage, one rule so the two never
+ * cross:
+ *  - under his mark, with "Write it again by itself" on: the writer writes the
+ *    passage again toward the mark, with what the judge said it needs — twice
+ *    at most for a passage; its fixes wait (they were for the words it
+ *    replaces). After the second try is graded, the best-graded of the tries
+ *    and the version they came from stays on show, once (a version he picks
+ *    afterwards is his). "Leave it" on its grade stops it.
+ *  - otherwise, with "Apply the fixes by themselves" on: every fix with words
+ *    to put in goes in, one new version for the checking (Apply all, for that
+ *    passage); sentences to write again stay behind the bubble.
+ * One writing at a time, only while the writer is free; anything he asks the
+ * writer meanwhile goes first (writer.js yieldAuto). */
+function autoAfter(novelId) {
+  const house = store.peek('house', 'house') || {};
+  const a = autoOf(house);
+  if (a.fix === null && a.lift === null) return;
+  const judge = judgeOf(house);
+  let next = null;
+  for (const c of chaptersOf(novelId)) {
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      let v = picked(p);
+      if (!v || v.streaming || HIS_HOW.includes(v.how)) continue;
+      let e = checkOf(c, p, v);
+      if (!e) continue;
+      if (a.lift !== null && judge) {
+        /* the last try graded: the best of the tries stays on show */
+        if (v.lift >= MAX_LIFTS && !v.settled) {
+          const lifts = liftsOf(p);
+          const first = lifts.find((x) => x.lift === 1);
+          const pool = [...lifts, ...(first && first.from ? (p.versions || []).filter((x) => x.id === first.from) : [])];
+          let best = v;
+          let bestGrade = e.grade ? e.grade.overall : -1;
+          for (const x of pool) {
+            const g = (checkOf(c, p, x) || {}).grade;
+            if (g && Number.isFinite(g.overall) && g.overall > bestGrade) { best = x; bestGrade = g.overall; }
+          }
+          store.change('chapter', c.id, chapterSteps.setVersion(p.id, v.id, { settled: true }), { now: true });
+          if (best.id !== v.id) {
+            store.change('chapter', c.id, chapterSteps.pick(p.id, best.id), { now: true });
+            archivist.nudge(novelId);
+            const now = store.peek('chapter', c.id);
+            const np = now && (now.passages || []).find((x) => x.id === p.id);
+            v = np ? picked(np) : best;
+            e = checkOf(now || c, np || p, v);
+            if (!e) continue;
+          }
+        }
+        const g = e.grade;
+        const card = (e.items || []).find((x) => x.kind === 'grade');
+        const under = g && g.of && g.overall < judge.target && card;
+        if (under && LIFTABLE.includes(v.how) && (v.done || v.at || 0) >= a.lift && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && (card.lift || g.lift)) {
+          if (!next) next = { chapterId: c.id, passageId: p.id, v, note: card.lift || g.lift, lift: liftsOf(p).length + 1 };
+          /* its fixes wait for the passage written again */
+          continue;
+        }
+      }
+      if (a.fix !== null && (v.done || v.at || 0) >= a.fix && (e.items || []).some((x) => typeof x.replace === 'string')) applyPassage(novelId, c.id, p.id);
+    }
+  }
+  if (next && !writerBusy(novelId) && !lifting.has(novelId)) {
+    liftTried.add(next.v.id);
+    const job = writeAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, note: next.note, fromVersion: next.v, lift: next.lift })
+      .then((out) => { if (out && out.ok) archivist.nudge(novelId); return out; })
+      .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
+      .finally(() => lifting.delete(novelId));
+    lifting.set(novelId, job);
+  }
+  tell(novelId);
+}
+
+export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter }; }

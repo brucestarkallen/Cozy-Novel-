@@ -457,6 +457,7 @@ function rolesGroup(hs, open) {
     roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true),
     field('The checker', checkSel, 'Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. Writing from before it began is checked only when you ask. A quick, inexpensive model is perfect here.'),
     judgeField(hs),
+    ...autoFields(hs),
     ideasField(hs));
   return g;
 }
@@ -476,6 +477,22 @@ function ideasField(hs) {
     field('How many ideas', sel));
 }
 
+/* what happens by itself: the checker's fixes, and a passage under his mark
+ * written again — each from when he switches it on (checker.js autoAfter) */
+function autoFields(hs) {
+  const row = (key, label, say) => {
+    const on = h('input', { type: 'checkbox', checked: Boolean(hs[key] && hs[key].on) });
+    on.addEventListener('change', () => changeHouse((x) => { x[key] = on.checked ? { on: true, from: Date.now() } : { on: false }; }, { now: true }));
+    return h('div.field', h('label.toggle', on, h('span', label)), h('em', say));
+  };
+  return [
+    row('autoFix', 'Apply the checker’s fixes by themselves',
+      'Every fix with words to put in goes in as soon as it’s found — one new version per checking, the words before one arrow away. Sentences to write again (your words to avoid, stock wording) stay behind the bubble for you, and your own words are never changed by themselves. For passages written after you switch it on.'),
+    row('autoLift', 'Write a passage under your mark again by itself',
+      'When the judge puts a passage under your mark, the writer writes it again toward it with what the judge said it needs — twice at most; then the best-graded version stays on show, every version one arrow away. Its fixes wait until then. Anything you ask the writer meanwhile goes first, and Leave it on its grade stops it. Your own words are never written again by themselves. For passages written after you switch it on.'),
+  ];
+}
+
 /* the judge (in the checker's reading): on or off, and his mark */
 function judgeField(hs) {
   const j = hs.judge || {};
@@ -485,7 +502,7 @@ function judgeField(hs) {
   mark.addEventListener('input', typing(() => { const n = Number(mark.value.trim().replace(',', '.')); changeHouse((x) => { x.judge = { ...(x.judge || {}) }; if (mark.value.trim() && Number.isFinite(n) && n >= 1 && n <= 10) x.judge.target = n; else delete x.judge.target; }); }, 400));
   return h('div.field',
     h('label.toggle', on, h('span', 'The judge grades each passage')),
-    h('em', 'In the checker’s own reading, ten checks a passage passes or fails — Opening, True to the book, Shown, Pacing, Specific, Fresh, Sentences, People, Moves, Ending — each one it fails named with the words that fail it; its grade is the number passed. A passage under your mark comes behind the bubble with fixes that lift it and Write it again toward your mark — nothing changes until you say. Two versions of one passage by two writers are read head to head. Its grades show which writer writes best.'),
+    h('em', 'In the checker’s own reading, ten checks a passage passes or fails — Opening, True to the book, Shown, Pacing, Specific, Fresh, Sentences, People, Moves, Ending — each one it fails named with the words that fail it; its grade is the number passed. A passage under your mark comes behind the bubble with fixes that lift it and Write it again toward your mark — nothing changes until you say, unless you switch on the two below. Two versions of one passage by two writers are read head to head. Its grades show which writer writes best.'),
     field('Your mark', mark, 'Under this, a passage is offered to be lifted (empty: 9 — one check failed at most).'));
 }
 
