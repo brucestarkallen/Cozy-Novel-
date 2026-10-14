@@ -665,7 +665,9 @@ function drawEnd() {
   }
   /* a page that did not come, said in the chapter it was asked for — with
    * what the model thought, kept to read and copy (Cozy Tavern M301) */
-  const err = S.errors.get(c.id);
+  let err = S.errors.get(c.id);
+  /* a passage added since — his words, a scene turned into prose — and the failure no longer stands (Cozy Tavern's M669) */
+  if (err && err.ids && (c.passages || []).some((p) => !err.ids.has(p.id))) { S.errors.delete(c.id); err = null; }
   if (err) {
     const card = h('div.endcard.error',
       h('b', err.stopped ? 'Stopped before any words came. ' : 'The page did not come. '), err.stopped ? 'What it thought is below.' : err.words);
@@ -738,29 +740,54 @@ function drawComposer() {
 /* Ideas for what happens next: a few premises, a tap puts one in the box —
  * kept for the chapter until he asks for new ones */
 const ideasOn = (house) => !(house && house.ideas && house.ideas.on === false);
-const IDEAS = { chapterId: null, list: [], asking: false };
+/* Ideas are kept for the place they were asked for — the book, the chapter
+ * and how it ends — and shown only there: never filed under a chapter he
+ * moved to while they came, nor offered once the chapter has gone on
+ * (Cozy Tavern's M389/M443/M548). */
+const IDEAS = { key: '', list: [], asking: null };
+function ideasKey() {
+  const c = chapter();
+  const last = c ? [...(c.passages || [])].reverse().find((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim()) : null;
+  const v = last && picked(last);
+  return `${S.novelId}|${S.chapterId}|${v ? `${v.id}:${String(v.text || '').length}` : ''}`;
+}
 async function showIdeas({ fresh = false } = {}) {
   const house = store.peek('house', 'house') || {};
   const count = Number((house.ideas || {}).count) || 4;
-  const s = openSheet('Ideas for what happens next', { small: true });
+  const here = ideasKey();
+  let open = true;
+  const s = openSheet('Ideas for what happens next', { small: true, onClose: () => { open = false; } });
   const draw = () => {
+    if (!open) return;
     s.body.textContent = '';
-    if (IDEAS.asking) { s.body.append(h('p.say', 'Thinking of what could happen next…')); return; }
-    if (!IDEAS.list.length) { s.body.append(h('p.say', 'None yet.')); }
-    for (const idea of IDEAS.list) {
+    if (IDEAS.asking && IDEAS.asking.key === here) {
+      s.body.append(h('p.say', 'Thinking of what could happen next…'), h('div.btnrow', h('button.btn.small', { title: 'Lets go of this ask — no ideas come from it.', onclick: () => IDEAS.asking && IDEAS.asking.ctl.abort() }, 'Stop')));
+      return;
+    }
+    const list = IDEAS.key === here ? IDEAS.list : [];
+    if (!list.length) { s.body.append(h('p.say', 'None yet.')); }
+    for (const idea of list) {
       s.body.append(h('div.idea', h('span', idea), h('button.btn.small.primary', { title: 'Puts this premise in the box — change it as you like, then Write.', onclick: async () => { s.close(); await useAsDirection(idea); } }, 'Use')));
     }
-    s.body.append(h('div.btnrow', h('button.btn.small', { title: 'Asks for new ones, from where the book stands now.', onclick: () => ask() }, 'New ideas')));
+    s.body.append(h('div.btnrow', h('button.btn.small', { title: 'Asks for new ones, from where the book stands now — never the ones above again.', onclick: () => ask() }, 'New ideas')));
   };
   const ask = async () => {
-    if (IDEAS.asking) return;
-    IDEAS.asking = true; draw();
-    const out = await talk.nextIdeas({ novelId: S.novelId, chapterId: S.chapterId, count });
-    IDEAS.asking = false;
-    if (out.ok) { IDEAS.list = out.ideas; IDEAS.chapterId = S.chapterId; } else toast(`No ideas came: ${out.error}.`, 5000);
+    if (IDEAS.asking && IDEAS.asking.key === here) return;
+    /* an ask for another place lets go: only one is ever on its way */
+    if (IDEAS.asking) IDEAS.asking.ctl.abort();
+    const asking = { key: here, ctl: new AbortController() };
+    const not = IDEAS.key === here ? [...IDEAS.list] : [];
+    const at = { novelId: S.novelId, chapterId: S.chapterId };
+    IDEAS.asking = asking;
+    draw();
+    const out = await talk.nextIdeas({ ...at, count, signal: asking.ctl.signal, not });
+    if (IDEAS.asking === asking) IDEAS.asking = null;
+    if (out.ok) { IDEAS.list = out.ideas; IDEAS.key = asking.key; } else if (!out.stopped) toast(`No ideas came${asking.key !== ideasKey() ? ' for the chapter you asked in' : ''}: ${out.error}.`, 5000);
     draw();
   };
-  if (fresh || IDEAS.chapterId !== S.chapterId || !IDEAS.list.length) { IDEAS.list = []; draw(); ask(); } else draw();
+  if (IDEAS.asking && IDEAS.asking.key === here) draw();
+  else if (fresh || IDEAS.key !== here || !IDEAS.list.length) ask();
+  else draw();
 }
 
 function lengthMenu() {
@@ -800,7 +827,8 @@ async function run(fn) {
   const here = () => S.novelId === novelId && S.chapterId === chapterId;
   const failed = out && !out.ok && !out.gone && ((!out.stopped && out.error) || (out.stopped && out.thought));
   if (failed) {
-    S.errors.set(chapterId, { words: sentence(out.error), needsConnection: out.needsConnection, thought: out.thought || '', stopped: Boolean(out.stopped) });
+    const ch = store.peek('chapter', chapterId);
+    S.errors.set(chapterId, { words: sentence(out.error), needsConnection: out.needsConnection, thought: out.thought || '', stopped: Boolean(out.stopped), ids: new Set(((ch && ch.passages) || []).map((p) => p.id)) });
     if (here()) {
       drawPage();
       if (!S.els.size) drawEnd();

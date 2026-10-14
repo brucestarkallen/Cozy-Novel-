@@ -22,9 +22,9 @@
  * - His own words (his instructions, his brief, his notes) go word for word.
  */
 
-import { LENGTHS, soundOf } from './shape.js';
+import { LENGTHS, soundOf, hisField } from './shape.js';
 import { numberWords, estimateTokens } from '../util.js';
-import { foldedText, nameInText } from './names.js';
+import { foldedText, nameInText, firstSentence } from './names.js';
 
 /* ------------------------------------------------- the starting words */
 /* What the boxes in Settings → Your instructions start with, and what
@@ -142,16 +142,26 @@ function titleLine(novel) { return `${titled(novel)}${novel.meta && novel.meta.s
 
 /* ---------------------------------------------------- the book, described */
 
-export function notesText(novel, { forHelper = false, fit = 0, focus = '', only = null } = {}) {
+export function notesText(novel, { forHelper = false, fit = 0, focus = '', only = null, shortIds = null } = {}) {
   const all = novel.notes || {};
   /* only some cards (the notes' check, a group at a time when they outgrow its model) */
   const n = only ? Object.fromEntries(Object.entries(all).map(([k, list]) => [k, Array.isArray(list) ? list.filter((c) => only.has(c.id)) : list])) : all;
-  /* the first sentence of a card's words, for a card shown short */
-  const firstOf = (t) => { const x = String(t || '').trim(); const m = x.match(/^[\s\S]{20,}?[.!?…](?=\s|$)/); const f = (m ? m[0] : x).slice(0, 220); return f.length < x.length ? f + ' …' : f; };
-  const line = (c, short) => `- ${c.name}${c.aka && c.aka.length ? ` (also ${c.aka.join(', ')})` : ''}${c.about ? ` — ${short ? firstOf(c.about) : c.about.trim()}` : ''}`;
+  /* the first sentence of a card's words, for a card shown short — a title's
+   * or an initial's full stop is no sentence's end ("Dr. Wells", "J. Hale":
+   * Cozy Tavern's M292) */
+  const firstOf = (t) => { const x = String(t || '').trim(); const f = firstSentence(x).slice(0, 220); return f.length < x.length ? f + ' …' : f; };
+  /* what the book added to a card he wrote, beside his words (never over them) */
+  const since = (c, short) => (c.since && String(c.since).trim() ? `\n  Since then: ${short ? firstOf(c.since) : String(c.since).trim()}` : '');
+  /* where someone was last told to be, and when: a "now" from an earlier chapter says so (Cozy Tavern's M294/M541) */
+  const seenMap = (novel.memory && novel.memory.seen) || {};
+  const order = novel.order || [];
+  let newest = '';
+  for (const id of order) if (Object.keys(seenMap[id] || {}).length) newest = id;
+  const nowLabel = (c) => (c.nowAt && newest && c.nowAt !== newest && order.includes(c.nowAt) && order.indexOf(c.nowAt) < order.indexOf(newest) ? `Last seen (Chapter ${numberWords(order.indexOf(c.nowAt) + 1)})` : 'Right now');
+  const line = (c, short) => `- ${c.name}${c.aka && c.aka.length ? ` (also ${c.aka.join(', ')})` : ''}${c.about ? ` — ${short ? firstOf(c.about) : c.about.trim()}` : ''}${forHelper && c.about && hisField(c, 'about') ? ' (my words)' : ''}${since(c, short)}`;
   const person = (c, short) => line(c, short) + (short
-    ? (c.now ? `\n  Right now: ${firstOf(c.now)}` : '')
-    : `${c.ties ? `\n  With others: ${c.ties.trim()}` : ''}${c.now ? `\n  Right now: ${c.now.trim()}` : ''}`);
+    ? (c.now ? `\n  ${nowLabel(c)}: ${firstOf(c.now)}` : '')
+    : `${c.ties ? `\n  With others: ${c.ties.trim()}` : ''}${c.now ? `\n  ${nowLabel(c)}: ${c.now.trim()}` : ''}`);
   const render = (short) => {
     const out = [];
     if ((n.people || []).length) out.push('People\n' + n.people.map((c) => person(c, short('people', c))).join('\n'));
@@ -169,7 +179,8 @@ export function notesText(novel, { forHelper = false, fit = 0, focus = '', only 
   if (!fit || estimateTokens(full) <= fit) return full;
   const folded = focus ? foldedText(focus) : null;
   const whole = (kind, c) => Boolean(c.updated && c.updated.by === 'you') || Boolean(folded && [c.name, ...(c.aka || [])].some((nm) => nm && nameInText(folded, nm, { words: kind === 'people' })));
-  return `${render((kind, c) => !whole(kind, c))}\n\n(To fit, the cards the words below do not name are shown by their first line.)`;
+  /* which cards rode short (shortIds, a Set to fill): one of them is never written whole from its first line */
+  return `${render((kind, c) => { const short = !whole(kind, c); if (short && shortIds) shortIds.add(c.id); return short; })}\n\n(To fit, the cards the words below do not name are shown by their first line.)`;
 }
 
 /* The notes have not read the newest passages yet (he wrote on while the
@@ -446,9 +457,12 @@ export function playToProseRequest({ chapterLabel, who, transcript, length }) {
 }
 
 /* Ideas: a few premises for what happens next, each in its own block */
-export function ideasRequest(count) {
+export function ideasRequest(count, { not = [] } = {}) {
   const n = Math.max(1, Math.min(5, Math.round(Number(count) || 4)));
-  return `Give me ${n === 1 ? 'one premise' : `${numberWords(n).toLowerCase()} genuinely different premises`} for what happens next in the book, right from where it stops — ${n === 1 ? 'the one' : 'each one'} I'd most enjoy writing from, true to the people in it. Each a few lines in my voice, the way I'd type it in the box, in its own ${'<direction>'}…${'</direction>'}. Nothing else.`;
+  /* "New ideas": told the ones it gave last, so it never hands them back (Cozy Tavern's M30-002) */
+  const notThese = (not || []).filter((x) => String(x || '').trim());
+  const again = notThese.length ? `\n\nNew ones — not these, which you gave me last time:\n${notThese.map((x) => `- ${String(x).replace(/\s+/g, ' ').trim()}`).join('\n')}` : '';
+  return `Give me ${n === 1 ? 'one premise' : `${numberWords(n).toLowerCase()} genuinely different premises`} for what happens next in the book, right from where it stops — ${n === 1 ? 'the one' : 'each one'} I'd most enjoy writing from, true to the people in it. Each a few lines in my voice, the way I'd type it in the box, in its own ${'<direction>'}…${'</direction>'}. Nothing else.${again}`;
 }
 
 /* --------------------------------------------------------- the partner */
@@ -489,13 +503,14 @@ ${CHANGES_OPEN}[
 - "2.3" is passage 3 of Chapter Two, as on the page. Quote "find" exactly — enough to be found in one place only. A passage written anew is a new version. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
 - "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary.
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
-- To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
+- To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - Only quote what you can see; never make up a passage or a fact. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block.`;
 
-export function partnerFrame(house, novel, { notesAs = 'system' } = {}) {
+export function partnerFrame(house, novel, { notesAs = 'system', tools = true } = {}) {
   return [
     `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner: you know the book inside out (it’s all below) and the craft as well as anyone. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. The notes keep themselves — every new page is read into them, and every few readings each card is checked against the book and cards that repeat each other are folded into one — so leave their upkeep to that: change a card when I ask, or when one is plainly wrong about the book, and never offer to tidy them. You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
-    partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now'),
+    /* Ideas reads nothing more and changes nothing: it is never told it could (Cozy Tavern's M241) */
+    tools ? partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now') : '',
     notesAs === 'system' ? hereIs('partner') : '',
   ].filter(Boolean).join('\n\n');
 }
@@ -653,7 +668,7 @@ function stockLine(stock) {
 /* The notes are kept to the newest page of the book: what someone is doing or
  * feeling "right now" there is never the moment of a passage from earlier in
  * it (Cozy Tavern G3) */
-const NOTES_FOR_A_READER = 'The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right). They are kept to the newest page of the book: each “Right now” is where someone stands at the end of the book so far, never at these passages — a passage from earlier in the book is not wrong for coming before it:';
+const NOTES_FOR_A_READER = 'The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right). They are kept to the newest page of the book: each “Right now” is where someone stands at the end of the book so far (a “Last seen” where they were last told to be), never at these passages — a passage from earlier in the book is not wrong for coming before it:';
 
 /* what I asked the writer for in these passages, each by its number — doing it is never a fault */
 function askedLines(asked) {
@@ -763,8 +778,11 @@ export const ASKED_WORDS = [ABOUT_ASK, TIES_ASK, NOW_ASK, PLACE_ASK, LORE_ASK, T
 
 const NOTE_RULES = `Include only entries that are new or changed, and in each only the fields that changed — a field you give replaces the old one, so give it whole. Keep every fact that's still true.
 - Someone, somewhere or something new: write down how they're described the first time they appear — looks, features, voice, what they wear or carry. It can't be found again later.
-- "about" is who someone is for good: change it only for something lasting, never a passing mood, and keep everything already in it.
-- "now" leads with where they are and what they're doing. Feelings carry over — a shock, a slight, a warmth set earlier still colours them until the story changes it. A plan is never "now": it's a thread.
+- A person's "about" is who they are for good: change it only for something lasting, never a passing mood, and keep everything already in it. On a card marked (my words), never repeat mine: give in "about" only what the book has added since — all of it, whole — and it is kept beside my words.
+- A place's, a thing's or a thread's "about" says where it stands now: a thing that matters to what can happen next (a vehicle, a weapon, a key, a letter) with whose it is and where it is, written again when it moves; a place as it is now.
+- "now" leads with where they are and what they're doing. Feelings carry over — a shock, a slight, a warmth set earlier still colours them until the story changes it. A plan is never "now": it's a thread. A flashback, a dream, a memory, a letter or a story someone tells is not now — it moves no one's "now"; a jump in time moves the "now" of everyone it carries along: write theirs again.
+- What someone says, believes, fears or plans is theirs — kept as said or believed, by whom, never as what happened, until the book shows it.
+- Numbers, ages, amounts and distances exactly as the book gives them.
 - "ties": add the newest turn and keep the older ones short; say why each tie moved.
 - Who knows what: a secret, or something only some of them saw or were told, says who knows it — and nobody knows what they had no way to learn.
 - Whose and who: a thing someone holds, a deed someone did, a line someone said is written with whose it is and who did or said it, as the book has it.

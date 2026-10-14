@@ -434,9 +434,11 @@ export function noteUsage(conn, usage, sent, text) {
 export const BACKOFF_MS = [3000, 8000, 20000];
 /* A WORKER'S LEASH (Cozy Tavern A5, M207): a call of the helper's or the
  * checker's that hears nothing at all from its provider for three minutes —
- * or goes on past a quarter of an hour — is let go and tried again as a
- * passing fault, so one hung call never holds a book's notes for good. A
- * page is never leashed: he has Stop. (Tests may shorten it.) */
+ * or makes no progress (no word, no thought) for a quarter of an hour,
+ * whatever keeps the line open (M748) — is let go, as a passing fault for the
+ * worker to weigh, never sent again inside the same ask. A page is never
+ * leashed: he has Stop. Ideas, asked from a sheet he may close, is leashed
+ * too (opts.leash). (Tests may shorten it.) */
 export const LEASH_QUIET_MS = 3 * 60 * 1000;
 export const LEASH_ALL_MS = 15 * 60 * 1000;
 const leashOf = (ms, name) => (Number(globalThis[name]) > 0 ? Number(globalThis[name]) : ms);
@@ -513,6 +515,7 @@ export async function ask(conn, opts = {}) {
     const gap = lead ? prefillGap(conn) : '';
     let text = '';
     let thinking = '';
+    let progressAt = Date.now();
     const emitText = (s) => {
       if (!s) return;
       if (lead) {
@@ -520,10 +523,12 @@ export async function ask(conn, opts = {}) {
         if (!s.startsWith(put)) { const back = put + (/^\s/.test(s) ? '' : gap); text += back; if (opts.onText) opts.onText(back); }
       }
       text += s;
+      progressAt = Date.now();
       if (opts.onText) opts.onText(s);
     };
     const emitThinking = (s) => {
       if (!s) return;
+      progressAt = Date.now();
       if (thoughtLead) {
         const put = thoughtLead; thoughtLead = '';
         if (!s.startsWith(put)) { const back = put + (/^\s/.test(s) ? '' : ' '); thinking += back; if (opts.onThinking) opts.onThinking(back); }
@@ -587,14 +592,13 @@ export async function ask(conn, opts = {}) {
     let out;
     /* a helper's or the checker's call on its leash */
     let leashed = '';
-    const leash = opts.worker ? new AbortController() : null;
+    const leash = opts.worker || opts.leash ? new AbortController() : null;
     let heardAt = Date.now();
-    const leashFrom = Date.now();
     const quietMs = leashOf(LEASH_QUIET_MS, '__cozyLeashQuietMs');
     const allMs = leashOf(LEASH_ALL_MS, '__cozyLeashAllMs');
     const leashTimer = leash ? setInterval(() => {
       if (leash.signal.aborted) return;
-      if (Date.now() - heardAt > quietMs) { leashed = 'quiet'; leash.abort(); } else if (Date.now() - leashFrom > allMs) { leashed = 'long'; leash.abort(); }
+      if (Date.now() - heardAt > quietMs) { leashed = 'quiet'; leash.abort(); } else if (Date.now() - progressAt > allMs) { leashed = 'long'; leash.abort(); }
     }, Math.max(50, Math.min(5000, Math.floor(quietMs / 4)))) : null;
     try {
       const res = await fetch('/api/call', {
@@ -614,7 +618,7 @@ export async function ask(conn, opts = {}) {
       if (leashed && !(opts.signal && opts.signal.aborted)) {
         /* let go on its leash: a passing fault, its words (if any) kept as cut */
         const mins = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m === 1 ? 'a minute' : `${m} minutes`; };
-        out = { finish: 'error', error: leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer went on for more than ${mins(allMs)}`, status: 0, transport: true, midStream: Boolean(text), text, thinking };
+        out = { finish: 'error', error: leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer made no progress for ${mins(allMs)}`, status: 0, transport: true, leashed, midStream: Boolean(text), text, thinking };
       } else if ((e && e.name === 'AbortError') || (opts.signal && opts.signal.aborted)) {
         sent.ms = Date.now() - sent.at;
         if (opts.onSent) opts.onSent(sent);
@@ -797,14 +801,15 @@ export async function ask(conn, opts = {}) {
       /* the wait its provider asked for is kept, however long (Cozy Tavern M28): a
        * short one waited here, a long one handed back for the helper to keep */
       const asked = retryAfterMs(out.retryAfter);
-      if (opts.patient && transient && asked <= 60000 && transientTries < BACKOFF_MS.length && !(opts.signal && opts.signal.aborted)) {
+      /* a call let go on its leash is not sent again here: the same ask would hang the same way (Cozy Tavern M675-B1) — the worker weighs it */
+      if (opts.patient && transient && !out.leashed && asked <= 60000 && transientTries < BACKOFF_MS.length && !(opts.signal && opts.signal.aborted)) {
         await sleep(asked > 0 ? asked : BACKOFF_MS[transientTries], opts.signal);
         transientTries++;
         continue;
       }
       if (opts.onSent) opts.onSent(sent);
       return { ok: false, text: '', thinking, notes, error: plainError(lastError, lastStatus, { transport: out.transport, phone: out.phone }), status: lastStatus, sent,
-        permanent: !transient && lastStatus !== 0, ...(asked > 0 ? { retryAfterMs: asked } : {}) };
+        permanent: !transient && lastStatus !== 0, ...(asked > 0 ? { retryAfterMs: asked } : {}), ...(out.leashed ? { leashed: out.leashed } : {}) };
     }
     if (opts.onSent) opts.onSent(sent);
     noteUsage(conn, out.usage, sent, text + thinking);
@@ -863,7 +868,7 @@ export async function ask(conn, opts = {}) {
     }
     if (out.finish === 'error') {
       /* broken off partway: what arrived is kept, and said to be cut */
-      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra };
+      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra, ...(out.leashed ? { leashed: out.leashed } : {}) };
     }
     const reason = out.reason || '';
     const blocked = BLOCKED.test(reason);

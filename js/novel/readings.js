@@ -155,6 +155,76 @@ export function notesBeforeWith(novel, chapterId, pid) {
   return { notes, also };
 }
 
+/* THE NOTES AS THEY STOOD AT A POINT OF THE BOOK (Cozy Tavern's M336/M337:
+ * a moment earlier in the story is never handed what comes after it as "so
+ * far"). Writing at a point with read passages after it — another take or a
+ * rewrite of an earlier passage, a page written in between, carrying on an
+ * earlier chapter, a scene set there — the readings of everything after the
+ * point are taken back, newest first, each only where every card it touched
+ * still reads as it left it; the passage written again goes back to before
+ * it, chain and all. point: {mark} the passage rewritten, {before} the
+ * passage the new words come before (another take puts them in its place),
+ * {through} the passage they come after; none: the chapter's end. Returns
+ * {notes, kept, clean, later, also}: clean — nothing after the point is left
+ * in them; later — something after the point had been read at all; also —
+ * passages before the point read together with one taken back (said to be
+ * not in these notes yet). Pure. */
+export function notesAtPoint(novel, chapters, chapterId, point = {}) {
+  const out = { notes: (novel && novel.notes) || {}, kept: (novel && novel.kept) || {}, clean: true, later: false, also: [] };
+  const order = (novel && novel.order) || [];
+  const ci = order.indexOf(chapterId);
+  if (ci < 0) return out;
+  const list = ((chapters[chapterId] || {}).passages) || [];
+  const at = (id) => list.findIndex((p) => p.id === id);
+  let from = list.length;
+  if (point.mark && at(point.mark) >= 0) from = at(point.mark);
+  else if (point.before && at(point.before) >= 0) from = at(point.before);
+  else if (point.through && at(point.through) >= 0) from = at(point.through) + 1;
+  const after = [...list.slice(from).map((p) => [chapterId, p.id]), ...order.slice(ci + 1).flatMap((id) => (((chapters[id] || {}).passages) || []).map((p) => [id, p.id]))];
+  const laterIds = new Set(after.map(([, pid]) => pid));
+  const seen = (novel.memory && novel.memory.seen) || {};
+  /* every reading behind what the notes hold of the passages after the point, each version's chain back to its first */
+  const readings = [];
+  const have = new Set();
+  for (const [cid, pid] of after) {
+    const sig = (seen[cid] || {})[pid];
+    if (!sig) continue;
+    out.later = true;
+    let r = readingOf(novel, pid, sig);
+    let whole = false;
+    /* one read together with passages taken out (mixed) holds theirs too: never taken back by itself */
+    for (let step = 0; r && step < 12; step++) {
+      if (r.mode !== 'new' && r.mode !== 'change') break;
+      if (!have.has(r.sig)) { have.add(r.sig); readings.push(r); }
+      if (r.mode === 'new') { whole = true; break; }
+      r = readingOf(novel, pid, r.fromSig);
+    }
+    if (!whole) out.clean = false;
+  }
+  /* a passage after the point taken out, its reading not yet told: its words are still in the notes */
+  for (const [cid] of [[chapterId], ...order.slice(ci + 1).map((id) => [id])]) {
+    const here = new Set((((chapters[cid] || {}).passages) || []).map((p) => p.id));
+    for (const pid of Object.keys(seen[cid] || {})) if (!here.has(pid)) { out.later = true; out.clean = false; }
+  }
+  if (!out.later) return out;
+  let state = { notes: out.notes, kept: out.kept };
+  for (const r of readings.sort((a, b) => (b.at || 0) - (a.at || 0))) {
+    const plan = planOf(state, r, { back: true });
+    if (!plan.clean) { out.clean = false; break; }
+    state = { notes: moved(state.notes, plan.moves), kept: keptMoved(state.kept, plan.kept) };
+    for (const pid of Array.isArray(r.covers) ? r.covers : []) if (!laterIds.has(pid) && !out.also.includes(pid)) out.also.push(pid);
+  }
+  return { ...out, notes: state.notes, kept: state.kept };
+}
+function keptMoved(kept, moves) {
+  const out = JSON.parse(JSON.stringify(kept || {}));
+  for (const m of moves || []) {
+    if (!same(out[m.key], m.from)) continue;
+    if (m.to) out[m.key] = JSON.parse(JSON.stringify(m.to)); else delete out[m.key];
+  }
+  return out;
+}
+
 /* The signature the helper marks a version read with (archivist.signature),
  * its text half computed once per version text. */
 const hashes = new WeakMap();

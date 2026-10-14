@@ -2278,13 +2278,11 @@ await test('the partner\'s changes: a name inside another name, a hyphened name,
   await putAway(b);
 });
 
-await test('an Undo that can put back only part of a change says so, and keeps for the helper the words it takes away', async () => {
+await test('an Undo that can put back only part of a change says so; a passage a name change put back reads as the helper read it before — unless a card keeps the new name, and then it is read again, told the words it takes away', async () => {
   const b = await makeBook([['Lily ran.', 'Lily hid.']], { manual: true });
   markAllSeen(b);
   await script([{ text: '<changes>[{"rename": {"from": "Lily", "to": "Rose"}, "why": "x"}]</changes>\nRenamed.' }]);
   await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Rose.' });
-  /* the helper reads the renamed passages */
-  markAllSeen(b);
   /* he edits the first since */
   writer.saveEdit({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id, text: 'Rose ran fast.' });
   const turn = store.peek('talk', b.novelId).turns.at(-1);
@@ -2296,11 +2294,25 @@ await test('an Undo that can put back only part of a change says so, and keeps f
   assert.equal(picked(b.ch().passages[1]).text, 'Lily hid.');
   assert.equal(picked(b.ch().passages[0]).text, 'Rose ran fast.', 'his edit stays');
   assert.match(picked(store.peek('talk', b.novelId).turns.at(-1)).changes[0].undoneSaid, /1 changed since/);
-  /* the renamed words the helper read are kept for it: it is told what the passage used to say */
-  const ch = archivist.changesIn(b.novel(), b.ch());
-  const back = ch.changes.find((c) => c.pid === b.ch().passages[1].id);
-  assert.equal(back.old, 'Rose hid.', JSON.stringify(ch.changes));
+  /* the one put back reads as the helper read it before the name changed: only his edit is new to it */
+  let ch = archivist.changesIn(b.novel(), b.ch());
+  assert.deepEqual(ch.changes.map((c) => c.pid), [b.ch().passages[0].id], JSON.stringify(ch.changes));
   await putAway(b);
+  /* a card that took the new name and was changed since keeps it: the passages put back are read again, told the words they lose */
+  const c = await makeBook([['Lily ran.', 'Lily hid.']], { manual: true });
+  store.change('novel', c.novelId, shape.novelSteps.putNote('people', { id: 'pe-l', name: 'Lily', about: 'A girl.' }), { now: true });
+  markAllSeen(c);
+  const r = changes.makeChange(c.novelId, { rename: { from: 'Lily', to: 'Rose' } });
+  assert.equal(r.status, 'made', r.said);
+  assert.equal(archivist.pendingWork(c.novelId), false, 'read already, renamed');
+  store.change('novel', c.novelId, shape.novelSteps.putNote('people', { ...c.novel().notes.people[0], now: 'Hiding.' }), { now: true });
+  assert.equal(changes.undoChange(c.novelId, r).ok, true);
+  assert.equal(c.novel().notes.people[0].name, 'Rose', 'the card changed since keeps its name');
+  assert.equal(picked(c.ch().passages[1]).text, 'Lily hid.');
+  ch = archivist.changesIn(c.novel(), c.ch());
+  const back = ch.changes.find((x) => x.pid === c.ch().passages[1].id);
+  assert.equal(back && back.old, 'Rose hid.', JSON.stringify(ch.changes));
+  await putAway(c);
 });
 
 await test('conversations with the partner: new, open, copy, branch from an answer, rename, remove and Start over — each with its Undo where it takes something', async () => {
@@ -4023,7 +4035,8 @@ await test('chapters the partner asks to read, more than its model holds beside 
   /* What it's about and the notes are long too: they go whatever happens, and the reading fits beside them */
   store.change('novel', b.novelId, (n) => { n.brief = 'A BRIEF. ' + 'The keeper and the sea and the letter. '.repeat(120); }, { now: true });
   for (let i = 0; i < 12; i++) store.change('novel', b.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: `PERSON ${i}`, about: 'Someone the keeper knows from the harbour, with a long story. '.repeat(6) })), { now: true });
-  await setHouse({ context: 12000 }, CRAFTS_OFF);
+  /* room enough for some of the chapter beside everything that must go (at 12,000 only the mark that the middle is left out fitted) */
+  await setHouse({ context: 14000 }, CRAFTS_OFF);
   await script([{ text: 'Let me look first. <read>[1]</read>' }, { text: 'Having read it: it works.' }]);
   const out = await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[1], text: 'How is chapter one?' });
   assert.equal(out.ok, true, out.error);
@@ -4033,7 +4046,7 @@ await test('chapters the partner asks to read, more than its model holds beside 
   assert.ok(back.includes('THE OPENING OF ONE.') && back.includes('THE END OF ONE.') && back.includes('the middle of this chapter is left out here'), back.slice(0, 300));
   assert.ok(back.includes('as much of each as fits here'), back.slice(-200));
   const sent = r[1].body.messages.reduce((n, m) => n + util.estimateTokens(String(m.content)) + 8, 0);
-  assert.ok(sent + 6000 <= 12000, `it fits the model's 12,000 with the answer's 6,000: ${sent} tokens sent`);
+  assert.ok(sent + 6000 <= 14000, `it fits the model's 14,000 with the answer's 6,000: ${sent} tokens sent`);
   assert.ok(systemOf(r[1]).includes('PERSON 11') || r[1].body.messages.some((m) => String(m.content).includes('PERSON 11')), 'the notes went with it');
   assert.equal(picked(store.peek('talk', b.novelId).turns.at(-1)).text, 'Having read it: it works.');
   await setHouse();
@@ -5109,17 +5122,57 @@ await test('what its model will not write beside his rewritten words is asked on
 /* =================================================== the helper and the checker: what Cozy Tavern learned */
 heading('the helper and the checker: what Cozy Tavern learned');
 
-await test('a helper’s call that hears nothing from its provider is let go on its leash and tried again — a page never is', async () => {
+await test('a helper’s call that hears nothing from its provider is let go on its leash — never sent again inside the same ask, which would hang the same way; the helper asks a passage at a time after it; a page is never leashed', async () => {
   globalThis.__cozyLeashQuietMs = 400;
   try {
     const build = () => ({ messages: [{ role: 'user', content: 'Answer with JSON.' }], maxTokens: 300 });
-    await script([{ pause: 4, text: 'too late' }, { text: 'the second try' }]);
+    await script([{ pause: 4, text: 'too late' }, { text: 'never asked for' }]);
     const t0 = Date.now();
     const out = await call.ask(CONN, { build, stream: true, worker: true, patient: true });
-    assert.equal(out.ok, true, JSON.stringify(out).slice(0, 300));
-    assert.equal(out.text, 'the second try');
-    assert.ok(Date.now() - t0 < 4000 + 3000, 'let go well before the silence ended');
-    assert.equal((await requests()).length, 2);
+    assert.equal(out.ok, false, JSON.stringify(out).slice(0, 300));
+    assert.equal(out.leashed, 'quiet');
+    assert.match(out.error, /sent nothing/);
+    assert.ok(Date.now() - t0 < 4000, 'let go well before the silence ended');
+    assert.equal((await requests()).length, 1, 'not sent again inside the ask');
+    /* the helper: a reading of two passages let go on its leash is asked one passage at a time after it — and nothing is set aside for it */
+    const b = await makeBook([['MARA KEPT THE LIGHT.', 'TOM MENDED THE NETS.'], ['The sea rose.']], { manual: true });
+    await reset();
+    await script([{ pause: 4, text: '{}' }]);
+    await archivist.run(b.novelId);
+    let r = await requests();
+    assert.equal(r.length, 1, 'no probe, no second try');
+    const asked = JSON.stringify(r[0].body.messages);
+    assert.ok(asked.includes('MARA KEPT') && asked.includes('TOM MENDED'), 'both passages were in the one ask');
+    assert.ok(archivist.forTests().narrow.has(b.novelId), 'a passage at a time from now on');
+    assert.ok(archivist.forTests().failures.get(b.novelId), 'tried again later, by itself');
+    assert.deepEqual(Object.keys(b.novel().memory.aside || {}), [], 'nothing set aside for a hang');
+    archivist.forTests().failures.delete(b.novelId);
+    await reset();
+    await script(Array.from({ length: 6 }, () => ({ text: '{"people": []}' })));
+    await archivist.run(b.novelId);
+    r = await requests();
+    const first = JSON.stringify(r[0].body.messages);
+    assert.ok(first.includes('MARA KEPT') && !first.includes('TOM MENDED'), 'one passage in the ask');
+    assert.equal(archivist.pendingWork(b.novelId), false, 'and every one read');
+    await putAway(b);
+    /* no progress for its leash — the line kept open with nothing new in it — is let go too; an answer still coming never is, however long it runs */
+    globalThis.__cozyLeashQuietMs = 2000;
+    globalThis.__cozyLeashAllMs = 700;
+    await reset();
+    await script([{ hang_after: 'a first word' }, { text: 'x'.repeat(60), chunk: 3, delay: 0.1 }]);
+    const stuck = await call.ask(CONN, { build, stream: true, worker: true, patient: true });
+    assert.equal(stuck.leashed, 'long', JSON.stringify(stuck).slice(0, 300));
+    assert.match(stuck.error, /made no progress/);
+    const slow = await call.ask(CONN, { build, stream: true, worker: true, patient: true });
+    assert.equal(slow.ok, true, slow.error);
+    assert.equal(slow.text, 'x'.repeat(60), 'two seconds of words, never cut: it was making progress');
+    /* a reading let go partway is not asked again as if it had run out of room */
+    await reset();
+    await script([{ hang_after: '{"people": [' }, { text: '{}' }]);
+    const part = await archivist.askJson(CONN, 'Answer with JSON.', 'Go.');
+    assert.equal(part.ok, false);
+    assert.equal(part.leashed, 'long');
+    assert.equal((await requests()).length, 1);
     /* a page waits as long as its provider takes: he has Stop */
     await reset();
     await script([{ pause: 1.2, text: 'slow but sure' }]);
@@ -5129,6 +5182,7 @@ await test('a helper’s call that hears nothing from its provider is let go on 
     assert.equal((await requests()).length, 1);
   } finally {
     delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashAllMs;
   }
 });
 
@@ -5489,6 +5543,161 @@ await test('a change still waiting shows the words it would write over, as they 
   store.change('chapter', b.ids[1], shape.chapterSteps.setName('Old Name', 'you'), { now: true });
   assert.equal(changes.wordsNow(b.novelId, v.changes[1]), 'Old Name');
   await setHouse();
+  await putAway(b);
+});
+
+await test('a change claimed only in words is asked for once — “Done — …”, “Updated …”; a thought aloud, a supposing or a change made before is never one; a second answer that comes back cut leaves the first standing, with what it made', async () => {
+  for (const [t, want] of [['Done — Mira is nineteen now.', true], ['Mira’s card has been updated: she’s nineteen.', true], ['Updated Mira to nineteen.', true], ['Done — Mira is nineteen now, not seventeen.', true], ['I’ve changed her age to nineteen.', true],
+    ['I’ve changed my mind about the ending — it works.', false], ['If I changed the ending, she would never forgive him.', false], ['Since I rewrote passage 2.3 earlier, the seam holds.', false],
+    ['I have updated nothing yet.', false], ['If you cut the adverb, the opening now reads much more cleanly.', false], ['I cut a scene like this from my own first draft.', false], ['Should I change the ending?', false],
+    ['Done.', true], ['All set!', true], ['Done reading.', false], ['Done with the chapters — here is what I think.', false]]) {
+    assert.equal(talk.claimsChange(t), want, t);
+  }
+  const b = await makeBook([['Mira was seventeen.']], { manual: true });
+  await script([{ text: 'Done — she is nineteen now.' }, { text: '<changes>[{"passage": "1.1", "find": "seventeen", "replace": "nineteen", "why": "her age"}]</changes>\nHere is the whole answer again, and it runs on and on', finish: 'length' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Make Mira nineteen.' });
+  assert.equal((await requests()).length, 2, 'asked once more, no more');
+  const v = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.ok(v.text.startsWith('Done — she is nineteen now.'), v.text);
+  assert.ok(v.text.includes('<changes>'), 'the block that made the change is kept with it');
+  assert.equal(v.cut, undefined, 'the first answer came whole');
+  assert.equal(picked(b.ch().passages[0]).text, 'Mira was nineteen.');
+  await putAway(b);
+});
+
+await test('the partner is shown whole every card his message names, however many the notes hold; a card it saw only by its first line is read whole before it is written', async () => {
+  const b = await makeBook([['Mara climbed to the lamp.']], { manual: true });
+  for (let i = 0; i < 40; i++) store.change('novel', b.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: `Person ${i}`, about: `First line of person ${i}. ` + 'More about them, a long story told slowly. '.repeat(20), ties: `TIES OF PERSON ${i}` })), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: 'Kai Storm', about: 'A fisherman of the north harbour, slow to speak. SECRET FACT ABOUT KAI.', ties: 'OWES MARA A BOAT.' })), { now: true });
+  await setHouse({ context: 16000 }, CRAFTS_OFF);
+  await script([{ text: 'He is a fisherman.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Tell me about Kai Storm.' });
+  let r = await requests();
+  const sent = [systemOf(r[0]), ...r[0].body.messages.map((m) => String(m.content))].join('\n');
+  assert.ok(sent.includes('shown by their first line'), 'the notes were fitted');
+  assert.ok(sent.includes('SECRET FACT ABOUT KAI') && sent.includes('OWES MARA A BOAT'), 'the card he named rides whole');
+  assert.ok(!sent.includes('TIES OF PERSON 7'), 'a card he did not name rides by its first line');
+  await reset();
+  await script([
+    { text: '<changes>[{"note": "people", "name": "Person 3", "about": "Only this now.", "why": "x"}]</changes>\nChanged.' },
+    { text: '<read>["card: Person 3"]</read>' },
+    { text: '<changes>[{"note": "people", "name": "Person 3", "about": "First line of person 3. All of it kept, and a new fact.", "why": "x"}]</changes>\nNow made.' },
+  ]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Fix the notes.' });
+  r = await requests();
+  assert.equal(r.length, 3);
+  assert.ok(String(r[2].body.messages.at(-1).content).includes('TIES OF PERSON 3'), 'the card came back whole');
+  const v = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.match(v.changes[0].said, /only by its first line/);
+  assert.equal(b.novel().notes.people.find((c) => c.name === 'Person 3').about, 'First line of person 3. All of it kept, and a new fact.');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a passage the partner writes anew is made whole the way a page is: a stray of another script stuck to a word, a quotation left open', async () => {
+  const story = 'The lamp burned low over the harbour as the boats came home, one by one, their sails grey against a darker sky. '.repeat(3);
+  const b = await makeBook([[story]], { manual: true });
+  const r = changes.makeChange(b.novelId, { passage: '1.1', text: `${story}She said, “Wait for me.\n\nThe 吃door opened and the wind came in off the water, cold and salt.` });
+  assert.equal(r.status, 'made', r.said);
+  const t = picked(b.ch().passages[0]).text;
+  assert.ok(!t.includes('吃'), t.slice(-120));
+  assert.ok(t.includes('“Wait for me.”'), t.slice(-160));
+  assert.match(r.said, /stray character/);
+  await putAway(b);
+});
+
+await test('a name changed everywhere is read, checked and summed up already: nothing is asked again, the summaries say the new name, and Undo puts it all back as it was', async () => {
+  const b = await makeBook([['Mira lit the lamp.', 'The sea rose.'], ['Mira slept by the fire.']], { manual: true });
+  markAllSeen(b);
+  for (let i = 0; i < 2; i++) store.change('chapter', b.ids[i], shape.chapterSteps.setSummary({ text: `Summary ${i}: Mira does things.`, fp: shape.chapterPrint(b.ch(i)), at: Date.now() }), { now: true });
+  const p11 = b.ch(0).passages[0];
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p11.id, picked(p11).id, { round: 'r1', sig: util.hashText(picked(p11).text), at: Date.now(), items: [{ id: 'i1', kind: 'grammar', find: 'Mira lit', replace: 'Mira lights', why: 'tense' }] }), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-m', name: 'Mira', about: 'The keeper.' }), { now: true });
+  assert.equal(archivist.pendingWork(b.novelId), false);
+  const r = changes.makeChange(b.novelId, { rename: { from: 'Mira', to: 'Myra' } });
+  assert.equal(r.status, 'made', r.said);
+  assert.equal(picked(b.ch(0).passages[0]).text, 'Myra lit the lamp.');
+  assert.equal(archivist.pendingWork(b.novelId), false, 'nothing for the helper to read again');
+  assert.equal(b.ch(0).summary.text, 'Summary 0: Myra does things.');
+  assert.equal(b.ch(0).summary.fp, shape.chapterPrint(b.ch(0)));
+  const e = checker.entryFor(b.ch(0), b.ch(0).passages[0]);
+  assert.ok(e, 'the finding follows the renamed version');
+  assert.equal(e.items[0].find, 'Myra lit');
+  assert.equal(changes.undoChange(b.novelId, r).ok, true);
+  assert.equal(picked(b.ch(0).passages[0]).text, 'Mira lit the lamp.');
+  assert.equal(archivist.pendingWork(b.novelId), false, 'nor after its Undo');
+  assert.equal(b.ch(0).summary.text, 'Summary 0: Mira does things.');
+  await putAway(b);
+});
+
+await test('work begun before a name changed everywhere is given the new name: a reading that lands after it makes no card under the old one', async () => {
+  const b = await makeBook([['Mira lit the lamp.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-m', name: 'Mira', about: 'The keeper.', now: '' }), { now: true });
+  await script([{ pause: 1.5, text: JSON.stringify({ people: [{ name: 'Mira', now: 'In the lamp room.' }] }) }]);
+  const reading = archivist.run(b.novelId);
+  await sleep(500);
+  const r = changes.makeChange(b.novelId, { rename: { from: 'Mira', to: 'Mina' } });
+  assert.equal(r.status, 'made', r.said);
+  await reading;
+  const people = b.novel().notes.people;
+  assert.deepEqual(people.map((c) => [c.name, c.now]), [['Mina', 'In the lamp room.']]);
+  assert.equal(archivist.pendingWork(b.novelId), false, 'the renamed passage counts as read');
+  await putAway(b);
+});
+
+await test('the checker knows his own words and old writing by the version they came from: a fix he applies himself never lets the others go in by themselves, and a name changed everywhere sends the checker nothing', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const b = await makeBook([[]], { manual: true });
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'My own words alot and and more teh end.' });
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.1', kind: 'grammar', find: 'alot', replace: 'a lot', why: 'x' },
+    { passage: '1.1', kind: 'grammar', find: 'and and', replace: 'and', why: 'y' },
+    { passage: '1.1', kind: 'grammar', find: 'teh', replace: 'the', why: 'z' }] }) }]);
+  await checker.runCheck(b.novelId);
+  const s = checker.suggestions(b.novelId);
+  assert.equal(s.length, 3);
+  assert.equal(checker.applyOne(b.novelId, s[0].chapterId, s[0].passageId, s[0].item.id).ok !== false, true);
+  await checker.runCheck(b.novelId);
+  assert.equal(picked(b.ch().passages[0]).text, 'My own words a lot and and more teh end.', 'the other two still wait for him');
+  assert.equal(checker.suggestions(b.novelId).length, 2);
+  await putAway(b);
+  await setHouse({}, { checksFrom: Date.now(), judge: { on: false } });
+  await reset();
+  const c = await makeBook([[{ text: 'Jovan walked.', at: Date.now() - 100000 }, { text: 'Jovan ran.', at: Date.now() - 100000 }]], { manual: true });
+  assert.equal(changes.makeChange(c.novelId, { rename: { from: 'Jovan', to: 'Jovann' } }).status, 'made');
+  await checker.runCheck(c.novelId);
+  assert.equal((await requests()).length, 0, 'writing from before the checker began is not checked by itself — renamed or not');
+  await setHouse();
+  await putAway(c);
+});
+
+await test('a scene whose prose was taken out of the book lets go of “written into the book”: what it covered rides again as the scene', async () => {
+  const b = await makeBook([['The lamp was lit.']], { manual: true });
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+  store.change('play', id, (d) => { d.turns = [shape.newTurn('you', 'I climb the stair.'), shape.newTurn('ai', 'THE STAIR CREAKS.')]; }, { now: true });
+  const prose = shape.newPassage('ai', 'Prose of the stair.', { how: 'play' });
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(prose, b.ch().passages[0].id), { now: true });
+  store.change('play', id, shape.turnSteps.set({ turned: store.peek('play', id).turns[1].id, after: prose.id }), { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(prose.id), { now: true });
+  await script([{ text: 'The lamp gutters.' }]);
+  await talk.playSay({ playId: id, text: 'I look up.' });
+  const q = store.peek('play', id);
+  assert.equal(q.turned, null);
+  const sent = (await requests())[0].body.messages.map((m) => String(m.content)).join('\n');
+  assert.ok(sent.includes('THE STAIR CREAKS.'), 'the talk it covered rides again');
+  assert.equal(talk.transcriptOf(q).count, 4);
+  await putAway(b);
+});
+
+await test('Ideas reads nothing more and changes nothing, so it is never told it could; New ideas is told the ones on show', async () => {
+  const b = await makeBook([['The lamp was lit.']], { manual: true });
+  await script([{ text: '<direction>She climbs.</direction>' }]);
+  const out = await talk.nextIdeas({ novelId: b.novelId, chapterId: b.ids[0], count: 1, not: ['She sleeps.'] });
+  assert.equal(out.ok, true, out.error);
+  const r = await requests();
+  const all = [systemOf(r[0]), ...r[0].body.messages.map((m) => String(m.content))].join('\n');
+  assert.ok(!all.includes('<changes>') && !all.includes('<read>'), 'no changes block, no read block');
+  assert.ok(all.includes('not these, which you gave me last time:\n- She sleeps.'), 'the ones on show are named');
   await putAway(b);
 });
 

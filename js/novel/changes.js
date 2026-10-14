@@ -15,12 +15,14 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newVersion, endOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp } from './shape.js';
+import { chapterSteps, novelSteps, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE } from './prompts.js';
 import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays } from './textshape.js';
+import { replaceMany, renameRule } from './names.js';
 
 /* ------------------------------------------------------------ reading it */
 
@@ -71,6 +73,8 @@ export function partsOf(text) {
 /* the premises an answer offers */
 export function directionsIn(text) { return partsOf(text).filter((x) => x.kind === 'direction' && x.done).map((x) => x.text); }
 
+/* the changes blocks of an answer, as written ('' when none) */
+export function blocksIn(text) { return [...String(text || '').matchAll(BLOCK(CHANGES_OPEN, CHANGES_CLOSE))].map((m) => m[0]).join('\n\n'); }
 /* a changes block still on its way */
 export function changesComing(text) { return /<changes>/i.test(String(text || '')) && !/<\/changes>/i.test(String(text || '')); }
 
@@ -93,7 +97,8 @@ export function readAsks(text) {
       const t = String(x == null ? '' : x).trim();
       const ask = /^find\s*:/i.test(t) ? { find: t.replace(/^find\s*:\s*/i, '').slice(0, 200) }
         : /^module\s*:/i.test(t) ? { module: t.replace(/^module\s*:\s*/i, '').slice(0, 120) }
-          : chapterNumber(t);
+          : /^card\s*:/i.test(t) ? { card: t.replace(/^card\s*:\s*/i, '').slice(0, 120) }
+            : chapterNumber(t);
       if (ask === null || (typeof ask === 'object' && !Object.values(ask)[0])) continue;
       if (!out.some((y) => JSON.stringify(y) === JSON.stringify(ask))) out.push(ask);
     }
@@ -320,6 +325,10 @@ function loose(str) {
   const out = []; const starts = []; const ends = [];
   for (let i = 0; i < str.length; i++) {
     let ch = str[i];
+    /* emphasis marks are the page's dressing, not its words (Cozy Tavern's
+     * M752: a quote with other marks is the original's own text) — "She
+     * knew" is found where the page has "She *knew*" */
+    if (ch === '*' || ch === '_') continue;
     if (/\s/.test(ch)) ch = ' ';
     else if (SINGLE_QUOTES.has(ch)) ch = "'";
     else if (DOUBLE_QUOTES.has(ch)) ch = '"';
@@ -377,57 +386,6 @@ const newWords = (op) => (op.replace !== undefined ? String(op.replace) : op.tex
 
 const esc = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const MONTH_OR_DAY = /^(january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i;
-/* a name as a whole word, as written or in capitals (Cozy Tavern's
- * spelling) — never part of a longer word, nor of a name joined with a
- * hyphen ("Mary" is not in "Mary-Jane") */
-const EDGE_BEFORE = '(?<![\\p{L}\\p{N}_])(?<![\\p{L}\\p{N}]-)';
-const EDGE_AFTER = '(?![\\p{L}\\p{N}_])(?!-[\\p{L}\\p{N}])';
-function nameRe(name) {
-  const n = String(name || '');
-  const forms = [...new Set([n, n.toUpperCase()])].map(esc).join('|');
-  return new RegExp(`${EDGE_BEFORE}(?:${forms})${EDGE_AFTER}`, 'gu');
-}
-/* Several changes of one text made in one pass over it as it stood — each
- * place changed once, by the longest change that finds it there, and never
- * again by another (Cozy Tavern's M675-8: "Kara" to "Mara" and "Mara" to
- * "Kara" made together swap the two; made one after the other they leave
- * one name for both). rules: [{re, to(match), skip(text) -> [[from, to]]}].
- * {text, counts} — how many places each rule changed. */
-function replaceMany(text, rules) {
-  const t = String(text || '');
-  const hits = [];
-  rules.forEach((r, k) => {
-    const skip = r.skip ? r.skip(t) : [];
-    for (const m of t.matchAll(new RegExp(r.re.source, r.re.flags.includes('g') ? r.re.flags : `${r.re.flags}g`))) {
-      if (!m[0]) continue;
-      const a = m.index;
-      const b = a + m[0].length;
-      if (skip.some(([x, y]) => a >= x && b <= y)) continue;
-      hits.push({ a, b, k, m: m[0] });
-    }
-  });
-  hits.sort((x, y) => x.a - y.a || (y.b - y.a) - (x.b - x.a) || x.k - y.k);
-  const counts = rules.map(() => 0);
-  let out = '';
-  let at = 0;
-  for (const h of hits) {
-    if (h.a < at) continue;
-    out += t.slice(at, h.a) + rules[h.k].to(h.m);
-    at = h.b;
-    counts[h.k]++;
-  }
-  return { text: out + t.slice(at), counts };
-}
-/* a name changed wherever it stands — but never where it is already part
- * of the name it becomes ("Oda" to "Oda Jovan" leaves "Oda Jovan" as it is) */
-function renameRule(from, to) {
-  const up = String(from).toUpperCase();
-  return {
-    re: nameRe(from),
-    skip: (t) => [...t.matchAll(nameRe(to))].map((m) => [m.index, m.index + m[0].length]),
-    to: (m) => (m === up && up !== from ? String(to).toUpperCase() : to),
-  };
-}
 function renamed(text, from, to) { return replaceMany(text, [renameRule(from, to)]).text; }
 /* the same words wherever they stand: whole words at the ends that are
  * letters or numbers ("Ann" is not in "Annual" nor "Anna") */
@@ -497,7 +455,7 @@ function newVersionOn(put, novelId, x, next, why) {
  * whether it was cut short or stopped (its Go on stays) */
 export function carried(v) {
   if (!v) return {};
-  return { ...(v.ask ? { ask: v.ask } : {}), ...endOf(v) };
+  return { ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v) };
 }
 
 /* ------------------------------------------------------------ across the book, together */
@@ -564,13 +522,26 @@ export function groupsOf(ops) {
  * (who he plays, where it starts, every telling and move — Cozy Tavern's
  * M607-8) — each text once, every rule over it as it stood */
 function renameEverywhere(novelId, novel, rules, put, why) {
-  const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [], plays: [] };
+  const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [], plays: [], seen: [], summaries: [] };
   const counts = rules.map(() => 0);
   const swap = (t) => { const r = replaceMany(t, rules); r.counts.forEach((c, k) => { counts[k] += c; }); return r.text; };
+  /* the same rules over what was read, checked and summed up — never counted as places changed */
+  const quiet = (t) => replaceMany(t, rules).text;
+  const printsBefore = new Map((novel.order || []).map((id) => [id, chapterPrint(store.peek('chapter', id) || { passages: [] })]));
+  const restamp = [];
   for (const x of eachPassage(novel)) {
     const next = swap(x.version.text);
-    if (next !== x.version.text) undo.passages.push(newVersionOn(put, novelId, x, next, why));
+    if (next === x.version.text) continue;
+    const made = newVersionOn(put, novelId, x, next, why);
+    undo.passages.push(made);
+    restamp.push({ x, made, next });
   }
+  /* WHAT WAS READ, CHECKED AND SUMMED UP FOLLOWS THE NAME (Cozy Tavern's
+   * M752 restamp, M730): a version a rename made from the one the helper read
+   * is read already — its reading kept for it, the names in it changed — and
+   * the checker's findings and the chapter's summary go with it, so nothing
+   * is read, checked or summed up again, and paid for, because a name changed */
+  restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore);
   for (const id of novel.order || []) {
     const c = store.peek('chapter', id);
     if (!c || !c.name) continue;
@@ -634,6 +605,63 @@ function renameEverywhere(novelId, novel, rules, put, why) {
   }
   return { undo, counts };
 }
+function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore) {
+  const mem = novel.memory || {};
+  const seenAll = mem.seen || {};
+  const readings = mem.readings || {};
+  const sigOfV = (v) => archivist.signature(v);
+  const newSigs = new Map();
+  for (const { x, made, next } of restamp) newSigs.set(sigOfV(x.version), { pid: x.passage.id, vid: made.versionId, sig: sigOfV({ id: made.versionId, text: next }) });
+  const swapCard = (c) => {
+    if (!c) return c;
+    const out = clone(c);
+    for (const k of ['name', 'about', 'ties', 'now', 'since']) if (typeof out[k] === 'string') out[k] = quiet(out[k]);
+    if (Array.isArray(out.aka)) out.aka = out.aka.map(quiet);
+    return out;
+  };
+  const swapKept = (k) => (k && typeof k.text === 'string' ? { ...clone(k), text: quiet(k.text) } : clone(k));
+  const seenNow = {};
+  for (const { x, made, next } of restamp) {
+    const oldSig = sigOfV(x.version);
+    const to = newSigs.get(oldSig);
+    /* read as it was: read as it is now */
+    if ((seenAll[x.chapterId] || {})[x.passage.id] === oldSig) {
+      const map = seenNow[x.chapterId] || (seenNow[x.chapterId] = { ...(seenAll[x.chapterId] || {}) });
+      map[x.passage.id] = to.sig;
+      undo.seen.push({ chapterId: x.chapterId, pid: x.passage.id, from: oldSig, to: to.sig });
+    }
+    /* its reading, kept for the new version with the names in it changed */
+    const r = (readings[x.passage.id] || {})[x.version.id];
+    if (r && r.sig === oldSig) {
+      let copy;
+      if (r.in) { const t = newSigs.get(r.in.sig); copy = { sig: to.sig, in: t ? { pid: t.pid, vid: t.vid, sig: t.sig } : clone(r.in) }; }
+      else copy = { ...clone(r), sig: to.sig, cards: (r.cards || []).map((c) => ({ ...c, before: swapCard(c.before), after: swapCard(c.after) })), kept: Object.fromEntries(Object.entries(r.kept || {}).map(([k, v]) => [k, { before: swapKept(v.before), after: swapKept(v.after) }])) };
+      put('novel', novelId, novelSteps.putReading(x.passage.id, made.versionId, copy), { now: true });
+    }
+    /* the checker's findings on it, their words changed with it */
+    const live = store.peek('chapter', x.chapterId);
+    const e = live && live.checks && live.checks[x.passage.id] && live.checks[x.passage.id][x.version.id];
+    if (e && e.sig === hashText(String(x.version.text || ''))) {
+      const items = (e.items || []).map((it) => ({ ...clone(it), ...(typeof it.find === 'string' ? { find: quiet(it.find) } : {}), ...(typeof it.replace === 'string' ? { replace: quiet(it.replace) } : {}) }));
+      put('chapter', x.chapterId, chapterSteps.setCheck(x.passage.id, made.versionId, { ...clone(e), sig: hashText(next), items }), { now: true });
+    }
+  }
+  for (const [chapterId, map] of Object.entries(seenNow)) put('novel', novelId, novelSteps.seen(chapterId, map), { now: true });
+  /* a chapter's summary that was true of it stays true of it, the name changed */
+  for (const id of novel.order || []) {
+    const c = store.peek('chapter', id);
+    const s = c && c.summary;
+    if (!s || !String(s.text || '').trim() || s.fp !== printsBefore.get(id)) continue;
+    const text = quiet(s.text);
+    const fp = chapterPrint(c);
+    if (text === s.text && fp === s.fp) continue;
+    const after = { ...clone(s), text, fp };
+    undo.summaries.push({ chapterId: id, before: clone(s), after: clone(after) });
+    put('chapter', id, chapterSteps.setSummary(after), { now: true });
+    put('chapter', id, chapterSteps.keepSummary(after), { now: true });
+  }
+}
+
 /* the same words changed across the chapters each change names */
 function replaceEverywhere(novelId, novel, items, put, why) {
   const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [] };
@@ -666,6 +694,10 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
   if (bad >= 0) return bases.map((b, i) => ({ ...b, status: 'refused', said: i === bad ? items[i].why : `it goes together with ${bases[bad].label}, which could not be made: ${items[bad].why}` }));
   const why = bases.map((b) => b.why).filter(Boolean).join(' ') || undefined;
   const { undo, counts } = names ? renameEverywhere(novelId, novel, items.map((x) => x.rule), put, why) : replaceEverywhere(novelId, novel, items, put, why);
+  if (names && counts.some((n) => n > 0)) {
+    undo.renamed = items.map((x) => ({ from: x.from, to: x.to }));
+    put('novel', novelId, novelSteps.noteRenames(undo.renamed, at));
+  }
   const missing = (i) => (names ? `“${items[i].from}” does not stand anywhere in the book` : 'those words stand nowhere in those chapters');
   if (!counts.some((n) => n > 0)) return bases.map((b, i) => ({ ...b, status: 'refused', said: missing(i) }));
   put('novel', novelId, novelSteps.touchWritten(at));
@@ -698,7 +730,7 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
 
 /* One change, made. Returns the change as kept on the reply:
  * {id, op, label, why, status: 'made'|'refused', said?, undo?}. */
-export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null } = {}) {
+export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null, short = null } = {}) {
   /* dry: everything looked at as it would be, nothing written — whether it would land (whyNot) */
   const put = dry ? () => {} : (...a) => store.change(...a);
   if (op && op.unreadable) return { id, op: clone(op), label: 'A changes block', why: '', status: 'refused', said: `its changes block could not be read (it began: ${op.head || '…'})` };
@@ -788,10 +820,21 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     }
     const old = String(v.text || '');
     let next;
+    let mended = '';
     if (op.text !== undefined && op.find === undefined) {
       next = text(op.text);
       if (!next) return refuse('it gave no words for the passage');
       if (!hasWords(next)) return refuse(`it gave no words for the passage — “${clipped(next)}” is none`);
+      /* a passage written anew is made whole the way a page is (Cozy Tavern's
+       * M176: the third path takes the same door): a stray of another script
+       * stuck to a word, a soft wrap, a quotation left open — its words never
+       * cut, they are all its own */
+      const unglued = dropGluedStrays(next);
+      const marks = mendMarks(joinSoftWraps(unglued.text));
+      if (unglued.changed || marks.text !== unglued.text) {
+        mended = [unglued.changed ? 'a stray character of another script stuck to a word taken off' : '', marks.changed ? 'a quotation left open closed' : '', !marks.changed && marks.text !== unglued.text ? 'a line broken mid-sentence joined' : ''].filter(Boolean).join('; ');
+        next = marks.text;
+      }
     } else {
       const words = newWords(op);
       if (words === null) return refuse('it gave no new words for them');
@@ -813,7 +856,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     const was = countWords(old);
     const now = countWords(next);
     const shrunk = anew && was > 60 && now < was / 2 ? `it is ${now.toLocaleString()} words now, from ${was.toLocaleString()}` : '';
-    const said = [shrunk, stands].filter(Boolean).join('; ');
+    const said = [shrunk, stands, mended].filter(Boolean).join('; ');
     return { ...base, status: 'made', undo: { what: 'passage', chapterId: chapter.id, passageId: passage.id, versionId: version.id, from: v.id }, before: old, after: next, ...(said ? { said } : {}) };
   }
 
@@ -897,6 +940,10 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       if (near.ambiguous) return refuse(`there is no ${name} in the notes — more than one card answers to it; name the card as the notes do`);
       if (near.card) return refuse(`there is no ${name} in the notes — the card is called ${near.card.name}; name it so`);
     }
+    /* a card it was shown only by its first line is never written whole from
+     * it: who they are, or how they stand with the others, read first (the
+     * twin of a passage it only had in short — Cozy Tavern's M84-4/M86) */
+    if (card && short && short.has(card.id) && ['about', 'ties'].some((k) => op[k] !== undefined && archivist.cleanText(op[k]))) return refuse(`it had ${card.name}'s card only by its first line — read it whole first with “card: ${card.name}”`);
     if (truthOf(op.remove) === true) {
       if (!card) return refuse(`there is no ${name} in the notes`);
       put('novel', novelId, novelSteps.dropNote(kind, card.id), { now: true });
@@ -974,13 +1021,21 @@ export function undoChange(novelId, change) {
     /* each place put back that still reads as the change left it; one changed since stays */
     let back = 0;
     let kept = 0;
+    const putBack = new Set();
+    /* a name changed everywhere goes back as it was read only when the notes'
+     * cards go back with it: a card changed since keeps the new name, and the
+     * passages put back are then read again as changes */
+    const notesBack = (u.cards || []).every((x) => JSON.stringify(((store.peek('novel', novelId).notes || {})[x.kind] || []).find((c) => c.id === x.id) || null) === JSON.stringify(x.after));
+    const asRead = (pid) => notesBack && (u.seen || []).some((y) => y.pid === pid);
     for (const x of u.passages || []) {
       const c = store.peek('chapter', x.chapterId);
       const p = c && (c.passages || []).find((y) => y.id === x.passageId);
       const shown = p && picked(p);
       if (!shown || shown.id !== x.versionId || !p.versions.some((v) => v.id === x.from)) { kept++; continue; }
-      /* read by the helper since: its words are kept for it, so what came only from them goes too */
-      archivist.retireIfSeen(novelId, x.chapterId, x.passageId, x.versionId);
+      putBack.add(x.passageId);
+      /* read by the helper since: its words are kept for it, so what came only from them goes too —
+       * unless it was only read as renamed, and is read as it was again below */
+      if (!asRead(x.passageId)) archivist.retireIfSeen(novelId, x.chapterId, x.passageId, x.versionId);
       store.change('chapter', x.chapterId, chapterSteps.pick(x.passageId, x.from), { now: true });
       store.change('chapter', x.chapterId, chapterSteps.removeVersion(x.passageId, x.versionId), { now: true });
       back++;
@@ -1009,6 +1064,22 @@ export function undoChange(novelId, change) {
       if (JSON.stringify((live.kept || {})[x.key] || null) !== JSON.stringify(x.after)) { kept++; continue; }
       store.change('novel', novelId, novelSteps.setKept(x.key, x.before), { now: true });
       back++;
+    }
+    /* what was read as renamed is read as it was again; a summary renamed with it goes back too */
+    const seenBack = {};
+    for (const x of u.seen || []) {
+      if (!putBack.has(x.pid) || !asRead(x.pid)) continue;
+      const live = store.peek('novel', novelId);
+      const map = seenBack[x.chapterId] || (seenBack[x.chapterId] = { ...(((live.memory || {}).seen || {})[x.chapterId] || {}) });
+      if (map[x.pid] === x.to) map[x.pid] = x.from;
+    }
+    for (const [chapterId, map] of Object.entries(seenBack)) store.change('novel', novelId, novelSteps.seen(chapterId, map), { now: true });
+    /* work on its way since the names changed is given them back as they were */
+    if ((u.renamed || []).length && back) store.change('novel', novelId, novelSteps.noteRenames(u.renamed.map((x) => ({ from: x.to, to: x.from })), Date.now()), { now: true });
+    for (const x of u.summaries || []) {
+      const c = store.peek('chapter', x.chapterId);
+      if (!c || JSON.stringify(c.summary || null) !== JSON.stringify(x.after)) continue;
+      store.change('chapter', x.chapterId, chapterSteps.setSummary(x.before), { now: true });
     }
     for (const row of u.plays || []) {
       const pl = store.peek('play', row.playId);

@@ -22,7 +22,7 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, chapterText } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, howOf, bornOf, chapterText } from './shape.js';
 import { numberedText, shortOf } from './context.js';
 import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros } from './prompts.js';
 import { locate } from './changes.js';
@@ -89,9 +89,9 @@ function wanted(house, chapter, p) {
   if (chapter.checkAll) return true;
   /* by itself, only a finished page: one cut short or stopped waits for its Go on (Cozy Tavern M552) */
   if (v.cut) return false;
-  if (v.how === 'imported') return false;
+  if (howOf(v) === 'imported') return false;
   const from = house && house.checksFrom;
-  return Number.isFinite(from) && (v.done || v.at || 0) >= from;
+  return Number.isFinite(from) && bornOf(v) >= from;
 }
 
 function chaptersOf(novelId) {
@@ -632,7 +632,7 @@ function keepWords(novelId, w, next, rest) {
     store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, v.id, entry), { now: true });
   } else {
     /* words fixed in place: where the version stops goes with them (cut short, stopped — its Go on stays: Tavern M511-1) */
-    const version = newVersion({ text: next, how: 'suggested', round: e.round, from: v.id, words: countWords(next), ...(v.ask ? { ask: v.ask } : {}), ...endOf(v) });
+    const version = newVersion({ text: next, how: 'suggested', round: e.round, from: v.id, words: countWords(next), ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v) });
     store.change('chapter', chapter.id, chapterSteps.addVersion(p.id, version), { now: true });
     store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, version.id, entry), { now: true });
   }
@@ -1014,7 +1014,7 @@ function autoAfter(novelId) {
       if (p.by === 'break') continue;
       let v = picked(p);
       /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) */
-      if (!v || v.streaming || v.cut || HIS_HOW.includes(v.how)) continue;
+      if (!v || v.streaming || v.cut || HIS_HOW.includes(howOf(v))) continue;
       let e = checkOf(c, p, v);
       if (!e) continue;
       if (a.lift !== null && judge) {
@@ -1043,13 +1043,13 @@ function autoAfter(novelId) {
         const g = e.grade;
         const card = (e.items || []).find((x) => x.kind === 'grade');
         const under = g && g.of && g.overall < judge.target && card;
-        if (under && LIFTABLE.includes(v.how) && (v.done || v.at || 0) >= a.lift && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && (card.lift || g.lift)) {
+        if (under && LIFTABLE.includes(v.how) && bornOf(v) >= a.lift && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && (card.lift || g.lift)) {
           if (!next) next = { chapterId: c.id, passageId: p.id, v, note: card.lift || g.lift, lift: liftsOf(p).length + 1 };
           /* its fixes wait for the passage written again */
           continue;
         }
       }
-      if (a.fix !== null && (v.done || v.at || 0) >= a.fix && (e.items || []).some((x) => typeof x.replace === 'string')) applyPassage(novelId, c.id, p.id, { byItself: true });
+      if (a.fix !== null && bornOf(v) >= a.fix && (e.items || []).some((x) => typeof x.replace === 'string')) applyPassage(novelId, c.id, p.id, { byItself: true });
     }
   }
   if (next && !writerBusy(novelId) && !lifting.has(novelId)) {

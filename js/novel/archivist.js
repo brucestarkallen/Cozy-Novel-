@@ -27,7 +27,7 @@ import { connFor, busy as writerBusy, setNotesWait } from './writer.js';
 import { parseFirstObject } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriedBy, sameThreadTitle } from './shape.js';
-import { foldedText, tokensMissing, looksLikeTokenDump, isGroupName } from './names.js';
+import { foldedText, tokensMissing, looksLikeTokenDump, isGroupName, renameIn, renameAll } from './names.js';
 import { helperFrame, notesRequest, summaryRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
@@ -723,14 +723,16 @@ const hasGone = (o) => Boolean(o && Array.isArray(o.gone) && o.gone.length);
 export async function askJson(conn, system, request, { want } = {}) {
   const room = helperRoom(conn);
   const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: room }), stream: true, worker: true, patient: true });
-  if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs };
+  if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed };
   let obj = parseFirstObject(first.text, want);
   if (obj) return { ok: true, obj };
+  /* let go on its leash partway: not out of room — asked again it would stall the same way */
+  if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed };
   /* once more, told what went wrong — given more room when it ran out of it; never more than that */
   const cut = Boolean(first.cut);
   const more = cut ? Math.min(room * 2, Math.floor(contextOf(conn) * 0.6)) : room;
   const second = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
-  if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs };
+  if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed };
   obj = parseFirstObject(second.text, want);
   if (obj) return { ok: true, obj };
   return { ok: false, error: unreadWhy(second), unreadable: true };
@@ -1074,16 +1076,27 @@ async function readChanges(novelId, conn) {
       });
       let got;
       const gen = ((now.memory || {}).reread || 0);
+      const askedAt = Date.now();
       readingNow.add(novelId);
       try { got = await askJson(conn, helperFrame(house, now), request, { want: notesShape }); } finally { readingNow.delete(novelId); }
+      /* a name changed everywhere while it was asked: its answer is given the new name, so no card is made under the old one (Cozy Tavern's M730) */
+      const renamedSince = ((((store.peek('novel', novelId) || {}).memory || {}).renames) || []).filter((x) => x.at >= askedAt);
+      if (got && got.ok && renamedSince.length) got = { ...got, obj: renameAll(got.obj, renamedSince) };
       /* the whole book began to be read again (or that was undone) while it was asked: its answer belongs to notes no longer there */
       if ((((store.peek('novel', novelId) || {}).memory || {}).reread || 0) !== gen) break;
       /* another browser has the book now: what this one began of a passage is taken back, and it stops */
       try { await mustHold('helper', novelId); } catch (e) { takeBackParts(); throw e; }
       if (!got.ok) {
         /* a passage its model will not read is set aside, never asked forever */
-        const fault = await whoseFault(conn, got);
         const giveUp = (e) => { takeBackParts(); return e; };
+        /* let go on its leash (nothing heard, or no progress, for minutes): never the passage's fault, never set
+         * aside for it — but a long ask is what a slow model chokes on, so it is asked one passage at a time
+         * (Cozy Tavern's M675-7) */
+        if (got.leashed) {
+          if (B.items.length + B.removed.length + B.chapters.length > 1) narrow.add(novelId);
+          throw giveUp(failed(got));
+        }
+        const fault = await whoseFault(conn, got);
         if (fault !== 'words') throw giveUp(failed(fault === 'model' ? got : fault));
         if (B.items.length + B.removed.length + B.chapters.length > 1) { narrow.add(novelId); const e = failed(got); e.soon = true; throw giveUp(e); }
         const key = askedKey(B);
@@ -1141,6 +1154,8 @@ async function readChanges(novelId, conn) {
         for (const c of done) {
           const p = live && live.passages.find((x) => x.id === c.pid);
           const v = p && picked(p);
+          /* renamed while it was read: what was read is the version the name made, read already */
+          if (renamedSince.length && v && v.from === c.sig.split(SIG_SEP)[0] && signature(v) !== c.sig && String(v.text || '') === renameIn(c.whole !== undefined ? c.whole : c.text, renamedSince)) c.sig = signature(v);
           map[c.pid] = c.sig;
           if (v && signature(v) === c.sig) continue;
           const [vid] = c.sig.split(SIG_SEP);

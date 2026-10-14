@@ -16,6 +16,9 @@ export function foldName(name) {
 const TITLE_KIND = {
   mr: 'civil', mrs: 'civil', ms: 'civil', miss: 'civil', mx: 'civil', madam: 'civil', dr: 'civil', prof: 'civil',
   sir: 'noble', dame: 'noble', lady: 'noble', lord: 'noble',
+  duke: 'peer', duchess: 'peer', count: 'peer', countess: 'peer', baron: 'peer', baroness: 'peer', earl: 'peer', viscount: 'peer', marquis: 'peer', marquess: 'peer',
+  saint: 'holy',
+  old: 'nick', young: 'nick', little: 'nick', big: 'nick',
   king: 'royal', queen: 'royal', prince: 'royal', princess: 'royal', emperor: 'royal', empress: 'royal',
   captain: 'rank', lieutenant: 'rank', commander: 'rank', general: 'rank', colonel: 'rank', major: 'rank', sergeant: 'rank',
   officer: 'rank', detective: 'rank', agent: 'rank', head: 'rank', chief: 'rank', admiral: 'rank',
@@ -172,12 +175,18 @@ export function isGroupName(name) {
 /* Is this name in this text? The whole name, or any word of it that names
  * someone — never a title, a joining word, or the owner in "Jovan's mother".
  * `folded` is the text already folded (foldedText), for asking of many names. */
-export function foldedText(text) {
-  return { loose: ' ' + foldName(text) + ' ', tight: ' ' + nameFold(text) + ' ' };
+export function foldedText(text, { cased = false } = {}) {
+  /* cased: the words with their capitals kept (accents off), so one word of a
+   * name is asked of the book as a name — "Will" for Will Turner is never
+   * "she will go", "Wells" never "the old wells" (Cozy Tavern's M257/M280) */
+  return { loose: ' ' + foldName(text) + ' ', tight: ' ' + nameFold(text) + ' ', ...(cased ? { cased: String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '') } : {}) };
 }
 export function nameInText(folded, name, { words = true } = {}) {
   const f = typeof folded === 'string' ? foldedText(folded) : folded;
-  const has = (w) => Boolean(w) && (f.loose.includes(' ' + w + ' ') || f.tight.includes(' ' + w + ' '));
+  const present = (w) => Boolean(w) && (f.loose.includes(' ' + w + ' ') || f.tight.includes(' ' + w + ' '));
+  /* with the capitals kept, a lone word of the name stands only where the book writes it as a name */
+  const capitalised = (w) => !f.cased || new RegExp(`(?<![\\p{L}\\p{N}])${w.charAt(0).toUpperCase()}${w.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'u').test(f.cased);
+  const has = present;
   const raw = String(name || '');
   const P = parseName(raw);
   if (has(P.bare) || has(foldName(raw))) return true;
@@ -186,7 +195,7 @@ export function nameInText(folded, name, { words = true } = {}) {
   const ws = P.words.filter((w) => !owners.has(w) && !NAME_STOP.has(w));
   let distinct = ws.filter((w) => w.length >= 3);
   if (!distinct.length) distinct = ws.filter((w) => w.length >= 2);
-  return distinct.some(has);
+  return distinct.some((w) => present(w) && capitalised(w));
 }
 
 /* a place's or a thing's name, a leading "the" or "a" set aside ("The Wells
@@ -282,3 +291,89 @@ export function namedMidSentence(text, word) {
   return Boolean(w) && new RegExp(`(?<![.!?…]\\s|^|["“‘(—–]|\\n)(?<![\\p{L}\\p{M}\\p{N}])${w}(?![\\p{L}\\p{M}\\p{N}])`, 'mu').test(String(text || ''));
 }
 
+
+/* ------------------------------------------------- a name changed everywhere */
+
+const escRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/* a name as a whole word, as written or in capitals (Cozy Tavern's
+ * spelling) — never part of a longer word, nor of a name joined with a
+ * hyphen ("Mary" is not in "Mary-Jane") */
+const EDGE_BEFORE = '(?<![\\p{L}\\p{N}_])(?<![\\p{L}\\p{N}]-)';
+const EDGE_AFTER = '(?![\\p{L}\\p{N}_])(?!-[\\p{L}\\p{N}])';
+export function nameRe(name) {
+  const n = String(name || '');
+  const forms = [...new Set([n, n.toUpperCase()])].map(escRe).join('|');
+  return new RegExp(`${EDGE_BEFORE}(?:${forms})${EDGE_AFTER}`, 'gu');
+}
+/* Several changes of one text made in one pass over it as it stood — each
+ * place changed once, by the longest change that finds it there, and never
+ * again by another (Cozy Tavern's M675-8: "Kara" to "Mara" and "Mara" to
+ * "Kara" made together swap the two; made one after the other they leave
+ * one name for both). rules: [{re, to(match), skip(text) -> [[from, to]]}].
+ * {text, counts} — how many places each rule changed. */
+export function replaceMany(text, rules) {
+  const t = String(text || '');
+  const hits = [];
+  rules.forEach((r, k) => {
+    const skip = r.skip ? r.skip(t) : [];
+    for (const m of t.matchAll(new RegExp(r.re.source, r.re.flags.includes('g') ? r.re.flags : `${r.re.flags}g`))) {
+      if (!m[0]) continue;
+      const a = m.index;
+      const b = a + m[0].length;
+      if (skip.some(([x, y]) => a >= x && b <= y)) continue;
+      hits.push({ a, b, k, m: m[0] });
+    }
+  });
+  hits.sort((x, y) => x.a - y.a || (y.b - y.a) - (x.b - x.a) || x.k - y.k);
+  const counts = rules.map(() => 0);
+  let out = '';
+  let at = 0;
+  for (const h of hits) {
+    if (h.a < at) continue;
+    out += t.slice(at, h.a) + rules[h.k].to(h.m);
+    at = h.b;
+    counts[h.k]++;
+  }
+  return { text: out + t.slice(at), counts };
+}
+/* a name changed wherever it stands — but never where it is already part
+ * of the name it becomes ("Oda" to "Oda Jovan" leaves "Oda Jovan" as it is) */
+export function renameRule(from, to) {
+  const up = String(from).toUpperCase();
+  return {
+    re: nameRe(from),
+    skip: (t) => [...t.matchAll(nameRe(to))].map((m) => [m.index, m.index + m[0].length]),
+    to: (m) => (m === up && up !== from ? String(to).toUpperCase() : to),
+  };
+}
+/* names changed in a text, all at once: pairs [{from, to}] */
+export function renameIn(text, pairs) {
+  const rules = (pairs || []).filter((x) => x && x.from && x.to && x.from !== x.to).map((x) => renameRule(x.from, x.to));
+  return rules.length ? replaceMany(text, rules).text : String(text == null ? '' : text);
+}
+/* every word of an answer renamed: strings in it, however deep (a helper's answer asked before a name changed) */
+export function renameAll(value, pairs) {
+  if (!pairs || !pairs.length) return value;
+  if (typeof value === 'string') return renameIn(value, pairs);
+  if (Array.isArray(value)) return value.map((x) => renameAll(x, pairs));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, renameAll(v, pairs)]));
+  return value;
+}
+
+/* A text's first sentence (twenty letters at least): a full stop after a
+ * title or an initial — "Dr. Wells", "J. Hale", "St. Ives" — or in "e.g." is
+ * no sentence's end (Cozy Tavern's M292: "Ms. June runs the Bluebird" was
+ * once cut to "Ms. June — Ms") */
+const TITLE_STOP = /(?:^|[\s(“"'])(?:Mr|Mrs|Ms|Mx|Dr|St|Prof|Capt|Lt|Sgt|Mt|Gen|Col|Cmdr|Sr|Jr|Rev|Hon|vs|etc|No|e\.g|i\.e|[A-Z])\.$/;
+export function firstSentence(text) {
+  const x = String(text || '').trim();
+  const re = /[.!?…](?=\s|$)/g;
+  for (let m = re.exec(x); m; m = re.exec(x)) {
+    const end = m.index + 1;
+    if (end < 20) continue;
+    const head = x.slice(0, end);
+    if (m[0] === '.' && TITLE_STOP.test(head)) continue;
+    return head;
+  }
+  return x;
+}

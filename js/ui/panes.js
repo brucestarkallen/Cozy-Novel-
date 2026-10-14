@@ -7,7 +7,7 @@ import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
 import * as talk from '../novel/talk.js';
 import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGrow, copyText, field, onBack } from './dom.js';
-import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, NOTE_KINDS, turnSteps } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, NOTE_KINDS, turnSteps, hisStamp } from '../novel/shape.js';
 import { numberWords, plural, timeAgo, nameKey, openOf } from '../util.js';
 import { showSent } from './sent.js';
 import { webUrl } from '../model/call.js';
@@ -290,6 +290,10 @@ function drawLight() {
 
 /* what he is typing beside the page survives the pane being drawn again */
 const typed = { key: '', value: '', focus: false };
+/* words handed back to a box that is not on screen (an answer that did not
+ * come while he was in another book or scene): kept for that box, put back
+ * the moment it is drawn — never lost (Cozy Tavern's M752) */
+const heldBack = new Map();
 function keepTyped() {
   const ta = ui.rightFoot.querySelector('textarea');
   if (!ta) return;
@@ -310,15 +314,21 @@ export function unsentWords() {
   /* the boxes on screen are the truth for their own words (he may have
    * cleared them since they were last kept); what is kept counts only while
    * its boxes are not the ones shown */
+  if ([...heldBack.values()].some((w) => String(w || '').trim())) return true;
   if (boxes.length && foot.dataset.for === typed.key) return false;
   return Boolean(String(typed.value || '').trim()) || Boolean(String(typed.tell || '').trim());
 }
 export function restoreTyped(key) {
   ui.rightFoot.dataset.for = key;
   const ta = ui.rightFoot.querySelector('textarea');
-  if (!ta || typed.key !== key) return;
-  if (typed.value && !ta.value) { ta.value = typed.value; ta.dispatchEvent(new Event('input')); }
-  if (typed.focus) ta.focus({ preventScroll: true });
+  if (!ta) return;
+  if (typed.key === key) {
+    if (typed.value && !ta.value) { ta.value = typed.value; ta.dispatchEvent(new Event('input')); }
+    if (typed.focus) ta.focus({ preventScroll: true });
+  }
+  /* words an answer that did not come handed back while this box was not on screen */
+  const held = heldBack.get(key);
+  if (held && !ta.value.trim()) { ta.value = held; ta.dispatchEvent(new Event('input')); heldBack.delete(key); }
 }
 
 /* each drawing of the side pane counts: one overtaken while it waited for a
@@ -580,8 +590,13 @@ function editCard(kind, id) {
     if (ties && (t.ties !== undefined || !cur)) out.ties = ties.value.trim();
     if (open && (t.open !== undefined || !cur)) out.open = open.checked;
     if (cur && !Object.keys(t).length) { done = true; cardDrafts.delete(draftKey); s.close(); return; }
-    out.updated = { by: 'you', at: Date.now() };
+    /* his in what he wrote here (a new card: all he gave it) — the helper still writes the rest as the book goes on */
+    const wrote = cur ? Object.keys(t) : ['name', ...Object.keys(t), ...(aka.value.trim() ? ['aka'] : [])];
+    out.updated = hisStamp(live, wrote, Date.now());
     store.change('novel', novelId, novelSteps.putNote(kind, out), { now: true });
+    /* a name another card already goes by: two cards for one — the notes' check folds them (Cozy Tavern's M614, M730) */
+    const twin = (store.peek('novel', novelId).notes[kind] || []).find((x) => x.id !== out.id && [x.name, ...(x.aka || [])].some((a) => nameKey(a) === nameKey(out.name)));
+    if (twin) { archivist.askAudit(novelId); toast(`${twin.name === out.name ? 'Another card is called' : 'Another card also goes by'} ${out.name} — the notes’ check folds the two into one, keeping your words.`, 6000); }
     done = true;
     cardDrafts.delete(draftKey);
     s.close();
@@ -627,7 +642,7 @@ async function drawPartner() {
     if (!text) return;
     ta.value = ''; typed.value = '';
     const out = await talk.partnerSay({ novelId, chapterId: P.chapterId, text });
-    if (out && !out.ok && out.error) toast('Your partner did not answer: ' + out.error, 6000);
+    if (out && !out.ok && out.error) toast(`Your partner${elsewhere(novelId)} did not answer: ${out.error}${out.giveBack && elsewhere(novelId) ? ' — your message is back in its box there' : ''}`, 6000);
     /* a message whose answer did not come is not on the page: its words come back to the box */
     if (out && out.giveBack) giveBack('talk:' + novelId, out.giveBack);
   } }, working ? 'Stop' : 'Send');
@@ -680,9 +695,19 @@ function quickAsks(anchor, ta, send) {
 function drawPartnerSoon() { if (!partnerFrame) partnerFrame = requestAnimationFrame(() => { partnerFrame = 0; if (P.side === 'partner') drawPartner(); }); }
 
 function giveBack(key, words) {
+  if (!String(words || '').trim()) return;
   const ta = ui.rightFoot.querySelector('textarea');
   if (ta && ui.rightFoot.dataset.for === key && !ta.value.trim()) { ta.value = words; ta.dispatchEvent(new Event('input')); return; }
-  if (typed.key === key && !typed.value) typed.value = words;
+  if (typed.key === key && !typed.value) { typed.value = words; return; }
+  /* that box is not on screen and its words are another's: kept for it */
+  heldBack.set(key, heldBack.get(key) ? `${heldBack.get(key)}\n\n${words}` : words);
+}
+/* where a reply that did not come was asked, when he is somewhere else now */
+function elsewhere(novelId, playId = '') {
+  const here = P.novelId === novelId && (!playId || (P.side === 'play' && P.playId === playId));
+  if (here) return '';
+  const n = store.peek('novel', novelId);
+  return ` in “${(n && n.meta && n.meta.title) || 'Untitled'}”`;
 }
 
 async function clearTalk() {
@@ -844,7 +869,7 @@ function drawTurn(kind, id, turn) {
     !mine && kind === 'play' && String(v.tookOff || '').trim() ? { label: 'Put back what was taken off', hint: 'What the narrator added after its telling — a note to you, a block of tracking — back where it was, as a new version of this answer.', disabled: talk.talkBusy('play', id), run: () => { if (talk.putBackTelling({ playId: id, turnId: turn.id })) toast('Put back — the answer without it is one arrow away.'); } } : null,
     { label: 'Copy', hint: mine ? 'Your words, to paste anywhere.' : 'Its words, to paste anywhere.', run: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') },
     '-',
-    { label: 'Remove', hint: mine ? 'This message goes from the conversation, with Undo.' : 'This answer goes from the conversation, with Undo; changes it made stay in the book.', danger: true, run: () => removeTurn(kind, id, turn) },
+    { label: 'Remove', hint: mine ? `This message and the ${kind === 'play' ? 'telling' : 'answer'} to it go from the ${kind === 'play' ? 'scene' : 'conversation'}, with Undo${kind === 'talk' ? '; changes it made stay in the book' : ''}.` : 'This answer goes from the conversation, with Undo; changes it made stay in the book.', danger: true, run: () => removeTurn(kind, id, turn) },
   ]) }, icon('more', 16)));
   el.append(row);
   return el;
@@ -966,15 +991,24 @@ function removeTurn(kind, id, turn) {
   const rec = store.peek(kind, id);
   const list = (rec && rec.turns) || [];
   const i = list.findIndex((t) => t.id === turn.id);
+  if (i < 0) return;
+  /* his message goes with the answers to it, up to his next one — an answer
+   * to a message no longer there is never told on, nor written into the book
+   * (Cozy Tavern's M635) */
+  let end = i + 1;
+  if (turn.by === 'you') while (end < list.length && list[end].by !== 'you') end++;
+  const gone = list.slice(i, end);
+  if (gone.some((t) => (t.versions || []).some((v) => v.streaming))) { toast('An answer to it is still being written — Stop it first.'); return; }
   const before = i > 0 ? list[i - 1].id : null;
-  const copy = JSON.parse(JSON.stringify(turn));
-  store.change(kind, id, turnSteps.removeTurn(turn.id), { now: true });
-  undoToast('Taken out.', () => {
+  const copies = JSON.parse(JSON.stringify(gone));
+  store.change(kind, id, (d) => { d.turns = (d.turns || []).filter((t) => !copies.some((c) => c.id === t.id)); }, { now: true });
+  undoToast(copies.length > 1 ? 'Taken out, with the answer to it.' : 'Taken out.', () => {
     store.change(kind, id, (d) => {
       d.turns = d.turns || [];
-      if (d.turns.some((t) => t.id === copy.id)) return;
+      const back = copies.filter((c) => !d.turns.some((t) => t.id === c.id));
+      if (!back.length) return;
       const at = before ? d.turns.findIndex((t) => t.id === before) + 1 : 0;
-      d.turns.splice(Math.max(0, at), 0, JSON.parse(JSON.stringify(copy)));
+      d.turns.splice(Math.max(0, at), 0, ...JSON.parse(JSON.stringify(back)));
     }, { now: true });
   });
 }
@@ -1074,6 +1108,8 @@ async function drawPlay() {
     const p = store.peek('play', P.playId) ?? await store.open('play', P.playId).catch(() => null);
     if (gen !== sideGen) return;
     if (!p) { P.playId = null; return drawPlay(); }
+    /* its prose taken out of the book since: "written into the book up to here" lets go */
+    if (talk.mendScene(p.id)) return drawOnePlay(store.peek('play', p.id));
     return drawOnePlay(p);
   }
   ui.rightBody.append(h('p.hint', 'Step into the story as one of its people. You write what they say and do; the narrator plays everyone and everything else. When it went somewhere good, Turn it into prose writes it into the chapter.'));
@@ -1105,8 +1141,10 @@ async function drawPlay() {
       P.playId = id;
       P.offs.push(store.subscribe('play', id, () => { if (P.side === 'play' && P.playId === id && !drawnAlready('play', id)) drawSideSoon(); }));
       drawSide();
+      const novelId = P.novelId;
       const out = await talk.playSay({ playId: id, text: '' });
-      if (out && !out.ok && out.error) toast('The narrator did not answer: ' + out.error, 6000);
+      const away = elsewhere(novelId, id);
+      if (out && !out.ok && out.error) toast(`The narrator${away ? ` of your scene${away}` : ''} did not answer: ${out.error}`, 6000);
     } }, 'Begin the scene')))));
 }
 
@@ -1190,7 +1228,7 @@ function drawOnePlay(p) {
   const fresh = talk.transcriptOf(p).count;
   ui.rightFoot.hidden = false;
   ui.rightFoot.append(ta, tellBox, h('div.crow.wrap',
-    h('button.btn.small', { disabled: working || !fresh || writer.busy(P.novelId), onclick: () => toProse(p, false), title: 'Write what happened into the chapter as prose' }, 'Turn it into prose'),
+    h('button.btn.small', { disabled: working || !fresh || (writer.busy(P.novelId) && !writer.autoBusy(P.novelId)), onclick: () => toProse(p, false), title: 'Write what happened into the chapter as prose' }, 'Turn it into prose'),
     tellBtn, choicesBtn,
     h('span.grow'), send));
   for (const box2 of [ta, tellBox]) box2.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
@@ -1205,16 +1243,20 @@ function drawOnePlay(p) {
 /* his move — his character's words, a line to the narrator, or both (nothing: it goes on) */
 async function playMove(p, text, tell) {
   const out = await talk.playSay({ playId: p.id, text, tell });
-  if (out && !out.ok && out.error) toast('The narrator did not answer: ' + out.error, 6000);
+  const away = elsewhere(p.novelId || P.novelId, p.id);
+  if (out && !out.ok && out.error) toast(`The narrator${away ? ` of your scene${away}` : ''} did not answer: ${out.error}`, 6000);
   if (out && (out.giveBack || out.giveBackTell)) {
     giveBack('play:' + p.id, out.giveBack || '');
     if (out.giveBackTell) { typed.key = 'play:' + p.id; typed.tell = out.giveBackTell; typed.tellOpen = true; const tb = ui.rightFoot.querySelector('textarea.tellbox'); if (tb && ui.rightFoot.dataset.for === 'play:' + p.id && !tb.value.trim()) { tb.value = out.giveBackTell; tb.hidden = false; } }
   }
 }
 
-async function toProse(p, fromStart) {
+async function toProse(p0, fromStart) {
+  const p = talk.mendScene(p0.id) ? store.peek('play', p0.id) : p0;
   const tr = talk.transcriptOf(p, { fromStart });
   if (!tr.count) { toast('Nothing new to write yet.'); return; }
+  /* his hand first: a page the app is writing by itself stops and is taken away whole (the same door as the desk's) */
+  await writer.yieldAuto(P.novelId);
   const n = store.peek('novel', P.novelId);
   const chapterId = n.order.includes(p.chapterId) ? p.chapterId : n.order[n.order.length - 1];
   if (!wide()) closeRight();

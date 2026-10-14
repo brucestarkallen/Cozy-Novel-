@@ -25,7 +25,7 @@ import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
 import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, standingNotes, macroNames, withMacros } from './prompts.js';
-import { notesBeforeWith, unread } from './readings.js';
+import { notesAtPoint, unread } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
 
@@ -191,6 +191,17 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
   return { book, used: cost + laterCost, whole: earlier.length - k, short: k - omitted };
 }
 
+/* Where the notes hold what comes after the point being written and it
+ * could not all be taken back: said, in words true in every voice — the
+ * checker is told the same (prompts.js NOTES_FOR_A_READER) */
+function notesRunOn(novel, chapters) {
+  const order = novel.order || [];
+  let last = '';
+  for (const id of order) if (chapters[id] && chapterText(chapters[id]).trim()) last = id;
+  const label = last ? chapterLabel(novel, chapters[last], { withName: false }) : 'the book';
+  return `These notes run to the end of the book so far (${label}), later than the point being written here: where they tell of what comes after it — where someone is, what they know, what has happened since — the chapters up to this point are right, and nothing after it has happened yet.`;
+}
+
 /* The passages the notes have not read yet, up to the point being written
  * (for the partner and a scene: anywhere in the book) — the words that say
  * so, or ''. The passage being written again is not counted. */
@@ -255,7 +266,7 @@ export function narratorWords(instr) {
  * the request ready up to there); a rule waking or going back to sleep
  * changes the system message before it, so that one request is not kept
  * ready — the next one is. */
-export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null, moment = '' }) {
+export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null, moment = '', tools = true }) {
   const instr = (house && house.instructions) || {};
   const notesAs = notesAsOf(house);
   const chapter = chapters[target.chapterId] || chapters[(novel.order || [])[novel.order.length - 1]] || { id: '', passages: [] };
@@ -264,18 +275,22 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   let own = '';
   let frame = '';
   if (purpose === 'write') { own = instr.system; frame = writerFrame(house, novel, { notesAs }); }
-  else if (purpose === 'partner') { own = instr.partner; frame = partnerFrame(house, novel, { notesAs }); }
+  else if (purpose === 'partner') { own = instr.partner; frame = partnerFrame(house, novel, { notesAs, tools }); }
   else if (purpose === 'play') { own = narratorWords(instr); frame = playFrame(house, novel, play || {}, label, { notesAs }); }
   /* while the whole book is read again, the notes as they stood before it */
   const shown = standingNotes(novel);
   const rebuilt = shown !== novel;
-  const about = aboutTheBook(shown, { plans: true });
   /* the notes as they stood at the point being written (readings.js): a
    * passage written again — another take, a rewrite, his selected words — is
-   * never handed the notes its old version made */
-  const again = purpose === 'write' && chapter.id && !rebuilt ? (target.mark || target.before || '') : '';
-  const before = again ? notesBeforeWith(novel, chapter.id, again) : null;
-  const notesNow = before ? { ...novel, notes: before.notes } : shown;
+   * never handed the notes its old version made, and a point earlier in the
+   * book — a page written in between, an earlier chapter carried on, a scene
+   * set there — is never handed what comes after it as "so far" (Cozy
+   * Tavern's M336/M337); what cannot be taken back is said to run to the end */
+  const pointed = (purpose === 'write' || purpose === 'play') && chapter.id && !rebuilt;
+  const atPoint = pointed ? notesAtPoint(novel, chapters, chapter.id, { mark: target.mark, before: target.before, through: target.through }) : null;
+  const notesNow = atPoint && atPoint.later ? { ...shown, notes: atPoint.notes, kept: atPoint.kept } : shown;
+  const runsOn = atPoint && atPoint.later && !atPoint.clean ? notesRunOn(novel, chapters) : '';
+  const about = aboutTheBook(notesNow, { plans: true });
   /* the modules (modules.js): the ones that always ride, and the ones his words woke */
   const ride = ridingFor(house, novel, purpose, wakesOn(moment));
   /* his words and the modules with the names in them — never {{user}} or {{char}} (Tavern M361) */
@@ -308,8 +323,10 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
    * do not name ride by their first line — his own cards always whole. And
    * which passages up to that point they have not read yet, said at their top. */
   const notesShare = Math.max(1500, Math.floor((total - reserve - instructions - afterCost) / 3));
-  const kept = notesText(notesNow, { fit: notesShare, focus: chapter.id ? `${chapterText(chapter)}\n${request}` : request });
-  const notes = kept || (before && before.also.length) ? [rebuilt ? '' : notesBehind(novel, chapters, chapter, target, purpose, before ? before.also : []), kept].filter(Boolean).join('\n\n') : '';
+  /* whole: every card the chapter, his request or his own last words name (Cozy Tavern's M74: a card he asks about is never shown by its first line) */
+  const shortIds = new Set();
+  const kept = notesText(notesNow, { fit: notesShare, focus: [chapter.id ? chapterText(chapter) : '', request, moment].filter(Boolean).join('\n'), shortIds });
+  const notes = kept || (atPoint && atPoint.also.length) ? [rebuilt ? '' : notesBehind(novel, chapters, chapter, target, purpose, atPoint ? atPoint.also : []), kept ? runsOn : '', kept].filter(Boolean).join('\n\n') : '';
   const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
   /* a room this app only guessed after a "too long" is never a reason to
    * refuse: the book fits it, and the page goes */
@@ -369,6 +386,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     stats: { tokens: estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0), room: total, whole: fit.whole + (chapter.id ? 1 : 0), short: fit.short, omitted: fit.book.omitted, modules: ride.names, over, least,
       /* the chapters it was given whole — the one open (unless told in part) and the earlier ones that fit (talk.js: never a passage written anew in one it only had in short) */
       wholeIds: [...fit.book.whole.map((w) => w.id), ...(chapter.id && cur === current ? [chapter.id] : [])],
+      /* the cards shown by their first line (talk.js: never written whole from it) */
+      shortCards: [...shortIds],
       /* what goes whatever the book's earlier chapters, the answer's room, the chapter open (talk.js) */
       fixed, reserve, current: currentCost(current) },
     /* a model whose room cannot hold what has to go with any of the book is

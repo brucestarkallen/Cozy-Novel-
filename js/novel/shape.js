@@ -74,6 +74,17 @@ export function endOf(v) {
   for (const k of ['cut', 'cutWhy', 'cutBy', 'stopped']) if (v[k] !== undefined) out[k] = v[k];
   return out;
 }
+/* WHOSE WORDS, AND FROM WHEN (Cozy Tavern's M607 keepWritersOwn): a version
+ * made from another by fixing words in place — a fix he applied, the
+ * partner's, a name changed everywhere, a few words rewritten — keeps the
+ * root it came from: his own words stay his, and writing from before the
+ * checker began stays from before it. */
+export function rootOf(v) {
+  if (!v) return {};
+  return { rootHow: v.rootHow || v.how, rootAt: v.rootAt || v.done || v.at || 0 };
+}
+export const howOf = (v) => (v && (v.rootHow || v.how)) || '';
+export const bornOf = (v) => (v ? v.rootAt || v.done || v.at || 0 : 0);
 /* the two read the same at their end: the last words untouched */
 export function sameEnd(a, b) {
   const tail = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(-40);
@@ -350,6 +361,12 @@ export const novelSteps = {
     }
   },
   setMemory: (patch) => (n) => { n.memory = { ...(n.memory || {}), ...patch }; },
+  /* a name changed everywhere, kept for a little while: work asked before it
+   * (a page on its way, a reading) is given the new name when it lands */
+  noteRenames: (pairs, at) => (n) => {
+    n.memory = n.memory || {};
+    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at }))].filter((x) => at - x.at < 3600000).slice(-20);
+  },
   /* what the helper's model would not read, set aside with why (archivist.js) */
   setAside: (entries) => (n) => { n.memory = n.memory || {}; n.memory.aside = { ...(n.memory.aside || {}), ...entries }; },
   dropAside: (keys) => (n) => { if (!n.memory || !n.memory.aside) return; for (const k of keys || []) delete n.memory.aside[k]; },

@@ -15,9 +15,10 @@ import { ask, emptyWhy, stripControlLeak } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays } from './textshape.js';
+import { renameIn } from './names.js';
 
 /* -------------------------------------------------------------- roles */
 
@@ -358,6 +359,14 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       if (unglued.changed) notes.push('A stray character of another script, stuck to the front of a word, was taken off.');
       finalText = mendMarks(unglued.text, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
     }
+    /* a name changed everywhere while this was written: the page reads it as
+     * the book does now (Cozy Tavern's M730 — work begun before the change is
+     * given it when it lands) */
+    const renamedSince = ((((store.peek('novel', novelId) || {}).memory || {}).renames) || []).filter((x) => x.at >= job.at);
+    if (renamedSince.length && String(finalText).trim()) {
+      const named = renameIn(finalText, renamedSince);
+      if (named !== finalText) { finalText = named; notes.push(`A name was changed everywhere while this was written — it reads ${renamedSince.map((x) => x.to).join(', ')} here too.`); }
+    }
     const arrived = String(answer).trim();
     /* the app's own page, given way to his hand: taken away whole */
     if (job.yielded) {
@@ -628,7 +637,8 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   const marked = full.slice(0, start) + MARK_OPEN + full.slice(start, end) + MARK_CLOSE + full.slice(end);
   /* what wakes a rule, read before the new version shows */
   const moment = momentOf(chapter, p, note);
-  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id });
+  /* a few words rewritten in place: the rest are the passage's as they were — his own, or from before the checker began, stay so (Cozy Tavern's M607) */
+  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
