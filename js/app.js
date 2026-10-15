@@ -9,8 +9,8 @@ import { onLearn, onKey, onIdentity } from './model/call.js';
 import { h, $, icon, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays } from './ui/dom.js';
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
-import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow } from './ui/desk.js';
-import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords } from './ui/panes.js';
+import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound } from './ui/desk.js';
+import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn } from './ui/panes.js';
 import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './ui/look.js';
@@ -23,6 +23,8 @@ import { startChecking, busyAny as checkingAny, keepGrades } from './novel/check
 import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
 import { mendBook } from './novel/mend.js';
+import { initBranches, openBranches } from './ui/branches.js';
+import { openConversation } from './novel/talk.js';
 
 const A = { novelId: null, chapterId: null, booting: true, updateWaiting: false, fromShelf: false, reading: null, route: 0, then: null };
 
@@ -256,6 +258,36 @@ export async function goChapter(chapterId) {
 /* ------------------------------------------------------------- the bars */
 
 function bindChrome() {
+  initBranches({
+    where: () => `${A.route}:${location.hash}`,
+    chapter: novelId => A.novelId === novelId ? A.chapterId : null,
+    prepare: async novelId => { await saveDeskForBranch(novelId); await saveComposersForBranch(novelId); },
+    open: async (novelId, chapterId = null, target = {}) => {
+      const startingRoute = A.route;
+      const startingHash = location.hash;
+      const point = target.source;
+      /* A source conversation may since have been put aside; open its own
+       * words before showing the source answer. */
+      if (point?.conversationId) {
+        await store.open('novel', novelId);
+        const conversation = await store.open('talk', novelId);
+        if (conversation?.convId !== point.conversationId) {
+          const out = await openConversation(novelId, point.conversationId);
+          if (!out.ok) throw new Error(out.error || 'The conversation could not be opened.');
+        }
+      }
+      if (A.route !== startingRoute || location.hash !== startingHash) return;
+      A.then = { novelId, run: () => {
+        if (point?.playId) showTurn('play', point.playId, point.turnId);
+        else if (point?.conversationTurnId) showTurn('talk', novelId, point.conversationTurnId);
+        else if (point?.through && point.through !== '^') showFound(point.through);
+        else if (target.playId) showTurn('play', target.playId);
+        else if (target.conversationId) showTurn('talk', novelId);
+      } };
+      A.fromShelf = false;
+      await go(`#/n/${novelId}${chapterId ? `/${chapterId}` : ''}`);
+    },
+  });
   initShelf({ root: $('#shelf'), books: $('#books'), search: $('#search'), foot: $('#shelfFoot') }, { openNovel });
   $('#shelfSettings').addEventListener('click', () => openSettings());
   const changeRoom = (patch) => {
@@ -310,8 +342,9 @@ export function drawBar() {
   const c = store.peek('chapter', A.chapterId);
   if (!n || !c) return;
   $('#bookTitle b').textContent = n.meta.title || 'Untitled';
+  $('#bookTitle').title = n.branch?.name ? `${n.meta.title || 'Untitled'} — ${n.branch.name}` : 'Chapters';
   const num = n.order.indexOf(c.id) + 1;
-  $('#chapLine').textContent = `Chapter ${numberWords(num)}${c.name ? ` — ${c.name}` : ''}`;
+  $('#chapLine').textContent = `${n.branch?.name ? `${n.branch.name} · ` : ''}Chapter ${numberWords(num)}${c.name ? ` — ${c.name}` : ''}`;
 }
 
 function writerMenu(anchor) {
@@ -342,6 +375,7 @@ function writerMenu(anchor) {
 function moreMenu(anchor) {
   menu(anchor, [
     { label: 'Scenes', hint: 'Step into the story as one of its people; the narrator plays everyone else.', run: () => showSide('play') },
+    { label: 'Branches of this story', hint: 'Take another path in a separate book, or return to the original and its branches.', run: () => openBranches(A.novelId) },
     { label: 'About this book', hint: 'What it’s about, how it reads, where it’s headed, Sound, taking it out as a file.', run: () => openBook(A.novelId, { onGone: () => toShelf() }) },
     { label: 'Full screen', hint: 'The page and the box, nothing above them.', run: fullPage },
     { label: 'Reading mode', hint: 'Only the page, for reading.', run: readingMode },

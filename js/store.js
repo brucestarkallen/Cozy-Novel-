@@ -28,6 +28,7 @@ let generation = null;             /* the library's generation (counted up by ea
 let libraryEpoch = 0;              /* discard replies already travelling when a whole copy comes back */
 let offline = false;
 let lastError = '';
+let branchIO = 0;                 /* an update waits until a branch's snapshot or save has answered */
 
 const keyOf = (kind, id) => `${kind}/${id}`;
 
@@ -94,6 +95,57 @@ export async function sentKept(novelId, key) {
   if (!e) return { failed: '' };
   await e.done;
   return { failed: e.failed };
+}
+
+/* A branch reads one consistent copy of the book from the phone, after this
+ * page's edits and sent words have landed. Its later creation names every
+ * source revision, so a change in another window refuses the whole copy. */
+export async function branchSnapshot(novelId) {
+  const mine = () => [...recs.values()].filter((r) =>
+    (r.kind === 'novel' && r.id === novelId) || (r.kind !== 'house' &&
+      (r.data?.novelId === novelId || (['talk', 'draft'].includes(r.kind) && r.id === novelId))));
+  const epoch = libraryEpoch;
+  branchIO++;
+  let timer;
+  try {
+    const saved = Promise.all([
+      ...mine().map((r) => r.pending.length || r.saving ? saveNow(r) : null),
+      ...[...sentKeeps].filter(([k]) => k.startsWith(novelId + '/')).map(([, e]) => e.done),
+    ]);
+    await Promise.race([saved, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('the book is still waiting to be saved; try again once it is saved')), 30000); })]);
+    clearTimeout(timer);
+    if (epoch !== libraryEpoch) return { ok: false, status: 409, error: 'A whole copy was brought back; open the book again before branching.' };
+    const { status, data } = await api('GET', `/api/branches/${encodeURIComponent(novelId)}`, { wait: 60000 });
+    if (epoch !== libraryEpoch || oldGeneration(data) || (data && knowGeneration(data.generation))) return { ok: false, status: 409, error: 'The library changed; open the book again before branching.' };
+    if (status !== 200 || !data || !data.ok) return { ...(data || {}), ok: false, status, error: data?.error || 'The book could not be read for its branch.' };
+    const versions = new Map(data.records.map((e) => [keyOf(e.kind, e.id), e.rev]));
+    if (mine().some((r) => r.pending.length || r.saving || r.removing || (r.loaded && !r.deleted && r.rev > (versions.get(keyOf(r.kind, r.id)) || 0)))) {
+      return { ok: false, status: 409, changed: true, error: 'The book changed while it was being copied; try again in a moment.' };
+    }
+    setOffline(false);
+    return { ...data, status };
+  } catch (e) {
+    return { ok: false, status: 0, error: String(e?.message || e || 'The phone could not be reached.') };
+  } finally { clearTimeout(timer); branchIO--; }
+}
+
+/* A stable requestId is the new book's id. The caller retains this exact
+ * request after an uncertain answer: a retry returns the committed branch,
+ * and never writes the submitted copy over edits made in it meanwhile. */
+export async function createBranch(spec) {
+  const epoch = libraryEpoch;
+  branchIO++;
+  try {
+    const { status, data } = await api('POST', '/api/branches', { body: spec, wait: 60000 });
+    if (epoch !== libraryEpoch || oldGeneration(data)) return { ok: false, status: 409, error: 'The library changed; open the book again before branching.' };
+    if (status !== 200 || !data?.ok) return { ...(data || {}), ok: false, status, uncertain: status >= 500 || (status === 200 && !data), error: data?.error || 'The branch could not be kept on the phone.' };
+    knowGeneration(data.generation);
+    setOffline(false);
+    for (const fn of shelfFns) fn({ kind: 'novel', id: data.novelId, by: CLIENT });
+    return { ...data, status };
+  } catch (e) {
+    return { ok: false, status: 0, uncertain: true, error: String(e?.message || e || 'The phone could not be reached.') };
+  } finally { branchIO--; }
 }
 
 /* A BOOK'S LEASE (serve.py take_lease; Cozy Tavern M293): the helper and the
@@ -200,6 +252,10 @@ export function revOf(kind, id) {
   const r = recs.get(keyOf(kind, id));
   return r ? r.rev : 0;
 }
+
+/* An operation that opened several records must still belong to the same
+ * whole-library copy before it sends the page to their address. */
+export function libraryGeneration() { return generation; }
 
 /* Make a new record. Resolves once the phone has it. */
 export async function create(kind, id, data) {
@@ -639,6 +695,7 @@ export function recheck() {
 }
 
 export function hasPending() {
+  if (branchIO) return true;
   for (const r of recs.values()) if (r.pending.length || r.saving) return true;
   return false;
 }

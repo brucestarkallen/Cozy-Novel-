@@ -31,6 +31,7 @@ import { foldedText, foldName, tokensMissing, looksLikeTokenDump, isGroupName, i
 import { helperFrame, notesRequest, summaryRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
+import { continuityOf, mergeContinuity, continuityStep } from './timeline.js';
 
 const lights = new Map();          /* novelId -> {state, words, at} */
 const timers = new Map();
@@ -1067,9 +1068,12 @@ export function readingRoom(conn, fixed) {
  * of them, which is what the first whole object of an answer cut off is
  * (Cozy Tavern's M246/M682: a cut answer stored as a finished reading) */
 /* only the answer's own parts: a row's map of ties ("Aldric": …) found inside a reply cut off is no answer (Cozy Tavern's M685) */
-const ANSWER_KEYS = new Set([...NOTE_KINDS, 'gone', 'chapterName', 'about', 'style', 'clear', 'verdict']);
+const ANSWER_KEYS = new Set([...NOTE_KINDS, 'gone', 'chapterName', 'about', 'style', 'clear', 'verdict', 'timeline']);
 export const notesShape = (o) => Boolean(o) && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => {
   if (!ANSWER_KEYS.has(k)) return false;
+  /* A bad history does not discard sound notes or ask the model again.
+   * Its valid events survive; its coverage stays incomplete (timeline.js). */
+  if (k === 'timeline') return true;
   if (NOTE_KINDS.includes(k) || k === 'gone') return Array.isArray(o[k]) && o[k].every((row) =>
     Boolean(row) && typeof row === 'object' && !Array.isArray(row) && Boolean(cleanName(row.name)) && (k !== 'gone' || NOTE_KINDS.includes(row.kind)));
   if (k === 'clear') return truthOf(o[k]) !== undefined;
@@ -1476,14 +1480,22 @@ async function readChanges(novelId, conn) {
     const before = chapter && firstChanged > 0 ? chapterText({ passages: chapter.passages.slice(0, firstChanged) }) : '';
     /* the notes measured as they are sent: every card all of what is read now names, whole — no reading of a part of it carries more (Cozy Tavern M714: a request measured without what it carries) */
     const focusAll = [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed.map((r) => String((r && r.text) || '')), ...removedChapters.map((r) => String((r && r.text) || ''))].join('\n');
-    /* what rides beside the passages, all of it counted: the frame, the notes, his words, and what the helper keeps of the book (Cozy Tavern M714) */
-    const keptNow = keptByHelper(novel).reduce((t, k) => t + estimateTokens(String(((novel.kept || {})[k] || {}).text || '')) + 120, 0);
-    const fixedWith = (notes) => estimateTokens(helperFrame(house, novel)) + estimateTokens(notes) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + keptNow + 900;
-    let room = readingRoom(conn, fixedWith(notesText(novel, { forHelper: true, fit: notesFit, focus: focusAll })));
+    /* Count the request's actual fixed words, including the history's
+     * format and rules. The former guessed instructions plus a 1,500-token
+     * safety allowance refused a 6,000-token helper that still had ample
+     * room. With the fixed request measured, 600 tokens remain as safety,
+     * and 160 more cover source labels and the part's position. */
+    const named = namedBook(novel, house);
+    const fixedWith = (notes) => estimateTokens(helperFrame(house, novel)) + estimateTokens(notesRequest({
+      novel: named, chapterLabel: label, before: '', changes: [], removed: [], removedChapters: [],
+      notesShown: notes, at, of: (novel.order || []).length, later: true, goesOn: true,
+    })) + 160;
+    const roomWith = (notes) => readingRoom(conn, fixedWith(notes)) + 900;
+    let room = roomWith(notesText(named, { forHelper: true, fit: notesFit, focus: focusAll }));
     /* the cards it names cannot all ride whole beside it: past the notes' share they ride by their first line, as the others do — a reading is never refused for them (the fold never writes whole a card it saw by its first line) */
     let plain = false;
     if (room < 600) {
-      const plainRoom = readingRoom(conn, fixedWith(notesText(novel, { forHelper: true, fit: notesFit })));
+      const plainRoom = roomWith(notesText(named, { forHelper: true, fit: notesFit }));
       if (plainRoom >= 600) { plain = true; room = plainRoom; }
     }
     if (room < 600) {
@@ -1494,6 +1506,10 @@ async function readChanges(novelId, conn) {
       throw e;
     }
     const batchWords = Math.max(200, Math.min(9000, Math.floor((room * 0.6) / 1.4)));
+    /* Every tiny passage still has a source label and prose around it.
+     * Count that cost in the batch too: hundreds of one-line passages
+     * cannot share the room of a single passage with the same word count. */
+    const sourceWords = Math.ceil(estimateTokens(`Passage source passage_12345678901234567890\nThis part of ${label} was changed. It used to read:\n"""\n\n"""\nIt now reads:\n"""\n\n"""`) / 1.4);
     const beforeChars = Math.max(0, Math.min(60000, Math.floor(room * 0.3 * 3.2)));
     /* a part written into the middle of a chapter: the chapter goes on after it, already read */
     const lastChanged = changes.length ? Math.max(...changes.map((c) => chapter.passages.findIndex((p) => p.id === c.pid))) : -1;
@@ -1516,7 +1532,7 @@ async function readChanges(novelId, conn) {
       if (!ps.length) { chapterParts.push({ id: r.id, text: r.text, last: true }); continue; }
       ps.forEach((t, i) => chapterParts.push({ id: r.id, text: ps.length > 1 ? `${t}\n\n(part ${i + 1} of ${ps.length} of what it held)` : t, last: i === ps.length - 1 }));
     }
-    const outWords = removed.reduce((a, r) => a + countWords(r.text), 0) + chapterParts.reduce((a, r) => a + countWords(r.text), 0);
+    const outWords = removed.reduce((a, r) => a + countWords(r.text) + sourceWords, 0) + chapterParts.reduce((a, r) => a + countWords(r.text) + sourceWords, 0);
     const ask = (fields) => ({ items: [], removed: [], chapters: [], before: '', ...fields });
     const batches = [];
     /* what was taken out rides with the first passages when it is short; alone and first when it is long, or one at a time is asked */
@@ -1526,7 +1542,7 @@ async function readChanges(novelId, conn) {
       let group = [];
       let gw = 0;
       for (const r of removed) {
-        const w = countWords(r.text);
+        const w = countWords(r.text) + sourceWords;
         /* one longer than a reading holds: told in parts, done with at its last (Cozy Tavern M714) */
         if (w > batchWords) {
           if (group.length) { batches.push(ask({ removed: group })); group = []; gw = 0; }
@@ -1545,7 +1561,7 @@ async function readChanges(novelId, conn) {
     let words = 0;
     const push = () => { if (batch.length) batches.push(ask({ items: batch })); batch = []; words = 0; };
     for (const c of changes) {
-      const w = countWords(c.text) + countWords(c.old);
+      const w = countWords(c.text) + countWords(c.old) + sourceWords;
       if (one) push();
       if (w > batchWords) {
         push();
@@ -1572,6 +1588,7 @@ async function readChanges(novelId, conn) {
     /* what a passage read in parts changed, gathered until its last part */
     let acc = [];
     let accKept = {};
+    const histories = new Map();
     /* A PASSAGE READ IN PARTS THAT CANNOT BE FINISHED (Cozy Tavern M205,
      * M218: a part-built reading is never left half in the notes): what its
      * earlier parts changed is taken back — where it still reads as they left
@@ -1583,6 +1600,7 @@ async function readChanges(novelId, conn) {
     const takeBackParts = () => {
       if (!midPassage) return;
       takeBackInParts(novelId, parts);
+      histories.clear();
       midPassage = false;
     };
     for (let b = 0; b < batches.length; b++) {
@@ -1684,6 +1702,19 @@ async function readChanges(novelId, conn) {
       }
       acc = mergeUndo({ cards: acc }, folded.cards);
       accKept = mergeKeptUndo(accKept, kept);
+      /* Source labels belong to the words in this request, not to a name
+       * guessed from the answer. Gather long passages until all their parts
+       * are read. A missing list is a gap, never "nothing happened". */
+      for (const c of B.items) {
+        if (c.oldOnly) continue;
+        const rows = Array.isArray(got.obj.timeline) ? got.obj.timeline.filter(r => r && r.source === c.pid) : [];
+        const source = { text: c.text, whole: c.whole !== undefined ? c.whole : c.text };
+        const notes = store.peek('novel', novelId).notes;
+        let history = rows.length ? null : continuityOf(undefined, notes, source);
+        for (const row of rows) history = mergeContinuity(history, continuityOf(row.events, notes, source));
+        if (rows.length !== 1) history.complete = false;
+        histories.set(c.sig, mergeContinuity(histories.get(c.sig), history));
+      }
       parts.cards = mergeUndo({ cards: parts.cards }, folded.cards);
       parts.kept = mergeKeptUndo(parts.kept, kept);
       /* a part of a passage, and more of it to come — kept on the book, so a
@@ -1752,6 +1783,15 @@ async function readChanges(novelId, conn) {
         if (back.length) store.change('novel', novelId, novelSteps.dropAside(back));
         /* what this reading changed, kept for each version it read (readings.js) */
         if (done.length) {
+          for (const c of done) {
+            const history = histories.get(c.sig);
+            if (!history) continue;
+            const cid = movedTo.get(c.pid) || chapter.id;
+            /* This step checks the selected version and words again when
+             * a refused save is replayed over another browser's changes. */
+            store.change('chapter', cid, continuityStep(c.pid, c.sig.split(SIG_SEP)[0], history));
+            histories.delete(c.sig);
+          }
           keepReading(novelId, chapter, done, acc, accKept, { mixed: B.removed.length > 0 || B.chapters.length > 0 });
           acc = [];
           accKept = {};

@@ -65,6 +65,7 @@ and open **http://127.0.0.1:8081**. Another port: `COZYNOVEL_PORT=8091 python3 s
 
 ## The notes, the summaries and the partner
 
+- **Notes → Timeline** follows meaningful changes in relationships, people and threads, in manuscript order. Filter by person or thread, choose **Up to here** or **Whole book**, and tap a source to return to its exact passage. Quotes support each turn; beliefs, claims and intentions say whose they are. The existing cards remain your current notes and the place to edit them. Choosing another passage version changes its history too. Scenes enter this history when turned into manuscript prose. The helper gathers it during its usual reading; opening the Timeline makes no model call. Older pages show gaps honestly: **Read the whole book again** can fill them through the existing helper.
 - **People** (who they are, *with others* — how they stand with the people who matter to them, and why — and *right now*), **Places**, **Things worth remembering** (objects, facts, secrets and who knows them, rules of the world) and **Threads** (promises, secrets, questions still open) are what the writer reads before every page, so a name, a scar or a promise never drifts. **Chapter summaries** are something else: they stand in for whole chapters once the book is longer than the model can read (the newest chapters always ride whole; a chapter is never sent both whole and in short).
 - The helper writes them the way Summaryception taught: only what changed, a first appearance described when it happens, feelings that carry over, who knows what, each cause kept with what it led to, nothing invented and nothing softened. A card you wrote stays yours: the helper keeps where they are now and how they stand with others, never your words.
 - **Each version of a passage keeps its own notes**, like Cozy Tavern's ledger checkpoint for every swipe. **Another take**, a **Rewrite** or your **Edit** of the newest passage first takes what the old version put in the notes back out — the notes stand as they did before that passage — and the new version is read from there, as new; the writer of the new take is handed the notes as they stood before the passage, never the ones the old version made. The **arrows** back to a version read before bring its notes back at once, with no reading; so does taking out the newest passage. A passage further back that changes is read as a change (the helper is told what it used to say and what it says now), so later readings are never written over. A card you wrote or changed stays as you left it through all of this. A chapter that reads again as it once did gets its summary from then back, with no call.
@@ -76,6 +77,14 @@ and open **http://127.0.0.1:8081**. Another port: `COZYNOVEL_PORT=8091 python3 s
 - **Conversations with the partner**, as Cozy Tavern keeps sessions: the open one is named at the top (**Conversation 1**); a tap lists the others, newest used first, to open one, and **Rename**, **Copy** or **Remove** this one (with Undo). **New** begins a fresh one and keeps this one in the list. **Branch from here**, under an answer, opens a copy up to that answer; a change copied with it stays the one it was made in, with its Undo there. **Edit and ask again**, under your message, puts your words back in the box and lets go of that message and everything after it (Undo brings them back). **Start over** empties the open conversation, with Undo; the changes it made stay in the book. Search finds words in every conversation, and opens the one they are in. The partner can go full screen.
 
 **Ideas** (a chip under the page, Settings → Who does what to switch it off or set how many): one to five premises for what happens next, from your partner's connection with the whole book — a tap puts one in the box.
+
+### Branches of a story
+
+Use a passage's **⋯ → Branch from here** to try another direction without losing the original. A branch is a separate book, with its own manuscript, notes and future. It keeps the story through that passage; later chapters, conversations and scenes remain in the original. **More → Branches of this story** also offers the whole book or the current chapter, and lists the related books. Rename a branch in **About this book → Branches**.
+
+A scene turn can start a separate branch too. It keeps the conversation through that turn and begins from the manuscript before that scene was converted into prose, so its later outcome cannot leak backward. The partner offers two distinct choices: branch just the conversation within this book, or create a separate book with the current manuscript and the conversation through the chosen answer. The latter keeps today's manuscript; it does not reconstruct the manuscript from when the answer was written.
+
+Your current premise, plans and instructions travel with the branch. Generated notes are rewound where the saved readings support it; otherwise the helper rebuilds from the kept pages while preserving your authored note fields. Retained versions, checks, thinking, Timeline evidence and saved requests come along. Branch creation saves the complete copy together, recovers after interruption, and retries a lost acknowledgement without making a duplicate. Adding books from a library backup keeps imported branches together in their own family.
 
 A version made from another by changing some of its words — the checker's fixes, your partner's words, your own edit — keeps what wrote them: ⋯ → **What the writer was sent**, and its thinking above it. **Remove versions…** (a passage's ⋯, three or more versions): tick the ones to go — one always stays — with Undo. Each version keeps everything of its own: its notes, what the helper keeps of the book, the chapter's summary, the checker's suggestions and the judge's grade.
 
@@ -178,6 +187,10 @@ node tests/final_workflows.mjs      # conversation conflicts, scene anchors and 
 node tests/automation_integrity.mjs # concurrent helper starts, rewrite retry and stale automatic replies
 node tests/storage_integrity.mjs    # restoration races, journal recovery and imported drafts
 python3 tests/backup_integrity.py   # atomic restore failure and distinct safety copies
+node tests/branches.mjs            # branch boundaries, note rewind, conversations and retry ownership
+python3 tests/branch_storage.py    # atomic branch saves, crash recovery, source races and saved requests
+node tests/branch_imports.mjs      # imported families and exact preservation of prose and evidence
+node tests/timeline.mjs            # supported turning points, source versions, boundaries and coverage
 python3 tests/browser/walk_main.py  # the whole app in a real browser (needs playwright + chromium)
 python3 tests/browser/walk_more.py
 python3 tests/browser/walk_removal.py # failed chapter/scene deletion stays visible; successful removal still works
@@ -191,6 +204,9 @@ python3 tests/browser/walk_settings.py       # pending edits, connection tests a
 python3 tests/browser/walk_dialogs.py        # book exports, saved fields and sent words
 python3 tests/browser/walk_worlds.py         # illustrated worlds, light/dark, animation and saved preferences
 python3 tests/browser/walk_viewpoint.py      # per-book viewpoint/tense, persistence and phone layouts
+python3 tests/browser/walk_branches.py       # independent branches, scenes, navigation and folded layouts
+python3 tests/browser/walk_branch_imports.py # damaged-copy refusal from shelf and Settings before any writes
+python3 tests/browser/walk_timeline.py       # Timeline filters, source links, versions and phone layouts
 ```
 
 All of them use synthetic books in a temporary folder and stand-in models; nothing paid is ever called.

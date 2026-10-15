@@ -9,6 +9,7 @@
 import { newId, countWords, hashText, numberWords, slug } from '../util.js';
 import { newNovel, newChapter, newPassage, newTurn, chapterLabel, passageText, picked, coverFor } from './shape.js';
 import { isBreakLine, STRONG, EM } from './textshape.js';
+import { remapBranchData } from './branches.js';
 
 /* ------------------------------------------------------------- out */
 
@@ -317,21 +318,57 @@ export function fromText(name, raw) {
 export function booksFromLibrary(snap) {
   const recs = Array.isArray(snap && snap.records) ? snap.records : [];
   const novels = recs.filter((r) => r.kind === 'novel');
+  const damaged = () => { throw new Error('This copy gives a book, chapter or scene conflicting owners. No books were added.'); };
+  const recordKeys = new Set(), owners = new Map();
+  for (const r of recs) {
+    if (!['novel', 'chapter', 'play', 'talk', 'draft'].includes(r.kind)) continue;
+    const key = r.kind + '/' + r.id;
+    if (recordKeys.has(key) || !r.data || r.data.id !== r.id) damaged();
+    recordKeys.add(key);
+  }
+  for (const nr of novels) {
+    if (owners.has(nr.id)) damaged();
+    owners.set(nr.id, nr.id);
+  }
+  for (const nr of novels) {
+    for (const [field, kind] of [['order', 'chapter'], ['plays', 'play']]) {
+      const ids = nr.data[field] || [];
+      if (!Array.isArray(ids)) damaged();
+      for (const id of ids) {
+        const r = recs.find((r) => r.kind === kind && r.id === id);
+        if (!r) continue;
+        if (owners.has(id) || (r.data.novelId && r.data.novelId !== nr.id)) damaged();
+        owners.set(id, nr.id);
+      }
+    }
+    for (const kind of ['talk', 'draft']) {
+      const r = recs.find((r) => r.kind === kind && r.id === nr.id);
+      if (r?.data.novelId && r.data.novelId !== nr.id) damaged();
+    }
+  }
+  /* Import a family together, with one address book. Per-book maps would
+   * leave branches pointing back at the old library. An absent ancestor
+   * gets a new family address too: it stays absent, never joins an existing
+   * original by accident. Authored words are never searched and replaced. */
+  const map = new Map();
+  const remember = (id, prefix) => { if (typeof id === 'string' && id && !map.has(id)) map.set(id, newId(prefix)); };
+  for (const nr of novels) {
+    remember(nr.data.id, 'n');
+    for (const cid of nr.data.order || []) if (recs.some((r) => r.kind === 'chapter' && r.id === cid)) remember(cid, 'ch');
+    for (const pid of nr.data.plays || []) if (recs.some((r) => r.kind === 'play' && r.id === pid)) remember(pid, 'pl');
+  }
+  for (const nr of novels) {
+    const branch = nr.data.branch;
+    if (!branch) continue;
+    remember(branch.rootId, 'n'); remember(branch.fromId, 'n');
+    remember(branch.point?.chapterId, 'ch'); remember(branch.point?.playId, 'pl');
+  }
+  const renamed = (value) => remapBranchData(value, map);
   const out = [];
   for (const nr of novels) {
     const old = nr.data;
-    const nid = newId('n');
-    const map = new Map([[old.id, nid]]);
+    const nid = map.get(old.id);
     const chapterIds = (old.order || []).filter((cid) => recs.some((x) => x.kind === 'chapter' && x.id === cid));
-    for (const cid of chapterIds) map.set(cid, newId('ch'));
-    for (const pid of old.plays || []) if (recs.some((x) => x.kind === 'play' && x.id === pid)) map.set(pid, newId('pl'));
-    /* every old name, as a whole name, wherever it stands — a key or a value */
-    const renamed = (x) => {
-      if (x === undefined || x === null) return x;
-      let j = JSON.stringify(x);
-      for (const [a, b] of map) j = j.replace(new RegExp(`(?<![A-Za-z0-9_-])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-])`, 'g'), b);
-      return JSON.parse(j);
-    };
     const novel = renamed(old);
     novel.id = nid;
     novel.meta = { ...(novel.meta || {}), title: `${(novel.meta && novel.meta.title) || 'Untitled'}`, opened: Date.now() };
@@ -347,8 +384,9 @@ export function booksFromLibrary(snap) {
     const draft = recs.find((x) => x.kind === 'draft' && x.id === old.id);
     const plays = [];
     novel.plays = (old.plays || []).map((pid) => {
-      if (!map.has(pid)) return null;
-      const p = renamed(recs.find((x) => x.kind === 'play' && x.id === pid).data);
+      const record = recs.find((x) => x.kind === 'play' && x.id === pid);
+      if (!record) return null;
+      const p = renamed(record.data);
       const id = map.get(pid);
       p.id = id; p.novelId = nid; p.chapterId = novel.order.includes(p.chapterId) ? p.chapterId : novel.order[novel.order.length - 1] || '';
       plays.push(p);

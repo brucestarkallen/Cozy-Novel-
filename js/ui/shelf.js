@@ -72,19 +72,20 @@ function drawWelcome(live, list, total) {
   if (ui.intro) ui.intro.classList.toggle('has-resume', Boolean(latest));
   if (!latest) { ui.resume.replaceChildren(); return; }
   const m = latest.meta || {};
+  const resumeMeta = `${latest.branch?.name ? `${latest.branch.name} · ` : ''}${plural(m.words || 0, 'word')} · ${plural(m.chapters || 1, 'chapter')}`;
   /* Shelf news can arrive while the button has focus. Update the words in
    * place for the same book, so a save from another window never takes the
    * Continue button (and the keyboard's place) away. */
   if (ui.resume.dataset.book === latest.id && ui.resume.firstChild) {
     ui.resume.querySelector('.resume-title').textContent = m.title || 'Untitled';
-    ui.resume.querySelector('.resume-meta').textContent = `${plural(m.words || 0, 'word')} · ${plural(m.chapters || 1, 'chapter')}`;
+    ui.resume.querySelector('.resume-meta').textContent = resumeMeta;
     return;
   }
   ui.resume.dataset.book = latest.id;
   ui.resume.replaceChildren(h('div.resume-card',
     h('span.resume-label', 'Where you left off'),
     h('h2.resume-title', m.title || 'Untitled'),
-    h('p.resume-meta', `${plural(m.words || 0, 'word')} · ${plural(m.chapters || 1, 'chapter')}`),
+    h('p.resume-meta', resumeMeta),
     h('div.resume-action',
       h('button.btn.primary', { onclick: () => hooks.openNovel(latest.id), title: 'Open this book at the chapter you last visited.' }, 'Continue writing', icon('right', 16)),
       h('span.resume-hint', 'Back to the chapter you last visited.'))));
@@ -93,7 +94,7 @@ function drawWelcome(live, list, total) {
 function draw() {
   const collection = rows.filter((r) => Boolean(r.meta && r.meta.archived) === showArchived);
   const list = collection
-    .filter((r) => !query || String(r.meta?.title || '').toLowerCase().includes(query) || String(r.meta?.subtitle || '').toLowerCase().includes(query))
+    .filter((r) => !query || String(r.meta?.title || '').toLowerCase().includes(query) || String(r.meta?.subtitle || '').toLowerCase().includes(query) || String(r.branch?.name || '').toLowerCase().includes(query))
     .sort(recentFirst);
   ui.books.textContent = '';
   const live = rows.filter((r) => !(r.meta && r.meta.archived));
@@ -122,11 +123,11 @@ function draw() {
   list.forEach((r, i) => {
     const m = r.meta || {};
     const el = h('div.book' + (m.archived ? '.archived' : ''), { style: { animationDelay: `${Math.min(i, 12) * 40}ms` } },
-      h('button.cover.' + (m.cover || 'ember'), { onclick: () => hooks.openNovel(r.id), 'aria-label': `Open ${m.title}` },
+      h('button.cover.' + (m.cover || 'ember'), { onclick: () => hooks.openNovel(r.id), 'aria-label': `Open ${m.title}${r.branch?.name ? ` — ${r.branch.name}` : ''}` },
         h('div.cover-copy', h('span.cover-kicker', 'A novel'), h('span.cover-rule', { 'aria-hidden': 'true' }), h('div.t', m.title || 'Untitled'), m.subtitle ? h('div.s', m.subtitle) : null),
         h('div.cover-foot', { 'aria-hidden': 'true' }, h('span.cover-rule'), h('div.orn', '❦'))),
-      h('div.meta', h('b', plural(m.words || 0, 'word')), ` · ${plural(m.chapters || 1, 'chapter')}`, h('br'), m.words > 0 && m.written ? `written ${timeAgo(m.written)}` : 'A beginning waiting for you'),
-      h('button.more', { 'aria-label': `About ${m.title}`, title: 'About this book', onclick: () => aboutBook(r) }, icon('more', 18)));
+      h('div.meta', r.branch?.name ? h('span.branch-shelf-name', r.branch.name) : null, h('b', plural(m.words || 0, 'word')), ` · ${plural(m.chapters || 1, 'chapter')}`, h('br'), m.words > 0 && m.written ? `written ${timeAgo(m.written)}` : 'A beginning waiting for you'),
+      h('button.more', { 'aria-label': `About ${m.title}${r.branch?.name ? ` — ${r.branch.name}` : ''}`, title: 'About this book', onclick: () => aboutBook(r) }, icon('more', 18)));
     ui.books.append(el);
   });
   if (query && !list.length && rows.length) {
@@ -211,7 +212,9 @@ async function importBook() {
       return;
     }
     if (data && data.format === 'cozynovel-library') {
-      const list = booksFromLibrary(data);
+      let list;
+      try { list = booksFromLibrary(data); }
+      catch (error) { toast(error?.message || 'That copy could not be read. No books were added.', 7000); return; }
       for (const b of list) {
         for (const id of b.novel.order) await store.create('chapter', id, b.chapters[id]);
         if (b.talk) await store.create('talk', b.novel.id, b.talk);

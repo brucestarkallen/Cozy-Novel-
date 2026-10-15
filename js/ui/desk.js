@@ -19,6 +19,7 @@ import { paced, follower } from './live.js';
 import { findIn } from '../novel/search.js';
 import { makeChange, undoChange } from '../novel/changes.js';
 import { nameChange, namedMidSentence, foldName } from '../novel/names.js';
+import { openBranch, branchBusy } from './branches.js';
 
 const S = {
   novelId: null, chapterId: null,
@@ -464,6 +465,7 @@ function passageMenu(anchor, p) {
       run: () => { if (writer.putBackTail({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) { archivist.nudge(S.novelId); toast('Put back — the page without it is one arrow away.'); } } } : null,
     '-',
     { label: 'Write from here (a passage after this one)', hint: 'A new passage between this one and the next, written to fit both.', disabled: busy(), run: () => { S.insertAfter = p.id; S.sel = null; drawComposer(); ui.direction.focus(); } },
+    { label: 'Branch from here', hint: 'Take the story up to this passage into a separate book, with its own notes.', disabled: branchBusy(S.novelId), run: () => openBranch({ novelId: S.novelId, chapterId: c.id, through: p.id }) },
     { label: 'Add a scene break after this', hint: 'A * * * line: a new scene begins after it.', run: () => { writer.addBreak({ chapterId: c.id, after: p.id }); } },
     i > 0 ? { label: 'Start a new chapter from here', hint: 'This passage and everything after it become the next chapter.', disabled: busy(), run: () => splitHere(p) } : null,
     '-',
@@ -1216,6 +1218,20 @@ function saveDraft() {
 export function draftWaiting() { return Boolean(draftDue); }
 /* the page going away: they are handed over now, to go with the rest */
 export function draftNow() { if (draftDue) saveDraftSoon.now(); }
+
+/* A branch must include the last keystroke, even before the typing pause. */
+export async function saveDeskForBranch(novelId) {
+  if (S.novelId !== novelId || !ui) return;
+  keepOpenEdit();
+  const direction = ui.direction.value;
+  saveDraftSoon.cancel();
+  draftDue = null;
+  let d = store.peek('draft', novelId);
+  if (d === undefined) d = await store.open('draft', novelId);
+  if (!d) await store.create('draft', novelId, { id: novelId, novelId, direction });
+  else store.change('draft', novelId, x => { x.direction = direction; }, { now: true });
+  await store.flush('draft', novelId);
+}
 
 async function loadDraft() {
   const id = S.novelId;

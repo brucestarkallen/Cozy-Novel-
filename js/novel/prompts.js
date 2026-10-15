@@ -1005,10 +1005,10 @@ const NOTE_RULES = `Include only entries that are new or changed, and in each on
 - Use "gone" only for an entry that no longer belongs in the book at all (it was only ever in text that's been taken out). Mark a thread "open": false once the story resolves it — by what happens after it was set up, never by the words that set it up (an oath sworn, a plan made, a promise given is open) and never just because time passed.
 - Write only what the book actually says — never invent, never guess.`;
 
-export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null, plain = false }) {
+export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null, plain = false, notesShown = undefined }) {
   const parts = [];
   /* plain: the cards it names could not all ride whole beside it — they ride as the rest do (archivist.js readChanges) */
-  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: plain ? '' : [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n'), shortIds });
+  const notes = notesShown === undefined ? notesText(novel, { forHelper: true, fit: notesFit, focus: plain ? '' : [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n'), shortIds }) : notesShown;
   parts.push(`The notes as they stand:\n${notes ? notes : '(none yet — this is the start)'}`);
   const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(about);
@@ -1021,8 +1021,8 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   if (before && before.trim()) parts.push(`${chapterLabel}, up to the new part (for context — already in the notes):\n${fence(before)}`);
   for (const c of changes) {
     if (c.oldOnly) parts.push(`This is part of the previous version of a passage in ${chapterLabel} that is being replaced. These words no longer happen as written; take back only what these words alone established. The replacement follows in later parts of this same reading, so do not guess it or treat the chapter as finished:\n${fence(c.old)}`);
-    else if (c.old) parts.push(`This part of ${chapterLabel} was changed. It used to read:\n${fence(c.old)}\nIt now reads:\n${fence(c.text)}`);
-    else parts.push(`New in ${chapterLabel}:\n${fence(c.text)}`);
+    else if (c.old) parts.push(`${c.pid ? `Passage source ${c.pid}\n` : ''}This part of ${chapterLabel} was changed. It used to read:\n${fence(c.old)}\nIt now reads:\n${fence(c.text)}`);
+    else parts.push(`${c.pid ? `Passage source ${c.pid}\n` : ''}New in ${chapterLabel}:\n${fence(c.text)}`);
   }
   for (const r of removed) parts.push(`This part was taken out of ${chapterLabel}, so it no longer happens in the book:\n${fence(r)}`);
   for (const r of removedChapters) parts.push(`A whole chapter was taken out of the book, so none of it happens any more. It held:\n${fence(r)}`);
@@ -1038,10 +1038,15 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   "lore": [{"name": "…", "about": "${LORE_ASK}"}],
   "threads": [{"name": "…", "about": "${THREAD_ASK}", "open": true}],
   "gone": [{"kind": "people", "name": "…"}],
+  "timeline": [{"source": "the source beside the new words", "events": [{"kind": "relationship", "cards": [{"kind": "people", "name": "…"}, {"kind": "people", "name": "…"}], "text": "what changed", "why": "what caused the change", "evidence": ["an exact quote from this source"], "stance": "fact"}]}],
   "chapterName": "a short name for ${chapterLabel}, only if it has none yet"${keptFields}
 }
 
-${NOTE_RULES}${keeps.length ? `
+${NOTE_RULES}
+- "timeline" traces meaningful developments in these new words: a relationship's beginning or change, a lasting personal change, or a thread set up, advanced or resolved. It is the history behind the notes, not another current account. Give one entry for EVERY source shown with new words, even when "events" is empty. Never extract events from the old words, context, or passages taken out. A passage read in parts contributes only events in the part shown here.
+- Each event has "kind": "relationship", "character", or "thread"; "cards" names existing People or Threads cards, including cards added in this answer. A relationship names both people; a character event names that person; a thread event names its thread. Quote the exact supporting words from that source in "evidence". Give only what those words support, briefly, with the cause when the source gives it. Do not restate an unchanged relationship or turn a note correction into a story event.
+- "stance" is "fact", "belief", "claim", or "intention". For anything other than fact, also give "whose": the person's name, and include their People card. A thought, boast, suspicion or plan does not establish that what they think or say happened. Affection, trust, knowledge and desire can differ on each side of a relationship: never infer reciprocity.
+- Development can deepen jealousy, rivalry, cruelty, dependence or distrust, or leave a conflict unresolved. Keep the person's temperament and the book's actual consequences. Never impose warmth, reconciliation, healing, a preferred arc or a better person. A flashback establishes history at the point the book reveals it; do not move it into the present.${keeps.length ? `
 - ${keeps.length === 2 ? '"about" and "style" describe' : keeps[0] === 'about' ? '"about" describes' : '"style" describes'} the whole book, not this part alone${keeps.includes('style') ? ' — the voice the book has settled into; where this part strays from it (a slip of tense or point of view), keep the book’s settled voice' : ''}.` : ''}`);
   return parts.join('\n\n');
 }

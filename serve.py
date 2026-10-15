@@ -21,6 +21,7 @@ What it does:
 
 import errno
 import gzip
+import hashlib
 import select
 import signal
 import socket
@@ -47,7 +48,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.9.3"
+VERSION = "2.10.0"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -58,6 +59,7 @@ HISTORY = HOME / "history"    # history/<kind>/<id>/<stamp>.json.gz — the copy
 TRASH = HOME / "trash"        # trash/<stamp>-<kind>-<id>.json.gz — deleted things, kept 30 days
 COPIES = HOME / "copies"      # copies/cozynovel-YYYY-MM-DD.json.gz — everything, once a day
 SENT = HOME / "sent"          # sent/<novel>/<key>.json.gz — what the model was sent
+BRANCHES = HOME / "branch-operations"  # durable creation receipts; an unfinished branch is rolled back on open
 USAGE = HOME / "usage.json"   # {"days": {"YYYY-MM-DD": {"<address>|<model>": {calls, in, out, cached, cacheWrite?, anthropic?, prices?, estimated}}}} — Usage and cost
 
 KINDS = ("house", "novel", "chapter", "talk", "play", "draft")
@@ -92,6 +94,7 @@ def _commit():
 
 COMMIT = _commit()
 LOCK = threading.RLock()
+_branch_hidden = set()        # unfinished new records are never another page's book
 # the model calls going through the relay right now: an update waits for them
 CALLS = {"n": 0}
 CALLS_LOCK = threading.Lock()
@@ -145,6 +148,8 @@ def read_record(kind, rid):
     """{"rev", "at", "data"} or None. A file that cannot be read is put back from
     its newest earlier copy (the unreadable one is kept beside it), so a book is
     never lost to a damaged file."""
+    if (kind, rid) in _branch_hidden:
+        return None
     p = record_path(kind, rid)
     try:
         with open(p, "rb") as f:
@@ -285,6 +290,8 @@ _revs = {}
 
 
 def rev_of(kind, rid):
+    if (kind, rid) in _branch_hidden:
+        return 0
     p = record_path(kind, rid)
     try:
         mt = p.stat().st_mtime_ns
@@ -317,6 +324,8 @@ def put_record(kind, rid, data, base, by="", checkpoint=False, save="", expected
     fingerprint of them), so a page can later tell whether a save of its
     landed. Returns (status, payload)."""
     with LOCK:
+        if (kind, rid) in _branch_hidden:
+            return 409, {"error": "that branch is still being made; try again in a moment"}
         if expected_generation is not None and expected_generation != generation():
             return 409, {"reload": True, "generation": generation(), "error": "a whole copy was brought back; the page is catching up"}
         cur = read_record(kind, rid)
@@ -368,7 +377,7 @@ def novel_list():
         return out
     for p in d.glob("*.json"):
         rid = p.name[:-5]
-        if not ID_RE.match(rid):
+        if not ID_RE.match(rid) or ("novel", rid) in _branch_hidden:
             continue
         try:
             mt = p.stat().st_mtime_ns
@@ -383,6 +392,9 @@ def novel_list():
             continue
         meta = rec["data"].get("meta") if isinstance(rec["data"].get("meta"), dict) else {}
         row = {"id": rid, "rev": rec.get("rev", 0), "meta": meta}
+        branch = rec["data"].get("branch")
+        if isinstance(branch, dict):
+            row["branch"] = {k: branch[k] for k in ("rootId", "fromId", "name", "at") if k in branch}
         _meta_cache[rid] = (mt, row)
         out.append(row)
     return out
@@ -832,6 +844,242 @@ def set_generation(n):
     atomic_write_bytes(GENERATION, str(int(n)).encode("utf-8"))
 
 
+# ------------------------------------------------------ a branch, whole at once
+
+def _book_records(nid):
+    """Called under LOCK: every record owned by a book, including an unlisted
+    child a previous save left behind. A revision vector sees additions too."""
+    records = all_records(("novel", "chapter", "talk", "play", "draft"))
+    return [e for e in records if (e["kind"] == "novel" and e["id"] == nid) or
+            (e["kind"] != "novel" and (e["data"].get("novelId") == nid or
+             (e["kind"] in ("talk", "draft") and e["id"] == nid)))]
+
+
+def branch_snapshot(nid):
+    with LOCK:
+        if not isinstance(nid, str) or not ID_RE.fullmatch(nid):
+            return 400, {"ok": False, "error": "that book's name is not valid"}
+        if not read_record("novel", nid):
+            return 410, {"ok": False, "error": "that book has been removed"}
+        records = _book_records(nid)
+        novel = next(e["data"] for e in records if e["kind"] == "novel")
+        owned = {(e["kind"], e["id"]) for e in records}
+        if any(("chapter", cid) not in owned for cid in novel.get("order", [])) or any(
+                ("play", pid) not in owned for pid in novel.get("plays", [])):
+            return 409, {"ok": False, "error": "part of this book has not finished saving; try again in a moment"}
+        return 200, {"ok": True, "generation": generation(), "records": records}
+
+
+def _branch_targets(records, nid):
+    """Validate the new book's complete ownership before the first write."""
+    if not isinstance(records, list) or not records:
+        return "the branch arrived without its pages"
+    seen = set()
+    for e in records:
+        if not isinstance(e, dict) or e.get("kind") not in ("novel", "chapter", "talk", "play", "draft") or \
+                not isinstance(e.get("id"), str) or not ID_RE.fullmatch(e["id"]) or not isinstance(e.get("data"), dict):
+            return "the branch has an incomplete record"
+        key = (e["kind"], e["id"])
+        if key in seen:
+            return "the branch has two records with the same name"
+        seen.add(key)
+        if e["data"].get("id") != e["id"]:
+            return "a branch record names a different page"
+        if e["kind"] == "novel":
+            if e["id"] != nid:
+                return "the branch must contain only its own book"
+        elif e["data"].get("novelId") != nid:
+            return "every part of a branch must belong to its new book"
+        elif e["kind"] in ("talk", "draft") and e["id"] != nid:
+            return "the branch's conversation and draft must name its book"
+    if ("novel", nid) not in seen:
+        return "the branch arrived without its book"
+    novel = next(e["data"] for e in records if e["kind"] == "novel")
+    for field, kind in (("order", "chapter"), ("plays", "play")):
+        ids = novel.get(field, [])
+        if not isinstance(ids, list) or any(not isinstance(x, str) for x in ids) or len(ids) != len(set(ids)) or \
+                set(ids) != {e["id"] for e in records if e["kind"] == kind}:
+            return "the branch's %s do not match what its book holds" % ("chapters" if kind == "chapter" else "scenes")
+    if not novel.get("order"):
+        return "a branch needs a chapter to open"
+    distinct = [e["id"] for e in records if e["kind"] in ("novel", "chapter", "play")]
+    if len(distinct) != len(set(distinct)):
+        return "the branch's book, chapters and scenes need their own names"
+    for e in records:
+        if e["kind"] == "play" and e["data"].get("chapterId") not in novel["order"]:
+            return "a branch's scene must stand in one of its chapters"
+    return ""
+
+
+def _sent_keys(value):
+    keys = set()
+    todo = [value]
+    while todo:
+        item = todo.pop()
+        if isinstance(item, dict):
+            sent = item.get("sent")
+            if isinstance(sent, str) and ID_RE.fullmatch(sent):
+                keys.add(sent)
+            more = item.get("sentMore")
+            if isinstance(more, list):
+                keys.update(k for k in more if isinstance(k, str) and ID_RE.fullmatch(k))
+            todo.extend(item.values())
+        elif isinstance(item, list):
+            todo.extend(item)
+    return keys
+
+
+def _sync_directory(path):
+    """A committed receipt must not reach disk before the records it names."""
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _branch_receipt(path, receipt):
+    atomic_write_bytes(path, json.dumps(receipt, ensure_ascii=False).encode("utf-8"))
+    _sync_directory(path.parent)
+    _sync_directory(HOME)
+
+
+def _undo_branch(receipt, path):
+    """Only freshly reserved names are here; no older record is ever touched."""
+    targets = receipt.get("targets")
+    nid = receipt.get("novelId")
+    if not isinstance(targets, list) or not isinstance(nid, str) or not ID_RE.fullmatch(nid) or any(
+            not isinstance(p, list) or len(p) != 2 or p[0] not in ("novel", "chapter", "talk", "play", "draft") or
+            not isinstance(p[1], str) or not ID_RE.fullmatch(p[1]) for p in targets):
+        raise ValueError("an unfinished branch's recovery record could not be read")
+    names = {tuple(p) for p in targets}
+    _branch_hidden.update(names)
+    for kind, rid in names:
+        target = record_path(kind, rid)
+        target.unlink(missing_ok=True)
+        target.with_name(target.name + ".tmp").unlink(missing_ok=True)
+        _revs.pop((kind, rid), None)
+        _meta_cache.pop(rid, None)
+    if (SENT / nid).exists():
+        shutil.rmtree(SENT / nid)
+    for kind in {p[0] for p in targets}:
+        if (STORE / kind).is_dir():
+            _sync_directory(STORE / kind)
+    if SENT.is_dir():
+        _sync_directory(SENT)
+    path.unlink(missing_ok=True)
+    path.with_name(path.name + ".tmp").unlink(missing_ok=True)
+    _sync_directory(path.parent)
+    _branch_hidden.difference_update(names)
+
+
+def recover_branches():
+    """Before serving, remove any creation interrupted before its commit.
+    Committed receipts stay, so a retry after deletion never recreates a book."""
+    with LOCK:
+        if not BRANCHES.is_dir():
+            return
+        for path in sorted(BRANCHES.glob("*.json")):
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+            if receipt.get("state") == "building":
+                _undo_branch(receipt, path)
+
+
+def create_branch(spec, by=""):
+    if not isinstance(spec, dict):
+        return 400, {"ok": False, "error": "the branch arrived incomplete"}
+    nid, source = spec.get("requestId"), spec.get("sourceId")
+    if not isinstance(nid, str) or not ID_RE.fullmatch(nid) or not isinstance(source, str) or not ID_RE.fullmatch(source) or nid == source:
+        return 400, {"ok": False, "error": "the branch needs its own book name"}
+    if spec.get("sourceSentId", source) != source:
+        return 400, {"ok": False, "error": "a branch can carry only its own book's sent words"}
+    gen = spec.get("generation")
+    if not isinstance(gen, int) or isinstance(gen, bool) or gen < 0:
+        return 400, {"ok": False, "error": "the branch did not say which copy of the library it belongs to"}
+    records = spec.get("records")
+    why = _branch_targets(records, nid)
+    if why:
+        return 400, {"ok": False, "error": why}
+    revisions = spec.get("revisions")
+    if not isinstance(revisions, list):
+        return 400, {"ok": False, "error": "the branch did not name the saves it was copied from"}
+    expected = {}
+    for e in revisions:
+        if not isinstance(e, dict) or e.get("kind") not in ("novel", "chapter", "talk", "play", "draft") or \
+                not isinstance(e.get("id"), str) or not ID_RE.fullmatch(e["id"]) or \
+                not isinstance(e.get("rev"), int) or isinstance(e["rev"], bool) or e["rev"] < 1:
+            return 400, {"ok": False, "error": "a source save number is missing"}
+        key = (e["kind"], e["id"])
+        if key in expected:
+            return 400, {"ok": False, "error": "a source save was named twice"}
+        expected[key] = e["rev"]
+    digest = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+    path = BRANCHES / (nid + ".json")
+    with LOCK:
+        if gen != generation():
+            return 409, {"ok": False, "reload": True, "generation": generation(), "error": "a whole copy was brought back; open the book again before branching"}
+        if path.exists():
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+            if receipt.get("state") == "building":
+                _undo_branch(receipt, path)
+            else:
+                if receipt.get("generation") != gen or receipt.get("hash") != digest:
+                    return 409, {"ok": False, "error": "that branch name has already been used"}
+                if not read_record("novel", nid):
+                    return 410, {"ok": False, "error": "that branch was already made and has since been removed"}
+                return 200, receipt["result"]
+        if not read_record("novel", source):
+            return 410, {"ok": False, "error": "the book this branch came from has been removed"}
+        current = {(e["kind"], e["id"]): e["rev"] for e in _book_records(source)}
+        if current != expected:
+            return 409, {"ok": False, "changed": True, "error": "the book changed while the branch was being made; try again from its newest copy"}
+        for e in records:
+            if record_path(e["kind"], e["id"]).exists() or gone_rev(e["kind"], e["id"]) or history_dir(e["kind"], e["id"]).exists():
+                return 409, {"ok": False, "error": "one of this branch's names was already used; make the branch again"}
+        if (SENT / nid).exists():
+            return 409, {"ok": False, "error": "that branch name already has sent words; make the branch again"}
+        novel = next(e["data"] for e in records if e["kind"] == "novel")
+        lineage = novel.get("branch")
+        if not isinstance(lineage, dict) or lineage.get("fromId") != source:
+            return 400, {"ok": False, "error": "the branch does not name the book it came from"}
+        result = {"ok": True, "novelId": nid, "chapterId": novel["order"][-1], "generation": gen}
+        targets = [[e["kind"], e["id"]] for e in records]
+        receipt = {"state": "building", "novelId": nid, "sourceId": source, "generation": gen,
+                   "hash": digest, "targets": targets, "result": result}
+        # A persisted reservation precedes every new file. Readers are held by
+        # LOCK, and the hidden set also protects a failed rollback until retry.
+        _branch_receipt(path, receipt)
+        names = {tuple(p) for p in targets}
+        _branch_hidden.update(names)
+        try:
+            for key in sorted(_sent_keys(records)):
+                old = SENT / source / (key + ".json.gz")
+                if old.is_file():
+                    atomic_write_bytes(SENT / nid / old.name, old.read_bytes())
+            # The shelf's book is the final data record written. No page sees
+            # it until the commit receipt is durable and the lock is released.
+            for e in sorted(records, key=lambda e: e["kind"] == "novel"):
+                write_record(e["kind"], e["id"], {"rev": 1, "at": now_ms(), "data": e["data"], "saves": []})
+            for kind in {e["kind"] for e in records}:
+                _sync_directory(STORE / kind)
+            _sync_directory(STORE)
+            if (SENT / nid).is_dir():
+                _sync_directory(SENT / nid)
+                _sync_directory(SENT)
+            receipt["state"] = "committed"
+            _branch_receipt(path, receipt)
+        except Exception:
+            _undo_branch(receipt, path)
+            raise
+        _branch_hidden.difference_update(names)
+        _meta_cache.pop(nid, None)
+        # All announcements happen after commit, still under the lock: a
+        # following deletion cannot be announced before this creation.
+        for e in records:
+            announce({"kind": e["kind"], "id": e["id"], "rev": 1, "by": by})
+        return 200, result
+
+
 # ---------------------------------------------------------------- usage and cost
 # Every call to a model — the writer, the helper, the checker, the partner,
 # the narrator — counted as it lands, by address and model, day by day (Cozy
@@ -943,11 +1191,14 @@ def sent_put(nid, key, body):
 
 
 def sent_get(nid, key):
-    f = SENT / nid / (key + ".json.gz")
-    try:
-        return read_gz(f)
-    except FileNotFoundError:
-        return None
+    with LOCK:
+        if ("novel", nid) in _branch_hidden:
+            return None
+        f = SENT / nid / (key + ".json.gz")
+        try:
+            return read_gz(f)
+        except FileNotFoundError:
+            return None
 
 
 # ------------------------------------------------------------------ events
@@ -1221,7 +1472,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     payload = {"rev": rec.get("rev", 0), "data": rec["data"], "saves": rec.get("saves") or [], "generation": generation()}
             return self.send_json(payload)
         if path == "/api/novels":
-            return self.send_json({"novels": novel_list()})
+            with LOCK:
+                rows = novel_list()
+            return self.send_json({"novels": rows})
+        if parts[:2] == ["api", "branches"] and len(parts) == 3:
+            code, payload = branch_snapshot(parts[2])
+            return self.send_json(payload, code)
         if path == "/api/events":
             return self.events()
         if parts[:2] == ["api", "history"] and len(parts) == 4:
@@ -1418,14 +1674,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/api/call":
             return self.proxy_call()
+        if path == "/api/branches":
+            try:
+                code, payload = create_branch(self.read_body(), self.client())
+            except Exception as e:
+                code = 507 if isinstance(e, OSError) and e.errno == errno.ENOSPC else 500
+                payload = {"ok": False, "error": "the branch could not be kept: %s" % (getattr(e, "strerror", None) or str(e))}
+            return self.send_json(payload, code)
         if path == "/api/revs":
             # which of these has changed: one answer for everything a page holds
             want = self.read_body()
             out = {}
-            if isinstance(want, list):
-                for pair in want[:5000]:
-                    if isinstance(pair, list) and len(pair) == 2 and self.ok_id(pair[0], pair[1]):
-                        out[pair[0] + "/" + pair[1]] = rev_of(pair[0], pair[1]) or -gone_rev(pair[0], pair[1])
+            with LOCK:
+                if isinstance(want, list):
+                    for pair in want[:5000]:
+                        if isinstance(pair, list) and len(pair) == 2 and self.ok_id(pair[0], pair[1]):
+                            out[pair[0] + "/" + pair[1]] = rev_of(pair[0], pair[1]) or -gone_rev(pair[0], pair[1])
             return self.send_json({"revs": out})
         if path == "/api/lease":
             spec = self.read_body()
@@ -1840,6 +2104,7 @@ def main():
     lock = hold_folder()
     for d in (STORE, HISTORY, TRASH, COPIES, SENT):
         d.mkdir(parents=True, exist_ok=True)
+    recover_branches()
     try:
         httpd = Server(("127.0.0.1", PORT), Handler)
     except OSError:

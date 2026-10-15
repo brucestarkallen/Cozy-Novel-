@@ -17,6 +17,7 @@ import { connFor, stopIn } from '../novel/writer.js';
 import { stopTalk } from '../novel/talk.js';
 import { toMarkdown, toText, toPrintable, toEpub, fileName } from '../novel/files.js';
 import { plural, debounce, timeAgo } from '../util.js';
+import { openBranches } from './branches.js';
 
 async function loadChapters(novel) {
   const chapters = {};
@@ -265,6 +266,16 @@ export function openBook(novelId, { onGone, onClose } = {}) {
       h('button.btn', { title: hint, onclick: () => { flushPending(); exportBook(novelId, kind); } }, label),
       h('small', hint)))),
     h('p.say', 'The printable book opens in your browser; print it to a PDF from there.')));
+
+  const branchName = n.branch ? h('input', { type: 'text', value: n.branch.name || '', maxlength: 120, 'aria-label': 'Branch name' }) : null;
+  if (branchName) branchName.addEventListener('input', later(() => {
+    const name = branchName.value.trim();
+    if (name) store.change('novel', novelId, x => { if (x.branch) x.branch.name = name; });
+  }));
+  s.body.append(group('Branches of this story', { key: 'book.branches' },
+    h('p.say', n.branch ? `You are in “${n.branch.name}”. Its pages and notes belong to this branch.` : 'A separate book for another way the story could go, with its own pages and notes.'),
+    branchName ? field('Branch name', branchName, 'A name for this path through the story. It keeps the book’s title above.') : null,
+    h('button.btn.quiet', { onclick: () => { flushPending(); openBranches(novelId, { before: flushPending }); } }, 'Open branches')));
 
   s.body.append(group('Put it away', { key: 'book.away' },
     h('div.btnrow',

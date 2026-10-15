@@ -1321,7 +1321,9 @@ async function bringCopyBack() {
       h('p.say', 'Adding keeps everything here and puts its books beside them. Replacing makes everything exactly as in the copy — what is here now is kept as a copy on the phone first.'));
   });
   if (choice === 'add') {
-    const list = booksFromLibrary(data);
+    let list;
+    try { list = booksFromLibrary(data); }
+    catch (error) { toast(error?.message || 'That copy could not be read. No books were added.', 7000); return; }
     for (const b of list) {
       for (const id of b.novel.order) await store.create('chapter', id, b.chapters[id]);
       if (b.talk) await store.create('talk', b.novel.id, b.talk);

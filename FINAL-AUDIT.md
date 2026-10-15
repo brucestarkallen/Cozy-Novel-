@@ -108,3 +108,56 @@ They do not establish that every model will obey every direction, interpret ever
 fact correctly or produce moving prose. No paid literary benchmark was run.
 The release does not claim mathematical freedom from bugs or universally perfect
 writing. Model choice, story direction and the reader's judgment still matter.
+
+## Branches and Timeline follow-up, 2.10.0
+
+Story branches are independent books because Notes belong to a book, not to a
+chapter. Passage boundaries keep the manuscript prefix. A scene branch also
+keeps its conversation prefix and returns before that scene's converted prose.
+The partner's separate-book action explicitly keeps the current manuscript;
+it does not claim to reconstruct historical edits from an old conversation.
+Cozy Tavern's branch history informed record copying, source boundaries,
+checkpoint preservation, crash recovery and independent request archives.
+
+The branch persistence checks exercise source edits and deletion, library
+replacement, concurrent duplicate requests, failed record writes, interrupted
+creation and startup recovery, hidden incomplete copies, and sent-history
+independence. Client checks cover drafts, copied change ownership, delayed
+navigation and failure messages. Conservative note rebuilding prevents later
+generated knowledge from entering an earlier branch when old checkpoints
+cannot prove the earlier state. Current authored premise, plans and note
+fields remain the writer's chosen input.
+
+Timeline is a view of the history behind Notes. It does not create a second
+editable relationship bible or another writer-context dump. Its compact events
+live on passage versions, with exact quotes and source fingerprints. Tests
+exercise selection, edits, moves, deletion, restoration, strict passage
+boundaries, long readings, malformed responses, attributed beliefs and stale
+replies. Opening it makes no model call. Existing pages without event readings
+show incomplete coverage; the existing whole-book reread can backfill them.
+Played scenes enter manuscript history once converted into selected prose.
+
+Backup-import tests reproduce literal IDs being replaced inside authored prose
+by the former whole-JSON text replacement. Structured address remapping now
+preserves those words, draft spacing, saved requests, reading signatures and
+Timeline evidence, while importing related branches into their own family.
+
+Chromium checks cover branch isolation, family navigation and naming, scene
+and partner semantics, Timeline filters and source links, keyboard focus, Back,
+and narrow/unfolded layouts. Temporary synthetic books and local stand-ins
+only are used. Browser dimensions approximate foldable layouts; actual Oppo
+Find N5 and Galaxy Fold7 hardware was not available. Exact evidence validates
+where a Timeline event came from; its interpretation still depends on the
+chosen model and can be checked against the displayed quote.
+
+The broad application run exposed two small-context regressions after adding
+Timeline instructions. The helper now measures actual fixed request words and
+source wrappers instead of stacking guessed allowances. The original tests
+pass at the same 6,000-token context, with request-plus-reply bounds checked.
+
+Final follow-up validation: **39 suites, 1,974 passed, zero final failures**
+(1,089 server/application/focused checks; 885 Chromium browser checks). The
+full application suite passed 365/365 after the sizing repair; the extended
+browser walkthrough passed 277/277. Focused branch browser tests passed 49/49
+on the final restore guard, including lost acknowledgements followed by
+reload, retained intervening edits, and destination deletion after commit.

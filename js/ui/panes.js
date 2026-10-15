@@ -18,6 +18,8 @@ import { paced, follower, streamLines } from './live.js';
 import { drawProse, growProse } from './prose.js';
 import * as desk from './desk.js';
 import { sceneWords, choicesIn, nowLabelOf } from '../novel/prompts.js';
+import { openBranch, branchBusy } from './branches.js';
+import { makeTimeline } from './timeline.js';
 
 let ui = null;
 let hooks = {};
@@ -57,7 +59,7 @@ export function openPanes(novelId, chapterId) {
   for (const off of P.offs) off();
   P.offs = [];
   P.watched = new Set();
-  if (P.novelId !== novelId) { P.playId = null; }
+  if (P.novelId !== novelId) { P.playId = null; notesView = 'cards'; notesTimeline?.destroy(); notesTimeline = null; }
   P.novelId = novelId;
   P.chapterId = chapterId;
   P.offs.push(store.subscribe('novel', novelId, () => { drawChapters(); if (P.side === 'notes') drawSide(); drawLight(); }));
@@ -412,6 +414,19 @@ export function unsentWords() {
     return String(d.value || '').trim() || String(d.tell || '').trim();
   });
 }
+export async function saveComposersForBranch(novelId) {
+  if (P.novelId === novelId) keepTyped();
+  const words = [...composerDrafts].filter(([key]) => composerBooks.get(key) === novelId);
+  if (!words.length) { await store.flush('draft', novelId); return; }
+  let d = store.peek('draft', novelId);
+  if (d === undefined) d = await store.open('draft', novelId);
+  if (!d) await store.create('draft', novelId, { id: novelId, novelId, composers: Object.fromEntries(words) });
+  else store.change('draft', novelId, x => {
+    x.composers ||= {};
+    for (const [key, value] of words) x.composers[key] = { ...value };
+  }, { now: true });
+  await store.flush('draft', novelId);
+}
 export function restoreTyped(key, novelId = P.novelId) {
   const cursor = { ...typed };
   ui.rightFoot.dataset.for = key;
@@ -494,6 +509,13 @@ function drawSide() {
   P.shownView = sideView();
   for (const b of ui.tabs.querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.tab === P.side));
   ui.right.dataset.tab = P.side;
+  /* A helper reading never removes a timeline filter under his fingers. */
+  if (P.side === 'notes' && notesView === 'timeline' && notesTimeline?.novelId === P.novelId && notesTimeline.el.isConnected) {
+    notesTimeline.update(P.chapterId);
+    return;
+  }
+  notesTimeline?.destroy();
+  notesTimeline = null;
   ui.rightBody.textContent = '';
   ui.rightFoot.textContent = '';
   ui.rightFoot.hidden = true;
@@ -505,6 +527,23 @@ function drawSide() {
 /* ---------------------------------------------------------------- notes */
 
 const KIND_TITLE = { people: 'People', places: 'Places', lore: 'Things worth remembering', threads: 'Threads' };
+let notesView = 'cards', notesTimeline = null;
+
+/* Both views belong to the same notebook. The timeline links back to these
+ * cards and to the existing reading action, never to another set of notes. */
+function notesViews() {
+  const views = h('div.segmented.notes-views', { role: 'group', 'aria-label': 'Notebook view' });
+  for (const [value, label, title] of [['cards', 'Cards', 'Read or edit the notes that travel with your story.'], ['timeline', 'Timeline', 'Follow changes in people, relationships and threads, with their source passages.']]) {
+    views.append(h('button', { 'data-notes-view': value, title, 'aria-pressed': String(notesView === value), onclick: () => {
+      if (notesView === value) return;
+      notesView = value;
+      drawSide();
+      ui.rightBody.querySelector(`[data-notes-view="${value}"]`)?.focus({ preventScroll: true });
+      ui.rightBody.scrollTop = 0;
+    } }, label));
+  }
+  return views;
+}
 
 function drawNotes() {
   const n = store.peek('novel', P.novelId);
@@ -513,6 +552,29 @@ function drawNotes() {
   const l = archivist.lightOf(novelId);
   const totalCards = NOTE_KINDS.reduce((a, k) => a + ((n.notes && n.notes[k]) || []).length, 0);
   ui.rightBody.append(h('div.pane-intro', h('p.pane-kicker', 'Beside the story'), h('div.pane-title-row', h('h2', 'Your notebook'), h('span.pane-count', plural(totalCards, 'card')))));
+  ui.rightBody.append(notesViews());
+  if (notesView === 'timeline') {
+    notesTimeline = makeTimeline({ novelId, chapterId: P.chapterId,
+      current: () => P.novelId === novelId && P.side === 'notes' && notesView === 'timeline' && location.hash.split('/')[2] === novelId,
+      openCard: (kind, id) => {
+        const now = store.peek('novel', novelId);
+        if (now?.notes?.[kind]?.some((card) => card.id === id)) editCard(kind, id);
+        else toast('This card is no longer in the notes.');
+      },
+      jumpSource: (chapterId, passageId, query) => { closeRight(); desk.whenOpen(chapterId, { passageId, show: { query } }); },
+      readAgain: () => {
+        notesView = 'cards';
+        drawSide();
+        const button = ui.rightBody.querySelector('[data-read-whole-book]');
+        button?.scrollIntoView({ block: 'center' });
+        button?.focus({ preventScroll: true });
+        button?.click();
+      },
+    });
+    ui.rightBody.append(notesTimeline.el);
+    notesTimeline.update();
+    return;
+  }
   const card = h('div.lightcard.note-status', { 'data-state': l.state },
     h('div.note-status-heading', h('span.note-status-light', { 'aria-hidden': 'true' }), h('h3', l.state === 'off' ? 'No helper chosen' : l.state === 'reading' ? 'Reading your story' : l.state === 'trouble' ? 'The helper needs a hand' : l.state === 'waiting' ? 'Waiting to read' : 'Keeping the story close')),
     h('p.note-status-copy', l.state === 'off' ? 'Choose one in Settings → Connections to keep your notes up to date. Your own cards are always yours to edit.' : l.words));
@@ -535,7 +597,7 @@ function drawNotes() {
     toast('The helper is checking the notes against the book — what it finds shows here.');
     drawSide();
   } }, asked && !off && cards > 0 ? 'Checking the notes…' : 'Check the notes against the book'));
-  row.append(h('button.btn.quiet.small', { title: 'The helper reads every chapter from the start and writes its notes and summaries afresh — your own cards and summaries stay. Until it is done, everything goes on with the notes as they are now.', disabled: again, onclick: async () => {
+  row.append(h('button.btn.quiet.small', { 'data-read-whole-book': '', title: 'The helper reads every chapter from the start and writes its notes and summaries afresh — your own cards and summaries stay. Until it is done, everything goes on with the notes as they are now.', disabled: again, onclick: async () => {
     /* never begun with no helper to finish it: the notes it would rebuild are never left half gone */
     if (off) { toast('No helper is chosen, so the book cannot be read again. Choose one in Settings → Connections.', 6000); return; }
     if (!(await confirmIt('Read the whole book again?', 'The helper reads every chapter from the start and writes its notes and summaries afresh — and, for a book set to Automatic, What it’s about and How it reads. Your own cards, your own summaries and your corrections stay as they are; a card you took out comes back if the book still tells of them. Until it is done, the writer and the rest go on with the notes as they are now; Undo puts back what is there now.', 'Read it again'))) return;
@@ -1122,12 +1184,15 @@ function drawTurn(kind, id, turn) {
   const copyWords = turn.by === 'you' ? (v.text || '') : kind === 'talk' ? wordsOf(v.text) : sceneWords(v.text);
   const mine = turn.by === 'you';
   row.append(h('button.tmore', { 'aria-label': mine ? 'More for this message' : 'More for this answer', title: 'More', onclick: (e) => menu(e.currentTarget, [
-    !mine && kind === 'talk' ? { label: 'Branch from here', hint: 'A new conversation with everything up to this answer; this one stays as it is.', disabled: talk.talkBusy('talk', id), run: async () => {
+    !mine && kind === 'talk' ? { label: 'Branch from here (conversation in this book)', hint: 'A new conversation up to this answer. Both conversations work on this same book and its notes.', disabled: talk.talkBusy('talk', id), run: async () => {
+      await saveComposersForBranch(id);
       const out = await talk.copyConversation(id, turn.id);
       if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
       drawSide();
       toast(`“${out.name}” is open — the first one is in the list.`, 4000);
     } } : null,
+    !mine && kind === 'talk' ? { label: 'Branch story with this conversation', hint: 'A separate book with the story as it stands now, and this conversation up to this answer. Earlier book changes are kept.', disabled: branchBusy(id), run: () => openBranch({ novelId: id, conversationId: store.peek('talk', id)?.convId || 'current', conversationTurnId: turn.id }) } : null,
+    kind === 'play' ? { label: 'Branch story from here', hint: 'A separate book with the story before this scene was turned into prose, and the scene up to this turn.', disabled: branchBusy(P.novelId), run: () => openBranch({ novelId: P.novelId, playId: id, turnId: turn.id }) } : null,
     /* the answer as it came, its blocks and all (Cozy Tavern's "What it said, whole") */
     !mine && kind === 'talk' && String(v.text || '').trim() !== wordsOf(v.text).trim() ? { label: 'What it said, whole', hint: 'The answer as it came — its changes block and all.', run: () => showWhole(v.text) } : null,
     !mine && v.sent ? { label: 'What was sent', hint: 'Everything this answer was asked with, as it went out.', run: () => showSent(P.novelId, v.sent) } : null,

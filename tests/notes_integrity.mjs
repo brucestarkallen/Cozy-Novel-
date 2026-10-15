@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { timelineOf } from '../js/novel/timeline.js';
+import { estimateTokens } from '../js/util.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.COZY_NOTES_PORT || 20550);
@@ -173,6 +175,102 @@ try {
     helper.readAgain(b.id); quiet();
     store.change('novel', b.id, shape.novelSteps.dropNote('people', card.id));
     assert.deepEqual(prompts.standingNotes(b.n()).notes.people, []);
+  });
+  const event = (text, extra = {}) => ({ kind: 'relationship', cards: [{ kind: 'people', name: 'Mara' }, { kind: 'people', name: 'Tom' }], text: 'Mara distrusts Tom more.', why: 'He concealed the letter.', evidence: [text], stance: 'fact', ...extra });
+  const historyOf = b => timelineOf(b.n(), { [b.cid]: b.c() });
+  await test('the existing helper call keeps exact turning points for explicitly named batched sources', async () => {
+    const texts = ['Mara distrusted Tom after he hid the letter.', 'Tom kept his distance from Mara.', 'Mara locked the gate.'];
+    const b = await book(texts), ps = b.c().passages;
+    store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
+    await script([
+      { text: JSON.stringify({ people: [{ name: 'Tom', about: 'A guarded messenger.' }], timeline: [
+        { source: ps[0].id, events: [event(texts[0])] },
+        { source: ps[1].id, events: [event(texts[1], { text: 'Tom distances himself from Mara.', why: '' })] },
+      ] }) },
+      { text: JSON.stringify({ timeline: [{ source: ps[2].id, events: [] }] }) },
+    ]);
+    await helper.run(b.id); await store.flush();
+    const out = historyOf(b);
+    assert.equal(out.events.length, 2); assert.deepEqual(out.events.map(e => e.passageId), ps.slice(0, 2).map(p => p.id));
+    assert.equal(out.coverage.read, 3); assert.equal(out.coverage.complete, true);
+    const calls = await requests(); assert.equal(calls.length, 2, 'normal batched reading plus the newest passage; no extra history request');
+    assert.ok(calls[0].body.messages.at(-1).content.includes(`source ${ps[0].id}`));
+    const saved = (await (await realFetch(`${BASE}/api/store/chapter/${b.cid}`)).json()).data;
+    assert.equal(shape.picked(saved.passages[0]).continuity.events.length, 1, 'evidence is durable on its source version');
+    historyOf(b); historyOf(b); assert.equal((await requests()).length, 2, 'opening the view asks nothing');
+  });
+  await test('bad or omitted timeline data leaves an honest gap without asking the helper again', async () => {
+    for (const timeline of [undefined, null, 'unsupported', [{ source: 'another source', events: [] }]]) {
+      const b = await book(); store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
+      await script([{ text: JSON.stringify({ people: [{ name: 'Mara', now: 'At the gate.' }], ...(timeline !== undefined ? { timeline } : {}) }) }]);
+      await helper.run(b.id);
+      assert.equal(historyOf(b).coverage.complete, false); assert.equal((await requests()).length, 1);
+      await helper.run(b.id); assert.equal((await requests()).length, 1, 'missing history alone never starts another paid call');
+    }
+  });
+  await test('valid evidence survives beside false quotes but that source stays incomplete', async () => {
+    const text = 'Mara distrusted Tom after he hid the letter.', b = await book([text]), pid = b.c().passages[0].id;
+    store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
+    await script([{ text: JSON.stringify({ people: [{ name: 'Tom', about: 'A guarded messenger.' }], timeline: [{ source: pid, events: [event(text), event('Mara forgave Tom.')] }] }) }]);
+    await helper.run(b.id);
+    assert.equal(historyOf(b).events.length, 1); assert.equal(historyOf(b).coverage.complete, false);
+    assert.equal((await requests()).length, 1);
+  });
+  await test('a delayed history cannot attach to words changed during the reading', async () => {
+    const text = 'Mara distrusted Tom after he hid the letter.', b = await book([text]), p = b.c().passages[0], old = shape.picked(p);
+    store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
+    await script([
+      { text: JSON.stringify({ people: [{ name: 'Tom', about: 'A guarded messenger.' }], timeline: [{ source: p.id, events: [event(text)] }] }), pause: 0.3 },
+      { text: JSON.stringify({ timeline: [{ source: p.id, events: [] }] }) },
+    ]);
+    const running = helper.run(b.id);
+    await until(async () => (await requests()).length > 0, 'The source reading did not start');
+    const v = shape.newVersion({ text: 'Mara waited alone at the gate.' });
+    store.change('chapter', b.cid, shape.chapterSteps.addVersion(p.id, v));
+    store.change('chapter', b.cid, shape.chapterSteps.setSummary({ text: 'Mara waits alone.', fp: shape.chapterPrint(b.c()), at: Date.now(), by: 'you' }));
+    await running;
+    assert.equal(old.continuity, undefined); assert.equal(historyOf(b).events.length, 0);
+    assert.equal(shape.picked(b.c().passages[0]).id, v.id);
+    assert.equal(historyOf(b).coverage.complete, true, 'the replacement received its own successful reading');
+  });
+  await test('long passages need history coverage from every part, with no extra reading', async () => {
+    store.change('house', 'house', h => { h.connections[0].context = 6000; });
+    try {
+      const text = 'Mara waited beside the quiet water. '.repeat(700), b = await book([text]), pid = b.c().passages[0].id;
+      store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
+      const answer = { text: JSON.stringify({ timeline: [{ source: pid, events: [] }] }) };
+      await script(Array.from({ length: 30 }, () => answer));
+      await helper.run(b.id);
+      assert.ok((await requests()).length > 1, 'the source was read in parts');
+      for (const call of await requests()) assert.ok(estimateTokens(call.body.messages.map(m => m.content).join('\n')) + (call.body.max_tokens || 0) <= 6000, 'the complete notes/history instructions, source and reply fit the small helper');
+      assert.equal(historyOf(b).coverage.complete, true);
+      assert.equal(historyOf(b).coverage.read, 1);
+      store.change('novel', b.id, shape.novelSteps.setMemory({ seen: {}, readings: {} }));
+      await script([{ text: '{}' }, ...Array.from({ length: 29 }, () => answer)]);
+      await helper.run(b.id);
+      assert.equal(historyOf(b).coverage.complete, false, 'the last part cannot hide a missing earlier part');
+    } finally { store.change('house', 'house', h => { h.connections[0].context = 200000; }); }
+  });
+  await test('Read the whole book again backfills history without adding a new worker', async () => {
+    const text = 'Mara distrusted Tom after he hid the letter.', b = await book([text]), pid = b.c().passages[0].id;
+    store.change('chapter', b.cid, c => { c.summary.by = 'you'; });
+    assert.equal(historyOf(b).coverage.complete, false);
+    await script([{ text: JSON.stringify({ people: [{ name: 'Mara', about: 'The keeper.' }, { name: 'Tom', about: 'A messenger.' }], timeline: [{ source: pid, events: [event(text)] }] }) }]);
+    helper.readAgain(b.id); quiet(); await helper.run(b.id); quiet();
+    assert.equal(historyOf(b).coverage.complete, true); assert.equal(historyOf(b).events.length, 1);
+    assert.equal((await requests()).length, 1);
+  });
+  await test('a small helper budgets every source wrapper when many tiny passages share a reading', async () => {
+    store.change('house', 'house', h => { h.connections[0].context = 6000; });
+    try {
+      const b = await book(Array.from({ length: 90 }, () => 'Mara waits.'));
+      store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
+      await script([]); await helper.run(b.id);
+      const calls = (await requests()).filter(r => r.body.messages.at(-1).content.includes('Update the notes for what this changes.'));
+      assert.ok(calls.length > 1);
+      for (const call of calls) assert.ok(estimateTokens(call.body.messages.map(m => m.content).join('\n')) + (call.body.max_tokens || 0) <= 6000, 'source labels count even when their passages are two words long');
+      assert.equal(helper.pendingWork(b.id), false);
+    } finally { store.change('house', 'house', h => { h.connections[0].context = 200000; }); }
   });
 } catch (e) { failed++; console.error(e.stack || e); }
 finally {
