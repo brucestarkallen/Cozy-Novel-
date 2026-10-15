@@ -325,3 +325,13 @@ Checked with all five suites — server 63/63, app 365/365, thinking 348/348 (0 
 - Turning off automatic whole-passage or sentence rewriting cancels its pending result. Stopping a background rewrite preserves a version manually selected while the request was running.
 - Malformed provider content blocks are handled safely. Structured output finds the actual story response rather than nested metadata, and numeric template bounds are enforced.
 - WRITING-AUDIT.md describes what runs automatically, how it recovers and where user action or a running browser is required. Behavioral regressions use synthetic books and local stand-in providers; no paid model call is made.
+
+## 2.9.1, still your storyteller
+
+- Writer, scene and partner guidance preserves the personality, humor and way of thinking described in their own instruction boxes. The story's viewpoint belongs to its telling character; it does not silently turn the storyteller into that character.
+- App-added storytelling instructions use ordinary writing language, with leftover robot/model terminology and artificial identity labels removed from the default crafts. This changes the app's words only; custom instructions and story text are never filtered.
+- Default crafts allow comic relief, deliberate grammar, ordinary replies and alternate versions of familiar characters. They no longer demand a fixed mental checklist, default dice rolls or one stock way for a clever, angry or composed person to behave. Custom instructions and edited modules keep their words.
+- The checker is explicitly told to respect intentional humor, speech patterns and the user's version of a familiar character. Book facts, scene agency and chosen viewpoint remain consistent.
+- Ready-made prefills preserve the words entered, including literal bracketed names. Reserved template marks are explained instead of silently removed; literal bracketed names also survive a provider's fallback to ordinary prefill. Connection settings explain that its opening and thinking seed are shared by the writer and narrator using it.
+- Focused persona requests cover writing, rewrites, selected rewrites, continuation, scenes, conversion, partner follow-ups and visible thinking. These are transport and instruction checks using local stand-ins, not claims about a model's private reasoning or literary performance.
+- Removing a book waits for its pending chapter, conversation, scene and draft saves. Failed removal preserves edits; restored records become editable again. Failed chapter or scene removal keeps the item in its book instead of silently hiding it.

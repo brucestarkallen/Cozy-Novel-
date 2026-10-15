@@ -431,6 +431,7 @@ function prefillPart(c, { set, now, quiet, tick }) {
   const sayHint = () => { const d = describePrefill({ ...now(), prefill: ta.value }); hint.textContent = d || 'Empty: nothing is started for it.'; };
   ta.addEventListener('input', typing(() => { set({ prefill: ta.value || undefined }); sayHint(); }, 500));
   part.append(field('Start the reply for it (optional — the prefill)', ta),
+    quiet('This opening and thinking seed are shared by the writer and narrator using this connection. For separate voices, use their own boxes in Your instructions, including Words in the storyteller’s own voice.'),
     quiet('Open it with <think> and it seeds the model’s THINKING instead of its reply — <think>Right, where were we. Let me look at what Bruce just asked for… — the model carries the thought on in your words, then writes the page itself. Anything after </think> starts the reply, as before.'),
     hint);
   sayHint();

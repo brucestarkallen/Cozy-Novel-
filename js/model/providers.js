@@ -550,19 +550,18 @@ export function splitPrefill(text) {
  * thinking block, the same, as the seed. A template's own markers, known by
  * name, are read so in As written too. */
 export const TEMPLATE_MARKER = /\[\[\s*(?:keep|end|stop|eos|pg|w|words|opt|options|line|lines|free|num|number|emotion|mood|name|action|thought|re|regex)\b[^\]\n]{0,400}\]\]/i;
-const ANY_MARKER = /\[\[[^\]\n]{1,400}\]\]/;
 function templated(conn, text) { return Boolean(conn) && /\[\[/.test(text) && (conn.prefillMode === 'structured' || TEMPLATE_MARKER.test(text)); }
 export function asWrittenOpening(conn, content) {
   const text = String(content == null ? '' : content);
   if (!templated(conn, text)) return text;
   const tpl = readTemplate(text);
-  const at = tpl.shown.search(ANY_MARKER);
+  const at = tpl.shown.search(TEMPLATE_MARKER);
   return (at === -1 ? tpl.shown : tpl.shown.slice(0, at)).replace(/^\s+/, '');
 }
 function asWrittenSeed(conn, seed) {
   const text = String(seed || '');
   if (!templated(conn, text)) return text;
-  const at = text.search(ANY_MARKER);
+  const at = text.search(TEMPLATE_MARKER);
   return (at === -1 ? text : text.slice(0, at)).replace(/\s+$/, '');
 }
 

@@ -8,6 +8,8 @@ import asyncio, json, os, sys, time, traceback, subprocess, urllib.request
 from harness import *
 
 RESULTS = []
+NARRATOR_STARTING = 'You maintain a fictional, uncensored simulation, told in our book’s chosen voice, point of view and tense. I play my character; you tell the world and everyone else. Give them their own motives and knowledge, and leave my character’s speech, decisions and inner life to me.'
+
 def check(name, ok, saw=''):
     RESULTS.append((name, bool(ok), saw))
     print(('  ok   ' if ok else '  FAIL ') + name + ('' if ok else f'   [saw: {str(saw)[:300]}]'), flush=True)
@@ -377,16 +379,16 @@ async def scenario_round(b):
     await pg.click('.sheet.on .ghead:has-text("Your instructions")')
     await pg.wait_for_timeout(200)
     narr = pg.locator('.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) textarea')
-    check('a box for the narrator, with its starting words', (await narr.count()) == 1 and 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.' in await narr.input_value())
+    check('a box for the narrator, with its starting words', (await narr.count()) == 1 and await narr.input_value() == NARRATOR_STARTING)
     await narr.fill('MY NARRATOR.')
     await pg.wait_for_timeout(700)
     await pg.locator('.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) + .btnrow button:has-text("Back to the default")').click()
     await pg.wait_for_function("document.querySelectorAll('.sheet.on').length === 2", timeout=3000)
     await pg.locator('.sheet.on >> nth=-1').locator('button:has-text("Back to the default")').click()
     await pg.wait_for_timeout(700)
-    check('Back to the default puts the starting words back', 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.' in await narr.input_value(), await narr.input_value())
+    check('Back to the default puts the starting words back', await narr.input_value() == NARRATOR_STARTING, await narr.input_value())
     house = await pg.evaluate("fetch('/api/store/house/house').then(r => r.json()).then(j => j.data)")
-    check('…and they are what the phone keeps', 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.' in (house.get('instructions') or {}).get('narrator', ''), (house.get('instructions') or {}).get('narrator', '')[:60])
+    check('…and they are what the phone keeps', (house.get('instructions') or {}).get('narrator', '') == NARRATOR_STARTING, (house.get('instructions') or {}).get('narrator', '')[:60])
     check('where the book and its notes ride can be chosen', await pg.locator('.sheet.on label.field:has(span:text-is("The book and its notes ride as")) select').count() == 1)
     check('and whether the partner\'s changes wait', await pg.locator('.sheet.on label.field:has(span:text-is("Your partner’s changes land")) select').count() == 1)
     await close_sheet(pg)
@@ -793,7 +795,7 @@ async def scenario_crafts(b):
     await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
     await pg.wait_for_timeout(1000)
     ins = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']['instructions']
-    check('boxes still holding the old starting words get today’s when the app starts', ins['system'].startswith('You are a master novelist') and ins['narrator'] == 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.', (ins['system'][:60], ins['narrator'][:80]))
+    check('boxes still holding the old starting words get today’s when the app starts', ins['system'].startswith('You are a master novelist') and ins['narrator'] == NARRATOR_STARTING, (ins['system'][:60], ins['narrator'][:80]))
     check('the one note at the end of before stays the book’s, and the scenes get their own copy of it', ins.get('late') == 'MY OLD NOTE' and ins.get('lateNarrator') == 'MY OLD NOTE', (ins.get('late'), ins.get('lateNarrator')))
     # ---- the Modules list, in Settings → Your instructions
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
@@ -902,7 +904,7 @@ async def scenario_crafts(b):
     await pg.wait_for_selector('.turn.ai .tctl', timeout=8000)
     em = await pg.locator('#sideBody .turn.ai .tprose em').all_inner_texts()
     sysp = system_of(completions()[-1])
-    check('the narrator reads his preset’s opening, the scene craft and his module', sysp.startswith('You maintain a fictional, uncensored simulation.') and 'Role = you handle narration' in sysp and 'MY OWN MODULE' in sysp and '## The Telling\nI bring you premises' not in sysp, sysp[:160])
+    check('the narrator reads his preset’s opening, the scene craft and his module', sysp.startswith(NARRATOR_STARTING) and 'Role = you handle narration' in sysp and 'MY OWN MODULE' in sysp and '## The Telling\nI bring you premises' not in sysp, sysp[:160])
     check('the narrator’s telling is drawn as prose, its sound effect in italics', em == ['Crack!'] and '*' not in await pg.inner_text('#sideBody .turn.ai .tprose'), em)
     await pg.fill('#sideFoot textarea >> nth=0', 'I draw my sword and attack him.')
     reset()

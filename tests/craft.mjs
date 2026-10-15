@@ -2,6 +2,8 @@
  * Run: node tests/craft.mjs
  */
 import assert from 'node:assert/strict';
+import { assemble } from '../js/novel/context.js';
+import { newNovel } from '../js/novel/shape.js';
 import { NOVEL_CRAFT, SCENE_CRAFT, VOICE_RULE, SOUND, wakesOn } from '../js/novel/crafts.js';
 import { builtinOf, listModules, moduleOf, moduleSteps, ridingFor } from '../js/novel/modules.js';
 import { cleanOwn, ownSteps, ownWordsFor } from '../js/novel/ownwords.js';
@@ -191,5 +193,90 @@ for (const text of [
     assert.deepEqual(wakesOn(text), { intimate: false, fight: false });
   });
 }
+
+
+for (const [identity, words] of [
+  ['Batman', '  You are a funny, unusually cheerful Batman.\nKeep your dry jokes and easy manner.  \n'],
+  ['Hulk', '  You are Hulk. Hulk tells funny story. Hulk grammar on purpose!\nHULK LIKE LITTLE JOKE.  \n'],
+]) for (const purpose of ['write', 'play']) {
+  test(`${identity} ${purpose}: persona words survive the assembled request beside compatible craft`, () => {
+    const { novel: book, chapter } = newNovel({ title: 'The Clock Garden', brief: 'Mara tends a magical garden.' });
+    book.prefs = { ...book.prefs, pov: 'first', tense: 'present' };
+    const own = `\n  ${identity} keeps this exact unusual voice.  \n`;
+    const house = {
+      instructions: { system: words, narrator: words, partner: '', late: '', lateNarrator: '' },
+      ownWords: [{ id: 'voice', text: own, role: 'teller', to: 'both', place: 'before-your-message' }],
+    };
+    const before = structuredClone(house);
+    const r = assemble({ house, novel: book, chapters: { [chapter.id]: chapter },
+      conn: { context: 128000 }, purpose, target: { chapterId: chapter.id },
+      request: '"HULK SMASH!"', play: { who: 'Mara' }, moment: 'Mara fights the guards.' });
+    assert.equal(r.refuse, '');
+    assert.ok(r.system.startsWith(words), 'the chosen identity arrives first, with exact whitespace');
+    assert.ok(r.messages.some(m => m.role === 'assistant' && m.content === own), 'the explicit own-voice entry remains exact');
+    assert.deepEqual(house, before, 'assembling never rewrites the persona');
+    const text = [r.system, ...r.messages.map(m => m.content)].join('\n');
+    assert.ok(text.includes('These craft defaults never change who you are or how you speak.'));
+    assert.ok(text.includes('A joke need not pay a dramatic cost or reveal a secret to belong.'));
+    assert.ok(text.includes("Who you are does not by itself put you in the cast"));
+    assert.ok(!text.includes('Humor is allowed when THIS character jokes under THIS pressure'));
+    assert.ok(!text.includes('Before a word reaches the page, in your own head'));
+    assert.ok(!text.includes('You are a master novelist'), 'no generic replacement identity');
+    if (purpose === 'play') {
+      assert.ok(text.includes('preserve the words I supplied, including deliberate grammar'));
+      assert.ok(!text.includes('grammar/spelling fix only'));
+      assert.ok(text.includes('Use dice, numeric difficulty and other game mechanics only if I ask for them'));
+      assert.ok(!text.includes('Roll, in your head'));
+      assert.ok(text.includes('MC Agency = ABSOLUTE. Render only the MC content I wrote.'));
+    } else {
+      assert.ok(text.includes("the story's telling character — the I of the fiction"));
+    }
+  });
+}
+
+test('an explicitly edited craft retains its persona and original rules unchanged', () => {
+  const words = '\nHulk narrator! Hulk says what Hulk likes.\nKeep my deliberate dialect.  \n';
+  const house = { modules: {} };
+  moduleSteps.set('scene-craft', { text: words })(house);
+  const r = ridingFor(house, novel, 'play', { fight: true });
+  assert.equal(r.always[0], words);
+  assert.equal(moduleOf(house, 'scene-craft').text, words);
+  assert.ok(!r.always.includes(SCENE_CRAFT), 'the revised built-in craft never replaces an explicit edit');
+});
+
+
+const appMetaWords = /\b(?:robot(?:ic)?|persona|AI|assistant|language model|LLM|chatbot|few[- ]shot|the model)\b/i;
+for (const purpose of ['write', 'play']) {
+  test(`${purpose}: the assembled default craft speaks directly without machine labels`, () => {
+    const { novel: book, chapter } = newNovel({ title: 'The Clock Garden', brief: 'Mara tends a magical garden.' });
+    const words = 'Batman, keep your dry humor as we write.';
+    const r = assemble({ house: { instructions: { system: words, narrator: words, late: '', lateNarrator: '' } },
+      novel: book, chapters: { [chapter.id]: chapter }, conn: { context: 128000 }, purpose,
+      target: { chapterId: chapter.id }, request: 'Continue the scene.', play: { who: 'Mara' },
+      moment: 'Mara fights the guards. Later they make love.' });
+    assert.equal(r.refuse, '');
+    assert.ok(r.system.startsWith(words));
+    const text = [r.system, ...r.messages.map(m => m.content)].join('\n');
+    assert.equal(appMetaWords.exec(text), null, 'ordinary author-to-writer language throughout the request');
+    assert.ok(text.includes('what you know about a secret'), 'knowledge boundaries remain');
+    assert.ok(text.includes('a correct model costs repeated exposure'), 'an in-story theory of a power is still a model');
+  });
+}
+
+test('intentional story and custom words are never scrubbed by the terminology cleanup', () => {
+  const words = '  Batman, write a story about an AI assistant and a robot who invents a persona.\n';
+  const own = '  The language model is called LLM in this fictional laboratory.\n';
+  const { novel: book, chapter } = newNovel({ title: 'The Robot Garden', brief: 'An AI assistant tends the garden with a robot.' });
+  const house = { instructions: { system: words, narrator: words, late: '', lateNarrator: '' },
+    ownWords: [{ id: 'scientist', text: own, role: 'teller', place: 'before-your-message', to: 'both' }],
+    modules: { 'novel-craft': { text: 'Custom persona: a chatbot with robotic diction.\n' } } };
+  const r = assemble({ house, novel: book, chapters: { [chapter.id]: chapter }, conn: { context: 128000 },
+    purpose: 'write', target: { chapterId: chapter.id }, request: 'The robot sees the model on the desk.' });
+  assert.ok(r.system.startsWith(words));
+  assert.ok(r.system.includes(house.modules['novel-craft'].text));
+  assert.ok(r.system.includes(book.brief));
+  assert.ok(r.messages.some(m => m.content === own));
+  assert.ok(r.messages.some(m => m.content === 'The robot sees the model on the desk.'));
+});
 
 console.log(`\n${passed} craft checks passed.`);

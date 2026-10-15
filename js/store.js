@@ -209,8 +209,8 @@ export async function create(kind, id, data) {
  * position, so it means the same thing over any copy. */
 export function change(kind, id, fn, { now = false, checkpoint = false, delay = 500 } = {}) {
   const r = rec(kind, id);
-  if (!r.loaded || !r.data) throw new Error(`${kind} ${id} is not open`);
   if (r.deleted || r.removing) return undefined;
+  if (!r.loaded || !r.data) throw new Error(`${kind} ${id} is not open`);
   const out = fn(r.data);
   r.pending.push({ fn, checkpoint });
   tellStatus();
@@ -235,24 +235,30 @@ function tell(r, why) { for (const fn of [...r.fns]) { try { fn(r.data, why); } 
 
 export async function remove(kind, id) {
   const r = rec(kind, id);
-  /* from now on it takes no new steps — a reading of the helper's landing
-   * while it goes would only be turned away by the phone ("deleted") — and a
-   * save already on its way lands before it goes */
-  r.removing = true;
-  clearTimeout(r.timer);
-  r.pending = [];
+  /* A book goes with its chapters, conversations, scenes and draft, exactly
+   * as on the phone. Freeze every open record before waiting: a worker's
+   * child save must not arrive after the phone has removed the whole book. */
+  const owned = kind === 'novel' ? [...recs.values()].filter((x) =>
+    ['chapter', 'talk', 'play', 'draft'].includes(x.kind) &&
+    ((x.data && x.data.novelId === id) || (['talk', 'draft'].includes(x.kind) && x.id === id))) : [];
+  const going = [r, ...owned];
+  for (const x of going) { x.removing = true; clearTimeout(x.timer); x.timer = null; }
   try {
-    if (r.saving) await saveNow(r).catch(() => {});
+    /* Keep pending edits in the deleted copy too. If deletion fails, their
+     * steps have not been discarded and the records remain editable. */
+    await Promise.all(going.map((x) => x.pending.length || x.saving ? saveNow(x) : null));
     const { status: code } = await api('DELETE', `/api/store/${kind}/${id}`);
     if (code !== 200) throw new Error('the phone could not delete it');
+    for (const x of going) {
+      x.deleted = true; x.data = null; x.loaded = false; x.pending = [];
+      unjournal(x);
+      /* watched records stay, so bringing the book back can refresh them */
+      if (!x.fns.size) recs.delete(keyOf(x.kind, x.id));
+    }
   } finally {
-    r.removing = false;
+    for (const x of going) x.removing = false;
+    tellStatus();
   }
-  r.deleted = true; r.data = null; r.loaded = false;
-  unjournal(r);
-  /* a record still watched keeps its watchers, so if it is brought back they hear of it */
-  if (!r.fns.size) recs.delete(keyOf(kind, id));
-  tellStatus();
 }
 
 /* Let go of a record this page no longer shows (its unsaved steps are saved first). */
@@ -445,10 +451,17 @@ function onNews(raw) {
     return;
   }
   if (ev.kind === 'novel') for (const fn of shelfFns) fn(ev);
-  if (ev.by === CLIENT) return;
+  /* Our own cascade also deletes child records, including ones opened
+   * while its request travelled. Those deletion events still matter. */
+  if (ev.by === CLIENT && !ev.deleted) return;
   const r = recs.get(keyOf(ev.kind, ev.id));
-  if (!r || !r.loaded) return;
-  if (ev.deleted) { gone(r); return; }
+  if (!r || (!r.loaded && !r.deleted)) return;
+  if (ev.deleted) {
+    /* remove() already owns these records and its caller moves the screen
+     * after success. Do not navigate away before that local removal ends. */
+    if (ev.by === CLIENT && r.removing) return;
+    gone(r); return;
+  }
   /* newer, or back after being deleted (started over, brought back) */
   if (r.deleted || ev.rev > r.rev) refresh(r);
 }
@@ -520,7 +533,7 @@ async function refresh(r) {
           /* our own save is on its way; if it was made from an older copy it is refused and rebased */
         } else {
           const back = r.deleted;
-          r.deleted = false;
+          r.deleted = false; r.loaded = true;
           if (back) r.pending = [];
           rebase(r, data.rev, data.data);
           tell(r, 'remote');
@@ -536,7 +549,7 @@ async function refresh(r) {
  * what changed is read again. */
 async function recheckAll() {
   for (const fn of shelfFns) fn();
-  const held = [...recs.values()].filter((r) => r.loaded);
+  const held = [...recs.values()].filter((r) => r.loaded || (r.deleted && r.fns.size));
   if (!held.length) return;
   const asked = new Map(held.map((r) => [r, r.rev]));
   let revs = null;

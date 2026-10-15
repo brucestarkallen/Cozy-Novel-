@@ -82,11 +82,45 @@ is available for intentionally adopting the updated text in an edited module.
 
 ## Evidence and limits
 
+The 2.9.1 persona follow-up checks writer, scene and partner identities separately,
+including rewrites, continuation, scene conversion, partner follow-ups and visible
+thinking. App-added wording asks for the voice and humour described in the user's
+instructions without assigning another identity. Default crafts allow deliberate
+grammar, comedy and alternate versions of familiar characters, and no longer
+require a fixed mental checklist or numeric contest procedure.
+Remaining robot/model terminology and artificial identity labels in those defaults
+are replaced with ordinary writing language. This is an edit to built-in guidance,
+not a filter on custom instructions, stories, or the thoughts a provider returns.
+
+A connection's prefill remains shared and literal. Separate instruction boxes and
+purpose-specific **Words in the storyteller's own voice** provide distinct voices
+for the writer and narrator. Optional structured thinking templates keep the form
+the user explicitly selected; a normal request adds no such form. Ready-made
+templates preserve literal names and report reserved marks that would change how
+the template works. Request tests check delivery and retained words, not whether a
+live model is funny or whether its private reasoning follows a prescribed voice.
+
+Deletion checks also reproduce a late save from the same window after a book's
+children have been removed, and a failed deletion discarding pending edits.
+Removal now freezes the book and its open child records, saves pending work
+before deleting, and keeps records editable if deletion fails. Restoring a book
+refreshes watched records even after missed news. Failed chapter or scene removal
+keeps its entry in the book. The server still protects against an already-sent
+save from another window arriving after deletion.
+
 Regression tests use synthetic books, the actual application modules and server,
 Chromium, and scripted local providers. They check saved state and outgoing
 requests, including delayed responses, missing grades, changed worker choices,
 scene placement, request inheritance and viewpoint persistence. The ordinary
 server, app, thinking and browser suites remain required.
+
+Version 2.9.1 passed **1,262 checks** on the final implementation: server 63,
+application 365, thinking/provider parity 348, main browser walk 75 and extended
+browser walk 277; instruction delivery 33, crafts and module routing 63, provider
+edges 7, literal prefill words 6, custom storytelling request paths 4, store removal
+and restoration 6, and browser removal/failure/retry flows 15. All completed with
+zero failures. The browser suite also verifies the updated narrator defaults,
+reset/save behavior and migration with exact expected words.
 
 Version 2.9.0 passed **1,300 checks**:
 

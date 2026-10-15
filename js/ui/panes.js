@@ -267,20 +267,28 @@ function chapterMenu(anchor, id, i) {
 }
 
 async function removeChapter(id) {
-  const n = store.peek('novel', P.novelId);
+  const novelId = P.novelId;
+  const n = store.peek('novel', novelId);
   const c = store.peek('chapter', id);
   const words = c ? chapterWords(c) : 0;
   if (!(await confirmIt('Remove this chapter?', `${chapterLabel(n, c)}${words ? ` and its ${plural(words, 'word')}` : ''} go to Recently deleted (Settings → Backups) for thirty days.`, 'Remove it', { danger: true }))) return;
   /* a page being written into it stops: there is nowhere left to keep it (Tavern M675) */
-  writer.stopIn(P.novelId, id);
-  archivist.retireChapter(P.novelId, c);
-  const i = n.order.indexOf(id);
-  store.change('novel', P.novelId, novelSteps.removeChapter(id), { now: true });
-  await store.flush('novel', P.novelId);
-  await store.remove('chapter', id).catch(() => {});
-  archivist.nudge(P.novelId);
-  writer.recount(P.novelId);
-  if (id === P.chapterId) hooks.goChapter(n.order[Math.max(0, Math.min(i, n.order.length - 1))]);
+  writer.stopIn(novelId, id);
+  try { await store.remove('chapter', id); }
+  catch (_) { toast('The chapter could not be removed. Try again in a moment.', 6000); return; }
+  /* Only a chapter the phone removed leaves the book and its readings.
+   * Apply the change by id to the current order, preserving edits made while
+   * the request was on its way. */
+  const current = store.peek('novel', novelId);
+  if (!current) return;
+  const i = current.order.indexOf(id);
+  archivist.retireChapter(novelId, c);
+  store.change('novel', novelId, novelSteps.removeChapter(id), { now: true });
+  await store.flush('novel', novelId);
+  archivist.nudge(novelId);
+  writer.recount(novelId);
+  if (P.novelId !== novelId) return;
+  if (id === P.chapterId) hooks.goChapter(current.order[Math.max(0, Math.min(i, current.order.length - 1))]);
   else drawChapters();
 }
 
@@ -1273,9 +1281,10 @@ function drawOnePlay(p) {
       { label: 'Remove this scene', hint: 'To Recently deleted; prose already written from it stays.', danger: true, run: async () => {
         if (!(await confirmIt('Remove this scene?', 'It goes to Recently deleted (Settings → Backups) for thirty days. Anything already turned into prose stays in the book.', 'Remove it', { danger: true }))) return;
         talk.stopTalk('play', p.id);
-        store.change('novel', P.novelId, novelSteps.removePlay(p.id), { now: true });
-        await store.remove('play', p.id).catch(() => {});
-        P.playId = null; drawSide();
+        try { await store.remove('play', p.id); }
+        catch (_) { toast('The scene could not be removed. Try again in a moment.', 6000); return; }
+        if (store.peek('novel', p.novelId)) store.change('novel', p.novelId, novelSteps.removePlay(p.id), { now: true });
+        if (P.novelId === p.novelId && P.playId === p.id) { P.playId = null; drawSide(); }
       } },
     ]) }, icon('more', 18)));
   ui.rightBody.append(head);

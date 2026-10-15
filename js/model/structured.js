@@ -447,14 +447,17 @@ export const STRUCTURED_PRESETS = Object.freeze([
     example: (w) => '(in the thinking box) last passage ended with: …\npath A: … path B: … path C: …\ngoing with: path B, because …\n\n(the page) ' + (w ? w + ' — ' : '') + 'the passage, down the path it chose…',
   },
 ]);
-/* his words, safe inside a template: no marker can be made of them (a "[[" or "]]" he typed is not a slot) */
+/* His words stay exactly as typed. The ready-made templates accept words,
+ * not controls that would hide, replace or move them into the thinking. */
 export function presetWords(words) {
-  return String(words == null ? '' : words).replace(/\[\[|\]\]/g, '').replace(/\s+$/g, '').replace(/^\s+/, '');
+  return String(words == null ? '' : words);
 }
 export function fillPreset(id, words) {
   const p = STRUCTURED_PRESETS.find((x) => x.id === id);
   if (!p) return { error: 'no such template' };
   const w = presetWords(words);
-  if (p.needsWords && !w) return { error: 'This template needs your words — type them first.' };
+  if (p.needsWords && !w.trim()) return { error: 'This template needs your words — type them first.' };
+  const control = w.match(/\[\[\s*(?:keep|end|stop|eos|pg|w|words|opt|options|line|lines|free|num|number|emotion|mood|name|action|thought|re|regex)\b[^\]\n]{0,400}\]\]|<\/?think>/i);
+  if (control) return { error: `“${control[0]}” changes how the template works, so your words were not added. Leave that mark out of “Your words”, or write your own template in the prefill box.` };
   return { prefill: p.build(w), example: p.example(w), guide: p.guide };
 }
