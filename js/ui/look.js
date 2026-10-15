@@ -50,8 +50,8 @@ export function applyLook(look = {}) {
   const novel = colourPair(look, 'novel');
   const scene = colourPair(look, 'scene'), dialogue = colourPair(look, 'dialogue');
   for (const [key, value] of Object.entries({
-    '--novel-paper': novel ? novel[mode] : '',
-    '--novel-ink': novel ? inkFor(novel[mode]) : '',
+    '--novel-highlight': novel ? novel[mode] : '',
+    '--novel-highlight-ink': novel ? inkFor(novel[mode]) : '',
     '--scene-paper': scene ? scene[mode] : '',
     '--scene-ink': scene ? inkFor(scene[mode]) : '',
     '--dlg': dialogue ? dialogue[mode] : '',

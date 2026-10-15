@@ -288,13 +288,13 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
 .pagewrap {
   /* Back only the manuscript's width. The room must remain visible in the
    * gutters; filling this entire viewport hid it on wide and folded screens. */
-  background: linear-gradient(var(--novel-paper, var(--paper)), var(--novel-paper, var(--paper))) center top / min(100%, var(--page-width)) 100% no-repeat;
+  background: linear-gradient(var(--paper), var(--paper)) center top / min(100%, var(--page-width)) 100% no-repeat;
 }
 @media (max-width: 520px) {
   .pagewrap { background-size: min(calc(100% - 16px), var(--page-width)) 100%; }
   .page { width: min(calc(100% - 16px), var(--page-width)); margin-inline: auto; }
 }
-.page { background: var(--novel-paper, var(--paper)); color: var(--novel-ink, var(--ink)); border-color: var(--paper-edge); box-shadow: none; }
+.page { background: var(--paper); color: var(--ink); border-color: var(--paper-edge); box-shadow: none; }
 .page::before { opacity: .13; }
 .chapnum { color: var(--ink-soft); font-family: var(--label-font); }
 .chapname:empty::before { opacity: 1; color: var(--ink-soft); }
@@ -525,22 +525,20 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
 :root[data-motion="off"] .sheet[aria-hidden="true"] { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) { .sheet[aria-hidden="true"] { visibility: hidden; } }
 
-/* Plain reading surfaces keep scroll backing opaque when highlights are off.
- * Scoped variables leave the other reading surface and saved palettes alone. */
-:root[data-novel-highlight="off"] .pagewrap {
-  --novel-paper: var(--chrome-solid);
-  --novel-ink: var(--chrome-ink);
+/* Highlight controls affect the writing blocks, never the page or pane behind them. */
+:root[data-novel-highlight="on"] body:not(.reading) .passage.selected {
+  background: var(--novel-highlight, var(--select));
+  color: var(--novel-highlight-ink, var(--ink));
 }
-:root[data-novel-highlight="off"] .page { border-color: transparent; }
-:root[data-novel-highlight="off"] .page::before { display: none; }
+:root[data-novel-highlight="off"] .passage.selected {
+  background: none; transition: none;
+}
 :root[data-scene-highlight="off"] .pane .turn.ai.prose-turn {
   background: transparent; color: var(--chrome-ink); border-color: transparent;
 }
-/* Page furniture follows custom paper contrast as well as the prose. */
-:root[style*="--novel-ink"] .page,
-:root[data-novel-highlight="off"] .page {
-  --paper: var(--novel-paper);
-  --ink: var(--novel-ink, var(--chrome-ink));
+/* Controls inside a custom highlight share its readable foreground. */
+:root[data-novel-highlight="on"][style*="--novel-highlight-ink"] body:not(.reading) .passage.selected {
+  --ink: var(--novel-highlight-ink);
   --ink-soft: var(--ink);
   --accent-on-paper: var(--ink);
 }

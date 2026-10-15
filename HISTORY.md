@@ -422,3 +422,11 @@ Checked across 48 suites: 2,163 distinct checks passed after final reruns. The n
 - Resetting the whole appearance restores both switches and preserves saved novel, scene and dialogue pairs. Colour changes leave the written passages untouched.
 
 Checked with 12 suites: 1,498 checks passed, zero failures, including the required server, application, thinking, main and extended browser suites. The reading-colour walkthrough passed 47 checks, covering persistence, independent switches, full-screen scenes, reading mode and plain manuscript backing in all three themes, both lights and phone/unfolded widths. Settings, accessibility, world performance, surface stability and room backing also passed. Temporary synthetic data and local stand-in providers only; no paid calls.
+
+## 2.10.6, passage highlights without changing the paper
+
+- Corrects Novel highlight colour to affect the selected passage, rather than recolouring the entire manuscript. Its on/off switch removes only that passage highlight. The theme’s solid page, viewport backing, border and decoration stay unchanged in both states.
+- Saved night/day highlight colours still return when enabled; reading mode keeps its usual unhighlighted passages. Controls inside a custom highlight use its readable foreground.
+- Scene highlighting remains limited to the narrator’s card; the surrounding pane stays solid. Appearance help now distinguishes writing highlights from the surrounding page.
+
+Checked with 8 suites: 1,218 checks passed, zero failures. The 47-check colour walkthrough verifies that only the selected passage changes colour, reading mode hides its highlight, switches persist and all three themes retain their original solid paper and scroll backing in both lights at phone and unfolded widths. Required server/application/thinking/main/extended-browser suites, surface stability and room backing passed. Original Study was visually inspected with highlights on and off. Synthetic temporary data and local stand-in providers only; no paid calls.

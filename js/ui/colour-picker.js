@@ -38,10 +38,10 @@ export function colourPicker(kind, read, update) {
     const scene = colourPair(look, surface) || recommendedColours(world, surface);
     const dialogue = colourPair(look, 'dialogue') || recommendedColours(world, 'dialogue');
     preview.style.background = scene[mode]; preview.style.color = inkFor(scene[mode]);
-    if (look[`${surface}Highlight`] === 'off') { preview.style.background = 'var(--chrome-solid)'; preview.style.color = 'var(--chrome-ink)'; }
+    if (look[`${surface}Highlight`] === 'off') { preview.style.background = kind === 'novel' ? 'var(--paper)' : 'var(--chrome-solid)'; preview.style.color = kind === 'novel' ? 'var(--ink)' : 'var(--chrome-ink)'; }
     preview.querySelector('.colour-dialogue').style.color = look.tint === 'off' ? 'inherit' : dialogue[mode];
     const low = contrast(scene[mode], dialogue[mode]) < 4.5;
-    hint.textContent = enabled && !enabled.checked ? 'Highlight is off: a plain reading surface replaces the coloured paper. Your colours stay saved.' : kind === 'novel' ? 'The writer’s novel page, including reading mode. Night and day switch together with your room.' : kind === 'scene' ? 'The narrator’s page in scenes, including full screen. Night and day switch together with your room.' : look.tint === 'off' ? 'Turn on Tint the dialogue to see these colours in the book and scenes.' : low ? 'This dialogue colour has low contrast against your scene highlight. Try a lighter night colour or a darker day colour.' : 'Spoken words in the book and scenes. Night and day switch together with your room.';
+    hint.textContent = enabled && !enabled.checked ? 'Highlight is off. The writing block has no highlight; the page behind it stays unchanged. Your colours stay saved.' : kind === 'novel' ? 'The selected passage in the novel. The page background stays unchanged. Night and day switch together with your room.' : kind === 'scene' ? 'The highlight behind the narrator’s writing, including full-screen scenes. Night and day switch together with your room.' : look.tint === 'off' ? 'Turn on Tint the dialogue to see these colours in the book and scenes.' : low ? 'This dialogue colour has low contrast against your scene highlight. Try a lighter night colour or a darker day colour.' : 'Spoken words in the book and scenes. Night and day switch together with your room.';
   };
   choose.addEventListener('change', () => update({ [`${kind}Palette`]: choose.value }));
   const edit = () => update({ [`${kind}Palette`]: 'custom', [`${kind}Custom`]: { dark: night.value, light: day.value } });

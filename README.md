@@ -174,7 +174,8 @@ The new-scene name and starting place also survive keyboard resizing and reloads
 Settings → Appearance includes novel highlight, scene highlight and dialogue colours, with
 separate night/day values, saved colour pairs, Cozy dark and Warm orange presets,
 and Back to default. Novel and scene highlights each have their own on/off switch;
-turning one off uses a plain reading surface and keeps its chosen colours. Saved colours stay available when the appearance is reset.
+the novel switch removes the selected passage’s highlight, while the scene switch removes
+the narrator card’s highlight. The surrounding page and pane backgrounds stay unchanged. Saved colours stay available when the appearance is reset.
 
 No build step: `index.html`, `css/`, `js/` and `serve.py` are the whole app. `AGENTS.md` maps the code and the rules it keeps. The checks:
 

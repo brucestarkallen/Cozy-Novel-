@@ -12,11 +12,11 @@ export function colourPair(look, kind) {
 }
 export function recommendedColours(world, kind) {
   const values = {
-    academy: { scene: ['#1d2a29', '#fffaf0'], dialogue: ['#edcc93', '#83530f'] },
-    tokyo: { scene: ['#211c31', '#fffafd'], dialogue: ['#9bdee7', '#276b79'] },
-    study: { scene: ['#30271f', '#fffaf0'], dialogue: ['#e8c49c', '#7a4d25'] },
+    academy: { novel: ['#303830', '#f4ebdc'], scene: ['#1d2a29', '#fffaf0'], dialogue: ['#edcc93', '#83530f'] },
+    tokyo: { novel: ['#322a46', '#f4ecf6'], scene: ['#211c31', '#fffafd'], dialogue: ['#9bdee7', '#276b79'] },
+    study: { novel: ['#44382a', '#f4ebdd'], scene: ['#30271f', '#fffaf0'], dialogue: ['#e8c49c', '#7a4d25'] },
   };
-  const [dark, light] = (values[world] || values.academy)[kind === 'novel' ? 'scene' : kind];
+  const [dark, light] = (values[world] || values.academy)[kind];
   return { dark, light };
 }
 function luminance(hex) {
