@@ -519,9 +519,9 @@ function autoFields(hs) {
   };
   return [
     row('autoFix', 'Apply the checker’s fixes by themselves',
-      'Every fix with words to put in goes in as soon as it’s found — one new version per checking, the words before one arrow away. Sentences to write again (your words to avoid, stock wording) stay behind the bubble for you, and your own words are never changed by themselves. For passages written after you switch it on.'),
+      'Every fix with words to put in goes in as soon as it’s found — grammar, clarity, wording — your own words too: one new version per checking, the words before one arrow away. A sentence to write again (a word on your list, stock wording) is written again by itself, twice at most for a passage. A slip against the book’s notes, and a rewrite of most of a paragraph, wait behind the bubble for you, and a version you put back on show yourself stays as you chose it. For passages written after you switch it on.'),
     row('autoLift', 'Write a passage under your mark again by itself',
-      'When the judge puts a passage under your mark, the writer writes it again toward it with what the judge said it needs — twice at most; then the best-graded version stays on show, every version one arrow away. Its fixes wait until then. Anything you ask the writer meanwhile goes first, and Leave it on its grade stops it. Your own words are never written again by themselves. For passages written after you switch it on.'),
+      'When the judge puts a passage under your mark, the writer writes it again toward it with what the judge said it needs — twice at most; then the best-graded version stays on show, every version one arrow away. Its fixes wait until then. Anything you ask the writer meanwhile goes first, Leave it on its grade stops it, and a version you put back on show yourself stays as you chose it. Your own words too. For passages written after you switch it on.'),
   ];
 }
 

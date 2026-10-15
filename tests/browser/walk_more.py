@@ -679,6 +679,14 @@ async def scenario_checker(b):
     check('the new words are checked, and what he left is not offered again: green', states[-1] == 'clean', states)
     ctl = await pg.inner_text('#passages .passage >> nth=-1 >> .pctl')
     check('each change is a version of its own, the words before one arrow away', '3 / 3' in ctl, ctl)
+    # his own words, read as Grammarly reads: a sentence in a weak passive is a Clarity card
+    await pg.fill('#direction', 'The choice was made by her to stay.'); await pg.click('#mineBtn')
+    await pg.wait_for_function("document.querySelector('#checkBubble').dataset.state === 'found'", timeout=15000)
+    await pg.click('#checkBubble'); await pg.wait_for_selector('.sheet.on .sug')
+    tags = await pg.locator('.sheet.on .sug .tag').all_inner_texts()
+    check('his own words are checked too, and a clarity fix says Clarity', [t.lower() for t in tags] == ['clarity'], tags)
+    await pg.locator('.sheet.on .sug:has-text("She chose") button:has-text("Leave it")').click(); await pg.wait_for_timeout(300)
+    if await pg.locator('.sheet.on').count(): await close_sheet(pg)
     # search: the words, wherever they are written, and a tap goes there
     await pg.click('#searchBtn')
     await pg.wait_for_selector('.sheet.on .searchtop')
@@ -1806,6 +1814,19 @@ async def scenario_auto(b):
         if 'patient, unhurried' in prose: break
         await pg.wait_for_timeout(250)
     check('the checker’s fix goes in by itself, the words before one arrow away', 'patient, unhurried' in prose and '2 / 2' in await pg.inner_text('#passages .passage >> nth=-1 >> .pctl'), prose[:200])
+    # he goes back to the words before with the arrows: his choice stands (looked at again below, after more checking)
+    await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected button[aria-label="The version before"]'); await pg.wait_for_timeout(400)
+    # his own words: fixed by themselves too (his word, 2.6.2)
+    await pg.fill('#direction', 'My own page: Mara kept no letters anymore.'); await pg.click('#mineBtn')
+    for i in range(120):
+        mine = await pg.inner_text('#passages .passage >> nth=-1')
+        if 'letters any more' in mine: break
+        await pg.wait_for_timeout(250)
+    check('his own words get the checker’s fix by themselves, the words before one arrow away', 'letters any more' in mine and '2 / 2' in await pg.inner_text('#passages .passage >> nth=-1 >> .pctl'), mine[:200])
+    # he takes the fixed version away: the words that come back on show are his choice too (looked at again below)
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    await pg.click('.menu-pop button:has-text("Remove this version")'); await pg.wait_for_timeout(500)
     # a page under the mark: written again by itself, toward it
     await write(pg, 'He gave her a look that meant he was sorry. And she knew, at last, that she was home.')
     for i in range(160):
@@ -1817,6 +1838,15 @@ async def scenario_auto(b):
     await pg.wait_for_timeout(1500)
     writ = await pg.inner_text('#writeBtn')
     check('and the writer is his again', writ.strip() == 'Write', writ)
+    first = await pg.inner_text('#passages .passage >> nth=0')
+    await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    ctl = await pg.inner_text('.passage.selected .pctl')
+    check('the version he went back to stays as he chose it, through every checking after — its fix waits for him', 'patient and unhurried' in first and '1 / 2' in ctl, (first[:160], ctl))
+    own = await pg.inner_text('#passages .passage >> nth=1')
+    await pg.click('#passages .passage >> nth=1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    vl = '.passage.selected .pctl .ver > span'
+    ver = await pg.inner_text(vl) if await pg.locator(vl).count() else '1 / 1'
+    check('and the words that came back when he took the fixed version away stay too', 'letters anymore' in own and '1 / 1' in ver, (own[:160], ver))
     # both off again, for the walks after (the house is shared)
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')

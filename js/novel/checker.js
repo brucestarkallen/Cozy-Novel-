@@ -1,14 +1,21 @@
 /* Cozy Novel — js/novel/checker.js — THE CHECKER: Grammarly for the book.
  *
  * Each passage, once it is finished (written, his own words, an edit), is
- * read by the checker for grammar, wording that sounds machine-made rather
- * than written ("humanize"), his words to avoid, and slips against the book
- * and its notes ("continuity"). What it would change waits, passage by
+ * read by the checker as Grammarly reads writing, made for a book: grammar,
+ * spelling, punctuation and the book kept consistent ("grammar"); sentences
+ * hard to follow, padded, unidiomatic or in a weak passive, written again
+ * whole when that is what they need ("clarity"); wording that sounds
+ * machine-made rather than written, a flat word, a word out of the book's
+ * voice ("humanize"); his words to avoid; where a passage joins the one
+ * before ("seam"); and slips against the book and its notes ("continuity").
+ * What it would change waits, passage by
  * passage, behind the bubble on the page — green when everything is checked
  * and nothing needs changing, blue while it checks, yellow with what it
  * found — to be applied one by one or all at once, or left as it is.
  *
- * Nothing is changed without him: an applied suggestion makes a new version
+ * Nothing is changed without him — unless he switched on what happens by
+ * itself (then his own words too, Settings → Who does what): an applied
+ * suggestion makes a new version
  * of the passage (the words before are one arrow away); the suggestions of
  * one checking all land on that one new version. What it found is kept on
  * the chapter, for the version it read, only while that version still reads
@@ -20,7 +27,7 @@
  * connection turned away for good is not asked again until it changes. */
 
 import * as store from '../store.js';
-import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain } from './writer.js';
+import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain, rewriteSelection as writeSpanAgain } from './writer.js';
 import * as archivist from './archivist.js';
 import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, howOf, bornOf, chapterText } from './shape.js';
 import { numberedText, shortOf, notesBehind } from './context.js';
@@ -108,18 +115,24 @@ function chaptersOf(novelId) {
  * passage — as his settings stand now (Cozy Tavern M474): a word he took off
  * his list is no longer offered, and a grade is under his mark only while it
  * is under the mark he has now */
+/* a suggestion as his settings stand now: one for a word he took off his list, or a grade his mark no longer
+ * stands over, is no longer his to see — nor done by itself */
+function standsNow(house) {
+  const avoid = new Set(avoidList(house).map((w) => w.toLowerCase()));
+  const judge = judgeOf(house);
+  return (item) => {
+    if (item.kind === 'avoid' && item.replace === null) return (item.phrases || [item.phrase]).some((w) => w && avoid.has(String(w).toLowerCase()));
+    if (item.kind === 'grade') return Boolean(judge) && Boolean(item.grade) && Number.isFinite(item.grade.overall) && item.grade.overall < judge.target;
+    return true;
+  };
+}
 export function suggestions(novelId) {
   const novel = store.peek('novel', novelId);
   const out = [];
   if (!novel) return out;
   const house = store.peek('house', 'house') || {};
-  const avoid = new Set(avoidList(house).map((w) => w.toLowerCase()));
   const judge = judgeOf(house);
-  const stands = (item) => {
-    if (item.kind === 'avoid' && item.replace === null) return (item.phrases || [item.phrase]).some((w) => w && avoid.has(String(w).toLowerCase()));
-    if (item.kind === 'grade') return Boolean(judge) && Boolean(item.grade) && Number.isFinite(item.grade.overall) && item.grade.overall < judge.target;
-    return true;
-  };
+  const stands = standsNow(house);
   for (const c of chaptersOf(novelId)) {
     const nums = passageNumbers(c);
     for (const p of c.passages || []) {
@@ -815,41 +828,7 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     const kind = CHECK_KINDS.includes(String(e.kind || '').toLowerCase()) ? String(e.kind).toLowerCase() : 'humanize';
     a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), start: spot.start, end: spot.end });
   }
-  for (const a of asked.values()) {
-    /* a word he never wants that it let through: found here, and its sentence
-     * offered to be written again (every such word of that sentence named) */
-    for (const w of avoid) {
-      for (const hit of avoidedIn(a.text, w)) {
-        const s = sentenceAround(a.text, hit.start, hit.end);
-        const same = a.items.find((x) => x.kind === 'avoid' && x.start === s.start && x.end === s.end);
-        if (same) { if (!same.phrases.includes(w)) same.phrases.push(w); continue; }
-        const sentence = a.text.slice(s.start, s.end);
-        if (a.items.some((x) => overlaps(x, hit) || overlaps(x, s)) || wasLeft(a, sentence, null)) continue;
-        a.items.push({ id: newId('sg'), kind: 'avoid', find: sentence, replace: null, phrase: w, phrases: [w], start: s.start, end: s.end });
-      }
-    }
-    for (const x of a.items) if (x.kind === 'avoid' && x.replace === null) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} on your list of words to avoid`;
-    /* stock wording counted that no fix here takes away: its sentence offered
-     * to be written again, the same way */
-    for (const hit of a.stock) {
-      if (a.items.some((x) => overlaps(x, hit))) continue;
-      const s = sentenceAround(a.text, hit.start, hit.end);
-      const same = a.items.find((x) => x.stock && x.start === s.start && x.end === s.end);
-      if (same) { if (!same.phrases.includes(hit.words)) same.phrases.push(hit.words); continue; }
-      const sentence = a.text.slice(s.start, s.end);
-      if (a.items.some((x) => overlaps(x, s)) || wasLeft(a, sentence, null)) continue;
-      a.items.push({ id: newId('sg'), kind: 'humanize', find: sentence, replace: null, stock: true, phrases: [hit.words], start: s.start, end: s.end });
-    }
-    for (const x of a.items) if (x.stock) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} stock wording — far more common in machine-made fiction than in books people write`;
-    /* a stray of another script no fix here takes out: its sentence offered to be written again (Cozy Tavern M119) */
-    for (const hit of a.strays) {
-      if (a.items.some((x) => overlaps(x, hit))) continue;
-      const s = sentenceAround(a.text, hit.start, hit.end);
-      const sentence = a.text.slice(s.start, s.end);
-      if (a.items.some((x) => overlaps(x, s)) || wasLeft(a, sentence, null)) continue;
-      a.items.push({ id: newId('sg'), kind: 'grammar', find: sentence, replace: null, stray: true, phrases: [a.text.slice(hit.start, hit.end)], why: 'a stray character of another script stands here', start: s.start, end: s.end });
-    }
-  }
+  for (const a of asked.values()) foundHere(a, avoid, (find) => wasLeft(a, find, null));
   const graded = new Map();
   if (judge) {
     for (const { a, list } of byPassage.values()) {
@@ -890,10 +869,74 @@ function where(chapterId, passageId) {
 
 /* the new words, kept: on the version this checking made, when it is the
  * one on the page — or as a new version, the words before one arrow away */
+/* The sentences the app finds itself, to be written again — a word on his list it let through, stock wording
+ * counted, a stray of another script — in words as they stand (a.text), around what is found there already
+ * (a.items, with their places): where a fix takes in the very words, the fix takes them away; where a fix only
+ * shares the sentence, the sentence waits, and is found again in the words the fix makes (keepWords). `left`:
+ * a sentence he left as it is for this passage. */
+function foundHere(a, avoid, left) {
+  /* a word he never wants: its sentence offered to be written again (every such word of that sentence named) */
+  for (const w of avoid) {
+    for (const hit of avoidedIn(a.text, w)) {
+      const s = sentenceAround(a.text, hit.start, hit.end);
+      /* (one of its own for the same sentence — never a fix that came back for it, which holds no list of words: 2.6.1 stopped on that) */
+      const same = a.items.find((x) => x.kind === 'avoid' && x.replace === null && x.start === s.start && x.end === s.end);
+      if (same) { if (!same.phrases.includes(w)) same.phrases.push(w); continue; }
+      const sentence = a.text.slice(s.start, s.end);
+      if (a.items.some((x) => overlaps(x, hit) || overlaps(x, s)) || left(sentence)) continue;
+      a.items.push({ id: newId('sg'), kind: 'avoid', find: sentence, replace: null, phrase: w, phrases: [w], start: s.start, end: s.end });
+    }
+  }
+  for (const x of a.items) if (x.kind === 'avoid' && x.replace === null) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} on your list of words to avoid`;
+  /* stock wording counted that no fix here takes away: its sentence offered to be written again, the same way */
+  for (const hit of a.stock) {
+    if (a.items.some((x) => overlaps(x, hit))) continue;
+    const s = sentenceAround(a.text, hit.start, hit.end);
+    const same = a.items.find((x) => x.stock && x.start === s.start && x.end === s.end);
+    if (same) { if (!same.phrases.includes(hit.words)) same.phrases.push(hit.words); continue; }
+    const sentence = a.text.slice(s.start, s.end);
+    if (a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
+    a.items.push({ id: newId('sg'), kind: 'humanize', find: sentence, replace: null, stock: true, phrases: [hit.words], start: s.start, end: s.end });
+  }
+  for (const x of a.items) if (x.stock) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} stock wording — far more common in machine-made fiction than in books people write`;
+  /* a stray of another script no fix here takes out: its sentence offered to be written again (Cozy Tavern M119) */
+  for (const hit of a.strays) {
+    if (a.items.some((x) => overlaps(x, hit))) continue;
+    const s = sentenceAround(a.text, hit.start, hit.end);
+    const sentence = a.text.slice(s.start, s.end);
+    if (a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
+    a.items.push({ id: newId('sg'), kind: 'grammar', find: sentence, replace: null, stray: true, phrases: [a.text.slice(hit.start, hit.end)], why: 'a stray character of another script stands here', start: s.start, end: s.end });
+  }
+}
+const ownFind = (x) => x.replace === null && (x.kind === 'avoid' || x.stock || x.stray);
+
+/* what still waits on words a fix made: the fixes not put in, where they stand in them, and the app's own
+ * sentences found again in them (foundHere) — a word on his list in a sentence a fix shared is offered now,
+ * never left standing unsaid because a fix stood beside it; one found again keeps its card */
+function stillWaiting(w, next, rest) {
+  const house = store.peek('house', 'house') || {};
+  const placed = [];
+  const loose = [];
+  for (const x of rest) {
+    if (ownFind(x)) continue;
+    const spot = x.kind === 'grade' || !x.find ? { why: 'none' } : locate(next, x.find);
+    if (spot.why) loose.push(x); else placed.push({ ...x, start: spot.start, end: spot.end });
+  }
+  const a = { text: next, items: placed, stock: stockIn(next, { not: askWords(w.v) }), strays: straysIn(next) };
+  const leftHere = (w.chapter.checksLeft && w.chapter.checksLeft[w.p.id]) || [];
+  foundHere(a, avoidList(house), (find) => leftHere.some((l) => l.find === find && l.replace === null));
+  const before = rest.filter(ownFind);
+  const found = a.items.sort((x, y) => x.start - y.start).map(({ start, end, ...x }) => {
+    const was = ownFind(x) ? before.find((o) => o.find === x.find && o.kind === x.kind) : null;
+    return was ? { ...x, id: was.id } : x;
+  });
+  return [...loose.filter((x) => x.kind === 'grade'), ...found, ...loose.filter((x) => x.kind !== 'grade')];
+}
+
 function keepWords(novelId, w, next, rest) {
   const { chapter, p, v, e } = w;
   const sig = hashText(next);
-  const entry = { round: e.round, sig, at: Date.now(), items: rest };
+  const entry = { round: e.round, sig, at: Date.now(), items: stillWaiting(w, next, rest) };
   if (v.how === 'suggested' && v.round === e.round) {
     /* the helper had read these words: it is told what they were */
     archivist.retireIfSeen(novelId, chapter.id, p.id, v.id);
@@ -1267,12 +1310,27 @@ export function autoOf(house) {
   const on = (x) => (x && x.on && Number.isFinite(x.from) ? x.from : null);
   return { fix: on(house && house.autoFix), lift: on(house && house.autoLift) };
 }
-/* his own words are never changed by themselves; only what a writer wrote whole is written again */
-const HIS_HOW = ['mine', 'edit', 'imported'];
-const LIFTABLE = ['write', 'another', 'rewrite', 'play'];
+/* what happens by itself happens to his own words too, once he switches it on (his word, 15 October:
+ * "automatically change my word — my own writing is ok too"): a passage under his mark is written again
+ * whoever wrote it — the writer, his partner, or he himself — twice at most; every version stays one
+ * arrow away */
 export const MAX_LIFTS = 2;
 const liftsOf = (p) => (p.versions || []).filter((v) => v.lift);
 const liftTried = new Set();
+/* written after he switched it on — by the version it came from: a fix or a rewrite of older words is as old as
+ * they are, and words brought in were written before, whenever they came */
+const since = (v, from) => howOf(v) !== 'imported' && bornOf(v) >= from;
+/* a sentence to write again — his word to avoid, stock wording, a stray of another script — that no fix took
+ * away: with the fixes going in by themselves, written again by itself too, one at a time, twice at most for a
+ * passage; each once for the words it was found in, and one that failed for a real reason never again */
+export const MAX_SPANS = 2;
+const spansOf = (p) => (p.versions || []).filter((v) => v.spanAuto);
+const spanTried = new Set();
+/* what the writer is told for a sentence to write again — the same by his button (Suggestions → Write it again) and by itself */
+export function spanNote(item) {
+  const words = quoted(Array.isArray(item.phrases) && item.phrases.length ? item.phrases : item.phrase ? [item.phrase] : []);
+  return item.stock ? `Write it again without ${words} — say it the way this book would.` : `Write it again without ${words}.`;
+}
 /* the passages open in his edit box: nothing goes in by itself under his hand (Cozy Tavern M429) */
 const editingNow = new Set();
 export function setEditing(passageId, on) { if (on) editingNow.add(passageId); else editingNow.delete(passageId); }
@@ -1289,9 +1347,13 @@ const checkOf = (c, p, v) => { const e = c.checks && c.checks[p.id] && c.checks[
  *    replaces). After the second try is graded, the best-graded of the tries
  *    and the version they came from stays on show, once (a version he picks
  *    afterwards is his). "Leave it" on its grade stops it.
- *  - otherwise, with "Apply the fixes by themselves" on: every fix with words
- *    to put in goes in, one new version for the checking (Apply all, for that
- *    passage); sentences to write again stay behind the bubble.
+ *  - otherwise, with "Apply the fixes by themselves" on: every small fix
+ *    with words to put in goes in, one new version for the checking (Apply
+ *    all, for that passage); then a sentence to write again that is left on
+ *    it (a word on his list, stock wording, a stray of another script) is
+ *    written again by itself, one at a time, twice at most for a passage.
+ *    A slip against the notes, and a fix too large, wait for him.
+ * His own words too, once he switched it on (his word, 2.6.2).
  * One writing at a time, only while the writer is free; anything he asks the
  * writer meanwhile goes first (writer.js yieldAuto). */
 function autoAfter(novelId) {
@@ -1299,13 +1361,15 @@ function autoAfter(novelId) {
   const a = autoOf(house);
   if (a.fix === null && a.lift === null) return;
   const judge = judgeOf(house);
+  const stands = standsNow(house);
   let next = null;
   for (const c of chaptersOf(novelId)) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       let v = picked(p);
-      /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) — nor under his hand in the edit box */
-      if (!v || v.streaming || v.cut || HIS_HOW.includes(howOf(v)) || editingNow.has(p.id)) continue;
+      /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) — nor under his hand in the edit box,
+       * nor on a version he put on show himself (the arrows, or the one on show removed): his choice stands, its suggestions wait for him */
+      if (!v || v.streaming || v.cut || v.chosen || editingNow.has(p.id)) continue;
       let e = checkOf(c, p, v);
       if (!e) continue;
       if (a.lift !== null && judge) {
@@ -1334,16 +1398,46 @@ function autoAfter(novelId) {
         const g = e.grade;
         const card = (e.items || []).find((x) => x.kind === 'grade');
         const under = g && g.of && g.overall < judge.target && card;
-        if (under && LIFTABLE.includes(v.how) && bornOf(v) >= a.lift && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
+        if (under && since(v, a.lift) && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
           if (!next) next = { chapterId: c.id, passageId: p.id, v, note: card.lift || g.lift, lift: liftsOf(p).length + 1 };
           /* its fixes wait for the passage written again */
           continue;
         }
       }
-      if (a.fix !== null && bornOf(v) >= a.fix && (e.items || []).some((x) => typeof x.replace === 'string')) applyPassage(novelId, c.id, p.id, { byItself: true });
+      if (a.fix !== null && since(v, a.fix)) {
+        if ((e.items || []).some((x) => typeof x.replace === 'string') && applyPassage(novelId, c.id, p.id, { byItself: true })) {
+          /* the version the fixes made, with what still waits on it */
+          const now = store.peek('chapter', c.id);
+          const np = now && (now.passages || []).find((x) => x.id === p.id);
+          v = np ? picked(np) : null;
+          e = v ? checkOf(now, np, v) : null;
+          if (!e) continue;
+        }
+        const span = (e.items || []).find((x) => x.replace === null && x.kind !== 'grade' && x.find && stands(x) && !spanTried.has(`${v.id}|${x.find}`) && !(v.spanFailed || []).includes(x.find));
+        const cur = ((store.peek('chapter', c.id) || c).passages || []).find((x) => x.id === p.id) || p;
+        if (span && !next && spansOf(cur).length < MAX_SPANS) next = { span: true, chapterId: c.id, passageId: p.id, v, item: span };
+      }
     }
   }
-  if (next && !writerBusy(novelId) && !lifting.has(novelId)) {
+  if (next && next.span && !writerBusy(novelId) && !lifting.has(novelId)) {
+    const key = `${next.v.id}|${next.item.find}`;
+    spanTried.add(key);
+    const spot = locate(String(next.v.text || ''), next.item.find);
+    if (!spot.why) {
+      const job = writeSpanAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, start: spot.start, end: spot.end, note: spanNote(next.item), fromVersion: next.v, auto: true })
+        .then((out) => {
+          if (out && out.ok) archivist.nudge(novelId);
+          /* failed for a real reason: kept on the version, never tried by itself again */
+          else if (out && !out.stopped && !out.yielded && !out.passing && !out.busy && !out.needsConnection) {
+            try { store.change('chapter', next.chapterId, chapterSteps.setVersion(next.passageId, next.v.id, { spanFailed: [...(next.v.spanFailed || []), next.item.find] }), { now: true }); } catch (_) { /* the chapter is gone */ }
+          }
+          return out;
+        })
+        .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
+        .finally(() => lifting.delete(novelId));
+      lifting.set(novelId, job);
+    }
+  } else if (next && !next.span && !writerBusy(novelId) && !lifting.has(novelId)) {
     liftTried.add(next.v.id);
     const job = writeAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, note: next.note, fromVersion: next.v, lift: next.lift })
       .then((out) => {
@@ -1361,4 +1455,4 @@ function autoAfter(novelId) {
   tell(novelId);
 }
 
-export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried }; }
+export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried, spanTried }; }

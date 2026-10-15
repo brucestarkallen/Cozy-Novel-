@@ -463,7 +463,8 @@ function passageMenu(anchor, p) {
 function pickVersion(p, i) {
   const v = p.versions[i];
   if (!v) return;
-  store.change('chapter', S.chapterId, chapterSteps.pick(p.id, v.id));
+  /* put on show by his own hand: left as he chose it — nothing the checker does by itself starts from it */
+  store.change('chapter', S.chapterId, chapterSteps.choose(p.id, v.id));
   /* a version read before brings its own notes back at once (readings.js) */
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId, 8000);
@@ -585,6 +586,9 @@ function removeVersions(p, ids) {
   const shown = (picked(live) || {}).id;
   for (const id of gone) archivist.retireIfSeen(S.novelId, chapterId, p.id, id);
   for (const id of gone) store.change('chapter', chapterId, chapterSteps.removeVersion(p.id, id), { now: true });
+  /* the one on show taken away: the version that comes on show in its place is his choice too */
+  const after = gone.includes(shown) ? picked((chapter().passages || []).find((x) => x.id === p.id) || { versions: [] }) : null;
+  if (after) store.change('chapter', chapterId, chapterSteps.choose(p.id, after.id), { now: true });
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId);
   writer.recount(S.novelId);

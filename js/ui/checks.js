@@ -19,7 +19,7 @@ let bubble = null;
 let hooks = {};
 const C = { novelId: null, chapterId: null, offs: [], frame: 0, sheet: null };
 
-const KIND = { grammar: 'Grammar', humanize: 'Humanize', avoid: 'Words to avoid', seam: 'Where it joins', continuity: 'Continuity', craft: 'Craft', grade: 'Under your mark' };
+const KIND = { grammar: 'Grammar', clarity: 'Clarity', humanize: 'Humanize', avoid: 'Words to avoid', seam: 'Where it joins', continuity: 'Continuity', craft: 'Craft', grade: 'Under your mark' };
 
 export function initChecks(el, appHooks) {
   bubble = el;
@@ -261,7 +261,7 @@ function card(novelId, x) {
       if (!spot) { toast('Those words are not there any more.'); checker.leaveOne(x.chapterId, x.passageId, item.id, { remember: false }); return; }
       if (C.sheet) C.sheet.close();
       /* his words to avoid, or stock wording counted: the sentence written again without them */
-      const note = item.stock ? `Write it again without ${checker.quoted(phrasesOf(item))} — say it the way this book would.` : `Write it again without ${checker.quoted(phrasesOf(item))}.`;
+      const note = checker.spanNote(item);
       desk.rewriteSpan({ chapterId: x.chapterId, passageId: x.passageId, start: spot.start, end: spot.end, note });
     } }, 'Write it again'));
   }

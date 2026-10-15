@@ -655,7 +655,10 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
 }
 
 /* Only the words he selected, rewritten; the rest of the passage untouched. */
-export async function rewriteSelection({ novelId, chapterId, passageId, start, end, note = '', fromVersion = null }) {
+/* auto: the app writing it by itself (a sentence the checker found, with
+ * "Apply the checker's fixes by themselves" on) — it gives way to anything he
+ * asks, and the version it was written from is on show again */
+export async function rewriteSelection({ novelId, chapterId, passageId, start, end, note = '', fromVersion = null, auto = false }) {
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -669,14 +672,15 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   /* what wakes a rule, read before the new version shows */
   const moment = momentOf(chapter, p, note);
   /* a few words rewritten in place: the rest are the passage's as they were — his own, or from before the checker began, stay so (Cozy Tavern's M607) */
-  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV), ...keptTail(baseV) });
+  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV), ...keptTail(baseV), ...(auto ? { spanAuto: true } : {}) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
+  /* (given way to him, it is taken away whole — runVersion's undo — and the version on show before it is on show again) */
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
     splice: (answer) => spliceSelection(full, start, end, answer),
     /* the passage it is written into was cut at its end: so is this version, and Go on still carries it on */
     keepEnd: cutAtEnd(baseV) ? endOf(baseV) : null,
-    build: { target: { chapterId, mark: passageId }, request, moment } });
+    build: { target: { chapterId, mark: passageId }, request, moment }, auto });
 }
 
 /* The words a carried-on passage gets. The model was asked to begin by

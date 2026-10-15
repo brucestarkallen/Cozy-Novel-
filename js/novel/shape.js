@@ -493,6 +493,16 @@ export const chapterSteps = {
     const i = p.versions.findIndex((v) => v.id === vid);
     if (i >= 0) p.pick = i;
   },
+  /* put on show by his own hand (the arrows, or the one on show removed): his choice, kept on the version —
+   * nothing the checker does by itself starts from it (checker.js autoAfter) */
+  choose: (pid, vid, at = Date.now()) => (c) => {
+    const p = findPassage(c, pid);
+    if (!p) return;
+    const i = p.versions.findIndex((v) => v.id === vid);
+    if (i < 0) return;
+    p.pick = i;
+    p.versions[i].chosen = at;
+  },
   /* move a passage to another place in the same chapter */
   movePassage: (pid, afterId) => (c) => {
     const i = c.passages.findIndex((p) => p.id === pid);
