@@ -6,7 +6,7 @@ export const DEFAULT_LOOK = { theme: 'academy', mode: 'dark', motion: 'on', room
 /* Older copies keep their daylight choice and every page setting. Their
  * stored words are untouched; the next deliberate theme choice saves the new name. */
 export function resolveLook(look = {}) {
-  const world = look.theme === 'tokyo' || look.theme === 'rain' ? 'tokyo' : 'academy';
+  const world = look.theme === 'study' ? 'study' : look.theme === 'tokyo' || look.theme === 'rain' ? 'tokyo' : 'academy';
   const mode = look.mode === 'light' || (!look.mode && look.theme === 'day') ? 'light' : 'dark';
   return { world, mode, motion: look.motion === 'off' ? 'off' : 'on' };
 }
@@ -33,7 +33,7 @@ export function applyLook(look = {}) {
   d.style.setProperty('--prose-lead', String(Number(look.lead) || 1.72));
   d.style.setProperty('--page-width', `${Number(look.width) || 680}px`);
   showWorld(world);
-  for (const [id, name] of [['worldAcademy', 'academy'], ['worldTokyo', 'tokyo']]) {
+  for (const [id, name] of [['worldAcademy', 'academy'], ['worldTokyo', 'tokyo'], ['worldStudy', 'study']]) {
     document.getElementById(id)?.setAttribute('aria-pressed', String(world === name));
   }
   const light = document.getElementById('modeToggle');
@@ -48,5 +48,5 @@ export function applyLook(look = {}) {
     movement.title = motion === 'on' ? 'Pause the room’s ambient animation' : 'Let the room’s ambient animation move';
   }
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', world === 'tokyo' ? (mode === 'light' ? '#f4eefb' : '#171426') : (mode === 'light' ? '#f5f1e7' : '#131e21'));
+  if (meta) meta.setAttribute('content', getComputedStyle(d).getPropertyValue('--chrome-solid').trim());
 }

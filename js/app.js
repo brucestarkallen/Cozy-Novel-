@@ -264,6 +264,7 @@ function bindChrome() {
   };
   $('#worldAcademy').addEventListener('click', () => changeRoom({ theme: 'academy' }));
   $('#worldTokyo').addEventListener('click', () => changeRoom({ theme: 'tokyo' }));
+  $('#worldStudy').addEventListener('click', () => changeRoom({ theme: 'study' }));
   $('#modeToggle').addEventListener('click', () => changeRoom({ mode: resolveLook(store.peek('house', 'house')?.look).mode === 'dark' ? 'light' : 'dark' }));
   $('#motionToggle').addEventListener('click', () => changeRoom({ motion: resolveLook(store.peek('house', 'house')?.look).motion === 'on' ? 'off' : 'on' }));
   initDesk({
@@ -345,7 +346,7 @@ function moreMenu(anchor) {
     { label: 'Full screen', hint: 'The page and the box, nothing above them.', run: fullPage },
     { label: 'Reading mode', hint: 'Only the page, for reading.', run: readingMode },
     '-',
-    { label: 'Your writing room', hint: 'Academy of Ink or Tokyo Afterglow, day or night, with gentle animation.', run: () => openSettings('look') },
+    { label: 'Your writing room', hint: 'Academy of Ink, Tokyo Afterglow or the Original Study, with light and movement your way.', run: () => openSettings('look') },
     { label: 'Settings', hint: 'Connections, who does what, your instructions and presets, how it looks, backups.', run: () => openSettings() },
   ]);
 }

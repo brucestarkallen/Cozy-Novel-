@@ -321,17 +321,47 @@ export function menu(anchor, items) {
     } else if (e.key === 'Tab') closeMenu();
   });
   document.body.append(pop);
-  const r = anchor.getBoundingClientRect();
-  const w = pop.offsetWidth, ht = pop.offsetHeight;
-  let x = Math.min(r.left, window.innerWidth - w - 8);
-  let y = r.bottom + 6;
-  if (y + ht > window.innerHeight - 8) y = Math.max(8, r.top - ht - 6);
-  pop.style.left = Math.max(8, x) + 'px';
-  pop.style.top = y + 'px';
-  openMenu = { pop, anchor, release: onBack(() => closeMenu(true)) };
-  setTimeout(() => document.addEventListener('pointerdown', outside, { capture: true }), 0);
+  const m = { pop, anchor, viewport: window.visualViewport, frame: 0, release: onBack(() => closeMenu(true)) };
+  openMenu = m;
+  placeMenu(m);
+  if (openMenu !== m) return;
+  window.addEventListener('resize', placeMenuSoon);
+  if (m.viewport) {
+    m.viewport.addEventListener('resize', placeMenuSoon);
+    m.viewport.addEventListener('scroll', placeMenuSoon);
+  }
+  m.outsideTimer = setTimeout(() => { if (openMenu === m) document.addEventListener('pointerdown', outside, { capture: true }); }, 0);
   const first = pop.querySelector('button:not([disabled])');
   if (first) first.focus({ preventScroll: true });
+}
+/* Folding the phone or opening its keyboard moves the anchor and the room
+ * available around it. Move the same menu: its focus and Back step stay. */
+function placeMenuSoon() {
+  const m = openMenu;
+  if (!m || m.frame) return;
+  m.frame = requestAnimationFrame(() => { m.frame = 0; if (openMenu === m) placeMenu(m); });
+}
+function placeMenu(m) {
+  if (!m.anchor.isConnected) { closeMenu(); return; }
+  const v = m.viewport;
+  const left = (v ? v.offsetLeft : 0) + 8, top = (v ? v.offsetTop : 0) + 8;
+  const width = Math.max(0, (v ? v.width : innerWidth) - 16);
+  const height = Math.max(0, (v ? v.height : innerHeight) - 16);
+  /* Reset the old position before measuring: an offscreen left edge can
+   * otherwise squeeze the menu to its minimum width after a fold. */
+  const { pop } = m;
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  pop.style.minWidth = Math.min(220, width) + 'px';
+  pop.style.maxWidth = Math.min(340, innerWidth * .92, width) + 'px';
+  pop.style.maxHeight = height + 'px';
+  const r = m.anchor.getBoundingClientRect();
+  const w = pop.offsetWidth, ht = pop.offsetHeight;
+  let y = r.bottom + 6;
+  if (y + ht > top + height) y = r.top - ht - 6;
+  pop.style.left = Math.max(left, Math.min(r.left, left + width - w)) + 'px';
+  pop.style.top = Math.max(top, Math.min(y, top + height - ht)) + 'px';
+  if (pop.contains(document.activeElement)) document.activeElement.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 function outside(e) { if (openMenu && !openMenu.pop.contains(e.target)) closeMenu(); }
 export function closeMenu(fromBack = false) {
@@ -339,6 +369,13 @@ export function closeMenu(fromBack = false) {
   if (!openMenu) return;
   const m = openMenu;
   openMenu = null;
+  clearTimeout(m.outsideTimer);
+  cancelAnimationFrame(m.frame);
+  window.removeEventListener('resize', placeMenuSoon);
+  if (m.viewport) {
+    m.viewport.removeEventListener('resize', placeMenuSoon);
+    m.viewport.removeEventListener('scroll', placeMenuSoon);
+  }
   const hadFocus = m.pop.contains(document.activeElement);
   m.pop.remove();
   if (!fromBack && m.release) m.release();

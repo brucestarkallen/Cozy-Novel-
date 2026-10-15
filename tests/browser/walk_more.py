@@ -1981,7 +1981,7 @@ CONTRAST = r"""(async () => {
   const was = {...document.documentElement.dataset};
   const style = document.documentElement.getAttribute('style');
   const out = {};
-  for (const theme of ['academy', 'tokyo']) for (const mode of ['dark', 'light']) {
+  for (const theme of ['academy', 'tokyo', 'study']) for (const mode of ['dark', 'light']) {
     applyLook({theme, mode});
     const btn = getComputedStyle(document.querySelector('#writeBtn'));
     const stops = btn.backgroundImage.match(/rgba?\([^)]+\)/g) || [];

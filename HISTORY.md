@@ -304,3 +304,10 @@ Checked with all five suites — server 63/63, app 365/365, thinking 348/348 (0 
 - Clouds, candlelight, floating ink, rain, neon and steam move slowly. A pause control, reduced-motion support, a hidden-room switch and pausing in background tabs keep the room comfortable on a phone. Only the selected illustration is mounted.
 - World, daylight and animation choices merge independently when two browsers save together, so pausing the room does not undo another window's theme choice.
 - Older appearance settings retain their page font, size, spacing and width; daylight remains light. Theme changes and animation preferences are saved on the device and follow every open window.
+
+## 2.8.1, the original room returns
+
+- Original Study restores the original room picture as a third choice beside Academy of Ink and Tokyo Afterglow. Its walnut and brass night interface and linen light interface carry through the writing page, settings and tools.
+- The picture follows the screen's shape: the portrait rainy window on a narrow outer screen, the wider room when a foldable opens. Folding or rotating does not reload the book or its draft. The photographs load only when this room is selected.
+- Room choices fit narrow outer screens and wider inner screens, with clear previews in Appearance. The original picture stays still, with optional gentle lamplight that respects pause and reduced motion.
+- Open menus reposition when the phone folds or its keyboard changes the available space. A pane being used keeps its words and focus when it changes between a drawer and a desktop column.

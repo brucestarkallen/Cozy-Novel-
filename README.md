@@ -2,7 +2,7 @@
 
 A quiet little room for writing a novel with a model beside you — on your phone, in Termux, in any browser.
 
-Choose your writing world: **Academy of Ink**, a magical library with arched windows and drifting ink, or **Tokyo Afterglow**, a warm apartment above a rainy neon city. Both are drawn from shapes and lines, with day and night modes. Switch worlds from the shelf, or **More → Your writing room** while writing. Ambient animation can be paused and respects reduced-motion preferences; the room can also be hidden for an uninterrupted page.
+Choose your writing world: **Academy of Ink**, a magical library with arched windows and drifting ink; **Tokyo Afterglow**, a warm apartment above a rainy neon city; or **Original Study**, the familiar picture of a lamplit room and rainy window. Academy and Tokyo are drawn from shapes and lines. Original Study frames its portrait picture on narrow screens and its wider room on unfolded phones and desktops. All three have light and dark interfaces. Switch worlds from the shelf, or **More → Your writing room** while writing. Ambient animation can be paused and respects reduced-motion preferences; the room can also be hidden for an uninterrupted page.
 
 You write the book chapter by chapter. Say what happens next and press **Write**, and your writer writes it onto the page; or write the words yourself and press **Add as my words**. Nothing is ever thrown away: another take, a rewrite or your own edit is a new *version* of the passage, and the earlier one is one arrow away.
 
@@ -149,7 +149,7 @@ python3 tests/browser/walk_main.py  # the whole app in a real browser (needs pla
 python3 tests/browser/walk_more.py
 python3 tests/browser/walk_accessibility.py  # dialogs, keyboard, search and file picking
 python3 tests/browser/walk_cozy.py           # shelf, resume, phone layouts and motion
-python3 tests/browser/walk_checks.py         # checker review, focus and both worlds in day/night
+python3 tests/browser/walk_checks.py         # checker review, focus and all three worlds in day/night
 python3 tests/browser/walk_settings.py       # pending edits, connection tests and module resets
 python3 tests/browser/walk_dialogs.py        # book exports, saved fields and sent words
 python3 tests/browser/walk_worlds.py         # illustrated worlds, light/dark, animation and saved preferences

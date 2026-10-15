@@ -1,5 +1,5 @@
-/* Two writing rooms, each with its own materials and morning light.
- * The illustration colours live in academy.css and tokyo.css. These are
+/* Writing rooms, each with its own materials and morning light.
+ * The room colours live in academy.css, tokyo.css and study.css. These are
  * the colours of everything the writer reads, touches, and writes on. */
 
 /* ------------------------------------------------------ ink and light */
@@ -145,7 +145,7 @@
   --shadow: 0 18px 50px rgba(67, 40, 91, .12), 0 2px 8px rgba(67, 40, 91, .06);
 }
 
-/* The room is a drawing. Keep the view beyond the words open to the light;
+/* Keep the view beyond the words open to the light;
  * opaque reading surfaces, rather than a heavy veil, protect the text. */
 .room, body.shelfview .room { background: var(--bg) !important; overflow: hidden; }
 .world-scene { position: absolute; inset: 0; overflow: hidden; pointer-events: none; contain: layout paint; }
@@ -358,7 +358,7 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
 :root[data-mode="light"] #shelfGreeting, :root[data-mode="light"] .shelf-invitation { text-shadow: none; }
 
 /* --------------------------------------------------- choose a world */
-.world-swatches { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin: 20px 0 23px; }
+.world-swatches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 20px 0 23px; }
 .world-swatches .swatch { position: relative; min-width: 0; padding: 12px; gap: 9px; background: var(--wash); border: 1px solid var(--line); border-radius: 13px; color: var(--chrome-ink); overflow: hidden; }
 .world-swatches .swatch[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--chrome-solid)); }
 .world-swatches .swatch[aria-pressed="true"]::after { content: '✓'; position: absolute; top: 19px; right: 19px; display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; color: var(--accent-ink); background: var(--accent); font: 600 11px/1 var(--ui); }
@@ -396,12 +396,13 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
   :root[data-world="tokyo"] .shelf-intro.has-resume .resume-title { font-size: 21px; line-height: 1.3; }
 }
 
-/* On a phone the choices occupy one quiet line, with light and movement
+/* On a phone the three rooms share a row, with light and movement
  * beneath it. The illustration stays full-bleed behind the reading room. */
 @media (max-width: 759px) {
   .world-toolbar { margin-top: 18px; gap: 10px; }
-  .world-choices { width: 100%; }
-  .world-choices button { flex: 1; min-width: 0; padding: 8px 9px; font-size: 12px; }
+  .world-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 3px; }
+  .world-choices button { min-width: 0; min-height: 49px; padding: 7px 8px; gap: 6px; font-size: 11px; white-space: normal; text-wrap: balance; }
+  .world-choices button > span { flex: none; font-size: 14px; }
   .world-light-controls { gap: 7px; }
   .world-light-controls button { min-height: 36px; }
   #motionToggle { width: 36px; }
@@ -424,8 +425,16 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
   :root[data-world="tokyo"] .chapname { font-size: 27px; }
   :root[data-world="tokyo"] .chapname:empty::before { font-size: 22px; }
 }
+@media (max-width: 540px) {
+  .world-swatches { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .world-swatches .swatch { display: grid; grid-template-columns: 94px minmax(0, 1fr); grid-template-rows: auto auto; align-content: center; gap: 3px 13px; padding: 10px; text-align: left; }
+  .world-swatches .world-preview { grid-column: 1; grid-row: 1 / 3; width: 94px; height: 76px; }
+  .world-swatches .swatch > b { grid-column: 2; align-self: end; padding-right: 7px; font-size: 22px; }
+  .world-swatches .swatch > small { grid-column: 2; align-self: start; font-size: 11px; }
+  .world-swatches .swatch[aria-pressed="true"]::after { top: 16px; right: auto; left: 77px; width: 19px; height: 19px; }
+}
 @media (max-width: 370px) {
-  .world-choices button { padding-left: 7px; padding-right: 7px; gap: 5px; font-size: 11px; }
+  .world-choices button { flex-direction: column; padding: 6px 4px; gap: 4px; font-size: 10px; }
   .world-choices button > span { font-size: 13px; }
   #shelfGreeting { font-size: 41px; }
   :root[data-world="tokyo"] .brand { gap: 10px; }
@@ -434,11 +443,36 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
   :root[data-world="tokyo"] #shelfGreeting { font-size: 35px; }
   :root[data-world="tokyo"] .book .cover .t { font-size: 17px; }
   .world-swatches { gap: 9px; }
-  .world-swatches .swatch { padding: 9px; }
+  .world-swatches .swatch { padding: 9px; gap: 3px 10px; grid-template-columns: 80px minmax(0, 1fr); }
+  .world-swatches .world-preview { width: 80px; height: 72px; }
+  .world-swatches .swatch[aria-pressed="true"]::after { left: 63px; }
   .world-swatches .swatch > b { font-size: 19px; }
   :root[data-world="tokyo"] .world-swatches .swatch > b { font-size: 13px; }
   .world-swatches .swatch > small { font-size: 10px; }
   .world-preview { height: 85px; }
+}
+
+/* A foldable opened to a short, broad screen needs the book-sized shelf
+ * and compact controls of a desk without the desktop's wide margins. */
+@media (min-width: 600px) and (max-width: 759px) {
+  .world-toolbar { flex-wrap: nowrap; gap: 12px; }
+  .world-choices { flex: 1; width: auto; }
+  .world-choices button { min-height: 40px; padding: 7px; }
+  .world-light-controls { flex: none; }
+  .shelf-intro.has-resume { gap: 20px; padding-top: 27px; padding-bottom: 29px; }
+  .shelf-intro.has-resume .shelf-welcome { padding: 0; }
+  .shelf-intro.has-resume .eyebrow { margin-bottom: 13px; }
+  .shelf-intro.has-resume .shelf-invitation { max-width: none; margin-top: 13px; }
+  .shelf-intro.has-resume .resume-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 18px; padding: 20px 22px; }
+  .shelf-intro.has-resume .resume-card .resume-label { grid-column: 1; margin: 0 0 7px; font-size: 9px; }
+  .shelf-intro.has-resume .resume-card .resume-title { grid-column: 1; font-size: 26px; line-height: 1.2; margin: 0 0 6px; }
+  .shelf-intro.has-resume .resume-card .resume-meta { grid-column: 1; margin: 0; font-size: 11px; }
+  .shelf-intro.has-resume .resume-card .resume-action { grid-column: 2; grid-row: 1 / 4; align-self: center; gap: 7px; max-width: 185px; }
+  .shelf-intro.has-resume .resume-card .resume-hint { font-size: 10px; }
+  :root[data-world="tokyo"] .shelf-intro.has-resume .resume-title { font-size: 21px; }
+  .shelf-actions { gap: 12px; }
+  .shelf-search { flex: 0 1 225px; }
+  .books { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 25px 22px; }
 }
 
 /* Animation never keeps painting an idle tab or overrides a quiet room.

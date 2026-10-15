@@ -47,7 +47,7 @@ async def main():
             check('background updates keep focus on the grade summary', await pg.evaluate("document.activeElement.matches('.judgebox summary')"))
             for width in [360, 412, 1280]:
                 await pg.set_viewport_size({'width': width, 'height': 900})
-                for theme in ('academy', 'tokyo'):
+                for theme in ('academy', 'tokyo', 'study'):
                     for mode in ('dark', 'light'):
                         await pg.evaluate("async (look) => (await import('/js/ui/look.js')).applyLook(look)", {'theme': theme, 'mode': mode})
                         check(f'{theme} {mode} review fits {width}px with grades expanded', await pg.locator('.sugsheet .body').evaluate('(e) => e.scrollWidth <= e.clientWidth + 1'))

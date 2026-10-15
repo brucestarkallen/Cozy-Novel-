@@ -209,12 +209,142 @@ async def scenario_search(browser):
     await pg.context.close()
 
 
+async def scenario_folded_menus(browser):
+    """An open menu follows a folded screen without replacing focus or Back."""
+    logs = []
+    pg = await harness.page(browser, logs, w=853, hgt=900, mobile=False)
+    await harness.new_book(pg, title='A Fold in the Page')
+    route = await pg.evaluate('location.hash')
+    await pg.click('#moreBtn')
+    await pg.wait_for_selector('.menu-pop')
+    await pg.evaluate("""async () => {
+      window.beforeFoldMenu = document.querySelector('.menu-pop');
+      window.beforeFoldFocus = document.activeElement;
+      window.beforeFoldDepth = (await import('/js/ui/dom.js')).backDepth();
+    }""")
+    for width in (402, 360, 853):
+        await pg.set_viewport_size({'width': width, 'height': 900})
+        await pg.wait_for_function("""() => {
+          const r = document.querySelector('.menu-pop').getBoundingClientRect();
+          return r.left >= 7 && r.right <= innerWidth - 7 && r.top >= 7 && r.bottom <= innerHeight - 7;
+        }""")
+        same = await pg.evaluate("""async () => ({
+          menu: document.querySelector('.menu-pop') === window.beforeFoldMenu,
+          focus: document.activeElement === window.beforeFoldFocus,
+          depth: (await import('/js/ui/dom.js')).backDepth() === window.beforeFoldDepth
+        })""")
+        check(f'the menu stays onscreen at {width}px with the same focus and Back step', all(same.values()), same)
+
+    # A short visual viewport (the keyboard or landscape) must also keep the
+    # focused final item visible inside the menu's own scrolling area.
+    await pg.keyboard.press('End')
+    await pg.set_viewport_size({'width': 402, 'height': 320})
+    await pg.wait_for_timeout(150)
+    visible = await pg.evaluate("""() => {
+      const m = document.querySelector('.menu-pop').getBoundingClientRect();
+      const a = document.activeElement.getBoundingClientRect();
+      return m.top >= 7 && m.bottom <= innerHeight - 7 && a.top >= m.top && a.bottom <= m.bottom;
+    }""")
+    check('a short viewport keeps the focused menu item visible', visible)
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_selector('.menu-pop', state='detached')
+    await pg.wait_for_timeout(150)
+    check('Back after folding closes only the menu and restores More', await pg.evaluate('document.activeElement.id === "moreBtn"') and await pg.evaluate('location.hash') == route)
+    await pg.set_viewport_size({'width': 853, 'height': 900})
+    await pg.evaluate("""() => {
+      window.dispatchEvent(new Event('resize'));
+      if (window.visualViewport) {
+        visualViewport.dispatchEvent(new Event('resize'));
+        visualViewport.dispatchEvent(new Event('scroll'));
+      }
+    }""")
+    await pg.wait_for_timeout(100)
+    check('later viewport events cannot revive a closed menu', await pg.locator('.menu-pop').count() == 0)
+    check('folding menus produces no page errors', not [x for x in logs if x.startswith('PAGEERROR')], logs)
+    await pg.context.close()
+
+
+async def scenario_drawer_to_column(browser):
+    """An active drawer becomes a column without losing its writing or focus."""
+    logs = []
+    pg = await harness.page(browser, logs, w=1440, hgt=900, mobile=False)
+    await pg.add_init_script("localStorage.setItem('cozynovel.left', 'off'); localStorage.setItem('cozynovel.right', 'off');")
+    await harness.new_book(pg, title='Room for the Conversation')
+    check('a saved closed column still starts closed on a wide screen', not await pg.locator('#sidePane').is_visible() and not await pg.locator('#chaptersPane').is_visible())
+    await pg.set_viewport_size({'width': 402, 'height': 900})
+    await pg.click('#partnerBtn')
+    draft = pg.locator('#sideFoot textarea')
+    await draft.fill('Keep these words while the screen grows.')
+    await draft.evaluate('(el) => { el.setSelectionRange(5, 16); window.columnDraft = el; }')
+    await pg.set_viewport_size({'width': 1440, 'height': 900})
+    await pg.wait_for_timeout(350)
+    state = await draft.evaluate("""(el) => ({
+      same: el === window.columnDraft, focused: el === document.activeElement,
+      text: el.value, selection: [el.selectionStart, el.selectionEnd],
+      docked: el.closest('aside').classList.contains('dock'),
+      visible: getComputedStyle(el).visibility === 'visible'
+    })""")
+    check('the open Partner becomes a visible column with its original draft and selection', state['same'] and state['focused'] and state['docked'] and state['visible'] and state['text'] == 'Keep these words while the screen grows.' and state['selection'] == [5, 16], state)
+    check('becoming a column releases only the drawer Back step', await pg.evaluate("async () => (await import('/js/ui/dom.js')).backDepth()") == 0)
+    await pg.set_viewport_size({'width': 1300, 'height': 900})
+    await pg.wait_for_timeout(100)
+    check('the active column stays open on subsequent resizes', await draft.is_visible() and await draft.evaluate('(el) => el === document.activeElement'))
+
+    await pg.set_viewport_size({'width': 402, 'height': 900})
+    await pg.wait_for_timeout(350)
+    inverse = await draft.evaluate("""(el) => ({
+      same: el === window.columnDraft, focused: el === document.activeElement,
+      selection: [el.selectionStart, el.selectionEnd],
+      open: el.closest('aside').classList.contains('open'),
+      visible: getComputedStyle(el).visibility === 'visible'
+    })""")
+    check('folding the focused column returns its original draft and selection to a drawer', inverse['same'] and inverse['focused'] and inverse['open'] and inverse['visible'] and inverse['selection'] == [5, 16], inverse)
+    check('the returning drawer has exactly one Back step', await pg.evaluate("async () => (await import('/js/ui/dom.js')).backDepth()") == 1)
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_function("!document.querySelector('#sidePane').classList.contains('open')")
+    check('Back closes the returned drawer and restores Partner focus', await pg.evaluate('document.activeElement.id === "partnerBtn" && !document.querySelector("#desk").hidden'))
+    await pg.click('#partnerBtn')
+    await pg.locator('.convrow button[aria-label="Full screen"]').click()
+    await pg.wait_for_selector('#sidePane.full')
+    await draft.focus()
+    await draft.evaluate('(el) => el.setSelectionRange(5, 16)')
+    await pg.set_viewport_size({'width': 1440, 'height': 900})
+    await pg.wait_for_timeout(350)
+    check('a full-screen Partner stays full while its drawer becomes a column', await pg.locator('#sidePane.full').count() == 1 and await draft.evaluate('(el) => el === document.activeElement && el.selectionStart === 5 && el.selectionEnd === 16'))
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_function("!document.querySelector('#sidePane').classList.contains('full')")
+    await pg.wait_for_function('!document.fullscreenElement')
+    await pg.evaluate("async () => (await import('/js/ui/dom.js')).afterBacks()")
+    check('Back leaves full screen for the visible Partner column', await pg.locator('#sidePane.dock').is_visible() and await pg.locator('#desk').is_visible())
+
+    await pg.set_viewport_size({'width': 402, 'height': 900})
+    if await pg.locator('#sidePane.open').count():
+        await pg.click('#sideClose')
+    await pg.click('#bookTitle')
+    chapter = pg.locator('#chaptersBody button.go').first
+    await chapter.focus()
+    await chapter.evaluate('(el) => { window.columnChapter = el; }')
+    await pg.set_viewport_size({'width': 1440, 'height': 900})
+    await pg.wait_for_timeout(350)
+    left = await chapter.evaluate('(el) => ({ same: el === window.columnChapter, focused: el === document.activeElement, active: document.activeElement.outerHTML.slice(0, 120), pane: el.closest("aside").className, visible: getComputedStyle(el).visibility })')
+    check('the focused Chapters drawer also becomes a visible column', await chapter.is_visible() and left['focused'] and await pg.locator('#chaptersPane.dock').count() == 1, left)
+    await pg.set_viewport_size({'width': 402, 'height': 900})
+    await pg.wait_for_timeout(350)
+    left = await chapter.evaluate('(el) => ({ focused: el === document.activeElement, active: document.activeElement.outerHTML.slice(0, 120), pane: el.closest("aside").className, visible: getComputedStyle(el).visibility })')
+    check('the focused Chapters column returns as a drawer', await chapter.is_visible() and left['focused'] and await pg.locator('#chaptersPane.open').count() == 1, left)
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_function("!document.querySelector('#chaptersPane').classList.contains('open')")
+    check('Back from the returning Chapters drawer restores the chapter button', await pg.evaluate('document.activeElement.id === "bookTitle"'))
+    check('changing drawers into columns produces no page errors', not [x for x in logs if x.startswith('PAGEERROR')], logs)
+    await pg.context.close()
+
+
 async def main():
     with harness.Env():
         async with async_playwright() as playwright:
             options = {'executable_path': os.environ['COZY_TEST_CHROMIUM']} if os.environ.get('COZY_TEST_CHROMIUM') else {}
             browser = await playwright.chromium.launch(**options)
-            for scenario in (scenario_dialogs, scenario_names_and_picker, scenario_search):
+            for scenario in (scenario_dialogs, scenario_names_and_picker, scenario_search, scenario_folded_menus, scenario_drawer_to_column):
                 print(scenario.__doc__, flush=True)
                 try:
                     await scenario(browser)

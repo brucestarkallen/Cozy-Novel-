@@ -22,6 +22,7 @@ import { sceneWords, choicesIn, nowLabelOf } from '../novel/prompts.js';
 let ui = null;
 let hooks = {};
 let SF = null;           /* the follow law beside the page (live.js) */
+let paneFocus = null;    /* a control hidden by the new media query before resize fires */
 const P = { novelId: null, chapterId: null, side: 'notes', playId: null, offs: [], watched: new Set(), leftOpen: false, rightOpen: false, release: { left: null, right: null },
   shownView: '',    /* the view last drawn beside the page (sideView) */
   drawn: '',        /* the conversation it was drawn from (turnsSig) */
@@ -37,6 +38,12 @@ export function initPanes(elements, appHooks) {
   talk.onTalkLive(onTalkLive);
   /* a reply asked for: the pane follows it in, until his hand moves it up */
   talk.onTalkJob((key, job) => { if (job) SF.start(); if (P.side === 'partner' || P.side === 'play') drawSide(); });
+  document.addEventListener('focusin', (e) => { paneFocus = ui.left.contains(e.target) || ui.right.contains(e.target) ? e.target : null; });
+  document.addEventListener('focusout', (e) => {
+    /* Ordinary blur lets go. A column becoming hidden at the breakpoint
+     * keeps the control long enough for dockWide to put it in its drawer. */
+    if (e.target === paneFocus && !e.relatedTarget && (!paneFocus.isConnected || getComputedStyle(paneFocus).visibility !== 'hidden')) paneFocus = null;
+  });
   window.addEventListener('resize', dockWide);
 }
 
@@ -65,11 +72,35 @@ function drawChaptersSoon() { if (!chFrame) chFrame = requestAnimationFrame(() =
 
 function dockWide() {
   const w = wide();
+  const focused = document.activeElement === document.body && paneFocus?.isConnected ? paneFocus : document.activeElement;
+  const carryLeft = !w && ui.left.classList.contains('dock') && ui.left.contains(focused);
+  const carryRight = !w && ui.right.classList.contains('dock') && !ui.right.classList.contains('full') && ui.right.contains(focused);
+  /* A drawer he is using becomes a column when there is room. A saved
+   * closed column still starts closed; opening a drawer is what changes it. */
+  if (w && P.leftOpen) keep('cozynovel.left', 'on');
+  if (w && P.rightOpen) keep('cozynovel.right', 'on');
   ui.left.classList.toggle('dock', w && kept('cozynovel.left') !== 'off');
   ui.right.classList.toggle('dock', w && kept('cozynovel.right') === 'on');
   /* wide enough for columns: a drawer open from the narrow screen closes (its Back step with it) */
-  if (w) { closeLeft(); closeRight(); ui.scrim.classList.remove('on'); }
+  if (w) { closeLeft(); closeRight(false, { keepFull: true }); ui.scrim.classList.remove('on'); }
+  /* On the way back, keep only the column he is actually using. Reuse its
+   * controls so a half-written sentence and its selection never move. A
+   * full-screen pane owns its own Back step and is already visible. */
+  else if (carryLeft && !P.leftOpen) {
+    closeRight();
+    P.leftOpen = true;
+    ui.left.classList.add('open');
+    ui.scrim.classList.add('on');
+    P.release.left = onBack(() => closeLeft(true));
+  } else if (carryRight && !P.rightOpen) {
+    closeLeft();
+    P.rightOpen = true;
+    ui.right.classList.add('open');
+    ui.scrim.classList.add('on');
+    P.release.right = onBack(() => closeRight(true));
+  }
   mirrorDock();
+  if ((carryLeft || carryRight) && focused !== document.activeElement) focused.focus({ preventScroll: true });
 }
 
 /* the desk knows which columns stand beside the page, so the box he types in
@@ -103,11 +134,13 @@ function openLeft() {
 }
 export function closeLeft(fromBack = false) {
   if (!P.leftOpen) return;
+  const hadFocus = ui.left.contains(document.activeElement);
   P.leftOpen = false;
   ui.left.classList.remove('open');
   if (!P.rightOpen) ui.scrim.classList.remove('on');
   if (!fromBack && P.release.left) P.release.left();
   P.release.left = null;
+  if (hadFocus && !ui.left.classList.contains('dock')) document.getElementById('bookTitle')?.focus({ preventScroll: true });
 }
 export function showSide(tab) {
   P.side = tab;
@@ -160,14 +193,16 @@ export function showTurn(kind, id, turnId) {
     setTimeout(() => el.classList.remove('found'), 4000);
   }));
 }
-export function closeRight(fromBack = false) {
+export function closeRight(fromBack = false, { keepFull = false } = {}) {
   if (!P.rightOpen) return;
-  if (fullKind() === 'scene' || fullKind() === 'partner') leaveFull();
+  const hadFocus = ui.right.contains(document.activeElement);
+  if (!keepFull && (fullKind() === 'scene' || fullKind() === 'partner')) leaveFull();
   P.rightOpen = false;
   ui.right.classList.remove('open');
   if (!P.leftOpen) ui.scrim.classList.remove('on');
   if (!fromBack && P.release.right) P.release.right();
   P.release.right = null;
+  if (hadFocus && !ui.right.classList.contains('dock')) document.getElementById(P.side === 'partner' ? 'partnerBtn' : P.side === 'notes' ? 'notesBtn' : 'moreBtn')?.focus({ preventScroll: true });
 }
 
 /* ------------------------------------------------------------ chapters */

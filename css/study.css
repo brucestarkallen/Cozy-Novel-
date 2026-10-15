@@ -1,0 +1,141 @@
+/* The original rainy study, with a portrait view for a closed foldable.
+ * The photographs stay exactly as supplied; only the room's surfaces change. */
+:root[data-world="study"] {
+  color-scheme: dark;
+  --display: 'Cormorant', 'Cormorant Garamond', Georgia, serif;
+  --label-font: var(--ui);
+  --bg: #201913;
+  --chrome: rgba(37, 29, 23, .97);
+  --chrome-solid: #251d17;
+  --chrome-ink: #f6ecdc;
+  --chrome-soft: #cfbfa9;
+  --line: rgba(233, 209, 172, .2);
+  --paper: #30271f;
+  --paper-2: #382e24;
+  --paper-edge: rgba(227, 200, 159, .23);
+  --ink: #f5ead8;
+  --ink-soft: #d2c2aa;
+  --ink-faint: #bfaf97;
+  --accent: #e5bf83;
+  --accent-2: #f0d29f;
+  --accent-ink: #322415;
+  --accent-on-paper: #edc991;
+  --secondary: #b8c9ad;
+  --dlg: #e8c49c;
+  --select: rgba(229, 191, 131, .11);
+  --card: rgba(37, 29, 23, .98);
+  --card-ink: #f6ecdc;
+  --danger: #f1a994;
+  --danger-ink: #f1a994;
+  --ok: #b5cda3;
+  --warn: #e9ca8d;
+  --room-panel: rgba(37, 29, 23, .96);
+  --field-bg: #2d241c;
+  --hover: rgba(237, 211, 171, .085);
+  --wash: rgba(237, 211, 171, .035);
+  --shadow: 0 18px 55px rgba(14, 9, 5, .3), 0 2px 8px rgba(14, 9, 5, .19);
+  --radius: 14px;
+}
+:root[data-world="study"][data-mode="light"] {
+  color-scheme: light;
+  --bg: #eee5d5;
+  --chrome: rgba(250, 244, 231, .97);
+  --chrome-solid: #faf4e7;
+  --chrome-ink: #403126;
+  --chrome-soft: #6d5b47;
+  --line: rgba(93, 69, 41, .21);
+  --paper: #fffaf0;
+  --paper-2: #f5ecda;
+  --paper-edge: rgba(116, 87, 49, .24);
+  --ink: #3d3025;
+  --ink-soft: #6c5944;
+  --ink-faint: #74624e;
+  --accent: #875321;
+  --accent-2: #8b5727;
+  --accent-ink: #fffbf2;
+  --accent-on-paper: #875321;
+  --secondary: #4d6742;
+  --dlg: #7a4d25;
+  --select: rgba(135, 83, 33, .09);
+  --card: rgba(250, 244, 231, .98);
+  --card-ink: #403126;
+  --danger: #9d382d;
+  --danger-ink: #9d382d;
+  --ok: #4b6637;
+  --warn: #7a591e;
+  --room-panel: rgba(250, 244, 231, .97);
+  --field-bg: #fffcf5;
+  --hover: rgba(107, 74, 38, .075);
+  --wash: rgba(107, 74, 38, .035);
+  --shadow: 0 18px 50px rgba(82, 53, 25, .14), 0 2px 8px rgba(82, 53, 25, .08);
+}
+
+.study-picture, .study-photo { display: block; width: 100%; height: 100%; }
+.study-picture { position: absolute; inset: 0; }
+.study-photo { object-fit: cover; object-position: 62% 50%; }
+.study-glow {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 86% 13%, rgba(255, 194, 94, .12), transparent 33%);
+  opacity: .65;
+  animation: study-lamplight 9s ease-in-out infinite alternate;
+}
+@keyframes study-lamplight { from { opacity: .35; } to { opacity: .8; } }
+:root[data-world="study"] .room::after {
+  background: linear-gradient(90deg, rgba(32, 25, 19, .87) 0%, rgba(32, 25, 19, .73) 36%, rgba(32, 25, 19, .3) 64%, rgba(32, 25, 19, .1) 100%),
+    linear-gradient(0deg, rgba(32, 25, 19, .95), rgba(32, 25, 19, .25) 38%, transparent 72%);
+}
+:root[data-world="study"][data-mode="light"] .room::after {
+  background: linear-gradient(90deg, rgba(238, 229, 213, .96) 0%, rgba(238, 229, 213, .89) 35%, rgba(238, 229, 213, .48) 66%, rgba(238, 229, 213, .19) 100%),
+    linear-gradient(0deg, rgba(238, 229, 213, .99), rgba(238, 229, 213, .52) 40%, transparent 78%);
+}
+:root[data-world="study"] body:not(.shelfview) .room::after { background: rgba(32, 25, 19, .28); }
+:root[data-world="study"][data-mode="light"] body:not(.shelfview) .room::after { background: rgba(238, 229, 213, .3); }
+:root[data-world="study"][data-room="off"] .room::after { background: none; }
+:root[data-world="study"] .brand-mark { border-radius: 13px 13px 5px 5px; }
+:root[data-world="study"] .brand p { font-style: italic; }
+:root[data-world="study"] .resume-card { border-radius: 14px; }
+:root[data-world="study"] .resume-card::before { left: 24px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+:root[data-world="study"] .resume-label { color: var(--accent); }
+:root[data-world="study"] .btn.primary { border-radius: 9px; }
+:root[data-world="study"] .page { border-radius: 6px 6px 0 0; }
+:root[data-world="study"] .page::before { background: linear-gradient(90deg, rgba(164, 116, 63, .14), transparent 4%, transparent 96%, rgba(164, 116, 63, .14)); }
+:root[data-world="study"] .chapterhead::after { content: '❧'; font-size: 19px; }
+:root[data-world="study"] .cover-kicker { letter-spacing: .23em; }
+:root[data-world="study"] .book .cover { border-color: rgba(243, 216, 175, .24); }
+.swatch[data-world="study"] .world-preview { background: #483526; color: #e5bf83; }
+.swatch[data-world="study"] .world-preview img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 66% 42%; }
+
+/* An unfolded book has a broad window; portrait screens keep the skyline,
+ * notebook and cup together instead of enlarging a corner of the room. */
+@media (min-width: 600px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 6/5) {
+  .study-photo { object-position: 72% 50%; }
+}
+@media (max-width: 599px), (max-aspect-ratio: 4/5) {
+  .study-photo { object-position: 50% 45%; }
+  .study-glow { background: radial-gradient(ellipse at 78% 65%, rgba(255, 194, 94, .1), transparent 40%); }
+  :root[data-world="study"] .room::after {
+    background: linear-gradient(90deg, rgba(32, 25, 19, .7), rgba(32, 25, 19, .48)),
+      linear-gradient(0deg, rgba(32, 25, 19, .97), rgba(32, 25, 19, .24) 58%, rgba(32, 25, 19, .17));
+  }
+  :root[data-world="study"][data-mode="light"] .room::after {
+    background: linear-gradient(90deg, rgba(238, 229, 213, .84), rgba(238, 229, 213, .68)),
+      linear-gradient(0deg, rgba(238, 229, 213, .98), rgba(238, 229, 213, .24) 58%, rgba(238, 229, 213, .13));
+  }
+  :root[data-world="study"] body:not(.shelfview) .room::after { background: rgba(32, 25, 19, .28); }
+  :root[data-world="study"][data-mode="light"] body:not(.shelfview) .room::after { background: rgba(238, 229, 213, .3); }
+  :root[data-world="study"][data-room="off"] .room::after { background: none; }
+}
+@media (max-width: 759px) {
+  :root[data-world="study"] .shelf-intro { gap: 22px; padding-top: 23px; padding-bottom: 27px; }
+  :root[data-world="study"] #shelfGreeting { font-size: 43px; line-height: 1.02; }
+  :root[data-world="study"] .resume-card { padding: 20px; }
+  :root[data-world="study"] .resume-label { margin-bottom: 9px; }
+  :root[data-world="study"] .resume-title { font-size: 27px; margin-bottom: 8px; }
+  :root[data-world="study"] .resume-meta { margin-bottom: 16px; }
+  :root[data-world="study"] .resume-action { gap: 8px; }
+  :root[data-world="study"] .resume-action .btn { width: 100%; }
+  :root[data-world="study"] .resume-hint { text-align: center; width: 100%; font-size: 10px; }
+}
+@media (max-width: 370px) {
+  :root[data-world="study"] #shelfGreeting { font-size: 39px; }
+}

@@ -1,4 +1,4 @@
-"""Two illustrated worlds, four lights: choices stay, the writer's words stay.
+"""Three writing rooms, each in two lights: choices and the writer's words stay.
 
 Real browser and server, a temporary library and no model calls. The default
 ports are independent of the main browser walks; environment overrides work.
@@ -15,6 +15,13 @@ from playwright.async_api import async_playwright
 H.PORT = int(os.environ.get('COZY_TEST_PORT', '19681'))
 H.PROV = int(os.environ.get('COZY_TEST_PROVIDER_PORT', '19699'))
 RESULTS = []
+WORLDS = ('academy', 'tokyo', 'study')
+WORLD_BUTTONS = {'academy': '#worldAcademy', 'tokyo': '#worldTokyo', 'study': '#worldStudy'}
+
+
+def photos(requests):
+    return [url for url in requests if '/assets/room/' in url or
+            urlparse(url).path.lower().endswith(('.jpg', '.jpeg', '.webp'))]
 
 
 def check(name, ok, saw=''):
@@ -82,7 +89,8 @@ async def scenario_worlds(browser):
     await pg.wait_for_selector('#shelf:not([hidden])')
     check('a new room begins in Academy of Ink at night with animation on',
           await state(pg) == {'world': 'academy', 'theme': 'academy', 'mode': 'dark', 'motion': 'on'}, await state(pg))
-    check('both worlds have visible manual controls', await pg.locator('#worldAcademy').is_visible() and await pg.locator('#worldTokyo').is_visible())
+    check('all three worlds have visible manual controls', all([
+        await pg.locator(selector).is_visible() for selector in WORLD_BUTTONS.values()]))
 
     await pg.locator('#worldTokyo').focus()
     await pg.keyboard.press('Enter')
@@ -124,8 +132,10 @@ async def scenario_worlds(browser):
     await pg.fill('#direction', draft)
     before = await pg.evaluate("async()=>{const s=await import('/js/store.js');return structuredClone(s.peek('chapter',location.hash.split('/')[3]));}")
     await appearance(pg)
-    check('appearance offers exactly the two illustrated worlds', await pg.locator('.swatch[data-world]').count() == 2 and
-          await pg.locator('.swatch[data-world="academy"]').inner_text() and await pg.locator('.swatch[data-world="tokyo"]').inner_text())
+    check('appearance offers both illustrated worlds and Original Study', await pg.locator('.swatch[data-world]').count() == 3 and
+          'Academy of Ink' in await pg.locator('.swatch[data-world="academy"]').inner_text() and
+          'Tokyo Afterglow' in await pg.locator('.swatch[data-world="tokyo"]').inner_text() and
+          'Original Study' in await pg.locator('.swatch[data-world="study"]').inner_text())
     check('light is a separate choice with Day and Night labels',
           await pg.locator('.mode-choice[data-mode="light"]').inner_text() == 'Day' and
           await pg.locator('.mode-choice[data-mode="dark"]').inner_text() == 'Night')
@@ -134,15 +144,21 @@ async def scenario_worlds(browser):
     await pg.get_by_role('checkbox', name='Ambient animation', exact=True).uncheck()
     check('Settings can pause ambient animation', (await state(pg))['motion'] == 'off')
 
-    for world in ('academy', 'tokyo'):
+    check('opening and choosing illustrated worlds never fetches the photographic room assets', not photos(requests), photos(requests))
+    for world in WORLDS:
         for mode in ('dark', 'light'):
+            request_start = len(requests)
             await pg.locator(f'.swatch[data-world="{world}"]').click()
             await pg.locator(f'.mode-choice[data-mode="{mode}"]').click()
             current = await state(pg)
             check(f'{world} {mode} uses the visible choice immediately', current['world'] == world and current['theme'] == world and current['mode'] == mode, current)
-            check(f'{world} {mode} mounts only its own illustrated scene', await pg.locator('.room > .world-scene').count() == 1 and
-                  await pg.locator(f'.room > .world-scene[data-world="{world}"] > svg.world-art').count() == 1)
-            check(f'{world} {mode} uses vector artwork without embedded photographs', await pg.locator('.room svg image').count() == 0)
+            check(f'{world} {mode} mounts only its own scene', await pg.locator('.room > .world-scene').count() == 1 and
+                  await pg.locator(f'.room > .world-scene[data-world="{world}"]').count() == 1)
+            if world == 'study':
+                check(f'{world} {mode} shows the original photographic room', await pg.locator('.world-scene[data-world="study"] .study-picture img').is_visible())
+            else:
+                check(f'{world} {mode} uses vector artwork without photographs',
+                      await pg.locator('.room svg.world-art').count() == 1 and await pg.locator('.room svg image, .room picture, .room img').count() == 0)
             ratios = await pg.evaluate(CONTRAST)
             check(f'{world} {mode} keeps story and controls readable at AA', all(r >= 4.5 for r in ratios.values()), ratios)
             for width in (360, 1280):
@@ -155,14 +171,17 @@ async def scenario_worlds(browser):
             check(f'{world} {mode} preserves the unfinished direction exactly', await pg.input_value('#direction') == draft)
             after = await pg.evaluate("async()=>{const s=await import('/js/store.js');return structuredClone(s.peek('chapter',location.hash.split('/')[3]));}")
             check(f'{world} {mode} leaves the saved chapter untouched', after == before)
+            if world != 'study':
+                check(f'{world} {mode} requests no photographic assets', not photos(requests[request_start:]), photos(requests[request_start:]))
             await appearance(pg)
     await close_settings(pg)
 
     # Leave the unfinished draft in its chapter while visiting the shelf.
     await pg.click('#toShelf')
     await pg.wait_for_selector('#shelf:not([hidden])')
-    for world in ('academy', 'tokyo'):
-        await pg.click('#worldAcademy' if world == 'academy' else '#worldTokyo')
+    for world in WORLDS:
+        request_start = len(requests)
+        await pg.click(WORLD_BUTTONS[world])
         if await pg.locator('#motionToggle').get_attribute('aria-pressed') != 'true':
             await pg.click('#motionToggle')
         await pg.emulate_media(reduced_motion='no-preference')
@@ -175,19 +194,20 @@ async def scenario_worlds(browser):
         await pg.emulate_media(reduced_motion='reduce')
         await pg.wait_for_timeout(100)
         check(f'{world} respects reduced motion even when animation is enabled', await running_room_animations(pg) == 0)
-        check(f'{world} reduced motion keeps the chosen illustrated scene visible', await pg.locator(f'.world-scene[data-world="{world}"] svg.world-art').is_visible())
+        scene_art = '.study-picture img' if world == 'study' else 'svg.world-art'
+        check(f'{world} reduced motion keeps the chosen scene visible', await pg.locator(f'.world-scene[data-world="{world}"] {scene_art}').is_visible())
         await pg.emulate_media(reduced_motion='no-preference')
         check(f'{world} reduced motion does not overwrite the manual preference', (await state(pg))['motion'] == 'on')
         for width in (320, 360, 1280):
             await pg.set_viewport_size({'width': width, 'height': 900})
             check(f'{world} shelf fits {width}px', await pg.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+        if world != 'study':
+            check(f'{world} never loads photographs after leaving Original Study', not photos(requests[request_start:]), photos(requests[request_start:]))
 
     await pg.get_by_role('button', name='Continue writing', exact=True).click()
     await pg.wait_for_selector('#desk:not([hidden])')
     check('the unfinished direction survives changing worlds from the shelf', await pg.input_value('#direction') == draft)
-    photo_requests = [url for url in requests if '/assets/room/' in url or urlparse(url).path.lower().endswith(('.jpg', '.jpeg', '.webp'))]
     remote_requests = [url for url in requests if urlparse(url).scheme in ('http', 'https') and urlparse(url).hostname not in ('127.0.0.1', 'localhost')]
-    check('worlds never request the photographic room assets', not photo_requests, photo_requests)
     check('worlds load without any external network request', not remote_requests, remote_requests)
     check('no model is called while changing the room', not H.reqs(), H.reqs())
     check('world controls raise no browser exceptions', not [line for line in logs if line.startswith('PAGEERROR')], logs)
@@ -200,7 +220,7 @@ async def scenario_legacy(browser):
     pg = await H.page(browser, logs)
     await pg.goto(f'http://127.0.0.1:{H.PORT}/')
     await pg.wait_for_selector('#shelf:not([hidden])')
-    for legacy, world, mode in (('study', 'academy', 'dark'), ('candle', 'academy', 'dark'),
+    for legacy, world, mode in (('study', 'study', 'dark'), ('candle', 'academy', 'dark'),
                                 ('ink', 'academy', 'dark'), ('day', 'academy', 'light'), ('rain', 'tokyo', 'dark')):
         await pg.evaluate("""async (theme)=>{
           const s=await import('/js/store.js');
@@ -228,6 +248,120 @@ async def scenario_legacy(browser):
             await pg.reload()
             await pg.wait_for_selector('#shelf:not([hidden])')
             check('restored legacy daylight survives reloading', (await state(pg))['world'] == 'academy' and (await state(pg))['mode'] == 'light', await state(pg))
+    await pg.context.close()
+
+
+async def study_source(pg, label, expected):
+    await pg.wait_for_function("""expected => {
+      const img = document.querySelector('.study-picture img');
+      return img && img.complete && img.naturalWidth > 0 &&
+        new URL(img.currentSrc).pathname.endsWith('/' + expected + '.webp');
+    }""", arg=expected, timeout=8000)
+    source = await pg.locator('.study-picture img').evaluate('(img)=>img.currentSrc')
+    check(label, urlparse(source).path.endswith(f'/{expected}.webp'), source)
+
+
+async def scenario_foldable(browser):
+    """The restored study follows viewport shape without disturbing work in progress."""
+    logs, requests = [], []
+    pg = await H.page(browser, logs, w=360, hgt=874)
+    pg.on('request', lambda request: requests.append(request.url))
+    await pg.goto(f'http://127.0.0.1:{H.PORT}/')
+    await pg.wait_for_selector('#shelf:not([hidden])')
+    await pg.click('#worldStudy')
+    if (await state(pg))['mode'] != 'light':
+        await pg.click('#modeToggle')
+    if (await state(pg))['motion'] != 'off':
+        await pg.click('#motionToggle')
+    await flush(pg)
+    expected = {'world': 'study', 'theme': 'study', 'mode': 'light', 'motion': 'off'}
+    await pg.reload()
+    await pg.wait_for_selector('#shelf:not([hidden])')
+    check('Original Study, daylight and paused motion survive reloading', await state(pg) == expected, await state(pg))
+    check('Original Study announces its selected shelf control', await pg.locator('#worldStudy').get_attribute('aria-pressed') == 'true' and
+          await pg.locator('#worldAcademy').get_attribute('aria-pressed') == 'false' and await pg.locator('#worldTokyo').get_attribute('aria-pressed') == 'false')
+    await study_source(pg, 'a folded portrait loads the original mobile room', 'mobile')
+
+    other = await browser.new_context(viewport={'width': 853, 'height': 965})
+    pg2 = await other.new_page()
+    await pg2.goto(f'http://127.0.0.1:{H.PORT}/')
+    await pg2.wait_for_selector('#shelf:not([hidden])')
+    check('a separate browser opens in the same Original Study choices', await state(pg2) == expected, await state(pg2))
+    await study_source(pg2, 'a fresh unfolded viewport loads the wide original room', 'desktop')
+    await other.close()
+
+    title = 'Letters from the Quiet Study — A Very Long Working Title for a Novel Still Being Written'
+    await H.new_book(pg, title, 'A writer keeps the same words when the room grows wider.')
+    words = 'Mara unfolded the letter beneath the study lamp. Every word stayed exactly where she left it.'
+    await pg.fill('#direction', words)
+    await pg.click('#mineBtn')
+    await pg.wait_for_selector('#passages .passage .prose')
+    await pg.click('#lengthBtn')
+    await pg.click('.menu-pop button:has-text("A few paragraphs")')
+    await pg.click('#outcomeBtn')
+    await pg.click('.menu-pop button:has-text("I decide")')
+    draft = '  Keep this unfinished thought.\nThe next line is mine to decide.  '
+    await pg.fill('#direction', draft)
+    await pg.locator('#direction').evaluate("(e)=>{e.focus();e.setSelectionRange(2,12,'forward');window.__foldDirection=e;}")
+    before = await pg.evaluate("async()=>structuredClone((await import('/js/store.js')).peek('chapter',location.hash.split('/')[3]))")
+
+    # Representative CSS viewports for a narrow outer display, reduced height
+    # with a keyboard, and near-square inner display; not hardware certification.
+    sizes = ((360, 874), (768, 864), (402, 874), (402, 380), (853, 965), (1280, 900), (360, 874))
+    for width, height in sizes:
+        await pg.set_viewport_size({'width': width, 'height': height})
+        photo = 'mobile' if width < 600 or width / height <= .8 else 'desktop'
+        await study_source(pg, f'live resize to {width}×{height} chooses the {photo} composition', photo)
+        editing = await pg.locator('#direction').evaluate('(e)=>[e.value,e.selectionStart,e.selectionEnd,e.selectionDirection,e===document.activeElement,e===window.__foldDirection]')
+        check(f'{width}×{height} preserves the draft, selection and focused control', editing == [draft, 2, 12, 'forward', True, True], editing)
+        check(f'{width}×{height} preserves manual world, light and writing choices', await state(pg) == expected and
+              'A few paragraphs' in await pg.inner_text('#lengthBtn') and 'I decide' in await pg.inner_text('#outcomeBtn'), await state(pg))
+        bounds = await pg.evaluate("""()=>{
+          const ids=['writeBtn','mineBtn','moreBtn','lengthBtn','outcomeBtn','writerBtn'];
+          return ids.map(id=>{const e=document.getElementById(id),r=e.getBoundingClientRect();
+            const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+            return {id,ok:r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&!!hit&&e.contains(hit)};
+          });
+        }""")
+        check(f'{width}×{height} keeps writing controls within reach with the long title',
+              await pg.evaluate('document.documentElement.scrollWidth<=innerWidth') and all(row['ok'] for row in bounds), bounds)
+
+    await pg.locator('#direction').evaluate('(e)=>e.blur()')
+    selected = await pg.locator('#passages .passage .prose p').first.evaluate("""e=>{
+      const text=e.firstChild, range=document.createRange();
+      range.setStart(text,0);range.setEnd(text,'Mara unfolded the letter'.length);
+      const s=window.getSelection();s.removeAllRanges();s.addRange(range);return s.toString();
+    }""")
+    await pg.wait_for_function("document.querySelector('#writeBtn').textContent==='Rewrite'")
+    for width, height in ((853, 965), (402, 874)):
+        await pg.set_viewport_size({'width': width, 'height': height})
+        check(f'{width}×{height} keeps selected story words and the Rewrite action',
+              await pg.evaluate('window.getSelection().toString()') == selected and
+              await pg.inner_text('#writeBtn') == 'Rewrite' and await pg.locator('#selBar').is_visible() and
+              await pg.input_value('#direction') == draft)
+    await pg.click('#selClear')
+    check('Never mind still clears the selected words after folding', await pg.inner_text('#writeBtn') == 'Write' and await pg.input_value('#direction') == draft)
+    after = await pg.evaluate("async()=>structuredClone((await import('/js/store.js')).peek('chapter',location.hash.split('/')[3]))")
+    check('folding and unfolding never changes the saved story', before == after)
+
+    # A loaded photographic room must leave no image behind when an illustrated
+    # world is selected, including after the viewport changes shape again.
+    await appearance(pg)
+    for world in ('academy', 'tokyo'):
+        request_start = len(requests)
+        await pg.locator(f'.swatch[data-world="{world}"]').click()
+        await close_settings(pg)
+        for width, height in ((768, 864), (360, 874)):
+            await pg.set_viewport_size({'width': width, 'height': height})
+        check(f'{world} replaces the photograph with one illustrated scene', await pg.locator('.room svg.world-art').count() == 1 and
+              await pg.locator('.room picture, .room img').count() == 0 and (await state(pg))['world'] == world)
+        check(f'{world} fold and unfold requests no photographic assets', not photos(requests[request_start:]), photos(requests[request_start:]))
+        check(f'{world} after Original Study preserves the draft and writing choices', await pg.input_value('#direction') == draft and
+              'A few paragraphs' in await pg.inner_text('#lengthBtn') and 'I decide' in await pg.inner_text('#outcomeBtn'))
+        await appearance(pg)
+    await close_settings(pg)
+    check('foldable layout changes make no model calls', not H.reqs(), H.reqs())
+    check('foldable layout changes raise no browser exceptions', not [line for line in logs if line.startswith('PAGEERROR')], logs)
     await pg.context.close()
 
 
@@ -297,7 +431,7 @@ async def main():
         async with async_playwright() as p:
             launch = {'executable_path': os.environ['COZY_TEST_CHROMIUM']} if os.environ.get('COZY_TEST_CHROMIUM') else {}
             browser = await p.chromium.launch(**launch)
-            for scenario in (scenario_worlds, scenario_legacy, scenario_concurrent_choices):
+            for scenario in (scenario_worlds, scenario_legacy, scenario_foldable, scenario_concurrent_choices):
                 try:
                     await scenario(browser)
                 except Exception:
