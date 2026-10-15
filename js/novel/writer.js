@@ -15,7 +15,7 @@ import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn } from './textshape.js';
 import { renameIn } from './names.js';
@@ -787,7 +787,7 @@ export function putBackTail({ novelId, chapterId, passageId }) {
   if (!now || (!top && !end)) return false;
   const body = String(now.text || '').replace(/\s+$/, '');
   const t = `${top ? `${top}\n\n` : ''}${body}${end ? `\n\n${now.tookOff}` : ''}`;
-  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}) });
+  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...writtenWith(now) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
   recount(novelId);
@@ -806,7 +806,8 @@ export function saveEdit({ novelId, chapterId, passageId, text, fromId = null })
   if (t === String(now.text || '')) return false;
   if (!t.trim()) return false;
   /* his words changed inside a passage cut short: it still stops where it stopped, and Go on stays — unless he wrote its end himself (Tavern M511-1) */
-  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...(sameEnd(now.text, t) ? { ...endOf(now), ...keptTail(now) } : {}) });
+  /* (what wrote the words he changed stays with them: What the writer was sent, and its thinking) */
+  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...(sameEnd(now.text, t) ? { ...endOf(now), ...keptTail(now) } : {}), ...writtenWith(now) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
   recount(novelId);

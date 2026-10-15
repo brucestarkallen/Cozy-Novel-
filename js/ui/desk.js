@@ -12,6 +12,7 @@ import { drawProse, growProse, selectionIn } from './prose.js';
 import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS } from '../novel/shape.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
+import { showJudged } from './checks.js';
 import { webUrl } from '../model/call.js';
 import { thinkBox as makeThinkBox, updateThinkBox } from './think.js';
 import { paced, follower } from './live.js';
@@ -454,7 +455,8 @@ function passageMenu(anchor, p) {
   const v = picked(p) || {};
   const i = c.passages.indexOf(p);
   menu(anchor, [
-    v.sent ? { label: 'What the writer was sent', hint: 'Every word of the request this version was written from.', run: () => showSent(S.novelId, v.sent) } : null,
+    v.sent ? { label: 'What the writer was sent', hint: v.how === 'suggested' || v.how === 'edit' || v.how === 'partner' ? 'Every word of the request that wrote the words this version was made from.' : 'Every word of the request this version was written from.', run: () => showSent(S.novelId, v.sent) } : null,
+    gradeSaid(p) ? { label: 'What the judge said', hint: 'Its ten checks of this version — each passed or failed, with the words; a no it could not find in the passage is shown, not counted.', run: () => showJudged(S.novelId, c.id, p.id) } : null,
     ...(Array.isArray(v.sentMore) ? v.sentMore : []).map((key, k, all) => ({ label: all.length > 1 ? `What Go on was sent (${numberWords(k + 1).toLowerCase()})` : 'What Go on was sent', hint: 'Every word of the request that carried this passage on.', run: () => showSent(S.novelId, key) })),
     { label: 'Copy the words', hint: 'This passage as it shows, to paste anywhere.', run: async () => { toast((await copyText(v.text || '')) ? 'Copied.' : 'It could not be copied.'); } },
     v.tookOff || v.tookOffTop ? { label: v.tookOff && v.tookOffTop ? 'Put back what was taken off' : v.tookOffTop ? 'Put back what was taken off its top' : 'Put back what was taken off its end',

@@ -10,7 +10,7 @@ import * as store from '../store.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, openSheet, confirmIt } from './dom.js';
 import { chapterLabel } from '../novel/shape.js';
-import { GRADE_AXES } from '../novel/prompts.js';
+import { GRADE_AXES, JUDGE_CHECKS } from '../novel/prompts.js';
 import { findIn } from '../novel/search.js';
 import { plural } from '../util.js';
 import * as desk from './desk.js';
@@ -29,6 +29,37 @@ export function initChecks(el, appHooks) {
 }
 
 /* the book now open: what it holds, watched */
+/* What the judge said of one passage's version on show: its ten checks, each passed or failed with the words that
+ * fail it (a tap goes to them), a "no" it could not show in the passage said and not counted, what the app counted
+ * itself, and what writing it again would need (2.6.5: a passage at or over the mark showed nothing of its grade) */
+export function showJudged(novelId, chapterId, passageId) {
+  const c = store.peek('chapter', chapterId);
+  const p = c && (c.passages || []).find((x) => x.id === passageId);
+  const e = p && checker.entryFor(c, p);
+  const g = e && e.grade;
+  if (!g) { toast('This version is not graded yet.'); return; }
+  const judge = checker.judgeOf(store.peek('house', 'house') || {});
+  const s = openSheet('What the judge said', { small: true });
+  const go = (words) => () => { s.close(); desk.whenOpen(chapterId, { passageId, show: { query: words } }); };
+  s.body.append(h('p.judgehead', h('b', `Graded ${g.overall} of ${g.of || 10}`), judge ? ` — your mark is ${judge.target}${g.overall < judge.target ? '; this is under it' : ''}` : ''));
+  if (!g.of) {
+    s.body.append(h('p.say', 'Graded before the ten checks, on another scale: ', GRADE_AXES.filter(([k]) => Number.isFinite(g[k])).map(([k, w]) => `${w} ${g[k]}`).join(' · '), '. Check this chapter grades it on the ten checks.'));
+    return;
+  }
+  const faults = g.faults || [];
+  s.body.append(h('ul.judged', ...JUDGE_CHECKS.map(([k, name, what]) => {
+    const f = faults.find((x) => x.check === k);
+    const row = h('li', { 'data-check': k, 'data-said': !f ? 'yes' : f.unverified ? 'uncounted' : 'no' }, h('b', name), ' — ');
+    if (!f) row.append('passed');
+    else if (f.unverified) row.append(`it said no, but the words it quoted are not in the passage, so it is not counted${f.said ? `: “${f.said}”` : ''}${f.why ? ` — ${f.why}` : ''}`);
+    else row.append(f.counted ? 'failed (counted by the app): ' : 'failed: ', h('button.link.quote', { title: 'Go to these words in the passage.', onclick: go(f.words) }, `“${f.words}”`), f.why ? ` — ${f.why}` : '');
+    row.append(h('small', what));
+    return row;
+  })));
+  if (g.lift) s.body.append(h('p.say', h('b', 'What would lift it: '), g.lift));
+  s.body.append(h('p.say.quiet', 'A judge reads generously: a published page fails one or two of these, a machine-made one most. A "no" counts only with the words in the passage that fail it.'));
+}
+
 export function showChecks(novelId, chapterId) {
   if (C.novelId !== novelId) {
     for (const off of C.offs) off();
@@ -231,7 +262,7 @@ function card(novelId, x) {
         } }, `“${f.words}”`)] : null,
         f.why ? ` — ${f.why}` : null,
         /* a "no" whose words are not in the passage: shown, never counted (Cozy Tavern M644) */
-        f.unverified ? h('small.notcounted', ' — its words were not found in the passage, so it is not counted') : null))));
+        f.unverified ? h('small.notcounted', ` — its words were not found in the passage, so it is not counted${f.said ? ` (it quoted “${f.said}”)` : ''}`) : null))));
     }
     if (item.why) el.append(h('div.sugwhy', item.why));
     if (item.lift) el.append(h('div.sugwhy', h('b', 'To reach it: '), item.lift));

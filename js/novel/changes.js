@@ -15,7 +15,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, keptTail } from './shape.js';
+import { chapterSteps, novelSteps, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, keptTail, writtenWith } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
@@ -498,7 +498,7 @@ function newVersionOn(put, novelId, x, next, why) {
  * whether it was cut short or stopped (its Go on stays) */
 export function carried(v) {
   if (!v) return {};
-  return { ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v), ...keptTail(v) };
+  return { ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v), ...keptTail(v), ...writtenWith(v) };
 }
 
 /* ------------------------------------------------------------ across the book, together */

@@ -90,6 +90,13 @@ export const bornOf = (v) => (v ? v.rootAt || v.done || v.at || 0 : 0);
  * words, a few words written again, his edit that keeps its end), so its
  * Put back stays (Cozy Tavern M46/M55: a copy made field by field dropped
  * what was not on its list) */
+/* what wrote a version's words, kept with a version made from it by changing some of them — the checker's fixes,
+ * his partner's words, his own edit: the request it was written from (What the writer was sent) and its thinking.
+ * Never the model: the new version is no longer that model's own whole page. */
+export function writtenWith(v) {
+  if (!v) return {};
+  return { ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.sent ? { sent: v.sent } : {}), ...(Array.isArray(v.sentMore) && v.sentMore.length ? { sentMore: v.sentMore.slice() } : {}) };
+}
 export function keptTail(v) {
   if (!v) return {};
   return { ...(String(v.tookOff || '').trim() ? { tookOff: v.tookOff } : {}), ...(String(v.tookOffTop || '').trim() ? { tookOffTop: v.tookOffTop } : {}) };

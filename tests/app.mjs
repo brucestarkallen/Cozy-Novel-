@@ -8352,6 +8352,75 @@ await test('a preset keeps his words in the storyteller’s own voice, and puts 
   assert.equal(presetsMod.sameVoice(v, presetsMod.voiceOf({ ...house, ownWords: [] })), false, 'different words: not the same voice');
 });
 
+heading('what wrote a page stays with it, and the judge read as it answers (2.6.5)');
+
+await test('a version made from another by changing some words keeps what wrote them — What the writer was sent and its thinking: the checker’s fixes by his tap or by themselves, his edit, his partner’s words; never the model', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 }, instructions: { system: 'HIS OWN WORDS FIRST', late: '', partner: '' } });
+  const b = await makeBook([['The lamp was cold.']], { manual: true });
+  const pid = b.ch().passages[0].id;
+  /* his Rewrite, then its fix in by itself */
+  await script([{ text: 'Mara lit the the lamp.', think: 'She should light it at once.' }, { text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' }] }) }]);
+  assert.equal((await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'She lights it.' })).ok, true);
+  const written = picked(b.ch().passages[0]);
+  assert.ok(written.sent && written.thinking, 'the rewrite has its request and thinking');
+  await checker.runCheck(b.novelId);
+  let v = picked(b.ch().passages[0]);
+  assert.deepEqual([v.how, v.text, v.sent, v.thinking, v.model], ['suggested', 'Mara lit the lamp.', written.sent, written.thinking, undefined], 'the fixed version: the same request and thinking, no model of its own');
+  /* his edit of it */
+  writer.saveEdit({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, text: 'Mara lit the lamp at last.' });
+  v = picked(b.ch().passages[0]);
+  assert.deepEqual([v.how, v.sent, v.thinking], ['edit', written.sent, written.thinking]);
+  /* his partner's words in it */
+  const made = changes.makeChange(b.novelId, { passage: '1.1', find: 'at last', replace: 'quickly' });
+  assert.equal(made.status, 'made', JSON.stringify(made));
+  v = picked(b.ch().passages[0]);
+  assert.deepEqual([v.how, v.text, v.sent, v.thinking], ['partner', 'Mara lit the lamp quickly.', written.sent, written.thinking]);
+  /* and what was sent is still there to read */
+  const r = await realFetch(`${BASE}/api/sent/${b.novelId}/${encodeURIComponent(v.sent)}`);
+  assert.equal(r.status, 200, 'the request kept on the phone');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the judge’s checks read by their names in any form — “Opening”, “True to the book”, true_to_the_book — never taken for a pass; an answer naming none of them is no grade', async () => {
+  await setHouse({}, { checksFrom: 0 });
+  const b = await makeBook([['Mara climbed the stair slowly and looked out at the grey sea below the light.']]);
+  const named = { Opening: 'yes', 'True to the book': 'No', Shown: 'yes', pacing: 'yes', SPECIFIC: 'yes', fresh: 'yes', sentences: 'yes', People: 'yes', moves: 'no', Ending: 'yes' };
+  await script([{ text: JSON.stringify({ edits: [], grades: [{ passage: '1.1', checks: named, faults: [
+    { check: 'True to the book', words: 'the grey sea', why: 'the notes say green' },
+    { check: 'Moves', words: 'looked out at the grey sea', why: 'nothing changes' }] }] }) }]);
+  await checker.runCheck(b.novelId);
+  const [row] = checker.gradesOf(b.novelId).rows;
+  assert.deepEqual([row.overall, row.faults.map((f) => [f.check, f.words])], [8, [['canon', 'the grey sea'], ['moves', 'looked out at the grey sea']]]);
+  /* an answer whose checks name none of the ten: asked again for the grades, never ten of ten */
+  const c = await makeBook([['Mara kept the light.']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [], grades: [{ passage: '1.1', checks: { style: 'yes', vibe: 'yes' } }] }) }, { text: JSON.stringify({ grades: [{ passage: '1.1', checks: ALL_YES(), faults: [] }] }) }]);
+  await checker.runCheck(c.novelId);
+  assert.equal((await checkAsk()).length, 2, 'asked once more');
+  assert.equal(checker.gradesOf(c.novelId).rows.length, 1);
+  await setHouse();
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a “no” quoted with a word of its own counts by the page’s own words — six or more of them in a row; a quote the page does not hold is kept, shown and not counted', async () => {
+  await setHouse({}, { checksFrom: 0 });
+  const b = await makeBook([['She climbed the narrow stair to the lamp room and waited for the storm to break over the rocks.']]);
+  await script([{ text: JSON.stringify({ edits: [], grades: [{ passage: '1.1', checks: { ...ALL_YES(), pacing: 'no', ending: 'no' }, faults: [
+    { check: 'pacing', words: 'she climbed the steep stair to the lamp room and waited for the storm', why: 'rushed' },
+    { check: 'ending', words: 'the weather turned', why: 'ends on the weather' }] }] }) }]);
+  await checker.runCheck(b.novelId);
+  const [row] = checker.gradesOf(b.novelId).rows;
+  assert.equal(row.overall, 9, 'the near quote counts; the one the page does not hold does not');
+  const pacing = row.faults.find((f) => f.check === 'pacing');
+  assert.equal(pacing.words, 'stair to the lamp room and waited for the storm', 'the longest stretch of the page’s own words');
+  const ending = row.faults.find((f) => f.check === 'ending');
+  assert.deepEqual([ending.unverified, ending.said], [true, 'the weather turned'], 'kept with what it quoted, to be shown');
+  await setHouse();
+  await putAway(b);
+});
+
 /* last of all: it lets go of every record this page holds, as a page does when a copy comes back */
 await test('a copy brought back while the page was away: what it kept waiting is let go, never saved over the copy', async () => {
   const b = await makeBook([['Mara kept the light.']]);

@@ -828,6 +828,14 @@ pre.whole { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-mon
 .sug ul.faults b { color: var(--chrome-ink); font-weight: 600; }
 .sug ul.faults .link.quote { font: italic 13px/1.45 var(--serif); text-align: left; padding: 0; overflow-wrap: anywhere; }
 .sug ul.faults .notcounted { font-size: 12px; font-style: italic; }
+/* What the judge said: its ten checks, one to a line, each with what it asks in small */
+ul.judged { margin: 8px 0; padding-left: 18px; font-size: 14px; line-height: 1.45; color: var(--chrome-soft); }
+ul.judged li { margin: 6px 0; }
+ul.judged b { color: var(--chrome-ink); font-weight: 600; }
+ul.judged li[data-said="no"] { color: var(--chrome-ink); }
+ul.judged li[data-said="uncounted"] { font-style: italic; }
+ul.judged small { display: block; font-size: 12px; opacity: .8; }
+ul.judged .link.quote { font: italic 14px/1.45 var(--serif); text-align: left; padding: 0; overflow-wrap: anywhere; }
 .sug[data-kind="seam"] .tag { color: #9fd8c4; }
 .asidebox .sug { margin-top: 8px; }
 /* Remove versions: each version, ticked to go */

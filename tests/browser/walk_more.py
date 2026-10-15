@@ -1880,6 +1880,14 @@ async def scenario_auto(b):
         if 'patient, unhurried' in prose: break
         await pg.wait_for_timeout(250)
     check('the checker’s fix goes in by itself, the words before one arrow away', 'patient, unhurried' in prose and '2 / 2' in await pg.inner_text('#passages .passage >> nth=-1 >> .pctl'), prose[:200])
+    # the fixed version still says what wrote it, and what the judge said of it
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]'); await pg.wait_for_timeout(200)
+    items = await pg.locator('.menu-pop button').all_inner_texts()
+    await pg.click('.menu-pop button:has-text("What the judge said")'); await pg.wait_for_timeout(400)
+    said = await pg.inner_text('.sheet.on >> nth=-1')
+    rows = await pg.locator('.sheet.on ul.judged li').count()
+    check('the version the fixes made keeps What the writer was sent, and What the judge said shows its ten checks', any('What the writer was sent' in t for t in items) and 'Graded 10 of 10' in said and rows == 10, (items, said[:120], rows))
+    await close_sheet(pg)
     # he goes back to the words before with the arrows: his choice stands (looked at again below, after more checking)
     await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
     await pg.click('.passage.selected button[aria-label="The version before"]'); await pg.wait_for_timeout(400)

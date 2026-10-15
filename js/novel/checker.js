@@ -29,7 +29,7 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain, rewriteSelection as writeSpanAgain } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, howOf, bornOf, chapterText } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, writtenWith, howOf, bornOf, chapterText } from './shape.js';
 import { numberedText, shortOf, notesBehind } from './context.js';
 import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
@@ -602,23 +602,36 @@ const tailOf = (text, keep) => (!keep ? '' : text.length > keep ? '[…]\n' + te
  * passed, of ten. */
 const SAID_NO = /^\s*(?:(?:no|n|fail(?:s|ed)?|false)(?![\p{L}])|[✗❌×✘])/iu;
 const SAID_YES = /^\s*(?:(?:yes|y|pass(?:es|ed)?|true|ok)(?![\p{L}])|[✓✔])/iu;
+/* a check as an answer names it — its key or its name, in any capitals, spaces or marks ("canon", "True to the book",
+ * "true_to_the_book", "Opening") — or nothing (2.6.5: a check named any way but the key was read as a pass, so a
+ * judge that wrote "Opening": "no" gave a page ten of ten) */
+const squash = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+const CHECK_KEY = new Map(JUDGE_CHECKS.flatMap(([k, name]) => [[squash(k), k], [squash(name), k]]));
+const checkKey = (s) => CHECK_KEY.get(squash(s)) || '';
+
 function judged(a, list, judge) {
   const failed = new Map();
   let answered = false;
   for (const g of list) {
     if (!g || typeof g !== 'object') continue;
-    const checks = g.checks && typeof g.checks === 'object' && !Array.isArray(g.checks) ? g.checks : null;
-    const faults = (Array.isArray(g.faults) ? g.faults : []).filter((f) => f && typeof f === 'object');
-    if (!checks && !faults.length) continue;
+    const raw = g.checks && typeof g.checks === 'object' && !Array.isArray(g.checks) ? g.checks : null;
+    /* the checks it answered, by their keys */
+    const checks = {};
+    for (const [name, said] of Object.entries(raw || {})) { const k = checkKey(name); if (k && !(k in checks)) checks[k] = said; }
+    const faults = (Array.isArray(g.faults) ? g.faults : []).filter((f) => f && typeof f === 'object' && checkKey(f.check));
+    /* an answer that names none of the ten is no grade: asked again, never taken for ten passes */
+    if (!Object.keys(checks).length && !faults.length) continue;
     answered = true;
     for (const [k] of JUDGE_CHECKS) {
-      const said = checks ? checks[k] : undefined;
-      const fault = faults.find((f) => String(f.check || '').trim().toLowerCase() === k);
+      const said = checks[k];
+      const fault = faults.find((f) => checkKey(f.check) === k);
       const yes = said === true || said === 1 || (typeof said === 'string' && SAID_YES.test(said));
       const no = said === false || said === 0 || (typeof said === 'string' && SAID_NO.test(said)) || (Boolean(fault) && !yes);
       if (!no || failed.has(k)) continue;
       const words = fault ? evidence(a.text, fault.words) : '';
-      failed.set(k, { check: k, ...(words ? { words } : { unverified: true }), why: fault ? clean(fault.why, 220) : '' });
+      /* a "no" whose words are not in the passage: kept with what the judge quoted, shown — never counted */
+      const quoted = fault ? clean(fault.words, 200) : '';
+      failed.set(k, { check: k, ...(words ? { words } : { unverified: true, ...(quoted ? { said: quoted } : {}) }), why: fault ? clean(fault.why, 220) : '' });
     }
   }
   if (!answered) return null;
@@ -660,6 +673,15 @@ function evidence(text, words) {
   for (const t of tries) {
     const hit = findIn(text, t, { max: 1, words: true })[0];
     if (hit) return text.slice(hit.start, hit.end);
+  }
+  /* a quote with a word of its own in it (2.6.5): the longest stretch of six words or more of it that stands in the
+   * passage as written — the page's own words, never the judge's */
+  const ws = w.split(/\s+/).filter(Boolean).slice(0, 80);
+  for (let len = ws.length - 1; len >= 6; len--) {
+    for (let i = 0; i + len <= ws.length; i++) {
+      const hit = findIn(text, ws.slice(i, i + len).join(' '), { max: 1, words: true })[0];
+      if (hit) return text.slice(hit.start, hit.end);
+    }
   }
   return '';
 }
@@ -1016,7 +1038,7 @@ function keepWords(novelId, w, next, rest) {
     store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, v.id, entry), { now: true });
   } else {
     /* words fixed in place: where the version stops goes with them (cut short, stopped — its Go on stays: Tavern M511-1) */
-    const version = newVersion({ text: next, how: 'suggested', round: e.round, from: v.id, words: countWords(next), ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v), ...keptTail(v) });
+    const version = newVersion({ text: next, how: 'suggested', round: e.round, from: v.id, words: countWords(next), ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v), ...keptTail(v), ...writtenWith(v) });
     store.change('chapter', chapter.id, chapterSteps.addVersion(p.id, version), { now: true });
     store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, version.id, entry), { now: true });
   }
