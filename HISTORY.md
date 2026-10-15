@@ -345,3 +345,17 @@ Checked with all five suites — server 63/63, app 365/365, thinking 348/348 (0 
 - Unsaved note-editor drafts are kept with the book's existing device-saved drafts, so Back and reload preserve them. Add recovers drafts for cards removed while their editors were closed. Save clears the acknowledged draft without applying unsaved words to a card.
 - Whole-book rereads keep complete automatic descriptions in use until the rebuild finishes. Explicit card corrections and removals take effect immediately, and Undo of the reread preserves later manual corrections.
 - NOTES-AUDIT.md explains the workflow, confirmed repairs, automatic recovery, verification and the limits of model-generated facts.
+
+## 2.9.3, room for the story
+
+- The default crafts make room for gradual affection, shared routines, private jokes, friendship and comfortable silence. Conflict, jealousy, inference and physical consequences follow the characters and the world, with contradictory blanket rules removed. Custom instructions and edited modules keep their exact words.
+- Scenes leave undecided arrivals, private history, choices and feelings to the player unless invited. Rewrites without a requested plot change keep settled events and outcomes. The judge recognizes credible kindness, cooperation and quiet beats.
+- Started replies and thinking seeds are not doubled when providers echo them across small chunks. Stopping a thought-only reply cannot turn the raw thinking into story text. Kept requests are independent copies of nested content blocks.
+- Whole-library restoration guards current clients against old saves, deletes and travelling responses, protects new edits and journal recovery, and ignores delayed generation notifications. Failed generation writes roll restoration back. Rapid restores keep separate safety copies, and malformed records, invalid save numbers and duplicate backup records are refused.
+- Imported books bring their unsent drafts. Partner and scene drafts remain with their own conversations, including folded narrator directions, and newer typing is protected while answers settle. Edit and ask again preserves words already in the box.
+- Conversation operations stay attached to the conversation they began in; destructive save conflicts preserve newer messages and report failure. Missing reply targets return typed words. Unconverted scenes follow moved or removed anchors. Missing chapters block writing and export instead of silently producing an incomplete result.
+- Simultaneous helper starts cannot duplicate a reading. Temporary automatic-rewrite failures retry with a visible wait and the provider's delay. Generated book descriptions reject restarted readings and preserve manual corrections during save conflicts.
+- Grading evidence no longer accepts part of a different word as a quotation. New head-to-head results are tied to the exact words compared and expire when those words change.
+- Chapter updates preserve keyboard focus. Phone notices use the available screen width. FINAL-AUDIT.md records the audit scope, behavioral checks, visual review and practical limits.
+
+Checked with all 32 suites: 1,831 passed, zero failures (1,032 server/application/focused checks and 799 Chromium browser checks). Temporary books and local stand-in providers only; no paid calls.

@@ -20,19 +20,32 @@ import { plural, debounce, timeAgo } from '../util.js';
 
 async function loadChapters(novel) {
   const chapters = {};
-  for (const id of novel.order || []) { const c = await store.open('chapter', id); if (c) chapters[id] = c; }
+  for (const id of novel.order || []) {
+    const c = await store.open('chapter', id);
+    if (!c) throw new Error('A chapter could not be read.');
+    chapters[id] = c;
+  }
   return chapters;
 }
 
 export async function exportBook(novelId, kind) {
-  const novel = await store.open('novel', novelId);
-  if (!novel) return;
-  const chapters = await loadChapters(novel);
-  if (kind === 'md') download(fileName(novel, 'md'), toMarkdown(novel, chapters), 'text/markdown');
-  else if (kind === 'txt') download(fileName(novel, 'txt'), toText(novel, chapters), 'text/plain');
-  else if (kind === 'html') download(fileName(novel, 'html'), await toPrintable(novel, chapters), 'text/html');
-  else if (kind === 'epub') download(fileName(novel, 'epub'), await toEpub(novel, chapters));
-  toast('The file is on its way to your downloads.');
+  try {
+    const novel = await store.open('novel', novelId);
+    if (!novel) throw new Error('The book could not be read.');
+    const chapters = await loadChapters(novel);
+    if (kind === 'md') download(fileName(novel, 'md'), toMarkdown(novel, chapters), 'text/markdown');
+    else if (kind === 'txt') download(fileName(novel, 'txt'), toText(novel, chapters), 'text/plain');
+    else if (kind === 'html') download(fileName(novel, 'html'), await toPrintable(novel, chapters), 'text/html');
+    else if (kind === 'epub') download(fileName(novel, 'epub'), await toEpub(novel, chapters));
+    else return false;
+    toast('The file is on its way to your downloads.');
+    return true;
+  } catch (_) {
+    /* An unread chapter is not an empty chapter. Keep an incomplete book
+     * out of Downloads and make a failed tap something he can act on. */
+    toast('The whole book could not be read, so no file was made. Try again when the phone answers; if a chapter is missing, look in Settings → Backups.', 8000);
+    return false;
+  }
 }
 
 /* What it's about / How it reads: Manual or Automatic, his words, and what

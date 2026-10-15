@@ -259,7 +259,7 @@ for (const purpose of ['write', 'play']) {
     const text = [r.system, ...r.messages.map(m => m.content)].join('\n');
     assert.equal(appMetaWords.exec(text), null, 'ordinary author-to-writer language throughout the request');
     assert.ok(text.includes('what you know about a secret'), 'knowledge boundaries remain');
-    assert.ok(text.includes('a correct model costs repeated exposure'), 'an in-story theory of a power is still a model');
+    assert.ok(text.includes('A correct inference still needs a credible basis'), 'understanding still needs evidence');
   });
 }
 
@@ -278,5 +278,52 @@ test('intentional story and custom words are never scrubbed by the terminology c
   assert.ok(r.messages.some(m => m.content === own));
   assert.ok(r.messages.some(m => m.content === 'The robot sees the model on the desk.'));
 });
+
+for (const purpose of ['write', 'play']) {
+  const crafted = () => {
+    const { novel: book, chapter } = newNovel({ title: 'The Lantern Kitchen', brief: 'Old friends share a quiet evening after a journey.' });
+    const r = assemble({ house: { instructions: { system: 'Batman, keep your dry warmth.', narrator: 'Hulk tell tender story.', late: '', lateNarrator: '' } },
+      novel: book, chapters: { [chapter.id]: chapter }, conn: { context: 128000 }, purpose,
+      target: { chapterId: chapter.id }, request: 'Let the reunion breathe.', play: { who: 'Mara' } });
+    assert.equal(r.refuse, '');
+    return [r.system, ...r.messages.map(m => m.content)].join('\n');
+  };
+  test(`${purpose}: warmth can grow through ordinary shared life without compulsory conflict`, () => {
+    const text = crafted();
+    assert.ok(text.includes('Repeated care, shared work, play and reliable presence can deepen a bond'));
+    assert.ok(text.includes('A tender moment can land without a confession, a crisis or a price'));
+    assert.ok(text.includes('jealousy is not compulsory'));
+    assert.ok(!text.includes('jealousy is default physics'));
+    assert.ok(!text.includes('never on the beat\'s pleasantness'));
+    assert.ok(!text.includes('who disagree fight to WIN'));
+    assert.ok(!text.includes('the gentle snap LATER but land worse'));
+    assert.ok(!text.includes('fire where a rival is visible'));
+    assert.ok(text.includes('where affection belongs here'));
+  });
+  test(`${purpose}: promises of friendship and uncertainty survive general invention rules`, () => {
+    const text = crafted();
+    assert.ok(text.includes('An explicitly platonic bond stays platonic unless I change it'));
+    assert.ok(text.includes('Being told a claim does not make it believed'));
+    assert.ok(!text.includes('stands as what they believe'));
+    assert.ok(!text.includes('Platonic is a state, not a law'));
+  });
+  test(`${purpose}: evidence, hearing and opposition follow this book's established world`, () => {
+    const text = crafted();
+    assert.ok(text.includes('hearing depends on the source, distance, barriers, background noise and established abilities'));
+    assert.ok(text.includes('New evidence may be discovered on the page'));
+    assert.ok(!text.includes('SOLID sealed barriers block normal conversation'));
+    assert.ok(!text.includes('opposition scales to MC\'s DEPLOYED level'));
+    assert.ok(!text.includes('must already exist on an EARLIER page'));
+    assert.ok(!text.includes('no supernatural deduction'));
+    assert.ok(text.includes('established expertise may make a first inference correct'));
+    assert.ok(text.includes('Extraordinary perception or deduction is available where the book establishes it'));
+  });
+  if (purpose === 'play') test('played warmth does not supply the player’s feelings or personal history', () => {
+    const text = crafted();
+    assert.ok(text.includes('My character’s unstated past, private attachments and inner life remain mine'));
+    assert.ok(text.includes('Leave my character’s response to a kindness for me to give'));
+    assert.ok(text.includes('MC Agency = ABSOLUTE. Render only the MC content I wrote.'));
+  });
+}
 
 console.log(`\n${passed} craft checks passed.`);

@@ -215,6 +215,7 @@ async function importBook() {
       for (const b of list) {
         for (const id of b.novel.order) await store.create('chapter', id, b.chapters[id]);
         if (b.talk) await store.create('talk', b.novel.id, b.talk);
+        if (b.draft) await store.create('draft', b.novel.id, b.draft);
         for (const p of b.plays) await store.create('play', p.id, p);
         await store.create('novel', b.novel.id, b.novel);
       }

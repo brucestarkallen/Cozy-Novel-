@@ -1522,17 +1522,29 @@ async def scenario_suggestions_more(b):
       return { n: p.versions.length, text: shape.picked(p).text, from: shape.picked(p).from, before: p.versions[1].text }; }""")
     check('his edit is made on the words he opened, the version that came meanwhile one arrow back — and said', got['n'] == 3 and got['text'] == 'Mara climbed the stair slowly. The lamp was lit.' and got['from'] == opened and got['before'] == 'Mara climbed the long stair. The lamp was lit.' and 'Another version came while you edited — it is one arrow back.' in toast, (got, toast))
     # nothing goes in by itself under his open box: the fixes wait, and go in once it closes
-    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { h.autoFix = { on: true, from: 0 }; h.judge = { on: false }; }, { now: true }))")
+    # As the switch does in the app, begin with newly written pages. A zero
+    # date also rewrites the earlier stock-wording fixture, leaving the
+    # whole-book bubble busy after this target's own fixes have arrived.
+    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { h.autoFix = { on: true, from: Date.now() }; h.judge = { on: false }; }, { now: true }))")
     await write(pg, 'The keeper waits.')
     await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
     await pg.click('.passage.selected .pctl button:has-text("Edit")')
     await pg.wait_for_selector('.editbox')
+    snapshot = """async () => {
+      const store = await import('/js/store.js'); const checker = await import('/js/novel/checker.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const c = store.peek('chapter', D.chapterId);
+      const p = c.passages[c.passages.length - 1]; const e = checker.entryFor(c, p);
+      return { versions: [p.versions.length, p.versions[p.versions.length - 1].how],
+        found: Boolean(e && (e.items || []).some((x) => typeof x.replace === 'string')),
+        bubble: document.querySelector('#checkBubble').dataset.state };
+    }"""
     for i in range(80):
-        if await pg.get_attribute('#checkBubble', 'data-state') == 'found': break
+        shown = await pg.evaluate(snapshot)
+        if shown['found'] and shown['bubble'] == 'found': break
         await pg.wait_for_timeout(250)
     count = "(async () => { const store = await import('/js/store.js'); const D = (await import('/js/ui/desk.js')).deskState(); const c = store.peek('chapter', D.chapterId); const p = c.passages[c.passages.length - 1]; return [p.versions.length, p.versions[p.versions.length - 1].how]; })()"
-    held = await pg.evaluate(count)
-    check('a fix found while his box is open waits behind the bubble, never put in under his hand', held == [1, 'write'] and await pg.get_attribute('#checkBubble', 'data-state') == 'found', held)
+    held = shown['versions']
+    check('a fix found while his box is open waits behind the bubble, never put in under his hand', held == [1, 'write'] and shown['found'] and shown['bubble'] == 'found', shown)
     await pg.click('.editrow button:has-text("Cancel")')
     went = held
     for i in range(40):
@@ -1768,12 +1780,20 @@ async def scenario_rest(b):
     await pg.route('**/api/novels', list_after_retry)
     await pg.goto(f'http://127.0.0.1:{PORT}/')
     await pg.wait_for_selector('#shelf:not([hidden]) #books > *:not(.shelfwait)', timeout=8000)
-    try:
-        await pg.wait_for_selector('#books .unread', timeout=8000)
-    except Exception:
-        pass
-    shelf = await pg.inner_text('#books')
-    check('books the phone did not list are never shown as no books — it says so, with Try again', 'could not be read just now' in shelf and 'Every story starts somewhere' not in shelf and await pg.locator('#books button:has-text("Try again")').count() == 1, shelf[:200])
+    # A successful startup request can start an automatic retry between two
+    # browser reads. Inspect the error's words and button in the same DOM state,
+    # before that legitimate retry replaces the notice with “Reading…”.
+    unread = await pg.wait_for_function("""() => {
+      const books = document.querySelector('#books');
+      if (!books?.querySelector('.unread')) return null;
+      return {
+        text: books.innerText,
+        retries: [...books.querySelectorAll('button')].filter((button) => button.textContent.includes('Try again')).length,
+      };
+    }""", timeout=8000)
+    unread = await unread.json_value()
+    shelf = unread['text']
+    check('books the phone did not list are never shown as no books — it says so, with Try again', 'could not be read just now' in shelf and 'Every story starts somewhere' not in shelf and unread['retries'] == 1, unread)
     # Keep startup catch-up requests failing through the click. Mark only a
     # list request made during the real retry click, so automatic recovery
     # cannot remove the button first or satisfy this manual-retry assertion.

@@ -216,24 +216,47 @@ function drawChapters() {
     P.watched.add(id);
     P.offs.push(store.subscribe('chapter', id, () => drawChaptersSoon()));
   }
-  ui.leftBody.textContent = '';
-  const list = h('ol.chlist');
+  /* Save acknowledgements and helper summaries arrive while he is using
+   * this list. Keep its buttons, focus and open menu anchors in place. */
+  let list = ui.leftBody.querySelector('.chlist');
+  if (!list) {
+    list = h('ol.chlist');
+    ui.leftBody.replaceChildren(h('p.pane-kicker', 'The shape of your story'), list,
+      h('div.btnrow.chapter-add', h('button.btn', { title: 'Begin a fresh chapter at the end of the book.', onclick: () => {
+        const now = store.peek('novel', P.novelId);
+        if (!now) return;
+        closeLeft(); desk.newChapterAfter(now.order[now.order.length - 1]);
+      } }, icon('plus', 16), 'New chapter')),
+      h('p.hint.chapter-total', { style: { textAlign: 'center', marginTop: '14px' } }));
+  }
+  const active = document.activeElement;
+  const rows = new Map([...list.children].map((li) => [li.dataset.id, li]));
   n.order.forEach((id, i) => {
     const c = store.peek('chapter', id);
     const words = c ? chapterWords(c) : 0;
-    const li = h('li' + (id === P.chapterId ? '.on' : ''),
-      h('button.go', { 'aria-current': id === P.chapterId ? 'page' : null, onclick: () => { closeLeft(); hooks.goChapter(id); } },
-        h('span.n', `Chapter ${numberWords(i + 1)}`),
-        c && c.name ? h('span.nm', c.name) : h('span.nm', { style: { fontStyle: 'italic', opacity: '.75' } }, words ? openingOf(c) : 'Not begun'),
-        h('span.w', plural(words, 'word')),
-        c && c.summary && c.summary.text ? h('span.sum', c.summary.text) : null),
-      h('button.menu', { 'aria-label': 'More for this chapter', onclick: (e) => chapterMenu(e.currentTarget, id, i) }, icon('more', 18)));
-    list.append(li);
+    let li = rows.get(id);
+    if (!li) li = h('li', { 'data-id': id },
+      h('button.go', { onclick: () => { closeLeft(); hooks.goChapter(id); } }, h('span.n'), h('span.nm'), h('span.w'), h('span.sum')),
+      h('button.menu', { 'aria-label': 'More for this chapter', onclick: (e) => chapterMenu(e.currentTarget, id, (store.peek('novel', P.novelId)?.order || []).indexOf(id)) }, icon('more', 18)));
+    rows.delete(id);
+    li.classList.toggle('on', id === P.chapterId);
+    const go = li.querySelector('.go');
+    if (id === P.chapterId) go.setAttribute('aria-current', 'page'); else go.removeAttribute('aria-current');
+    li.querySelector('.n').textContent = `Chapter ${numberWords(i + 1)}`;
+    const name = li.querySelector('.nm');
+    name.textContent = c?.name || (words ? openingOf(c) : 'Not begun');
+    name.style.fontStyle = c?.name ? '' : 'italic';
+    name.style.opacity = c?.name ? '' : '.75';
+    li.querySelector('.w').textContent = plural(words, 'word');
+    const summary = li.querySelector('.sum');
+    summary.textContent = c?.summary?.text || '';
+    summary.hidden = !summary.textContent;
+    if (list.children[i] !== li) list.insertBefore(li, list.children[i] || null);
   });
-  ui.leftBody.append(h('p.pane-kicker', 'The shape of your story'), list,
-    h('div.btnrow.chapter-add', h('button.btn', { title: 'Begin a fresh chapter at the end of the book.', onclick: () => { closeLeft(); desk.newChapterAfter(n.order[n.order.length - 1]); } }, icon('plus', 16), 'New chapter')));
+  for (const li of rows.values()) li.remove();
+  if (active?.isConnected && list.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true });
   const words = n.order.reduce((a, id) => a + chapterWords(store.peek('chapter', id) || { passages: [] }), 0);
-  ui.leftBody.append(h('p.hint', { style: { textAlign: 'center', marginTop: '14px' } }, `${plural(n.order.length, 'chapter')} · ${plural(words, 'word')} in all`));
+  ui.leftBody.querySelector('.chapter-total').textContent = `${plural(n.order.length, 'chapter')} · ${plural(words, 'word')} in all`;
   ui.leftTitle.textContent = 'Chapters';
 }
 
@@ -331,47 +354,127 @@ function drawLight() {
 
 /* --------------------------------------------------------------- side */
 
-/* what he is typing beside the page survives the pane being drawn again */
+/* Each conversation and scene keeps its own unsent words on the phone.
+ * The small in-memory copy also keeps selection during a redraw. */
 const typed = { key: '', value: '', focus: false };
-/* words handed back to a box that is not on screen (an answer that did not
- * come while he was in another book or scene): kept for that box, put back
- * the moment it is drawn — never lost (Cozy Tavern's M752) */
-const heldBack = new Map();
+const composerDrafts = new Map();
+const composerBooks = new Map();
+const composerView = new Map();
+let restoringComposer = false;
+function composerOf(key, novelId = composerBooks.get(key) || P.novelId) {
+  return composerDrafts.get(key) || store.peek('draft', novelId)?.composers?.[key] || { value: '', tell: '', tellOpen: false };
+}
+function keepComposer(novelId, key, words) {
+  const next = { value: words.value || '', tell: words.tell || '', tellOpen: Boolean(words.tellOpen) };
+  const prior = composerOf(key, novelId);
+  composerBooks.set(key, novelId);
+  if (JSON.stringify(prior) === JSON.stringify(next)) return;
+  composerDrafts.set(key, next);
+  const save = async () => {
+    let d = store.peek('draft', novelId);
+    if (d === undefined) d = await store.open('draft', novelId);
+    if (composerDrafts.get(key) !== next) return;
+    if (!d) await store.create('draft', novelId, { id: novelId, novelId, composers: { [key]: next } });
+    else store.change('draft', novelId, x => { x.composers ||= {}; x.composers[key] = { ...next }; }, { delay: 300 });
+    await new Promise(resolve => setTimeout(resolve, 350));
+    if (composerDrafts.get(key) !== next) return;
+    await store.flush('draft', novelId);
+    /* A clean copy follows later saves from another window. An unfinished
+     * save or the deliberately blank box of a sent message keeps its copy. */
+    if (composerDrafts.get(key) === next) {
+      composerDrafts.delete(key);
+      const latest = store.peek('draft', novelId)?.composers?.[key];
+      if (latest && JSON.stringify(latest) !== JSON.stringify(next) && ui.rightFoot.dataset.for === key && JSON.stringify(composerView.get(key)) === JSON.stringify(next)) restoreTyped(key, novelId);
+    }
+  };
+  save().catch(() => { /* the window keeps the words until the phone answers */ });
+}
 function keepTyped() {
+  if (restoringComposer) return;
   const ta = ui.rightFoot.querySelector('textarea');
-  if (!ta) return;
-  const key = ui.rightFoot.dataset.for || '';
-  /* the line to the narrator, and whether its box was open, ride with the scene's own box */
+  const key = ui.rightFoot.dataset.for;
+  if (!ta || !key) return;
   const tb = ui.rightFoot.querySelector('textarea.tellbox');
-  if (typed.key !== key) { typed.tell = ''; typed.tellOpen = false; }
-  typed.key = key;
-  typed.value = ta.value;
-  typed.focus = document.activeElement === ta;
-  if (tb) { typed.tell = tb.value; typed.tellOpen = !tb.hidden; }
+  Object.assign(typed, { key, value: ta.value, focus: document.activeElement === ta,
+    selection: [ta.selectionStart, ta.selectionEnd], tell: tb?.value || '', tellOpen: Boolean(tb && !tb.hidden),
+    tellFocus: tb && document.activeElement === tb, tellSelection: tb ? [tb.selectionStart, tb.selectionEnd] : null });
+  const words = { value: typed.value, tell: typed.tell, tellOpen: typed.tellOpen };
+  if (JSON.stringify(composerView.get(key)) !== JSON.stringify(words)) {
+    composerView.set(key, words);
+    keepComposer(ui.rightFoot.dataset.book, key, words);
+  }
 }
-/* words he typed beside the page and has not sent yet (an update waits for them: they live only here) */
 export function unsentWords() {
-  const foot = ui && ui.rightFoot;
-  const boxes = foot ? [...foot.querySelectorAll('textarea')] : [];
-  if (boxes.some((t) => String(t.value || '').trim())) return true;
-  /* the boxes on screen are the truth for their own words (he may have
-   * cleared them since they were last kept); what is kept counts only while
-   * its boxes are not the ones shown */
-  if ([...heldBack.values()].some((w) => String(w || '').trim())) return true;
-  if (boxes.length && foot.dataset.for === typed.key) return false;
-  return Boolean(String(typed.value || '').trim()) || Boolean(String(typed.tell || '').trim());
+  const boxes = ui ? [...ui.rightFoot.querySelectorAll('textarea')] : [];
+  if (boxes.some(t => t.value.trim())) return true;
+  return [...composerBooks.keys()].some(key => {
+    const d = composerOf(key);
+    return String(d.value || '').trim() || String(d.tell || '').trim();
+  });
 }
-export function restoreTyped(key) {
+export function restoreTyped(key, novelId = P.novelId) {
+  const cursor = { ...typed };
   ui.rightFoot.dataset.for = key;
+  ui.rightFoot.dataset.book = novelId;
+  composerBooks.set(key, novelId);
   const ta = ui.rightFoot.querySelector('textarea');
   if (!ta) return;
-  if (typed.key === key) {
-    if (typed.value && !ta.value) { ta.value = typed.value; ta.dispatchEvent(new Event('input')); }
-    if (typed.focus) ta.focus({ preventScroll: true });
+  const saved = composerOf(key, novelId);
+  composerView.set(key, { value: saved.value || '', tell: saved.tell || '', tellOpen: Boolean(saved.tellOpen) });
+  ta.value = saved.value || '';
+  const tb = ui.rightFoot.querySelector('textarea.tellbox');
+  if (tb) {
+    tb.value = saved.tell || '';
+    tb.hidden = !saved.tellOpen;
+    ui.rightFoot.querySelector('.tell-toggle')?.setAttribute('aria-pressed', String(Boolean(saved.tellOpen)));
   }
-  /* words an answer that did not come handed back while this box was not on screen */
-  const held = heldBack.get(key);
-  if (held && !ta.value.trim()) { ta.value = held; ta.dispatchEvent(new Event('input')); heldBack.delete(key); }
+  restoringComposer = true;
+  try { if (tb) tb.dispatchEvent(new Event('input')); ta.dispatchEvent(new Event('input')); }
+  finally { restoringComposer = false; }
+  if (cursor.key === key) {
+    const target = cursor.tellFocus && tb ? tb : cursor.focus ? ta : null;
+    const selection = target === tb ? cursor.tellSelection : cursor.selection;
+    if (target) { target.focus({ preventScroll: true }); if (selection) target.setSelectionRange(...selection); }
+  }
+}
+/* The sent draft stays on disk until the operation settles. A new sentence
+ * typed meanwhile gets its own save and cannot be cleared by this answer. */
+function beginComposerSend(key, { value = true, tell = false } = {}) {
+  keepTyped();
+  const novelId = composerBooks.get(key) || P.novelId;
+  const standing = composerOf(key, novelId);
+  const before = ui.rightFoot.dataset.for === key
+    ? { value: typed.value, tell: typed.tell, tellOpen: typed.tellOpen } : { ...standing };
+  const after = { ...standing, ...(value && standing.value === before.value ? { value: '' } : {}), ...(tell && standing.tell === before.tell ? { tell: '' } : {}) };
+  composerDrafts.set(key, after);
+  composerView.set(key, after);
+  if (ui.rightFoot.dataset.for === key) {
+    const ta = ui.rightFoot.querySelector('textarea');
+    const tb = ui.rightFoot.querySelector('textarea.tellbox');
+    if (value && ta) ta.value = after.value;
+    if (tell && tb) tb.value = after.tell;
+    Object.assign(typed, after);
+  }
+  return { key, novelId, before, after, value, tell };
+}
+function endComposerSend(sent, out) {
+  const { key, novelId, before, after, value, tell } = sent;
+  if (out?.giveBack || out?.giveBackTell) {
+    const current = { ...composerOf(key, novelId) };
+    const join = (old, next) => old && next && old !== next ? `${old}\n\n${next}` : old || next;
+    if (value && out.giveBack) current.value = join(before.value || out.giveBack, current.value);
+    if (tell && out.giveBackTell) { current.tell = join(before.tell || out.giveBackTell, current.tell); current.tellOpen = true; }
+    keepComposer(novelId, key, current);
+    if (ui.rightFoot.dataset.for === key) restoreTyped(key, novelId);
+    return;
+  }
+  const d = store.peek('draft', novelId);
+  if (d) {
+    store.change('draft', novelId, x => {
+      if (JSON.stringify(x.composers?.[key]) === JSON.stringify(before)) x.composers[key] = { ...after };
+    }, { delay: 300 });
+    store.flush('draft', novelId).then(() => { if (composerDrafts.get(key) === after) composerDrafts.delete(key); }).catch(() => {});
+  }
 }
 
 /* each drawing of the side pane counts: one overtaken while it waited for a
@@ -773,8 +876,10 @@ async function drawPartner() {
   if (!n) return;
   const novelId = P.novelId;
   const gen = sideGen;
-  const t = store.peek('talk', novelId) ?? await store.open('talk', novelId).catch(() => null);
+  const t = await talk.ensureTalk(novelId).catch(() => null);
+  await store.open('draft', novelId).catch(() => null);
   if (gen !== sideGen || P.side !== 'partner' || P.novelId !== novelId) return;
+  const draftKey = `talk:${novelId}:${t?.convId || 'current'}`;
   if (t) talk.repairStaleTurns('talk', novelId);
   /* the book's scenes at hand, so a rename everywhere reaches them */
   talk.loadPlays(novelId).catch(() => {});
@@ -795,13 +900,14 @@ async function drawPartner() {
     if (talk.talkBusy('talk', novelId)) { talk.stopTalk('talk', novelId); return; }
     const text = ta.value.trim();
     if (!text) return;
-    ta.value = ''; typed.value = '';
+    const sent = beginComposerSend(draftKey);
     const out = await talk.partnerSay({ novelId, chapterId: P.chapterId, text });
     if (out && !out.ok && out.error) toast(`Your partner${elsewhere(novelId)} did not answer: ${out.error}${out.giveBack && elsewhere(novelId) ? ' — your message is back in its box there' : ''}`, 6000);
     /* a message whose answer did not come is not on the page: its words come back to the box */
-    if (out && out.giveBack) giveBack('talk:' + novelId, out.giveBack);
+    endComposerSend(sent, out);
   } }, working ? 'Stop' : 'Send');
-  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
+  ta.addEventListener('input', keepTyped);
   /* drawn again on its own (its talk changed): the box keeps his words, and there is one of it */
   keepTyped();
   ui.rightFoot.textContent = '';
@@ -809,7 +915,7 @@ async function drawPartner() {
   const quick = h('button.btn.quiet.small', { 'aria-label': 'Quick asks', title: 'Quick asks — ready-made requests for your partner', disabled: working, onclick: (e) => quickAsks(e.currentTarget, ta, send) }, icon('more', 16), 'Quick asks');
   ui.rightFoot.append(ta, h('div.crow', turns.length ? h('button.btn.quiet.small', { title: 'This conversation’s talk goes and it begins again — the changes it made stay in the book. With Undo.', disabled: working, onclick: clearTalk }, 'Start over') : null, h('span.grow'), quick, send));
   autoGrow(ta, 0.3);
-  restoreTyped('talk:' + novelId);
+  restoreTyped(draftKey, novelId);
   P.drawn = 'talk:' + novelId + turnsSig(t);
   placeSide();
 }
@@ -841,9 +947,10 @@ function quickAsks(anchor, ta, send) {
     if (q.fill) { ta.value = q.fill; ta.dispatchEvent(new Event('input')); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); return; }
     /* what he had typed is not lost to a quick ask: it comes back to the box once the ask is sent */
     const mine = ta.value;
+    const key = ui.rightFoot.dataset.for;
     ta.value = q.ask; ta.dispatchEvent(new Event('input'));
     send.click();
-    if (mine.trim()) giveBack('talk:' + P.novelId, mine);
+    if (mine.trim()) giveBack(key, mine);
   } }))]);
 }
 
@@ -851,11 +958,10 @@ function drawPartnerSoon() { if (!partnerFrame) partnerFrame = requestAnimationF
 
 function giveBack(key, words) {
   if (!String(words || '').trim()) return;
-  const ta = ui.rightFoot.querySelector('textarea');
-  if (ta && ui.rightFoot.dataset.for === key && !ta.value.trim()) { ta.value = words; ta.dispatchEvent(new Event('input')); return; }
-  if (typed.key === key && !typed.value) { typed.value = words; return; }
-  /* that box is not on screen and its words are another's: kept for it */
-  heldBack.set(key, heldBack.get(key) ? `${heldBack.get(key)}\n\n${words}` : words);
+  const novelId = composerBooks.get(key) || P.novelId;
+  const before = composerOf(key, novelId);
+  keepComposer(novelId, key, { ...before, value: before.value && before.value !== words ? `${before.value}\n\n${words}` : words });
+  if (ui.rightFoot.dataset.for === key) restoreTyped(key, novelId);
 }
 /* where a reply that did not come was asked, when he is somewhere else now */
 function elsewhere(novelId, playId = '') {
@@ -992,20 +1098,23 @@ function drawTurn(kind, id, turn) {
   } else if (kind === 'talk') {
     /* his words back in the box; this message and everything after it let go — with Undo */
     row.append(h('button', { title: 'Your words back in the box to change and send again; this message and everything after it are let go (the changes made stay in the book). With Undo.', disabled: talk.talkBusy('talk', id), onclick: async () => {
+      const key = `talk:${id}:${store.peek('talk', id)?.convId || 'current'}`;
+      composerBooks.set(key, id);
+      keepTyped();
       const out = await talk.editAndAskAgain(id, turn.id);
       if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
-      drawSide();
-      requestAnimationFrame(() => {
-        const ta = ui.rightFoot.querySelector('textarea');
-        if (ta) { ta.value = out.text; ta.dispatchEvent(new Event('input')); ta.focus(); }
-      });
+      const before = { ...composerOf(key, id) };
+      giveBack(key, out.text);
+      const returned = { ...composerOf(key, id) };
+      if (ui.rightFoot.dataset.for === key) ui.rightFoot.querySelector('textarea')?.focus();
       undoToast('Your words are in the box.', () => {
-        /* the message is back where it was: the box lets go of the words it was handed, unless he changed them */
-        const ta = ui.rightFoot.querySelector('textarea');
-        if (ta && ta.value === out.text) { ta.value = ''; ta.dispatchEvent(new Event('input')); }
-        if (typed.value === out.text) typed.value = '';
+        /* Only this conversation's returned text lets go. A newer draft,
+         * or words in a scene he opened meanwhile, belong where they are. */
+        if (JSON.stringify(composerOf(key, id)) === JSON.stringify(returned)) {
+          keepComposer(id, key, before);
+          if (ui.rightFoot.dataset.for === key) restoreTyped(key, id);
+        }
         out.undo();
-        drawSide();
       });
     } }, 'Edit and ask again'));
   }
@@ -1260,6 +1369,8 @@ async function drawPlay() {
   const n = store.peek('novel', P.novelId);
   if (!n) return;
   const gen = sideGen;
+  await store.open('draft', n.id).catch(() => null);
+  if (gen !== sideGen) return;
   if (P.playId) {
     const p = store.peek('play', P.playId) ?? await store.open('play', P.playId).catch(() => null);
     if (gen !== sideGen) return;
@@ -1350,8 +1461,8 @@ function drawOnePlay(p) {
       ...offered.map((c) => h('button.choice', { onclick: () => {
         const tb = ui.rightFoot.querySelector('textarea.tellbox');
         const tell = tb && !tb.hidden ? tb.value.trim() : '';
-        if (tell) { tb.value = ''; typed.tell = ''; }
-        playMove(p, c, tell);
+        const sent = beginComposerSend('play:' + p.id, { value: false, tell: Boolean(tell) });
+        playMove(p, c, tell, sent);
       } }, c))));
   } else if ((store.peek('house', 'house') || {}).sceneChoices && lv && !lv.streaming && !working && sceneWords(String(lv.text || '')).trim()) {
     /* Three choices on, and none came with the newest part (told before they were on, or left out): said, with the way to ask
@@ -1362,16 +1473,16 @@ function drawOnePlay(p) {
   const ta = h('textarea', { rows: 1, placeholder: `What does ${p.who} say or do?`, 'aria-label': `What ${p.who} says or does` });
   /* his line to the narrator: how the telling should go, never his character's words */
   const tellBox = h('textarea.tellbox', { rows: 1, placeholder: `Tell the narrator — not ${p.who}’s words (bring someone in, the storm gets worse…)`, 'aria-label': 'Tell the narrator' });
-  const kept = typed.key === 'play:' + p.id ? typed : null;
+  const kept = composerOf('play:' + p.id, p.novelId);
   if (kept && kept.tell) tellBox.value = kept.tell;
   /* open or closed as he left it: closed, what is in it stays but is not sent */
   const tellOpen = Boolean(kept && kept.tellOpen);
   tellBox.hidden = !tellOpen;
-  const tellBtn = h('button.chip.toggle', { 'aria-pressed': String(tellOpen), title: 'A line for the narrator about how the scene should go', onclick: () => {
+  const tellBtn = h('button.chip.toggle.tell-toggle', { 'aria-pressed': String(tellOpen), title: 'A line for the narrator about how the scene should go', onclick: () => {
     const now = tellBox.hidden;
     tellBox.hidden = !now;
     tellBtn.setAttribute('aria-pressed', String(now));
-    typed.key = 'play:' + p.id; typed.tellOpen = now;
+    keepTyped();
     if (now) tellBox.focus();
   } }, 'Tell the narrator');
   const house = store.peek('house', 'house') || {};
@@ -1387,9 +1498,8 @@ function drawOnePlay(p) {
     if (talk.talkBusy('play', p.id)) { talk.stopTalk('play', p.id); return; }
     const text = ta.value.trim();
     const tell = tellBox.hidden ? '' : tellBox.value.trim();
-    ta.value = ''; typed.value = '';
-    if (tell) { tellBox.value = ''; typed.tell = ''; }
-    await playMove(p, text, tell);
+    const sent = beginComposerSend('play:' + p.id, { tell: Boolean(tell) });
+    await playMove(p, text, tell, sent);
   } }, working ? 'Stop' : 'Send');
   const fresh = talk.transcriptOf(p).count;
   ui.rightFoot.hidden = false;
@@ -1397,8 +1507,10 @@ function drawOnePlay(p) {
     h('button.btn.small', { disabled: working || !fresh || (writer.busy(P.novelId) && !writer.autoBusy(P.novelId)), onclick: () => toProse(p, false), title: 'Write what happened into the chapter as prose' }, 'Turn it into prose'),
     tellBtn, choicesBtn,
     h('span.grow'), send));
-  for (const box2 of [ta, tellBox]) box2.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
-  tellBox.addEventListener('input', () => { typed.key = 'play:' + p.id; typed.tell = tellBox.value; });
+  for (const box2 of [ta, tellBox]) {
+    box2.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send.click(); } });
+    box2.addEventListener('input', keepTyped);
+  }
   autoGrow(ta, 0.3);
   autoGrow(tellBox, 0.2);
   restoreTyped('play:' + p.id);
@@ -1407,14 +1519,11 @@ function drawOnePlay(p) {
 }
 
 /* his move — his character's words, a line to the narrator, or both (nothing: it goes on) */
-async function playMove(p, text, tell) {
+async function playMove(p, text, tell, sent) {
   const out = await talk.playSay({ playId: p.id, text, tell });
   const away = elsewhere(p.novelId || P.novelId, p.id);
   if (out && !out.ok && out.error) toast(`The narrator${away ? ` of your scene${away}` : ''} did not answer: ${out.error}`, 6000);
-  if (out && (out.giveBack || out.giveBackTell)) {
-    giveBack('play:' + p.id, out.giveBack || '');
-    if (out.giveBackTell) { typed.key = 'play:' + p.id; typed.tell = out.giveBackTell; typed.tellOpen = true; const tb = ui.rightFoot.querySelector('textarea.tellbox'); if (tb && ui.rightFoot.dataset.for === 'play:' + p.id && !tb.value.trim()) { tb.value = out.giveBackTell; tb.hidden = false; } }
-  }
+  if (sent) endComposerSend(sent, out);
 }
 
 async function toProse(p0, fromStart) {

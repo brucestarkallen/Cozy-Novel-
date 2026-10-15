@@ -82,6 +82,12 @@ is available for intentionally adopting the updated text in an edited module.
 
 ## Evidence and limits
 
+The 2.9.3 whole-product follow-up is recorded in [FINAL-AUDIT.md](FINAL-AUDIT.md).
+It resolves remaining forced-conflict rules, gives grounded warmth and friendship
+room to develop, protects scene agency and settled rewrite events, and covers
+streamed openings, conversation ownership, persistent composer drafts, restoration
+races, automatic retries, manual-description protection and comparison freshness.
+
 The 2.9.2 notes follow-up is documented in [NOTES-AUDIT.md](NOTES-AUDIT.md).
 It covers missing chapters, stale audit replies, malformed lists, duplicate-row
 merges, concurrent aliases and removals, field-specific saves, durable note drafts

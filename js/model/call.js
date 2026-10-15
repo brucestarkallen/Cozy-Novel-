@@ -396,13 +396,31 @@ export async function readReply(wire, res, { onText, onThinking, onNote, until, 
 /* WHAT WAS SENT, kept as it went: the body's lists and objects copied, its
  * words shared (a string never changes). Never the headers — they carry his key. */
 export function snapshotBody(body) {
-  const out = {};
-  for (const [k, v] of Object.entries(body || {})) {
-    if (Array.isArray(v)) out[k] = v.map((m) => (m && typeof m === 'object' ? { ...m } : m));
-    else if (v && typeof v === 'object') out[k] = JSON.parse(JSON.stringify(v));
-    else out[k] = v;
-  }
-  return out;
+  return JSON.parse(JSON.stringify(body || {}));
+}
+
+/* Some providers echo a started reply; others send only its continuation.
+ * Hold just the matching opening until enough arrives to tell which happened.
+ * A network chunk can end inside any word, in prose or in a thinking seed. */
+function openedStream(opening, gap, emit) {
+  let pending = Boolean(opening), held = '';
+  return {
+    feed(s) {
+      if (!s) return;
+      if (!pending) { emit(s); return; }
+      held += s;
+      if (held.length < opening.length && opening.startsWith(held)) return;
+      pending = false;
+      if (!held.startsWith(opening)) emit(opening + (/^\s/.test(held) ? '' : gap));
+      emit(held);
+      held = '';
+    },
+    end() {
+      /* An echo cut inside the opening is still only the words received. */
+      if (held) { emit(held); held = ''; }
+      pending = false;
+    },
+  };
 }
 
 /* ------------------------------------------------------------ usage */
@@ -532,32 +550,23 @@ export async function ask(conn, opts = {}) {
     if (req.structured && req.structured.note && !notes.includes(req.structured.note)) notes.push(req.structured.note);
     const sent = { url: req.url, model: req.body && req.body.model, body: snapshotBody(req.body), at: Date.now(), tokens: sizeOf(shape), ...(req.structured ? { structured: true } : {}) };
     /* the started reply and the started thought are part of what comes back */
-    let lead = req.prefill && req.prefill.applied ? String(req.prefill.content || '') : '';
-    let thoughtLead = req.prefill && req.prefill.applied ? String(req.prefill.seed || '') : '';
+    const lead = req.prefill && req.prefill.applied ? String(req.prefill.content || '') : '';
+    const thoughtLead = req.prefill && req.prefill.applied ? String(req.prefill.seed || '') : '';
     const gap = lead ? prefillGap(conn) : '';
     let text = '';
     let thinking = '';
     let progressAt = Date.now();
-    const emitText = (s) => {
-      if (!s) return;
-      if (lead) {
-        const put = lead; lead = '';
-        if (!s.startsWith(put)) { const back = put + (/^\s/.test(s) ? '' : gap); text += back; if (opts.onText) opts.onText(back); }
-      }
+    const proseOpening = openedStream(lead, gap, (s) => {
       text += s;
-      progressAt = Date.now();
       if (opts.onText) opts.onText(s);
-    };
-    const emitThinking = (s) => {
-      if (!s) return;
-      progressAt = Date.now();
-      if (thoughtLead) {
-        const put = thoughtLead; thoughtLead = '';
-        if (!s.startsWith(put)) { const back = put + (/^\s/.test(s) ? '' : ' '); thinking += back; if (opts.onThinking) opts.onThinking(back); }
-      }
+    });
+    const thoughtOpening = openedStream(thoughtLead, ' ', (s) => {
       thinking += s;
       if (opts.onThinking) opts.onThinking(s);
-    };
+    });
+    const emitText = (s) => { if (s) progressAt = Date.now(); proseOpening.feed(s); };
+    const emitThinking = (s) => { if (s) progressAt = Date.now(); thoughtOpening.feed(s); };
+    const finishOpenings = () => { proseOpening.end(); thoughtOpening.end(); };
     /* STRUCTURED: the answer is JSON ({"response":"…"}) — its words are read
      * out of it as they stream, the hidden part held back, and a <think>…</think>
      * the template made it write goes to the thinking box (Tavern M580, M586) */
@@ -654,6 +663,7 @@ export async function ask(conn, opts = {}) {
         if (opts.onSent) opts.onSent(sent);
         /* every word that came is flushed first: what a structured answer still held, a thought it never closed */
         try { if (decoder && onWords.end) onWords.end(); } catch (_) { /* what came stands */ }
+        finishOpenings();
         lateSplit();
         /* what streamed before Stop was paid for too */
         if (String(text + thinking).trim()) noteUsage(conn, null, sent, text + thinking);
@@ -665,6 +675,7 @@ export async function ask(conn, opts = {}) {
       if (leashTimer) clearInterval(leashTimer);
       if (giveWay) { const set = workersOn.get(connKey(conn)); if (set) { set.delete(giveWay); if (!set.size) workersOn.delete(connKey(conn)); } }
     }
+    finishOpenings();
     sent.ms = Date.now() - sent.at;
     sent.usage = out.usage || null;
     sent.finish = out.finish;
@@ -938,9 +949,10 @@ export async function ask(conn, opts = {}) {
 /* THE ANSWER'S OWN WORDS, as the call kept them — a thought it never opened
  * set apart (a stray "</think>"), what the decoder made of a structured
  * answer — never the raw stream beside them when the call finished: the
- * stream copy stands in only for a call that kept nothing (stopped, broken) */
+ * stream copy stands in only when no decoded text was returned at all. An
+ * explicitly empty result can mean every received word was thinking. */
 export function finalWords(out, streamed = '') {
-  if (out && out.ok && typeof out.text === 'string') return out.text;
+  if (out && typeof out.text === 'string') return out.text;
   return String((out && out.text) || streamed || '');
 }
 

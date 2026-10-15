@@ -118,6 +118,21 @@ async def scenario_names_and_picker(browser):
     logs = []
     pg = await harness.page(browser, logs)
     await harness.new_book(pg, title='Named with Care')
+    await pg.locator('#chapname').fill('夜の灯り')
+    await pg.locator('#chapname').dispatch_event('keydown', {'key': 'Enter', 'isComposing': True})
+    check('confirming a composed character does not blur the chapter heading', await pg.evaluate('document.activeElement.id === "chapname"'))
+    await pg.locator('#chapname').press('Enter')
+    check('Enter after composition names the chapter', await pg.evaluate("async()=>{const s=await import('/js/store.js');const n=s.peek('novel',location.hash.split('/')[2]);return s.peek('chapter',n.order[0]).name==='夜の灯り';}"))
+    await pg.fill('#direction', 'A lantern waits beside the door.')
+    await pg.locator('#direction').dispatch_event('keydown', {'key': 'Enter', 'ctrlKey': True, 'isComposing': True})
+    check('composing text in the writing box cannot start a page', not harness.reqs() and await pg.input_value('#direction') == 'A lantern waits beside the door.')
+    await pg.click('#mineBtn')
+    await pg.click('.passage.selected .pctl button:has-text("Rewrite…")')
+    rewrite = pg.locator('.rewriterow input')
+    await rewrite.fill('灯りを優しく')
+    await rewrite.dispatch_event('keydown', {'key': 'Enter', 'isComposing': True})
+    check('confirming a composed character does not send a rewrite', await rewrite.is_visible() and await rewrite.input_value() == '灯りを優しく' and not harness.reqs())
+    await pg.locator('.rewriterow button:has-text("Cancel")').click()
     await pg.click('#partnerBtn')
     await pg.click('.convpick')
     await pg.click('.menu-pop button:has-text("Rename this conversation")')
@@ -143,6 +158,10 @@ async def scenario_names_and_picker(browser):
     await pg.wait_for_function('window.pickerResult === null')
     check('cancel resolves the picker and removes its hidden input', await pg.locator('input[type=file]').count() == 0)
     check('renaming and canceling imports produce no page errors', not [x for x in logs if x.startswith('PAGEERROR')], logs)
+    await pg.set_viewport_size({'width': 360, 'height': 840})
+    await pg.evaluate("async()=>{const d=await import('/js/ui/dom.js');d.toast('Your words are kept safely. Return to this conversation whenever you are ready to carry on.');}")
+    bounds = await pg.locator('#toast').bounding_box()
+    check('a phone notice uses the available width and stays within the screen', bounds['width'] >= 280 and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 360, bounds)
     await pg.context.close()
 
 
@@ -318,12 +337,30 @@ async def scenario_drawer_to_column(browser):
     check('Back leaves full screen for the visible Partner column', await pg.locator('#sidePane.dock').is_visible() and await pg.locator('#desk').is_visible())
 
     await pg.set_viewport_size({'width': 402, 'height': 900})
+    # The viewport command can return before the resize handler carries the
+    # focused column into its drawer. Wait for that transition before
+    # deciding whether the drawer needs closing.
+    await pg.wait_for_function("!document.querySelector('#sidePane').classList.contains('dock')")
     if await pg.locator('#sidePane.open').count():
         await pg.click('#sideClose')
+        await pg.wait_for_function("!document.querySelector('#sidePane').classList.contains('open')")
     await pg.click('#bookTitle')
     chapter = pg.locator('#chaptersBody button.go').first
     await chapter.focus()
     await chapter.evaluate('(el) => { window.columnChapter = el; }')
+    await pg.evaluate("""async () => {
+      const s = await import('/js/store.js');
+      s.change('novel', location.hash.split('/')[2], n => { n.meta.subtitle = 'A room for every chapter'; });
+      await s.flush();
+    }""")
+    check('a book save keeps the actual focused chapter button', await chapter.evaluate('(el) => el === window.columnChapter && el === document.activeElement'))
+    await pg.evaluate("""async () => {
+      const s = await import('/js/store.js');
+      const n = s.peek('novel', location.hash.split('/')[2]);
+      s.change('chapter', n.order[0], c => { c.summary = {text: 'The lantern waits by the door.'}; });
+    }""")
+    await pg.wait_for_function('document.querySelector("#chaptersBody .sum").textContent === "The lantern waits by the door."')
+    check('an arriving summary updates the chapter without taking keyboard focus', await chapter.evaluate('(el) => el === window.columnChapter && el === document.activeElement'))
     await pg.set_viewport_size({'width': 1440, 'height': 900})
     await pg.wait_for_timeout(350)
     left = await chapter.evaluate('(el) => ({ same: el === window.columnChapter, focused: el === document.activeElement, active: document.activeElement.outerHTML.slice(0, 120), pane: el.closest("aside").className, visible: getComputedStyle(el).visibility })')

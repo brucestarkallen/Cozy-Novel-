@@ -49,7 +49,7 @@ export function initDesk(elements, appHooks) {
   hooks = appHooks;
   fitDirection = autoGrow(ui.direction);
   ui.direction.addEventListener('input', saveDraft);
-  ui.direction.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onWrite(); } });
+  ui.direction.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onWrite(); } });
   ui.writeBtn.addEventListener('click', onWrite);
   ui.mineBtn.addEventListener('click', onMine);
   ui.ideasBtn.addEventListener('click', () => showIdeas());
@@ -61,7 +61,7 @@ export function initDesk(elements, appHooks) {
   initScroller();
   ui.followBtn.addEventListener('click', () => { F.start(); ui.followBtn.hidden = true; toBottom(S.followId); });
   ui.chapname.addEventListener('focus', () => { ui.chapname.dataset.was = ui.chapname.textContent; });
-  ui.chapname.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ui.chapname.blur(); } });
+  ui.chapname.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ui.chapname.blur(); } });
   ui.chapname.addEventListener('blur', renameFromHeading);
   document.addEventListener('selectionchange', onSelection);
   ui.selClear.addEventListener('click', () => {
@@ -445,7 +445,7 @@ function rewriteRow(p) {
     S.rewriting = null;
     run(() => writer.rewrite({ novelId: S.novelId, chapterId: S.chapterId, passageId: p.id, note }));
   };
-  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); go(); } });
   if (S.focusNext === 'rewrite') { S.focusNext = null; setTimeout(() => inp.focus(), 30); }
   return h('div.rewriterow', inp, h('button.btn.primary.small', { onclick: go }, 'Rewrite'), h('button.btn.quiet.small', { onclick: () => { S.rewriting = null; drawPage(); } }, 'Cancel'));
 }

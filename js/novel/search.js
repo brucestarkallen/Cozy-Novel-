@@ -19,6 +19,11 @@ const SPACE = new Set([9, 10, 11, 12, 13, 32, 160, 0x2028, 0x2029]);
  * hyphen, a joiner */
 const UNSEEN = new Set([42, 95, 0xad, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff]);
 const DASHES = new Set(['-', '—', '–', '‐', '‑', '‒', '―', '−']);
+const WORD_CHAR = /^[\p{L}\p{N}\p{M}]$/u;
+/* These scripts commonly put separate words beside one another without
+ * spaces. Requiring spaces would reject real quotations from their prose. */
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+const joinedWord = (a, b) => WORD_CHAR.test(a) && WORD_CHAR.test(b) && !UNSPACED.test(a) && !UNSPACED.test(b);
 
 /* a text as it is matched, with where each of its letters came from —
  * kept for each text once, so typing in the box stays instant */
@@ -83,14 +88,17 @@ function foldWords(text) {
 }
 
 /* where the words stand in a text: [{start, end}] in its own letters
- * (words: punctuation let go, for reading a quote as evidence) */
-export function findIn(text, query, { max = 200, words = false } = {}) {
+ * (words: punctuation let go; whole: never a different word's prefix or
+ * suffix, for reading a quote as evidence without changing ordinary search) */
+export function findIn(text, query, { max = 200, words = false, whole = false } = {}) {
   const q = (words ? foldWords(query) : fold(query)).s.trim();
   if (!q) return [];
   const src = String(text || '');
   const T = words ? foldWords(src) : fold(src);
   const out = [];
   for (let at = T.s.indexOf(q); at >= 0 && out.length < max; at = T.s.indexOf(q, at + q.length)) {
+    if (whole && (joinedWord([...T.s.slice(Math.max(0, at - 2), at)].at(-1) || '', [...q.slice(0, 2)][0]) ||
+      joinedWord([...q.slice(-2)].at(-1), [...T.s.slice(at + q.length, at + q.length + 2)][0] || ''))) continue;
     const start = T.map[at];
     const last = T.map[at + q.length - 1];
     const c = src.charCodeAt(last);

@@ -151,6 +151,11 @@ Note-editor drafts save with the book, so Back and reload can restore words you
 have not saved onto a card. Add also recovers drafts whose cards were removed.
 [The notes audit](NOTES-AUDIT.md) explains the workflow, repairs, recovery and limits.
 
+Partner drafts stay with each conversation; scene moves and folded **Tell the
+narrator** directions stay with their scene across navigation and reloads. A newer
+draft is kept while an answer arrives. [The final product audit](FINAL-AUDIT.md)
+covers writing quality, recovery, saving, exports and the full interface.
+
 No build step: `index.html`, `css/`, `js/` and `serve.py` are the whole app. `AGENTS.md` maps the code and the rules it keeps. The checks:
 
 ```sh
@@ -167,10 +172,18 @@ node tests/workflows.mjs            # scenes, Go on, late replies and concurrent
 node tests/personas.mjs             # distinct writer/scene/partner voices, request paths and visible thinking
 node tests/prefill_words.mjs        # exact template words and literal bracketed-name fallbacks
 node tests/store_removal.mjs        # pending saves, failed deletion and whole-book restoration
+node tests/stream_integrity.mjs     # fragmented openings, stopped thinking and exact request snapshots
+node tests/search_integrity.mjs     # genuine quote boundaries without breaking unspaced-script prose
+node tests/final_workflows.mjs      # conversation conflicts, scene anchors and unavailable chapters
+node tests/automation_integrity.mjs # concurrent helper starts, rewrite retry and stale automatic replies
+node tests/storage_integrity.mjs    # restoration races, journal recovery and imported drafts
+python3 tests/backup_integrity.py   # atomic restore failure and distinct safety copies
 python3 tests/browser/walk_main.py  # the whole app in a real browser (needs playwright + chromium)
 python3 tests/browser/walk_more.py
 python3 tests/browser/walk_removal.py # failed chapter/scene deletion stays visible; successful removal still works
 python3 tests/browser/walk_notes.py   # remote note edits, refused saves, durable drafts and reload recovery
+python3 tests/browser/walk_exports.py # complete exports and readable failures for missing chapters
+python3 tests/browser/walk_composer_drafts.py # separate partner/scene drafts, reload and pending replies
 python3 tests/browser/walk_accessibility.py  # dialogs, keyboard, search and file picking
 python3 tests/browser/walk_cozy.py           # shelf, resume, phone layouts and motion
 python3 tests/browser/walk_checks.py         # checker review, focus and all three worlds in day/night

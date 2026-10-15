@@ -29,7 +29,7 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain, rewriteSelection as writeSpanAgain } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, writtenWith, howOf, bornOf, chapterText } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, writtenWith, howOf, bornOf, chapterText, duelMatches } from './shape.js';
 import { numberedText, shortOf, notesBehind } from './context.js';
 import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
@@ -278,6 +278,8 @@ export function stateOf(novelId) {
   const s = states.get(novelId);
   if (s && (s.state === 'trouble' || s.state === 'checking')) return { ...s, count };
   if (s && (s.state === 'retry' || s.state === 'elsewhere')) return { state: 'waiting', words: s.words, count };
+  const again = automaticWait(novelId);
+  if (again) return { state: 'waiting', words: `An automatic rewrite couldn’t finish just now. It tries again by itself in ${archivist.waitWords(again.until - Date.now())}.`, count };
   if (waiting(novelId)) return { state: 'waiting', words: 'The newest words are checked in a moment.', count };
   /* green says only what is true: older writing, never sent unasked, is not
    * called checked; a page that stopped partway waits for its Go on; one its
@@ -324,11 +326,12 @@ export function startChecking() {
 /* waiting out a failure, or stopped for a connection turned away: tried again now by his hand (Cozy Tavern M752-010) */
 export function stalled(novelId) {
   const f = failures.get(novelId);
-  return blocked.has(novelId) || Boolean(f && f.until > Date.now());
+  return blocked.has(novelId) || Boolean(f && f.until > Date.now()) || Boolean(automaticWait(novelId));
 }
 export function tryNow(novelId) {
   if (!store.peek('novel', novelId)) return false;
   failures.delete(novelId);
+  autoFailures.delete(novelId);
   blocked.delete(novelId);
   states.delete(novelId);
   const was = timers.get(novelId);
@@ -548,7 +551,7 @@ function stale(c) {
   for (const pid of Object.keys(c.checksLeft || {})) if (!(c.passages || []).some((x) => x.id === pid)) return true;
   for (const d of Object.values(c.duels || {})) {
     const p = d && (c.passages || []).find((x) => x.id === d.pid);
-    if (!p || !(p.versions || []).some((v) => v.id === d.x) || !(p.versions || []).some((v) => v.id === d.y)) return true;
+    if (!duelMatches(p, d)) return true;
   }
   for (const [pid, byV] of Object.entries(c.checks || {})) {
     const p = (c.passages || []).find((x) => x.id === pid);
@@ -704,12 +707,12 @@ function evidence(text, words) {
   if (!w) return '';
   const tries = [w, ...w.split(/\s*(?:…|\.\.\.)\s*/).filter((x) => x.length >= 12).sort((x, y) => y.length - x.length)];
   for (const t of tries) {
-    const hit = findIn(text, t, { max: 1 })[0];
+    const hit = findIn(text, t, { max: 1, whole: true })[0];
     if (hit) return text.slice(hit.start, hit.end);
   }
   /* the same words in the same order, a comma or a mark of its own aside, are the page's (Cozy Tavern M752-011) */
   for (const t of tries) {
-    const hit = findIn(text, t, { max: 1, words: true })[0];
+    const hit = findIn(text, t, { max: 1, words: true, whole: true })[0];
     if (hit) return text.slice(hit.start, hit.end);
   }
   /* a quote with a word of its own in it (2.6.5): the longest stretch of six words or more of it that stands in the
@@ -717,7 +720,7 @@ function evidence(text, words) {
   const ws = w.split(/\s+/).filter(Boolean).slice(0, 80);
   for (let len = ws.length - 1; len >= 6; len--) {
     for (let i = 0; i + len <= ws.length; i++) {
-      const hit = findIn(text, ws.slice(i, i + len).join(' '), { max: 1, words: true })[0];
+      const hit = findIn(text, ws.slice(i, i + len).join(' '), { max: 1, words: true, whole: true })[0];
       if (hit) return text.slice(hit.start, hit.end);
     }
   }
@@ -1132,8 +1135,9 @@ export function duelsDue(novelId) {
         seen.add(u.model);
         if (Math.max(madeAt(v), madeAt(u)) < from) continue;
         const key = duelKey(p.id, v.id, u.id);
-        if ((c.duels && c.duels[key]) || duelTried.has(key)) continue;
-        out.push({ chapterId: c.id, pid: p.id, x: v.id, y: u.id, key });
+        const tryKey = `${key}:${[v, u].sort((a, b) => a.id.localeCompare(b.id)).map(sigOf).join(':')}`;
+        if (duelMatches(p, c.duels && c.duels[key]) || duelTried.has(tryKey)) continue;
+        out.push({ chapterId: c.id, pid: p.id, x: v.id, y: u.id, key, tryKey });
       }
     }
   }
@@ -1181,6 +1185,12 @@ async function duel(novelId, conn, d, choice) {
   const vx = p && (p.versions || []).find((v) => v.id === d.x);
   const vy = p && (p.versions || []).find((v) => v.id === d.y);
   if (!novel || !vx || !vy) return null;
+  const snapshot = { pid: p.id, x: vx.id, y: vy.id, xSig: sigOf(vx), ySig: sigOf(vy), xModel: vx.model, yModel: vy.model };
+  const currentPair = () => {
+    const n = store.peek('novel', novelId), c = store.peek('chapter', chapter.id);
+    const live = c && (c.passages || []).find((x) => x.id === p.id);
+    return Boolean(n && (n.order || []).includes(chapter.id) && duelMatches(live, snapshot) && !(live.versions || []).some((v) => (v.id === snapshot.x || v.id === snapshot.y) && v.streaming));
+  };
   const pages = evenUp(String(vx.text || ''), String(vy.text || ''));
   /* the notes as everyone reads them, fitted to its model (S06-G3, M262) */
   const view = namedBook(standingNotes(novel), house);
@@ -1205,14 +1215,15 @@ async function duel(novelId, conn, d, choice) {
   const one = await archivist.askJson(conn, system, build(pages.x, pages.y, before), { want: (o) => typeof o.better === 'string' && Boolean(said(o)), beforeAsk: choice.beforeAsk });
   if (!one.ok) return stopOf(one);
   choice.beforeAsk();
-  if (!judgeOf(store.peek('house', 'house') || {})) return { changed: true };
+  if (!judgeOf(store.peek('house', 'house') || {}) || !currentPair()) return { changed: true };
   const two = await archivist.askJson(conn, system, build(pages.y, pages.x, before), { want: (o) => typeof o.better === 'string' && Boolean(said(o)), beforeAsk: choice.beforeAsk });
   if (!two.ok) return stopOf(two);
   const first = said(one.obj) === 'A' ? 'x' : said(one.obj) === 'B' ? 'y' : 'tie';
   const second = said(two.obj) === 'A' ? 'y' : said(two.obj) === 'B' ? 'x' : 'tie';
   const winner = first === second ? first : 'tie';
   await archivist.mustHold('checker', novelId);
-  const row = { pid: p.id, x: vx.id, y: vy.id, xModel: vx.model, yModel: vy.model, winner, why: clean(winner === 'tie' ? '' : first === winner ? one.obj.why : two.obj.why, 300), at: Date.now() };
+  if (!currentPair()) return { changed: true };
+  const row = { ...snapshot, winner, why: clean(winner === 'tie' ? '' : first === winner ? one.obj.why : two.obj.why, 300), at: Date.now() };
   store.change('chapter', chapter.id, chapterSteps.setDuel(d.key, row), { checkpoint: true });
   await store.flush('chapter', chapter.id);
   tell(novelId);
@@ -1230,16 +1241,16 @@ async function runDuels(novelId, conn, choice) {
     if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
     if (n >= 3) { schedule(novelId, 3000); return; }
     n++;
-    duelTried.add(d.key);
+    duelTried.add(d.tryKey);
     const chapter = store.peek('chapter', d.chapterId);
     const novel = store.peek('novel', novelId);
     setState(novelId, 'checking', `Reading two versions of ${chapter && novel ? `${chapterLabel(novel, chapter, { withName: false })}, passage ${passageNumbers(chapter).get(d.pid)}` : 'a passage'} side by side…`);
     let out;
     try { out = await duel(novelId, conn, d, choice); }
-    catch (error) { if (error && error.checkerChanged) duelTried.delete(d.key); throw error; }
-    if (out && out.changed) { duelTried.delete(d.key); return; }
+    catch (error) { if (error && error.checkerChanged) duelTried.delete(d.tryKey); throw error; }
+    if (out && out.changed) { duelTried.delete(d.tryKey); schedule(novelId, 3000); return; }
     /* it made way for his page: read again once the page has gone */
-    if (out && out.gaveWay) { duelTried.delete(d.key); schedule(novelId, 20000); return; }
+    if (out && out.gaveWay) { duelTried.delete(d.tryKey); schedule(novelId, 20000); return; }
     if (out && out.stop) throw out.stop;
   }
 }
@@ -1301,6 +1312,7 @@ export function gradesOf(novelId) {
     }
     for (const d of Object.values(c.duels || {})) {
       if (!d || !d.xModel || !d.yModel) continue;
+      if (!duelMatches((c.passages || []).find((p) => p.id === d.pid), d)) continue;
       duels++;
       const a = row(d.xModel);
       const b = row(d.yModel);
@@ -1471,6 +1483,25 @@ const since = (v, from) => howOf(v) !== 'imported' && bornOf(v) >= from;
 export const MAX_SPANS = 2;
 const spansOf = (p) => (p.versions || []).filter((v) => v.spanAuto);
 const spanTried = new Set();
+/* A temporary writing failure is not a completed attempt. Keep its own
+ * backoff: successful proofreading must not reset the writer's wait. */
+const autoFailures = new Map();
+function automaticWait(novelId) {
+  const a = autoOf(store.peek('house', 'house') || {});
+  const f = autoFailures.get(novelId);
+  return (a.fix !== null || a.lift !== null) && f && f.until > Date.now() ? f : null;
+}
+function afterAutomatic(novelId, tried, key, out) {
+  if (!out || out.ok) { if (out && out.ok) autoFailures.delete(novelId); return out; }
+  if (out.passing || out.busy || out.needsConnection) tried.delete(key);
+  if (out.passing && store.peek('novel', novelId)) {
+    const n = ((autoFailures.get(novelId) || {}).n || 0) + 1;
+    const ms = Math.max([60000, 180000, 600000][Math.min(n - 1, 2)], Number(out.retryAfterMs) || 0);
+    autoFailures.set(novelId, { n, until: Date.now() + ms });
+    schedule(novelId, ms);
+  } else if (out.busy) schedule(novelId, 4000);
+  return out;
+}
 /* what the writer is told for a sentence to write again — the same by his button (Suggestions → Write it again) and by itself */
 export function spanNote(item) {
   const words = quoted(Array.isArray(item.phrases) && item.phrases.length ? item.phrases : item.phrase ? [item.phrase] : []);
@@ -1505,6 +1536,8 @@ function autoAfter(novelId) {
   const house = store.peek('house', 'house') || {};
   const a = autoOf(house);
   if (a.fix === null && a.lift === null) return;
+  const waiting = autoFailures.get(novelId);
+  if (waiting && waiting.until > Date.now()) { schedule(novelId, waiting.until - Date.now()); return; }
   const judge = judgeOf(house);
   const stands = standsNow(house);
   let next = null;
@@ -1579,6 +1612,7 @@ function autoAfter(novelId) {
           return out;
         })
         .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
+        .then((out) => afterAutomatic(novelId, spanTried, key, out))
         .finally(() => lifting.delete(novelId));
       lifting.set(novelId, job);
     }
@@ -1594,6 +1628,7 @@ function autoAfter(novelId) {
         return out;
       })
       .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
+      .then((out) => afterAutomatic(novelId, liftTried, next.v.id, out))
       .finally(() => lifting.delete(novelId));
     lifting.set(novelId, job);
   }

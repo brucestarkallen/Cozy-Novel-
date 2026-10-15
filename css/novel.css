@@ -610,7 +610,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 /* notices */
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--safe-b) + 110px); z-index: 80; transform: translateX(-50%) translateY(20px);
-  max-width: min(92vw, 520px); padding: 11px 16px; border-radius: 14px;
+  width: max-content; max-width: min(92vw, 520px); padding: 11px 16px; border-radius: 14px;
   background: rgba(20,16,12,.94); color: #f5ecdc; font-size: 14px; line-height: 1.4; box-shadow: var(--shadow);
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s var(--ease);
 }

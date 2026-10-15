@@ -931,7 +931,7 @@ async function askName(title, value = '', ok = 'Save') {
     const s = openSheet(title, { small: true, onClose: () => resolve(out) });
     const inp = h('input', { type: 'text', value, maxlength: 40, placeholder: 'e.g. Batman' });
     const go = () => { const v = cleanName(inp.value); if (!v) { toast('It needs a name.'); return; } out = v; s.close(); };
-    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); go(); } });
     s.body.append(field('Name', inp), h('div.btnrow', h('button.btn.primary', { onclick: go }, ok)));
     setTimeout(() => inp.focus(), 50);
   });
@@ -1325,6 +1325,7 @@ async function bringCopyBack() {
     for (const b of list) {
       for (const id of b.novel.order) await store.create('chapter', id, b.chapters[id]);
       if (b.talk) await store.create('talk', b.novel.id, b.talk);
+      if (b.draft) await store.create('draft', b.novel.id, b.draft);
       for (const p of b.plays) await store.create('play', p.id, p);
       await store.create('novel', b.novel.id, b.novel);
     }

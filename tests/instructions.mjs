@@ -114,4 +114,21 @@ check('a continued scene retains what actually happened and the book’s viewpoi
   assert.ok(r.includes('without repeating the converted part or inventing a different outcome'));
   assert.ok(!r.includes('How it turns out is yours to decide'));
 });
+check('opening a scene preserves the player’s starting position and next move', () => {
+  const words = prompts.playOpening({ who: 'Mara' });
+  assert.ok(words.includes('where the book and my starting description place Mara'));
+  assert.ok(words.includes('leave the arrival or entry for me to choose'));
+  assert.ok(!words.includes('bring Mara in'));
+});
+check('the judge permits grounded kindness and a quiet emotional payoff', () => {
+  const words = prompts.checkRequest({ novel, chapterLabel: 'One', numbered: '[1.1] Mara kept the kettle warm for her friend.', judge: { target: 9 } });
+  assert.ok(words.includes('ordinary kindness, cooperation and affection can be true to them'));
+  assert.ok(words.includes('quiet beat need not invent a new event'));
+});
+check('a prose-only fresh take preserves what the established moment settled', () => {
+  const words = prompts.rewriteRequest({ chapterLabel: 'One', text: 'Mara gave the key to Ivo, who accepted it.' });
+  assert.ok(words.includes('Keep the established events, choices, relationships and outcome'));
+  assert.ok(words.includes('unless I ask to change them'));
+  assert.ok(words.includes('Mara gave the key to Ivo, who accepted it.'));
+});
 console.log(`\n${passed} passed, 0 failed`);

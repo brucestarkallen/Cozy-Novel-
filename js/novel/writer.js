@@ -126,12 +126,24 @@ function preflight(novelId) {
 }
 
 async function bookOf(novelId) {
-  const novel = await store.open('novel', novelId);
-  if (!novel) throw new Error('that book is not on the shelf any more');
-  const chapters = {};
-  await Promise.all((novel.order || []).map(async (id) => { chapters[id] = await store.open('chapter', id); }));
-  for (const id of Object.keys(chapters)) if (!chapters[id]) delete chapters[id];
-  return { novel, chapters };
+  try {
+    const opened = await store.open('novel', novelId);
+    if (!opened) return { error: 'that book is not on the shelf any more' };
+    await Promise.allSettled((opened.order || []).map((id) => store.open('chapter', id)));
+    /* The book can change while its chapters open. Work from its current
+     * order, and never write across a chapter whose words could not load. */
+    const novel = store.peek('novel', novelId);
+    if (!novel) return { error: 'that book is not on the shelf any more' };
+    const chapters = {};
+    for (const id of novel.order || []) {
+      const chapter = store.peek('chapter', id);
+      if (!chapter) return { error: 'a chapter could not be read — open the book again before asking for more writing' };
+      chapters[id] = chapter;
+    }
+    return { novel, chapters };
+  } catch (e) {
+    return { error: `the book could not be opened: ${(e && e.message) || String(e)}` };
+  }
 }
 
 export async function recount(novelId) {
@@ -441,7 +453,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       /* a passing fault (no answer, busy, down) — said apart, so what the app writes by itself tries again another time */
       const st = Number(out.status) || 0;
       const passing = !out.ok && !out.permanent && (st === 0 || st === 408 || st === 429 || st >= 500);
-      return { ok: false, error, notes, thought: kept, ...(passing ? { passing: true } : {}) };
+      return { ok: false, error, notes, thought: kept, ...(passing ? { passing: true, ...(Number.isFinite(out.retryAfterMs) && out.retryAfterMs > 0 ? { retryAfterMs: out.retryAfterMs } : {}) } : {}) };
     }
     const cutWhy = out.stopped ? 'you stopped it'
       : !out.cut ? undefined
@@ -569,6 +581,7 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
+  if (book.error) return { ok: false, error: book.error };
   const chapter = book.chapters[chapterId];
   if (!chapter) return { ok: false, error: 'that chapter is not in the book any more' };
   const list = chapter.passages || [];
@@ -631,6 +644,7 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
+  if (book.error) return { ok: false, error: book.error };
   const chapter = book.chapters[chapterId];
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   if (!p) return { ok: false, error: 'that passage is not there any more' };
@@ -669,6 +683,7 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
+  if (book.error) return { ok: false, error: book.error };
   const chapter = book.chapters[chapterId];
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   if (!p) return { ok: false, error: 'that passage is not there any more' };
@@ -694,6 +709,7 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
+  if (book.error) return { ok: false, error: book.error };
   const chapter = book.chapters[chapterId];
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   if (!p) return { ok: false, error: 'that passage is not there any more' };
@@ -738,6 +754,7 @@ export async function goOn({ novelId, chapterId, passageId }) {
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
+  if (book.error) return { ok: false, error: book.error };
   const chapter = book.chapters[chapterId];
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   if (!p) return { ok: false, error: 'that passage is not there any more' };
@@ -776,6 +793,7 @@ export async function playToProse({ novelId, chapterId, play, transcript, mine =
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
+  if (book.error) return { ok: false, error: book.error };
   const chapter = book.chapters[chapterId];
   if (!chapter) return { ok: false, error: 'that chapter is not in the book any more' };
   const who = play.who || 'their character';

@@ -1933,7 +1933,8 @@ await test('a scene sends the narrator\'s own words first — nothing of his whe
   assert.ok(sys.startsWith('THE NARRATOR\'S OWN WORDS') && !sys.includes('HIS OWN WORDS FIRST'), sys.slice(0, 80));
   assert.ok(sys.includes('I’m taking Joon’s part. Everything Joon says, does, thinks and feels comes from me'), 'whose part it is, in his own voice');
   assert.ok(sys.includes('if the book sees through Joon’s eyes') && sys.includes('if it sees through someone else’s, it stays theirs'), 'the book\'s own point of view stays');
-  assert.ok(body.messages.at(-1).content.includes('If Joon isn’t there yet, bring Joon in'), 'never "bring them in" when they are there already');
+  assert.ok(body.messages.at(-1).content.includes('where the book and my starting description place Joon'), 'the opening respects the established position');
+  assert.ok(body.messages.at(-1).content.includes('leave the arrival or entry for me to choose'), 'an unsupplied arrival remains the player’s choice');
   await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', narrator: '', late: '', partner: '' } });
   await reset();
   await script([{ text: 'Rain.' }]);
@@ -8525,11 +8526,14 @@ await test('a copy brought back while the page was away: what it kept waiting is
   const b = await makeBook([['Mara kept the light.']]);
   await store.flush();
   const gen = (await (await realFetch(BASE + '/api/version')).json()).generation;
+  const snapshot = await (await realFetch(BASE + '/api/backup')).json();
   const { news } = store.forTests();
   /* the line greets the page with the library as it is */
   news(JSON.stringify({ hello: { commit: 'same', generation: gen } }));
   store.change('chapter', b.ids[0], (c) => { c.passages[0].versions[0].text = 'WRITTEN BEFORE THE COPY CAME BACK'; }, { delay: 60000 });
   assert.equal(store.hasPending(), true);
+  const restored = await realFetch(BASE + '/api/restore', { method: 'POST', body: JSON.stringify(snapshot) });
+  assert.equal(restored.status, 200);
   /* back after a gap: a whole copy came back meanwhile */
   news(JSON.stringify({ hello: { commit: 'same', generation: gen + 1 } }));
   assert.equal(store.hasPending(), false, 'what it kept waiting is let go');

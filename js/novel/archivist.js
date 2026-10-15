@@ -35,9 +35,12 @@ import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readi
 const lights = new Map();          /* novelId -> {state, words, at} */
 const timers = new Map();
 const runningFor = new Set();
+/* The phone's lease belongs to this window. Two starts in this same window
+ * must not both obtain it while the first await is still pending. */
+const entering = new Set();
 const helperPrints = new Map();   /* connection as it was when this run began */
 /* reading some book just now (an update waits for it) */
-export function busyAny() { return runningFor.size > 0; }
+export function busyAny() { return runningFor.size > 0 || entering.size > 0; }
 const failures = new Map();        /* novelId -> {n, until} */
 const blocked = new Map();         /* novelId -> the helper connection as it was refused */
 const lightFns = new Set();
@@ -530,7 +533,7 @@ export function settleNow(novelId) {
   return n;
 }
 export async function settle(novelId) {
-  if (runningFor.has(novelId)) return 0;
+  if (runningFor.has(novelId) || entering.has(novelId)) return 0;
   const go = () => { const n = settleNow(novelId); if (n) tellLight(novelId); return n; };
   if (globalThis.navigator && navigator.locks && navigator.locks.request) {
     return navigator.locks.request(`cozynovel-helper-${novelId}`, { ifAvailable: true }, (lock) => (lock && !runningFor.has(novelId) ? go() : 0));
@@ -1192,7 +1195,7 @@ function helperFault(novelId, conn, got) {
 /* ----------------------------------------------------------- the reading */
 
 export async function run(novelId) {
-  if (runningFor.has(novelId)) { nudge(novelId, 5000); return; }
+  if (runningFor.has(novelId) || entering.has(novelId)) { nudge(novelId, 5000); return; }
   if (writerBusy(novelId)) { nudge(novelId, 4000); return; }
   const house = store.peek('house', 'house') || {};
   const chosen = connFor(house, 'helper');
@@ -1274,13 +1277,18 @@ export async function run(novelId) {
     if (!held.unreachable) setLight(novelId, 'waiting', ELSEWHERE);
     nudge(novelId, Math.max(20000, Math.min(held.left || 0, 90000)));
   } });
-  if (globalThis.navigator && navigator.locks && navigator.locks.request) {
-    await navigator.locks.request(`cozynovel-helper-${novelId}`, { ifAvailable: true }, async (lock) => {
-      if (!lock) { nudge(novelId, 20000); return; }
+  entering.add(novelId);
+  try {
+    if (globalThis.navigator && navigator.locks && navigator.locks.request) {
+      await navigator.locks.request(`cozynovel-helper-${novelId}`, { ifAvailable: true }, async (lock) => {
+        if (!lock) { nudge(novelId, 20000); return; }
+        await leased();
+      });
+    } else {
       await leased();
-    });
-  } else {
-    await leased();
+    }
+  } finally {
+    entering.delete(novelId);
   }
 }
 
@@ -1663,7 +1671,7 @@ async function readChanges(novelId, conn) {
       if (folded.cards.length || Object.keys(kept).length) {
         /* the cards it touched, changed by id — never the whole notes over a change made meanwhile */
         if (folded.cards.length) store.change('novel', novelId, novelSteps.applyCards(folded.cards));
-        for (const [key, k] of Object.entries(kept)) store.change('novel', novelId, novelSteps.setKept(key, k.after));
+        for (const [key, k] of Object.entries(kept)) keepIfUnchanged(novelId, key, k.before, k.after);
         const u = latest.memory && latest.memory.undo;
         const keep = Boolean(u && u.keep);
         /* a later part of a passage read in parts is the same reading: its Undo takes back every part */
@@ -2062,6 +2070,19 @@ function ownFp(novel, key) { return hashText(String(((novel || {})[key === 'abou
 /* his words as they stand now, kept by value: what a slow answer is stamped with when it lands (the book's record changes in place meanwhile) */
 const wordsNow = (novel) => ({ brief: String((novel && novel.brief) || ''), style: String((novel && novel.style) || '') });
 
+/* A result may meet a newer phone copy only when its save lands. Repeat
+ * the protection there, too: a manual correction, mode change or restarted
+ * reread must not be overwritten by replaying an older helper result. */
+function keepIfUnchanged(novelId, key, before, after) {
+  const novel = store.peek('novel', novelId);
+  const generation = ((novel || {}).memory || {}).reread || 0;
+  const move = novelSteps.moveKept([{ key, from: clone(before || null), to: clone(after || null) }]);
+  return store.change('novel', novelId, (n) => {
+    if (((n.memory || {}).reread || 0) !== generation || !keptByHelper(n).includes(key)) return false;
+    move(n);
+  });
+}
+
 /* the kept texts a reading's answer changes: {key: {before, after}} — never
  * a thinner one in place of what stands (Cozy Tavern's M517/M522: a one-line
  * answer is not the book), stamped with his words as they were when it was
@@ -2125,7 +2146,7 @@ async function keepTheBook(novelId, conn) {
    * his words stand — so his next rewrite of them is seen */
   for (const key of keptByHelper(novel)) {
     const k = novel.kept && novel.kept[key];
-    if (k && k.by !== 'you' && String(k.text || '').trim() && typeof k.ownFp !== 'string') store.change('novel', novelId, novelSteps.setKept(key, { ...k, ownFp: ownFp(novel, key) }));
+    if (k && k.by !== 'you' && String(k.text || '').trim() && typeof k.ownFp !== 'string') keepIfUnchanged(novelId, key, k, { ...k, ownFp: ownFp(novel, key) });
   }
   novel = store.peek('novel', novelId);
   const keeps = toKeep(novel);
@@ -2147,11 +2168,18 @@ async function keepTheBook(novelId, conn) {
   const fit = fitBook({ novel, chapters, chapterId: null, current: null, room });
   const started = Date.now();
   const asked = wordsNow(novel);
+  const generation = (novel.memory || {}).reread || 0;
+  const sameReading = () => {
+    const n = store.peek('novel', novelId);
+    return Boolean(n && ((n.memory || {}).reread || 0) === generation);
+  };
   const got = await helperJson(novelId, conn, frame, keepRequest({ novel: namedBook(novel, house), keeps, bookText: bookText(fit.book), notesFit }), { want: (o) => keeps.some((k) => typeof o[k] === 'string' && o[k].trim()) });
   await mustHold('helper', novelId);
+  if (!sameReading()) return;
   if (!got.ok) {
     const fault = await helperFault(novelId, conn, got);
     await mustHold('helper', novelId);
+    if (!sameReading()) return;
     if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
     /* this book's: another book's failure never counts toward giving up on this one */
     const key = `keep:${novelId}:${keeps.join(',')}`;
@@ -2176,7 +2204,7 @@ async function keepTheBook(novelId, conn) {
     const whole = text && (text.length >= 200 || text.split(/(?<=[.!?…])\s+/).filter((x) => x.trim()).length >= 2);
     if (!whole) { left.push(key); continue; }
     /* stamped with his words as they were when it was asked: his rewriting them meanwhile is seen */
-    store.change('novel', novelId, novelSteps.setKept(key, { text, at: Date.now(), ownFp: ownFp(asked, key) }));
+    keepIfUnchanged(novelId, key, k, { text, at: Date.now(), ownFp: ownFp(asked, key) });
   }
   if (left.length) triedKeeping(novelId, left, asked);
   await store.flush('novel', novelId);
@@ -2191,8 +2219,8 @@ function triedKeeping(novelId, keys, asked) {
   for (const k of keys) {
     if (!keptByHelper(latest).includes(k)) continue;
     const was = latest.kept && latest.kept[k];
-    if (!was) store.change('novel', novelId, novelSteps.setKept(k, { text: '', at: Date.now(), ownFp: ownFp(asked, k) }));
-    else if (was.by !== 'you') { const { again: _a, ...rest } = was; store.change('novel', novelId, novelSteps.setKept(k, { ...rest, ownFp: ownFp(asked, k) })); }
+    if (!was) keepIfUnchanged(novelId, k, null, { text: '', at: Date.now(), ownFp: ownFp(asked, k) });
+    else if (was.by !== 'you') { const { again: _a, ...rest } = was; keepIfUnchanged(novelId, k, was, { ...rest, ownFp: ownFp(asked, k) }); }
   }
 }
 
@@ -2414,7 +2442,7 @@ async function auditNotes(novelId, conn) {
   const changed = [...changedOf(folded.cards).map((c, i) => (folded.whys[folded.cards[i].id] ? { ...c, why: folded.whys[folded.cards[i].id] } : c)), ...keptChangedOf(kept)];
   if (folded.cards.length || Object.keys(kept).length) {
     if (folded.cards.length) store.change('novel', novelId, novelSteps.applyCards(folded.cards));
-    for (const [key, k] of Object.entries(kept)) store.change('novel', novelId, novelSteps.setKept(key, k.after));
+    for (const [key, k] of Object.entries(kept)) keepIfUnchanged(novelId, key, k.before, k.after);
     /* a group of a round: one Undo, and one lighting, for every group of it so far (nothing read in between) */
     const u0 = (latest.memory || {}).undo;
     const joined = Boolean(only) && Boolean(u0) && u0.round === roundId && Array.isArray(u0.cards);

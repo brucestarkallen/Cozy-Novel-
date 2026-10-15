@@ -558,7 +558,7 @@ export function rewriteRequest({ chapterLabel, note, text, last = false }) {
   if (!n) {
     return [
       `I’d like this passage from ${chapterLabel} written again.`,
-      'Write it again — a fresh take on the same moment.',
+      'Write it again — a fresh take on the same moment. Keep the established events, choices, relationships and outcome unless I ask to change them; find a better telling, without introducing a different turn of the story.',
       `The passage as it stands now (it sits where the chapter above says it does):\n${fence(text)}`,
       "Write the new version — just the passage itself. It takes the old one's place on the page, so it has to fit with what comes before and after it.",
     ].join('\n\n');
@@ -756,7 +756,7 @@ export function choicesIn(text) {
 
 export function playOpening({ who }) {
   const w = String(who || '').trim() || 'my character';
-  return `Begin the scene: where we are, who is there, what is happening. If ${w} isn’t there yet, bring ${w} in; then stop at the first moment ${w} would answer or act.`;
+  return `Begin the scene: where we are, who is there, what is happening. Start where the book and my starting description place ${w}; if they leave an arrival or entry undecided, leave the arrival or entry for me to choose. Tell the surrounding world up to the first moment ${w} would answer or act, then stop.`;
 }
 
 export function playOnwards({ who }) {
@@ -815,7 +815,7 @@ export const JUDGE_CHECKS = [
   ['specific', 'Specific', 'concrete, particular detail of this place and these people; nothing vague or generic where a real detail belongs'],
   ['fresh', 'Fresh', 'the wording belongs to these people and this moment rather than relying on cliché, stock bodily cues or empty ornament; intentional figurative language and a character’s own idiom serve the chosen voice'],
   ['sentences', 'Sentences', 'every sentence reads clean and natural, with a rhythm that varies — nothing awkward, clumsy or one shape after another'],
-  ['people', 'People', 'everyone acts and speaks from their own wants and nature, each in their own voice — nobody there only to move things along, nobody agreeing or giving way without a reason'],
+  ['people', 'People', 'everyone acts and speaks from their own wants and nature, each in their own voice — ordinary kindness, cooperation and affection can be true to them, while resistance also needs a reason; nobody exists only to move the plot or manufacture conflict'],
   ['moves', 'Moves', 'the passage earns its place through action, discovery, atmosphere, reflection or a change in a relationship; a quiet beat need not invent a new event'],
   ['ending', 'Ending', 'its stopping point fits its place in the book and the requested length — a continuation, quiet landing or chapter resolution as needed, without a forced cliffhanger or an unearned explanation of what it all meant'],
 ];

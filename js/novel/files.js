@@ -344,6 +344,7 @@ export function booksFromLibrary(snap) {
       return id;
     });
     const talk = recs.find((x) => x.kind === 'talk' && x.id === old.id);
+    const draft = recs.find((x) => x.kind === 'draft' && x.id === old.id);
     const plays = [];
     novel.plays = (old.plays || []).map((pid) => {
       if (!map.has(pid)) return null;
@@ -354,7 +355,8 @@ export function booksFromLibrary(snap) {
       return id;
     }).filter(Boolean);
     if (!novel.order.length) { const c = newChapter(nid); chapters[c.id] = c; novel.order = [c.id]; }
-    out.push({ novel, chapters, talk: talk ? { ...renamed(talk.data), id: nid, novelId: nid } : null, plays });
+    out.push({ novel, chapters, talk: talk ? { ...renamed(talk.data), id: nid, novelId: nid } : null,
+      draft: draft ? { ...renamed(draft.data), id: nid, novelId: nid } : null, plays });
   }
   return out;
 }

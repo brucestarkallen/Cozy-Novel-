@@ -47,7 +47,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.9.2"
+VERSION = "2.9.3"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -311,12 +311,14 @@ def write_record(kind, rid, rec):
         _revs.pop((kind, rid), None)
 
 
-def put_record(kind, rid, data, base, by="", checkpoint=False, save=""):
+def put_record(kind, rid, data, base, by="", checkpoint=False, save="", expected_generation=None):
     """Save one record. base is the rev the page's copy was made from (0 = it
     believes the record is new). save names the words saved (the page's own
     fingerprint of them), so a page can later tell whether a save of its
     landed. Returns (status, payload)."""
     with LOCK:
+        if expected_generation is not None and expected_generation != generation():
+            return 409, {"reload": True, "generation": generation(), "error": "a whole copy was brought back; the page is catching up"}
         cur = read_record(kind, rid)
         cur_rev = int(cur.get("rev") or 0) if cur else 0
         if base is not None:
@@ -695,10 +697,18 @@ def copies_list():
 def valid_snapshot(snap):
     if not isinstance(snap, dict) or snap.get("format") != "cozynovel-library" or not isinstance(snap.get("records"), list):
         return "that file is not a Cozy Novel copy"
+    names = set()
     for e in snap["records"]:
         if not isinstance(e, dict) or e.get("kind") not in KINDS or not isinstance(e.get("id"), str) \
                 or not ID_RE.match(e["id"]) or not isinstance(e.get("data"), dict):
             return "that copy has a damaged record in it, so nothing was changed"
+        name = (e["kind"], e["id"])
+        if name in names:
+            return "that copy has two records with the same name, so nothing was changed"
+        names.add(name)
+        rev = e.get("rev", 0)
+        if not isinstance(rev, int) or isinstance(rev, bool) or rev < 0:
+            return "that copy has a damaged save number in it, so nothing was changed"
     return ""
 
 
@@ -751,7 +761,7 @@ def replace_library(snap, by=""):
     with LOCK:
         before = library_snapshot(with_sent=True)
         COPIES.mkdir(parents=True, exist_ok=True)
-        safety = "cozynovel-before-%s.json.gz" % time.strftime("%Y%m%d-%H%M%S").lower()
+        safety = "cozynovel-before-%s-%09d.json.gz" % (time.strftime("%Y%m%d-%H%M%S").lower(), time.time_ns() % 1000000000)
         aside = None
         try:
             if before["records"]:
@@ -766,6 +776,9 @@ def replace_library(snap, by=""):
         revs = {(e["kind"], e["id"]): int(e.get("rev") or 0) for e in before["records"]}
         try:
             _become(snap["records"], snap.get("sent"), revs)
+            # Changing the library and its number is one operation. A phone
+            # unable to keep the number must put the records back too.
+            set_generation(generation() + 1)
         except Exception as e:
             reason = getattr(e, "strerror", None) or str(e) or e.__class__.__name__
             try:
@@ -797,7 +810,6 @@ def replace_library(snap, by=""):
                 print("what a book in Recently deleted was sent could not all be kept:", e, file=sys.stderr)
             shutil.rmtree(aside, ignore_errors=True)
         # a page's unsaved work from before the copy came back is not played over it
-        set_generation(generation() + 1)
         gen = generation()
     announce({"reload": True, "by": by, "generation": gen})
     return safety if before["records"] else ""
@@ -1199,12 +1211,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if parts[:2] == ["api", "store"] and len(parts) == 4:
             if not self.ok_id(parts[2], parts[3]):
                 return self.send_json({"error": "bad id"}, 400)
-            rec = read_record(parts[2], parts[3])
-            if rec is None:
-                # not there (yet): said plainly, not as a failure — with the
-                # number it had, when it was deleted
-                return self.send_json({"rev": gone_rev(parts[2], parts[3]), "data": None})
-            return self.send_json({"rev": rec.get("rev", 0), "data": rec["data"], "saves": rec.get("saves") or []})
+            with LOCK:
+                rec = read_record(parts[2], parts[3])
+                if rec is None:
+                    # not there (yet): said plainly, not as a failure — with the
+                    # number it had, when it was deleted
+                    payload = {"rev": gone_rev(parts[2], parts[3]), "data": None, "generation": generation()}
+                else:
+                    payload = {"rev": rec.get("rev", 0), "data": rec["data"], "saves": rec.get("saves") or [], "generation": generation()}
+            return self.send_json(payload)
         if path == "/api/novels":
             return self.send_json({"novels": novel_list()})
         if path == "/api/events":
@@ -1349,14 +1364,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not isinstance(body, dict) or not isinstance(body.get("data"), dict):
                 return self.send_json({"error": "that save arrived incomplete, so nothing was written"}, 400)
             raw = (self.headers.get("X-Base") or "").strip()
+            raw_generation = (self.headers.get("X-Generation") or "").strip()
             try:
                 base = int(raw) if raw else None
+                expected_generation = int(raw_generation) if raw_generation else None
             except ValueError:
                 return self.send_json({"error": "bad base"}, 400)
             checkpoint = (self.headers.get("X-Checkpoint") or "") == "1"
             save = re.sub(r"[^A-Za-z0-9_-]", "", str(self.headers.get("X-Save") or ""))[:40]
             try:
-                code, payload = put_record(kind, rid, body["data"], base, self.client(), checkpoint, save)
+                code, payload = put_record(kind, rid, body["data"], base, self.client(), checkpoint, save, expected_generation)
             except OSError as e:
                 return self.send_json({"error": "the phone could not write it: %s" % e.strerror}, 507 if e.errno == errno.ENOSPC else 500)
             return self.send_json(payload, code)
@@ -1382,7 +1399,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             kind, rid = parts[2], parts[3]
             if not self.ok_id(kind, rid) or kind == "house":
                 return self.send_json({"error": "bad id"}, 400)
-            had = delete_record(kind, rid, self.client())
+            raw_generation = (self.headers.get("X-Generation") or "").strip()
+            try:
+                expected_generation = int(raw_generation) if raw_generation else None
+            except ValueError:
+                return self.send_json({"error": "bad generation"}, 400)
+            with LOCK:
+                if expected_generation is not None and expected_generation != generation():
+                    return self.send_json({"reload": True, "generation": generation(), "error": "a whole copy was brought back; the page is catching up"}, 409)
+                had = delete_record(kind, rid, self.client())
             return self.send_json({"ok": True, "had": had})
         return self.send_json({"error": "unknown"}, 404)
 

@@ -814,7 +814,15 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
 
 export async function ensureTalk(novelId) {
   let t = await store.open('talk', novelId);
-  if (!t) t = await store.create('talk', novelId, { id: novelId, novelId, turns: [], updated: Date.now() });
+  if (!t) t = await store.create('talk', novelId, { id: novelId, novelId, convId: newId('cv'), turns: [], updated: Date.now() });
+  if (t && !t.convId) {
+    /* A draft belongs to a conversation even before its first message.
+     * Older records gain an identity once; a newer window's identity wins. */
+    const convId = newId('cv');
+    store.change('talk', novelId, (d) => { if (!d.convId) d.convId = convId; }, { now: true });
+    await store.flush('talk', novelId);
+    t = store.peek('talk', novelId);
+  }
   return t;
 }
 
@@ -829,16 +837,19 @@ export async function loadPlays(novelId) {
 export async function partnerSay({ novelId, chapterId, text }) {
   const t = String(text || '').trim();
   if (!t) return { ok: false, error: '' };
-  await ensureTalk(novelId);
-  await loadPlays(novelId);
-  if (talkBusy('talk', novelId)) return { ok: false, error: 'a reply is already on its way — Stop it first' };
+  let rec;
+  try { rec = { convId: (await ensureTalk(novelId)).convId || null }; await loadPlays(novelId); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e), giveBack: t }; }
+  if (talkBusy('talk', novelId)) return { ok: false, error: 'a reply is already on its way — Stop it first', giveBack: t };
+  const current = store.peek('talk', novelId);
+  if (!current || !store.peek('novel', novelId) || (rec.convId || null) !== (current.convId || null)) return { ok: false, error: 'the conversation changed while it was opening', giveBack: t };
   const mine = newTurn('you', t);
   const reply = newTurn('ai', '', { streaming: true });
-  store.change('talk', novelId, turnSteps.addTurn(mine));
-  store.change('talk', novelId, turnSteps.addTurn(reply), { now: true });
+  store.change('talk', novelId, inConversation(rec, turnSteps.addTurn(mine)));
+  store.change('talk', novelId, inConversation(rec, turnSteps.addTurn(reply)), { now: true });
   const out = await runTurn({ kind: 'talk', id: novelId, novelId, turnId: reply.id, versionId: reply.versions[0].id, role: 'partner',
     buildArgs: (rec, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(rec, { upto: reply.id, conn: c }), request: '', moment: hisLast(rec, reply.id) }) });
-  if (out.gone) return out;
+  if (out.gone) return { ...out, giveBack: t };
   if (!out.ok && !replied('talk', novelId, reply.id)) {
     try { store.change('talk', novelId, turnSteps.removeTurn(mine.id), { now: true }); } catch (_) { /* gone */ }
     /* asked again after Edit and ask again, and no answer came: what it let go is back as it was (unless the talk moved on since) */
@@ -896,11 +907,37 @@ export async function nextIdeas({ novelId, chapterId, count = 4, signal = null, 
 
 async function convReady(novelId) {
   const rec = await ensureTalk(novelId);
+  if (!rec || !store.peek('novel', novelId)) return { error: 'that conversation is not there any more' };
+  const convId = rec.convId || null;
   if (talkBusy('talk', novelId)) return { error: 'a reply is on its way — Stop it first' };
   await repairStaleTurns('talk', novelId);
-  const now = store.peek('talk', novelId) || rec;
+  const now = store.peek('talk', novelId);
+  if (!now || !store.peek('novel', novelId)) return { error: 'that conversation is not there any more' };
+  if ((now.convId || null) !== convId) return { error: 'another conversation opened while this one was being read — try again' };
   if ((now.turns || []).some((t) => (t.versions || []).some((v) => v.streaming))) return { error: 'a reply is being written in another window — wait for it there' };
   return { rec: now };
+}
+/* Steps are replayed after a refused save. A different conversation may
+ * have opened in another window by then: an action belongs to the one it
+ * was asked in, never whichever happens to be open when the save lands. */
+function inConversation(rec, step, unchanged = false) {
+  const convId = (rec && rec.convId) || null;
+  const turns = unchanged ? JSON.stringify((rec && rec.turns) || []) : null;
+  return (d) => {
+    if ((d.convId || null) !== convId || (unchanged && JSON.stringify(d.turns || []) !== turns)) return false;
+    step(d);
+    return true;
+  };
+}
+/* Wait for any refused save to replay before calling the action done. A
+ * destructive action also checks the turns: Undo only has the words that
+ * were here when it was asked, so newer messages must stay untouched. */
+async function keepConversation(novelId, rec, step, result, unchanged = false) {
+  const apply = inConversation(rec, step, unchanged);
+  let applied = false;
+  store.change('talk', novelId, (d) => { applied = apply(d); }, { now: true });
+  await store.flush('talk', novelId);
+  return applied ? result : { ok: false, error: 'the conversation changed in another window — your words are still there; try again' };
 }
 const spareOf = (rec) => ({ spareId: rec.convId || newId('cv'), spareName: openName(rec), at: Date.now() });
 
@@ -913,8 +950,7 @@ export async function newConversation(novelId) {
   if (!(rec.turns || []).length && !rec.named) return { ok: false, error: 'this conversation is a new one already' };
   const s = spareOf(rec);
   const name = freeName(rec, [s.spareName]);
-  store.change('talk', novelId, convSteps.fresh({ id: newId('cv'), name, ...s }), { now: true });
-  return { ok: true, name };
+  return keepConversation(novelId, rec, convSteps.fresh({ id: newId('cv'), name, ...s }), { ok: true, name });
 }
 
 /* another conversation opens; the open one stays in the list */
@@ -922,8 +958,7 @@ export async function openConversation(novelId, convId) {
   const { rec, error } = await convReady(novelId);
   if (error) return { ok: false, error };
   if (!(rec.convs || []).some((c) => c.id === convId)) return { ok: false, error: 'that conversation is not there any more' };
-  store.change('talk', novelId, convSteps.open({ id: convId, ...spareOf(rec) }), { now: true });
-  return { ok: true };
+  return keepConversation(novelId, rec, convSteps.open({ id: convId, ...spareOf(rec) }), { ok: true });
 }
 
 /* a copy of the open conversation — whole, or up to one of its turns — opens; this one stays as it is */
@@ -933,17 +968,16 @@ export async function copyConversation(novelId, upto = null) {
   if (!(rec.turns || []).length || (upto && !(rec.turns || []).some((t) => t.id === upto))) return { ok: false, error: 'there is nothing to copy' };
   const s = spareOf(rec);
   const name = markedName(s.spareName, upto ? 'branch' : 'copy', [s.spareName, ...(rec.convs || []).map((c) => c.name)]);
-  store.change('talk', novelId, convSteps.copy({ id: newId('cv'), name, upto, ...s }), { now: true });
-  return { ok: true, name };
+  return keepConversation(novelId, rec, convSteps.copy({ id: newId('cv'), name, upto, ...s }), { ok: true, name });
 }
 
 export async function renameConversation(novelId, name) {
   const n = cleanConvName(name);
   if (!n) return { ok: false, error: 'it needs a name' };
   const rec = await ensureTalk(novelId);
+  if (!rec || !store.peek('novel', novelId)) return { ok: false, error: 'that conversation is not there any more' };
   if ((rec.convs || []).some((c) => c.name === n)) return { ok: false, error: `another conversation is called “${n}” already` };
-  store.change('talk', novelId, convSteps.rename(n), { now: true });
-  return { ok: true };
+  return keepConversation(novelId, rec, convSteps.rename(n), { ok: true });
 }
 
 /* Start over: the open conversation's talk goes (the changes it made stay in the book); Undo puts it back */
@@ -952,9 +986,8 @@ export async function startOver(novelId) {
   if (error) return { ok: false, error };
   const turns = JSON.parse(JSON.stringify(rec.turns || []));
   const convId = rec.convId || newId('cv');
-  if (!rec.convId) store.change('talk', novelId, turnSteps.set({ convId }));
-  store.change('talk', novelId, convSteps.clear(), { now: true });
-  return { ok: true, undo: () => store.change('talk', novelId, convSteps.unclear(convId, turns), { now: true }) };
+  return keepConversation(novelId, rec, (d) => { d.convId = convId; convSteps.clear()(d); },
+    { ok: true, undo: () => store.change('talk', novelId, convSteps.unclear(convId, turns), { now: true }) }, true);
 }
 
 /* the open conversation goes from the list: the newest used of the others opens, or a new one; Undo opens it again */
@@ -963,8 +996,8 @@ export async function removeConversation(novelId) {
   if (error) return { ok: false, error };
   const gone = { id: rec.convId || newId('cv'), name: openName(rec), ...(rec.named ? { named: true } : {}), at: Date.now(), turns: JSON.parse(JSON.stringify(rec.turns || [])) };
   const next = conversationsOf(rec).others[0];
-  store.change('talk', novelId, convSteps.remove({ nextId: next ? next.id : null, freshId: newId('cv'), freshName: freeName(rec, [gone.name]) }), { now: true });
-  return { ok: true, name: gone.name, undo: () => store.change('talk', novelId, convSteps.unremove(gone, { at: Date.now() }), { now: true }) };
+  return keepConversation(novelId, rec, convSteps.remove({ nextId: next ? next.id : null, freshId: newId('cv'), freshName: freeName(rec, [gone.name]) }),
+    { ok: true, name: gone.name, undo: () => store.change('talk', novelId, convSteps.unremove(gone, { at: Date.now() }), { now: true }) }, true);
 }
 
 /* Edit and ask again: his message and everything after it are let go, his
@@ -978,8 +1011,8 @@ export async function editAndAskAgain(novelId, turnId) {
   const text = String((picked(list[i]) || {}).text || '');
   const cut = JSON.parse(JSON.stringify(list.slice(i)));
   const convId = rec.convId || newId('cv');
-  if (!rec.convId) store.change('talk', novelId, turnSteps.set({ convId }));
-  store.change('talk', novelId, convSteps.cutFrom(turnId), { now: true });
+  const out = await keepConversation(novelId, rec, (d) => { d.convId = convId; convSteps.cutFrom(turnId)(d); }, { ok: true }, true);
+  if (!out.ok) return out;
   /* until a new answer has come, what was let go is held: an ask that brings no answer puts it back as it was */
   heldCut.set(novelId, { convId, i, cut, at: Date.now() });
   return { ok: true, text, undo: () => { heldCut.delete(novelId); store.change('talk', novelId, convSteps.putBack(convId, i, cut), { now: true }); } };
@@ -995,7 +1028,7 @@ export async function partnerAgain({ novelId, chapterId, turnId }) {
   if (rec.turns[rec.turns.length - 1].id !== turnId) return { ok: false, error: 'only the newest answer can be asked again — for an older one, use Edit and ask again on your message before it' };
   if (talkBusy('talk', novelId)) return { ok: false, error: 'a reply is already on its way — Stop it first' };
   const v = newVersion({ streaming: true });
-  store.change('talk', novelId, turnSteps.addVersion(turnId, v), { now: true });
+  store.change('talk', novelId, inConversation(rec, turnSteps.addVersion(turnId, v)), { now: true });
   return runTurn({ kind: 'talk', id: novelId, novelId, turnId, versionId: v.id, role: 'partner',
     buildArgs: (r, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(r, { upto: turnId, conn: c }), request: '', moment: hisLast(r, turnId) }) });
 }
@@ -1017,11 +1050,12 @@ export async function newPlay({ novelId, chapterId, who, from = '' }) {
 /* A scene whose prose has left the book (its passage taken out, to redo
  * it) lets go of "written into the book up to here": the talk it covered
  * rides again as the scene, and Turn it into prose takes it again; one whose
- * prose moved to another chapter follows it (Cozy Tavern's M44: a hole never
- * left in what is handed on). True when it changed. */
+ * prose moved to another chapter follows it — as does a scene's original
+ * starting point, before any prose has been made (Cozy Tavern's M44: a hole
+ * never left in what is handed on). True when it changed. */
 export function mendScene(playId) {
   const p = store.peek('play', playId);
-  if (!p || !p.turned || !p.after) return false;
+  if (!p || !p.after || p.after === '^') return false;
   const novel = store.peek('novel', p.novelId);
   if (!novel) return false;
   for (const cid of novel.order || []) {
@@ -1059,19 +1093,22 @@ function playArgs(playRec, upto) {
  * only — a line for the narrator about how the telling should go, and the
  * narrator's answer. */
 export async function playSay({ playId, text, tell = '' }) {
-  let p = await store.open('play', playId);
-  if (!p) return { ok: false, error: 'that scene is not there any more' };
-  if (mendScene(playId)) p = store.peek('play', playId);
-  if (talkBusy('play', playId)) return { ok: false, error: 'a reply is already on its way — Stop it first' };
   const t = String(text || '').trim();
   const tl = String(tell || '').trim();
+  const giveBack = { giveBack: t, giveBackTell: tl };
+  let p;
+  try { p = await store.open('play', playId); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e), ...giveBack }; }
+  if (!p || !store.peek('novel', p.novelId)) return { ok: false, error: 'that scene is not there any more', ...giveBack };
+  if (mendScene(playId)) p = store.peek('play', playId);
+  if (talkBusy('play', playId)) return { ok: false, error: 'a reply is already on its way — Stop it first', ...giveBack };
   const mine = t || tl ? newTurn('you', t, tl ? { tell: tl } : {}) : null;
   if (mine) store.change('play', playId, turnSteps.addTurn(mine));
   const reply = newTurn('ai', '', { streaming: true });
   store.change('play', playId, turnSteps.addTurn(reply), { now: true });
   const out = await runTurn({ kind: 'play', id: playId, novelId: p.novelId, turnId: reply.id, versionId: reply.versions[0].id, role: 'writer', length: 'paragraphs',
     buildArgs: playArgs(p, reply.id) });
-  if (out.gone) return out;
+  if (out.gone) return { ...out, ...giveBack };
   if (!out.ok && mine && !replied('play', playId, reply.id)) {
     try { store.change('play', playId, turnSteps.removeTurn(mine.id), { now: true }); } catch (_) { /* gone */ }
     return { ...out, giveBack: t, giveBackTell: tl };

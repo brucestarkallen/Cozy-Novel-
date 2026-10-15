@@ -491,6 +491,13 @@ export const novelSteps = {
 
 function findPassage(c, pid) { return (c.passages || []).find((p) => p.id === pid); }
 function findVersion(p, vid) { return p && (p.versions || []).find((v) => v.id === vid); }
+/* Go on keeps the version's id while changing its words. A comparison
+ * belongs to the words it read, including when its save is replayed. */
+export function duelMatches(p, row) {
+  if (!p || !row) return false;
+  const x = findVersion(p, row.x), y = findVersion(p, row.y);
+  return Boolean(x && y && (!row.xSig || row.xSig === hashText(String(x.text || ''))) && (!row.ySig || row.ySig === hashText(String(y.text || ''))));
+}
 
 /* What the checker kept for a passage or its versions, put aside when they
  * went (pruneChecks), back with them: only for versions there again, never
@@ -508,7 +515,7 @@ function checksBack(c, pid) {
   }
   if (g.left) { c.checksLeft = c.checksLeft || {}; c.checksLeft[pid] = [...(c.checksLeft[pid] || []), ...g.left.filter((x) => !(c.checksLeft[pid] || []).some((y) => y.find === x.find && y.replace === x.replace))]; g.left = null; }
   for (const [key, d] of Object.entries(g.duels || {})) {
-    if (!findVersion(p, d.x) || !findVersion(p, d.y)) continue;
+    if (!duelMatches(p, d)) continue;
     c.duels = c.duels || {};
     if (!c.duels[key]) c.duels[key] = d;
     delete g.duels[key];
@@ -657,7 +664,7 @@ export const chapterSteps = {
    * kept while both versions are there */
   setDuel: (key, row) => (c) => {
     const p = findPassage(c, row.pid);
-    if (!p || !findVersion(p, row.x) || !findVersion(p, row.y)) return;
+    if (!duelMatches(p, row)) return;
     c.duels = c.duels || {};
     c.duels[key] = JSON.parse(JSON.stringify(row));
   },
@@ -673,6 +680,7 @@ export const chapterSteps = {
     for (const [key, d] of Object.entries(c.duels || {})) {
       const p = d && findPassage(c, d.pid);
       if (!p || !findVersion(p, d.x) || !findVersion(p, d.y)) { if (d && d.pid) stash(d.pid).duels[key] = d; delete c.duels[key]; }
+      else if (!duelMatches(p, d)) delete c.duels[key];
     }
     for (const pid of Object.keys(c.checks || {})) {
       const p = findPassage(c, pid);

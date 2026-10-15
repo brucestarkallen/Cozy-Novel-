@@ -25,6 +25,7 @@ let bootCommit = (() => {
   try { const m = globalThis.document && document.querySelector('meta[name="cozynovel-commit"]'); return m && m.content ? m.content : null; } catch (_) { return null; }
 })();
 let generation = null;             /* the library's generation (counted up by each whole copy brought back) */
+let libraryEpoch = 0;              /* discard replies already travelling when a whole copy comes back */
 let offline = false;
 let lastError = '';
 
@@ -52,7 +53,8 @@ export function onUpdate(fn) { updateFns.add(fn); return () => updateFns.delete(
  * gets a second more per megabyte to travel. */
 const WAIT = 15000;
 async function api(method, path, { body, headers = {}, keepalive = false, wait = 0 } = {}) {
-  const init = { method, headers: { 'X-Client': CLIENT, ...headers }, keepalive };
+  const guarded = generation !== null && /^\/api\/store\//.test(path) && ['PUT', 'DELETE'].includes(method);
+  const init = { method, headers: { 'X-Client': CLIENT, ...(guarded ? { 'X-Generation': String(generation) } : {}), ...headers }, keepalive };
   if (body !== undefined) {
     init.body = typeof body === 'string' ? body : JSON.stringify(body);
     init.headers['Content-Type'] = 'application/json';
@@ -65,6 +67,7 @@ async function api(method, path, { body, headers = {}, keepalive = false, wait =
     const res = await fetch(path, init);
     let data = null;
     try { data = await res.json(); } catch (_) { data = null; }
+    if (data && data.reload && Number.isFinite(data.generation)) knowGeneration(data.generation);
     return { status: res.status, data };
   } finally { if (timer) clearTimeout(timer); }
 }
@@ -158,8 +161,10 @@ export async function open(kind, id, { fresh = false } = {}) {
   const firstTime = !r.loaded;
   r.loading = (async () => {
     for (let attempt = 0; ; attempt++) {
+      const epoch = libraryEpoch;
       try {
         const { status: code, data } = await api('GET', `/api/store/${kind}/${id}`);
+        if (epoch !== libraryEpoch || oldGeneration(data) || (data && knowGeneration(data.generation))) continue;
         if (code === 200 && data && data.data === null) { r.loaded = true; r.data = null; r.rev = 0; r.baseJson = null; setOffline(false); return null; }
         if (code === 200 && data && data.data) {
           if (!r.pending.length || !r.loaded) {
@@ -174,6 +179,7 @@ export async function open(kind, id, { fresh = false } = {}) {
         if (code === 404) { r.loaded = true; r.data = null; r.rev = 0; r.baseJson = null; setOffline(false); return null; }
         throw new Error(data && data.error ? data.error : `the phone answered ${code}`);
       } catch (e) {
+        if (epoch !== libraryEpoch) continue;
         setOffline(true, e);
         if (attempt >= 2) throw e;
         await sleep(600 * (attempt + 1));
@@ -242,12 +248,15 @@ export async function remove(kind, id) {
     ['chapter', 'talk', 'play', 'draft'].includes(x.kind) &&
     ((x.data && x.data.novelId === id) || (['talk', 'draft'].includes(x.kind) && x.id === id))) : [];
   const going = [r, ...owned];
+  const epoch = libraryEpoch;
   for (const x of going) { x.removing = true; clearTimeout(x.timer); x.timer = null; }
   try {
     /* Keep pending edits in the deleted copy too. If deletion fails, their
      * steps have not been discarded and the records remain editable. */
     await Promise.all(going.map((x) => x.pending.length || x.saving ? saveNow(x) : null));
+    if (epoch !== libraryEpoch) throw new Error('a whole copy was brought back; the page is catching up');
     const { status: code } = await api('DELETE', `/api/store/${kind}/${id}`);
+    if (epoch !== libraryEpoch) throw new Error('a whole copy was brought back; the page is catching up');
     if (code !== 200) throw new Error('the phone could not delete it');
     for (const x of going) {
       x.deleted = true; x.data = null; x.loaded = false; x.pending = [];
@@ -311,6 +320,24 @@ function saveNow(r, { keepalive = false } = {}) {
     let ride = keepalive;
     try {
       while (r.pending.length && !r.deleted) {
+        const epoch = libraryEpoch;
+        /* A new book can be the first record opened by a page. Learn which
+         * library it belongs to before its first write, even without news. */
+        if (generation === null) {
+          try {
+            const v = await api('GET', '/api/version');
+            if (v.status !== 200 || !v.data || !Number.isFinite(v.data.generation)) throw new Error('the phone could not say which copy is open');
+            knowGeneration(v.data.generation);
+          } catch (e) {
+            if (epoch !== libraryEpoch) continue;
+            setOffline(true, e);
+            journal(r);
+            await nap(backoff);
+            backoff = Math.min(backoff * 2, 15000);
+            continue;
+          }
+          if (epoch !== libraryEpoch || !r.pending.length) continue;
+        }
         const ops = r.pending.slice();
         const checkpoint = ops.every((o) => o.checkpoint);
         const json = JSON.stringify(r.data);
@@ -325,6 +352,7 @@ function saveNow(r, { keepalive = false } = {}) {
             headers: { 'X-Base': String(r.rev), 'X-Save': hashText(json), ...(checkpoint ? { 'X-Checkpoint': '1' } : {}) },
           });
         } catch (e) {
+          if (epoch !== libraryEpoch) continue;
           ride = false;
           setOffline(true, e);
           journal(r);
@@ -332,6 +360,9 @@ function saveNow(r, { keepalive = false } = {}) {
           backoff = Math.min(backoff * 2, 15000);
           continue;
         }
+        /* Its acknowledgement belongs to the library it left. In
+         * particular it cannot consume an edit typed into the new copy. */
+        if (epoch !== libraryEpoch) continue;
         if (res.status === 200 && res.data && Number.isFinite(res.data.rev)) {
           r.rev = res.data.rev;
           r.baseJson = json;
@@ -418,11 +449,24 @@ const LOCKS = Boolean(NEWS && globalThis.navigator && navigator.locks && navigat
 /* a whole copy was brought back: nothing this page kept waiting from before
  * it is played over it, and the page shows the copy */
 function libraryReplaced() {
-  for (const r of recs.values()) { r.pending = []; r.loaded = false; r.journaled = false; }
+  libraryEpoch++;
+  for (const r of recs.values()) { r.pending = []; r.loaded = false; r.journaled = false; clearTimeout(r.timer); r.timer = null; }
   Journal.clear();
   for (const fn of reloadFns) fn();
   for (const fn of shelfFns) fn();
 }
+
+/* A read can discover a restore before the news line does. An older reply
+ * may still be travelling; it must never count the library backwards. */
+function knowGeneration(next) {
+  if (!Number.isFinite(next)) return false;
+  if (generation === null) { generation = next; return false; }
+  if (next <= generation) return false;
+  generation = next;
+  libraryReplaced();
+  return true;
+}
+const oldGeneration = (data) => data && Number.isFinite(data.generation) && generation !== null && data.generation < generation;
 
 function onNews(raw) {
   let ev;
@@ -432,9 +476,7 @@ function onNews(raw) {
     else if ((ev.hello.commit || '') !== bootCommit) for (const fn of updateFns) fn(ev.hello);
     if (Number.isFinite(ev.hello.generation)) {
       /* the copy came back while this page was away (Cozy Tavern M670): what it kept waiting is not saved over it */
-      const missed = generation !== null && ev.hello.generation !== generation;
-      generation = ev.hello.generation;
-      if (missed) { libraryReplaced(); return; }
+      if (knowGeneration(ev.hello.generation)) return;
     }
     setOffline(false);
     /* back after a gap, or the line newly held here: whatever changed
@@ -446,7 +488,10 @@ function onNews(raw) {
   if (ev.resync) { recheckAll(); return; }   /* this page fell behind the news: it reads everything again */
   if (ev.reload) {
     /* a whole copy was brought back: nothing waiting from before it is played over it */
-    if (Number.isFinite(ev.generation)) generation = ev.generation;
+    if (Number.isFinite(ev.generation)) {
+      if (generation !== null && ev.generation <= generation) return;
+      generation = ev.generation;
+    }
     libraryReplaced();
     return;
   }
@@ -521,8 +566,10 @@ async function refresh(r) {
   try {
     for (;;) {
       r.refreshAgain = false;
+      const epoch = libraryEpoch;
       const revAsked = r.rev;
       const { status: code, data } = await api('GET', `/api/store/${r.kind}/${r.id}`);
+      if (epoch !== libraryEpoch || oldGeneration(data) || (data && knowGeneration(data.generation))) return;
       if (code === 404 || (code === 200 && data && data.data === null)) {
         /* deleted — never a record this page made that the phone has not taken yet */
         if (stillGone(r, revAsked)) gone(r);
@@ -552,11 +599,13 @@ async function recheckAll() {
   const held = [...recs.values()].filter((r) => r.loaded || (r.deleted && r.fns.size));
   if (!held.length) return;
   const asked = new Map(held.map((r) => [r, r.rev]));
+  const epoch = libraryEpoch;
   let revs = null;
   try {
     const { status: code, data } = await api('POST', '/api/revs', { body: held.map((r) => [r.kind, r.id]) });
     if (code === 200 && data && data.revs) revs = data.revs;
   } catch (_) { revs = null; }
+  if (epoch !== libraryEpoch) return;
   for (const r of held) {
     if (!revs) { if (!r.deleted) refresh(r); continue; }
     const n = revs[keyOf(r.kind, r.id)];
@@ -739,10 +788,12 @@ function mergeList(base, mine, theirs) {
  * held it, or the record was deleted meanwhile, which stands), or '' (try
  * again later). */
 async function handOver(e) {
+  const epoch = libraryEpoch;
   const mine = JSON.parse(e.json);
   const base = e.baseJson ? JSON.parse(e.baseJson) : undefined;
   for (let i = 0; i < 6; i++) {
     const got = await api('GET', `/api/store/${e.kind}/${e.id}`);
+    if (epoch !== libraryEpoch || oldGeneration(got.data) || (got.data && knowGeneration(got.data.generation))) return 'done';
     if (got.status !== 200 || !got.data) throw new Error('the phone is away');
     const rev = Number(got.data.rev) || 0;
     const theirs = got.data.data;
@@ -752,6 +803,7 @@ async function handOver(e) {
     const data = theirs === null || rev === e.base ? mine : merge3(base, mine, theirs);
     if (theirs !== null && same(data, theirs)) return 'done';
     const put = await api('PUT', `/api/store/${e.kind}/${e.id}`, { body: `{"data":${JSON.stringify(data)}}`, headers: { 'X-Base': String(rev) } });
+    if (epoch !== libraryEpoch) return 'done';
     if (put.status === 200) {
       const r = recs.get(keyOf(e.kind, e.id));
       if (r && r.loaded) refresh(r);
@@ -774,8 +826,8 @@ export function replayJournal() {
     if (!entries.length) return 0;
     if (generation === null) {
       const v = await api('GET', '/api/version');
-      if (v.status !== 200 || !v.data) throw new Error('the phone is away');
-      generation = Number(v.data.generation) || 0;
+      if (v.status !== 200 || !v.data || !Number.isFinite(v.data.generation)) throw new Error('the phone is away');
+      knowGeneration(v.data.generation);
     }
     /* no locks: every entry is handed over, which is safe — a merge by id means the same thing twice */
     const open = (await liveTabs()) || new Set();
