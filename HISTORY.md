@@ -242,3 +242,15 @@ Found doing it, each fixed at the root:
 - When the checker's answer put a fix over exactly the sentence that held a word on his list, the checking stopped with "Cannot read properties of undefined" and tried again every minute, never finishing (2.6.1 and before). It finishes now, the fix offered as it came.
 
 Checked with all five suites on the final code — server 63/63, app 351/351, thinking 348/348 (0 leaks), walk_main 75/75, walk_more 269/269 — on synthetic books with stand-in models, and every new piece taken out on its own with its check run: 21 of 21 new in the app, 4 of 4 new on the screen. Every earlier list run again on this code: 405 of 405 caught in the app (seven aimed again at code this change moved or at a test renamed for his new rule), 40 of 40 on the screen. No paid provider call was made.
+
+## 2.6.3, a grade kept through its fixes, said in the passage's line, and graded when he asks
+
+He opened a book whose one passage said "with the checker's suggestions", tapped the bubble, and read "Everything is checked — nothing to change" — no grade anywhere, no suggestions to see, no button. "Are you pranking me? Above what suggestions?"
+
+Two faults, both real. The line was the version's name — the version the checker's fixes made — read as "there are suggestions here"; it now says *the checker's fixes put in*. And the grade was gone: when a fix went in, by his tap or by itself, the new version's checking kept what still waited but not the grade, so the score, the book's average and the judge's box at the top of Suggestions disappeared the moment a fix was applied (since the judge came, 2.4.1). The grade now goes with the words its fixes made, and a grade already lost is put back from the version the fix was made from — no model asked — when a book opens and before each look.
+
+Found on the way, the same gap from the other side: a passage checked while the judge was off, or graded before the ten checks, could never be graded — the bubble said everything was checked and Check this chapter was not there. The bubble now says how many are checked but not graded, and Check this chapter (or Check the whole book) asks for their grade alone — what was found in them stays as it was, and a model that will not grade one is not asked again. Nothing is sent by itself for them.
+
+And the grade can be seen: a selected passage's line says it (*Passage 3 · graded 9 of 10 · …*), drawn again the moment a grade comes.
+
+Checked with all five suites on the final code — server 63/63, app 354/354, thinking 348/348 (0 leaks), walk_main 75/75, walk_more 272/272 — on synthetic books with stand-in models, and every new piece taken out on its own with its check run: 13 of 13 new in the app, 4 of 4 new on the screen; every earlier list run again on this code: 418 of 418 in the app (three aimed again at lines this change moved), 44 of 44 on the screen. No paid provider call was made.
