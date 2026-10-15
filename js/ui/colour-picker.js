@@ -4,7 +4,9 @@ import { COLOUR_PRESETS, colourPair, recommendedColours, hexColour, inkFor, cont
 import { resolveLook } from './look.js';
 
 export function colourPicker(kind, read, update) {
-  const title = kind === 'scene' ? 'Scene highlight colour' : 'Dialogue colour';
+  const title = kind === 'novel' ? 'Novel highlight colour' : kind === 'scene' ? 'Scene highlight colour' : 'Dialogue colour';
+  const enabled = kind !== 'dialogue' ? h('input', { type: 'checkbox' }) : null;
+  enabled?.addEventListener('change', () => update({ [`${kind}Highlight`]: enabled.checked ? 'on' : 'off' }));
   const choose = h('select', { 'aria-label': title + ' preset' });
   const night = h('input', { type: 'color', 'aria-label': title + ' at night' });
   const day = h('input', { type: 'color', 'aria-label': title + ' by day' });
@@ -21,6 +23,7 @@ export function colourPicker(kind, read, update) {
   let signature = '';
   const refresh = () => {
     const look = read(), { world, mode } = resolveLook(look);
+    if (enabled) enabled.checked = look[`${kind}Highlight`] !== 'off';
     const saved = Object.entries(look[`${kind}Saved`] || {}).filter(([, p]) => p && hexColour(p.dark) && hexColour(p.light));
     const options = [['default', 'Recommended for this room'], ...Object.entries(COLOUR_PRESETS[kind]).map(([id, p]) => [id, p.name]), ...saved.map(([id, p]) => [id, p.name || 'Saved colour']), ['custom', 'Custom colours']];
     const next = JSON.stringify(options);
@@ -31,12 +34,14 @@ export function colourPicker(kind, read, update) {
     if (night.value !== pair.dark) night.value = pair.dark;
     if (day.value !== pair.light) day.value = pair.light;
     remove.hidden = !saved.some(([id]) => id === selected);
-    const scene = colourPair(look, 'scene') || recommendedColours(world, 'scene');
+    const surface = kind === 'novel' ? 'novel' : 'scene';
+    const scene = colourPair(look, surface) || recommendedColours(world, surface);
     const dialogue = colourPair(look, 'dialogue') || recommendedColours(world, 'dialogue');
     preview.style.background = scene[mode]; preview.style.color = inkFor(scene[mode]);
+    if (look[`${surface}Highlight`] === 'off') { preview.style.background = 'var(--chrome-solid)'; preview.style.color = 'var(--chrome-ink)'; }
     preview.querySelector('.colour-dialogue').style.color = look.tint === 'off' ? 'inherit' : dialogue[mode];
     const low = contrast(scene[mode], dialogue[mode]) < 4.5;
-    hint.textContent = kind === 'scene' ? 'The narrator’s page in scenes, including full screen. Night and day switch together with your room.' : look.tint === 'off' ? 'Turn on Tint the dialogue to see these colours in the book and scenes.' : low ? 'This dialogue colour has low contrast against your scene highlight. Try a lighter night colour or a darker day colour.' : 'Spoken words in the book and scenes. Night and day switch together with your room.';
+    hint.textContent = enabled && !enabled.checked ? 'Highlight is off: a plain reading surface replaces the coloured paper. Your colours stay saved.' : kind === 'novel' ? 'The writer’s novel page, including reading mode. Night and day switch together with your room.' : kind === 'scene' ? 'The narrator’s page in scenes, including full screen. Night and day switch together with your room.' : look.tint === 'off' ? 'Turn on Tint the dialogue to see these colours in the book and scenes.' : low ? 'This dialogue colour has low contrast against your scene highlight. Try a lighter night colour or a darker day colour.' : 'Spoken words in the book and scenes. Night and day switch together with your room.';
   };
   choose.addEventListener('change', () => update({ [`${kind}Palette`]: choose.value }));
   const edit = () => update({ [`${kind}Palette`]: 'custom', [`${kind}Custom`]: { dark: night.value, light: day.value } });
@@ -49,7 +54,8 @@ export function colourPicker(kind, read, update) {
     name.value = ''; toast('Colour pair saved.');
   } }, 'Save colours');
   const reset = h('button.btn.quiet.small', { title: 'Use the recommended colours for the current room. Your saved colours stay available.', onclick: () => update({ [`${kind}Palette`]: 'default' }) }, 'Back to default');
-  const box = h('section.reading-colours', { 'aria-label': title }, h('h4', title), field('Colour preset', choose),
+  const box = h('section.reading-colours', { 'aria-label': title }, h('h4', title),
+    ...(enabled ? [h('label.toggle', enabled, h('span', kind === 'novel' ? 'Highlight the novel' : 'Highlight scenes'))] : []), field('Colour preset', choose),
     h('div.fieldrow', field('Night', night), field('Day', day)), preview, hint,
     h('div.colour-save', field('Save a colour pair', name), save), h('div.btnrow', reset, remove),
     h('p.say.quiet', 'Back to default follows your room again. Your saved colours stay here.'));

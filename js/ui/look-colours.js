@@ -1,5 +1,6 @@
 /* Saved reading colours: paired for night and day, shared by every window. */
 export const COLOUR_PRESETS = {
+  novel: { cozy: { name: 'Cozy dark', dark: '#182420', light: '#f3ecde' } },
   scene: { cozy: { name: 'Cozy dark', dark: '#182420', light: '#f3ecde' } },
   dialogue: { orange: { name: 'Warm orange', dark: '#f0b47b', light: '#8a430d' } },
 };
@@ -15,7 +16,7 @@ export function recommendedColours(world, kind) {
     tokyo: { scene: ['#211c31', '#fffafd'], dialogue: ['#9bdee7', '#276b79'] },
     study: { scene: ['#30271f', '#fffaf0'], dialogue: ['#e8c49c', '#7a4d25'] },
   };
-  const [dark, light] = (values[world] || values.academy)[kind];
+  const [dark, light] = (values[world] || values.academy)[kind === 'novel' ? 'scene' : kind];
   return { dark, light };
 }
 function luminance(hex) {

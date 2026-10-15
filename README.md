@@ -171,9 +171,10 @@ The room remains visible around the manuscript, with opaque paper behind its wor
 The home background keeps a stable crop while mobile browser controls move. Each narrator
 answer shows how many input tokens were sent; estimates are marked “About.”
 The new-scene name and starting place also survive keyboard resizing and reloads.
-Settings → Appearance includes scene highlight and dialogue colours, with
+Settings → Appearance includes novel highlight, scene highlight and dialogue colours, with
 separate night/day values, saved colour pairs, Cozy dark and Warm orange presets,
-and Back to default. Saved colours stay available when the appearance is reset.
+and Back to default. Novel and scene highlights each have their own on/off switch;
+turning one off uses a plain reading surface and keeps its chosen colours. Saved colours stay available when the appearance is reset.
 
 No build step: `index.html`, `css/`, `js/` and `serve.py` are the whole app. `AGENTS.md` maps the code and the rules it keeps. The checks:
 

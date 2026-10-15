@@ -2,7 +2,7 @@
 import { showWorld } from './worlds.js';
 import { colourPair, inkFor } from './look-colours.js';
 
-export const DEFAULT_LOOK = { theme: 'academy', mode: 'dark', motion: 'on', room: 'on', tint: 'on', indent: 'off', font: 'literata', size: '18', lead: '1.72', width: '680' };
+export const DEFAULT_LOOK = { theme: 'academy', mode: 'dark', motion: 'on', room: 'on', tint: 'on', novelHighlight: 'on', sceneHighlight: 'on', indent: 'off', font: 'literata', size: '18', lead: '1.72', width: '680' };
 
 /* Older copies keep their daylight choice and every page setting. Their
  * stored words are untouched; the next deliberate theme choice saves the new name. */
@@ -32,6 +32,8 @@ export function applyLook(look = {}) {
   for (const [key, value] of Object.entries({
     theme: world, world, mode, motion,
     room: look.room === 'off' ? 'off' : 'on',
+    novelHighlight: look.novelHighlight === 'off' ? 'off' : 'on',
+    sceneHighlight: look.sceneHighlight === 'off' ? 'off' : 'on',
     font: look.font || 'literata',
     tint: look.tint === 'off' ? 'off' : 'on',
     indent: look.indent === 'on' ? 'on' : 'off',
@@ -45,8 +47,11 @@ export function applyLook(look = {}) {
   })) {
     if (d.style.getPropertyValue(key) !== value) d.style.setProperty(key, value);
   }
+  const novel = colourPair(look, 'novel');
   const scene = colourPair(look, 'scene'), dialogue = colourPair(look, 'dialogue');
   for (const [key, value] of Object.entries({
+    '--novel-paper': novel ? novel[mode] : '',
+    '--novel-ink': novel ? inkFor(novel[mode]) : '',
     '--scene-paper': scene ? scene[mode] : '',
     '--scene-ink': scene ? inkFor(scene[mode]) : '',
     '--dlg': dialogue ? dialogue[mode] : '',

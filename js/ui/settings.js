@@ -1180,7 +1180,7 @@ function lookGroup(hs) {
     Object.assign(look, latest);
     for (const editor of colourEditors) editor.refresh();
   };
-  for (const kind of ['scene', 'dialogue']) colourEditors.push(colourPicker(kind, () => house().look || {}, setLook));
+  for (const kind of ['novel', 'scene', 'dialogue']) colourEditors.push(colourPicker(kind, () => house().look || {}, setLook));
   const chosen = resolveLook(look);
   const sw = h('div.swatches.world-swatches', { role: 'group', 'aria-label': 'Choose your world' });
   for (const [id, label, description, paths] of THEMES) {
@@ -1223,7 +1223,7 @@ function lookGroup(hs) {
     h('div.btnrow', h('button.btn.quiet.small', { title: 'The theme, the type, the spacing and the width as they began — with Undo.', onclick: () => {
       const was = JSON.parse(JSON.stringify(house().look || {}));
       const put = (v) => { changeHouse((x) => { x.look = { ...v }; }, { now: true }); applyLook(v); for (const k of Object.keys(look)) delete look[k]; Object.assign(look, v); draw(); };
-      put({ ...DEFAULT_LOOK, sceneSaved: house().look?.sceneSaved, dialogueSaved: house().look?.dialogueSaved });
+      put({ ...DEFAULT_LOOK, novelSaved: house().look?.novelSaved, sceneSaved: house().look?.sceneSaved, dialogueSaved: house().look?.dialogueSaved });
       undoToast('It looks the way it began.', () => put(was));
     } }, 'Back to the default look')));
   return g;
