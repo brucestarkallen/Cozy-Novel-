@@ -112,7 +112,7 @@ function bookNow(novelId) {
 
 /* before anything is added to the page: is there a writer, and is the book free? */
 function preflight(novelId) {
-  if (running.has(novelId)) return { ok: false, error: 'something is already being written in this book — Stop it first' };
+  if (running.has(novelId)) return { ok: false, error: 'something is already being written in this book — Stop it first', busy: true };
   if (!connFor(house(), 'writer')) return { ok: false, error: 'no writer is chosen yet — add a connection in Settings → Connections', needsConnection: true };
   return null;
 }
@@ -385,7 +385,10 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       const kept = String(thought || '').trim() ? thought : undefined;
       if (out.stopped) return { ok: false, stopped: true, thought: kept };
       const error = leak.leaked && String(out.text || text).trim() ? 'the answer held nothing before the provider’s own markers' : out.ok ? emptyWhy(out, thought) : out.error;
-      return { ok: false, error, notes, thought: kept };
+      /* a passing fault (no answer, busy, down) — said apart, so what the app writes by itself tries again another time */
+      const st = Number(out.status) || 0;
+      const passing = !out.ok && !out.permanent && (st === 0 || st === 408 || st === 429 || st >= 500);
+      return { ok: false, error, notes, thought: kept, ...(passing ? { passing: true } : {}) };
     }
     const cutWhy = out.stopped ? 'you stopped it'
       : !out.cut ? undefined
@@ -753,12 +756,14 @@ export function putBackTail({ novelId, chapterId, passageId }) {
   return true;
 }
 
-/* His edit, kept as a new version — the words before it stay one arrow away. */
-export function saveEdit({ novelId, chapterId, passageId, text }) {
+/* His edit, kept as a new version made from the version his box was opened
+ * on (fromId) — another that came meanwhile (a fix, his partner) stays one
+ * arrow back (Cozy Tavern M429). Whether a version was made. */
+export function saveEdit({ novelId, chapterId, passageId, text, fromId = null }) {
   const chapter = store.peek('chapter', chapterId);
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   if (!p) return false;
-  const now = picked(p) || {};
+  const now = (fromId && p.versions.find((x) => x.id === fromId)) || picked(p) || {};
   const t = String(text || '').replace(/\s+$/, '');
   if (t === String(now.text || '')) return false;
   if (!t.trim()) return false;

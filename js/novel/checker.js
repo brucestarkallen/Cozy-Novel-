@@ -23,13 +23,14 @@ import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain } from './writer.js';
 import * as archivist from './archivist.js';
 import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, howOf, bornOf, chapterText } from './shape.js';
-import { numberedText, shortOf } from './context.js';
-import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros } from './prompts.js';
-import { locate } from './changes.js';
+import { numberedText, shortOf, notesBehind } from './context.js';
+import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes } from './prompts.js';
+import { locate, chapterNumber as chapterNum } from './changes.js';
 import { findIn } from './search.js';
 import { stockIn } from './stock.js';
+import { straysIn } from './textshape.js';
 import { contextOf } from '../model/providers.js';
-import { hashText, countWords, newId, plural, estimateTokens } from '../util.js';
+import { hashText, countWords, newId, plural, estimateTokens, cutWords } from '../util.js';
 
 /* ------------------------------------------------------------ who checks */
 
@@ -85,7 +86,9 @@ function wanted(house, chapter, p) {
   if (p.by === 'break') return false;
   const v = picked(p);
   if (!v || v.streaming || !String(v.text || '').trim()) return false;
-  if (entryFor(chapter, p)) return false;
+  const e = entryFor(chapter, p);
+  /* an answer that gave it no grade: graded again on a later look, twice at most (S06-G6) */
+  if (e) return e.graded === false && (e.tries || 0) < 2 && Boolean(judgeOf(house));
   if (chapter.checkAll) return true;
   /* by itself, only a finished page: one cut short or stopped waits for its Go on (Cozy Tavern M552) */
   if (v.cut) return false;
@@ -101,11 +104,22 @@ function chaptersOf(novelId) {
   return out;
 }
 
-/* every suggestion waiting in the book, chapter by chapter, passage by passage */
+/* every suggestion waiting in the book, chapter by chapter, passage by
+ * passage — as his settings stand now (Cozy Tavern M474): a word he took off
+ * his list is no longer offered, and a grade is under his mark only while it
+ * is under the mark he has now */
 export function suggestions(novelId) {
   const novel = store.peek('novel', novelId);
   const out = [];
   if (!novel) return out;
+  const house = store.peek('house', 'house') || {};
+  const avoid = new Set(avoidList(house).map((w) => w.toLowerCase()));
+  const judge = judgeOf(house);
+  const stands = (item) => {
+    if (item.kind === 'avoid' && item.replace === null) return (item.phrases || [item.phrase]).some((w) => w && avoid.has(String(w).toLowerCase()));
+    if (item.kind === 'grade') return Boolean(judge) && Boolean(item.grade) && Number.isFinite(item.grade.overall) && item.grade.overall < judge.target;
+    return true;
+  };
   for (const c of chaptersOf(novelId)) {
     const nums = passageNumbers(c);
     for (const p of c.passages || []) {
@@ -113,10 +127,44 @@ export function suggestions(novelId) {
       const e = entryFor(c, p);
       if (!e || !(e.items || []).length) continue;
       const v = picked(p);
-      for (const item of e.items) out.push({ chapterId: c.id, passageId: p.id, versionId: v.id, number: nums.get(p.id), chapter: chapterNumber(novel, c.id), item, text: String(v.text || '') });
+      for (const item of e.items) {
+        if (!stands(item)) continue;
+        const shown = item.kind === 'grade' ? { ...item, target: judge.target, ...(v.liftFailed ? { liftFailed: v.liftFailed } : {}) } : item;
+        out.push({ chapterId: c.id, passageId: p.id, versionId: v.id, number: nums.get(p.id), chapter: chapterNumber(novel, c.id), item: shown, text: String(v.text || '') });
+      }
     }
   }
   return out;
+}
+
+/* the passages its model would not check, set aside while their words stand — each with Check it again */
+export function setAsideList(novelId) {
+  const novel = store.peek('novel', novelId);
+  const out = [];
+  if (!novel) return out;
+  for (const c of chaptersOf(novelId)) {
+    const nums = passageNumbers(c);
+    for (const p of c.passages || []) {
+      const e = p.by === 'break' ? null : entryFor(c, p);
+      if (e && e.aside) out.push({ chapterId: c.id, passageId: p.id, versionId: picked(p).id, number: nums.get(p.id), chapter: chapterNumber(novel, c.id), why: e.aside, at: e.at });
+    }
+  }
+  return out;
+}
+/* Check it again: one set aside let go, read afresh */
+export function checkAgain(novelId, chapterId, passageId) {
+  const chapter = store.peek('chapter', chapterId);
+  const p = chapter && (chapter.passages || []).find((x) => x.id === passageId);
+  const v = p && picked(p);
+  const e = p && entryFor(chapter, p);
+  if (!e || !e.aside) return false;
+  store.change('chapter', chapterId, chapterSteps.dropCheck(p.id, v.id), { now: true, checkpoint: true });
+  /* asked again in its own right, never together with others */
+  stuckC.delete(`${p.id}:${v.id}:${e.sig}`);
+  failures.delete(novelId);
+  blocked.delete(novelId);
+  schedule(novelId, 300);
+  return true;
 }
 
 /* the passages still to be read by themselves, and the older ones he can ask for */
@@ -127,6 +175,7 @@ export function waiting(novelId) {
   return n;
 }
 export function unchecked(novelId, chapterId = null) {
+  const house = store.peek('house', 'house') || {};
   let n = 0;
   let words = 0;
   for (const c of chaptersOf(novelId)) {
@@ -134,12 +183,23 @@ export function unchecked(novelId, chapterId = null) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       const v = picked(p);
-      if (!v || v.streaming || !String(v.text || '').trim() || entryFor(c, p)) continue;
+      if (!v || v.streaming || !String(v.text || '').trim() || entryFor(c, p) || waitsForGoOn(house, v)) continue;
       n++;
       words += countWords(v.text);
     }
   }
   return { passages: n, words };
+}
+/* a new page that stopped partway: checked once Go on finishes it — never "older writing" (S11-G11) */
+function waitsForGoOn(house, v) {
+  const from = house && house.checksFrom;
+  return Boolean(v && v.cut) && howOf(v) !== 'imported' && Number.isFinite(from) && bornOf(v) >= from;
+}
+function cutWaiting(novelId) {
+  const house = store.peek('house', 'house') || {};
+  let n = 0;
+  for (const c of chaptersOf(novelId)) for (const p of c.passages || []) { const v = p.by === 'break' ? null : picked(p); if (v && !v.streaming && String(v.text || '').trim() && !entryFor(c, p) && waitsForGoOn(house, v)) n++; }
+  return n;
 }
 
 /* ------------------------------------------------------------ the light */
@@ -151,6 +211,9 @@ const runningFor = new Set();
 export function busyAny() { return runningFor.size > 0; }
 const failures = new Map();
 const blocked = new Map();
+/* one passage at a time for a book, after a checking of several its model would not answer; and how often each passage's words were not answered (Cozy Tavern M316, M675-7) */
+const narrowC = new Set();
+const stuckC = new Map();
 const fns = new Set();
 export function onChecks(fn) { fns.add(fn); return () => fns.delete(fn); }
 function tell(novelId) { for (const fn of fns) { try { fn(novelId); } catch (e) { console.error(e); } } }
@@ -169,10 +232,20 @@ export function stateOf(novelId) {
   if (s && (s.state === 'trouble' || s.state === 'checking')) return { ...s, count };
   if (s && s.state === 'retry') return { state: 'waiting', words: s.words, count };
   if (waiting(novelId)) return { state: 'waiting', words: 'The newest words are checked in a moment.', count };
-  if (count) return { state: 'found', words: `${plural(count, 'suggestion')} to look at.`, count };
-  /* green says only what is true: older writing, never sent unasked, is not called checked */
+  /* green says only what is true: older writing, never sent unasked, is not
+   * called checked; a page that stopped partway waits for its Go on; one its
+   * model would not check is said */
   const older = unchecked(novelId).passages;
-  return { state: 'clean', words: older ? `Everything new is checked — nothing to change. ${plural(older, 'older passage')} ${older === 1 ? 'is' : 'are'} checked only when you ask.` : 'Everything is checked — nothing to change.', count: 0 };
+  const cut = cutWaiting(novelId);
+  const aside = setAsideList(novelId).length;
+  const asideSaid = aside ? `${aside === 1 ? 'One passage' : plural(aside, 'passage')} its model would not check — in Suggestions, with Check it again.` : '';
+  if (count) return { state: 'found', words: [`${plural(count, 'suggestion')} to look at.`, asideSaid].filter(Boolean).join(' '), count };
+  const more = [
+    cut ? `${cut === 1 ? 'A passage that stopped partway is' : `${plural(cut, 'passage')} that stopped partway are`} checked once Go on finishes ${cut === 1 ? 'it' : 'them'}.` : '',
+    asideSaid,
+    older ? `${plural(older, 'older passage')} ${older === 1 ? 'is' : 'are'} checked only when you ask.` : '',
+  ].filter(Boolean).join(' ');
+  return { state: 'clean', words: more ? `${cut || aside ? 'Everything else new' : 'Everything new'} is checked — nothing to change. ${more}` : 'Everything is checked — nothing to change.', count: 0 };
 }
 
 /* ------------------------------------------------------------ when */
@@ -219,10 +292,16 @@ function retryLater(novelId, asked = 0) {
  * checks when it judges — measured from the words that are sent, so a longer
  * instruction is never more than the room allows; and room for a line of
  * stock wording found */
-function fixedOf(house, novel) {
+function fixedOf(house, novel, conn = null) {
+  /* the notes as everyone reads them while the whole book is read again (Cozy Tavern M262), fitted to its model's room as the helper's are (S06-G3) */
+  const view = standingNotes(novel);
+  const notesFit = conn ? archivist.notesRoomOf(conn) : 0;
   const avoid = avoidList(house);
-  const system = [checkerFrame(house, novel), avoidLine(avoid)].filter(Boolean).join('\n\n');
-  return estimateTokens(system) + estimateTokens(checkRequest({ novel, chapterLabel: 'Chapter Twenty-Two', numbered: '', avoid, judge: judgeOf(house), his: hisWords(house) })) + 150;
+  const system = [checkerFrame(house, view), avoidLine(avoid)].filter(Boolean).join('\n\n');
+  const req = checkRequest({ novel: view, chapterLabel: 'Chapter Twenty-Two', numbered: '', avoid, judge: judgeOf(house), his: hisWords(house), notesFit });
+  /* with the notes fitted, room for the cards the passages name to ride whole */
+  const fitted = /\(To fit, the cards [^)]*\)/.test(req);
+  return estimateTokens(system) + estimateTokens(req) + (fitted ? Math.floor(notesFit * 0.25) : 0) + 150;
 }
 
 /* What the writer is told of how to write — his own box, and his note at the
@@ -245,23 +324,25 @@ function storySoFar(novel, chapterId, budget) {
   const order = novel.order || [];
   const rows = [];
   let used = 0;
+  let left = 0;
   for (let i = order.indexOf(chapterId) - 1; i >= 0; i--) {
     const c = store.peek('chapter', order[i]);
     if (!c) continue;
     const row = `${chapterLabel(novel, c)}:\n${shortOf(c)}`;
     const t = estimateTokens(row);
-    if (used + t > budget) break;
+    /* the ones before that are left out — said, never silent (S06-G7) */
+    if (used + t > budget) { left = i + 1; break; }
     rows.unshift(row);
     used += t;
   }
-  return rows.join('\n\n');
+  return { text: rows.join('\n\n'), left };
 }
 
 /* how many words one checking carries: about as many as a careful read takes
  * at once, and never more than the checker's model holds beside the notes */
 const BATCH_WORDS = 2500;
 function batchWords(conn, house, novel) {
-  const fixed = fixedOf(house, novel);
+  const fixed = fixedOf(house, novel, conn);
   const room = archivist.readingRoom(conn, fixed);
   if (room < 600) {
     const e = new Error(`its model holds ${contextOf(conn).toLocaleString()} tokens, too few to check the book beside its notes — choose one with more room for the checker`);
@@ -273,7 +354,7 @@ function batchWords(conn, house, novel) {
 
 /* the next passages to read: of one chapter, in the book's order, as many
  * words as one checking carries (a longer passage alone, read in parts) */
-function nextBatch(novelId, limit) {
+function nextBatch(novelId, limit, { one = false } = {}) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
   for (const c of chaptersOf(novelId)) {
@@ -282,7 +363,8 @@ function nextBatch(novelId, limit) {
     for (const p of c.passages || []) {
       if (!wanted(house, c, p)) continue;
       const w = countWords(picked(p).text);
-      if (list.length && words + w > limit) break;
+      /* one at a time once a checking of several its model would not answer (the helper's narrow) */
+      if (list.length && (one || words + w > limit)) break;
       list.push(p);
       words += w;
       if (w > limit) break;
@@ -309,12 +391,19 @@ export async function runCheck(novelId) {
     runningFor.add(novelId);
     try {
       for (const c of chaptersOf(novelId)) if (stale(c)) store.change('chapter', c.id, chapterSteps.pruneChecks(), { checkpoint: true });
+      /* a passage another connection's model would not check: this one may (S08-G11, as the helper's) */
+      const print = archivist.connPrint(conn);
+      for (const c of chaptersOf(novelId)) {
+        for (const [pid, byV] of Object.entries(c.checks || {})) {
+          for (const [vid, e] of Object.entries(byV || {})) if (e && e.aside && e.conn && e.conn !== print) store.change('chapter', c.id, chapterSteps.dropCheck(pid, vid), { checkpoint: true });
+        }
+      }
       let lastAsked = '';
       for (let n = 0; ; n++) {
         if (writerBusy(novelId)) { schedule(novelId, 4000); break; }
         const limit = batchWords(conn, store.peek('house', 'house') || {}, store.peek('novel', novelId) || novel);
-        const batch = nextBatch(novelId, limit);
-        if (!batch) break;
+        const batch = nextBatch(novelId, limit, { one: narrowC.has(novelId) });
+        if (!batch) { narrowC.delete(novelId); break; }
         /* the same words again means nothing could be kept for them: never asked in a loop */
         const asking = batch.passages.map((p) => picked(p).id).join(',');
         if (asking === lastAsked) break;
@@ -334,6 +423,8 @@ export async function runCheck(novelId) {
       const why = (e && e.message) || String(e);
       /* another browser has the book now: it finishes the checking */
       if (e && e.yielded) { setState(novelId, null); schedule(novelId, 30000); return; }
+      /* a checking of several its model would not answer: read again at once, one passage at a time */
+      if (e && e.soon) { setState(novelId, 'checking', `The checker reads one passage at a time now (${why}).`); schedule(novelId, 1500); return; }
       if (e && e.permanent) {
         blocked.set(novelId, archivist.connPrint(conn));
         failures.delete(novelId);
@@ -359,8 +450,10 @@ export async function runCheck(novelId) {
   }
 }
 
-/* anything kept for a passage or version no longer in the chapter */
+/* anything kept for a passage or version no longer in the chapter — or kept aside past its two days */
 function stale(c) {
+  const old = Date.now() - 2 * 86400000;
+  for (const g of Object.values(c.checksGone || {})) if (!g || (g.at || 0) < old) return true;
   for (const pid of Object.keys(c.checksLeft || {})) if (!(c.passages || []).some((x) => x.id === pid)) return true;
   for (const d of Object.values(c.duels || {})) {
     const p = d && (c.passages || []).find((x) => x.id === d.pid);
@@ -432,11 +525,18 @@ function storyBefore(novel, chapter, pid) {
 const tailOf = (text, keep) => (!keep ? '' : text.length > keep ? '[…]\n' + text.slice(-keep).replace(/^\S*\s+/, '') : text);
 
 /* The judge's grade of one passage, from its answers (a passage read in
- * parts: every part's). A check fails where it was answered "no"; the words
- * it named are kept where they stand in the passage, to be shown there.
- * "fresh" fails wherever stock wording is counted in it, whatever was
- * answered (a model reading for its own kind of phrasing misses most of it).
- * The grade is the number of checks passed, of ten. */
+ * parts: every part's). A check is read by its first word — "no — it repeats
+ * the last line" is a no, "N", "✗", false and 0 too (Cozy Tavern M439); one a
+ * fault names and that was not answered a plain yes fails as well. A fail is
+ * held to its evidence (Cozy Tavern M644/M658): the words it named, found
+ * where they stand in the passage — a "no" whose words are not on the page is
+ * shown, unverified, and never counted or written again for. "fresh" fails
+ * wherever stock wording is counted in it, and "sentences" wherever a stray of
+ * another script stands, whatever was answered (a model reading for its own
+ * kind of phrasing misses most of it). The grade is the number of checks
+ * passed, of ten. */
+const SAID_NO = /^\s*(?:(?:no|n|fail(?:s|ed)?|false)(?![\p{L}])|[✗❌×✘])/iu;
+const SAID_YES = /^\s*(?:(?:yes|y|pass(?:es|ed)?|true|ok)(?![\p{L}])|[✓✔])/iu;
 function judged(a, list, judge) {
   const failed = new Map();
   let answered = false;
@@ -449,21 +549,29 @@ function judged(a, list, judge) {
     for (const [k] of JUDGE_CHECKS) {
       const said = checks ? checks[k] : undefined;
       const fault = faults.find((f) => String(f.check || '').trim().toLowerCase() === k);
-      const no = checks ? said === false || ['no', 'fail', 'failed', 'false'].includes(String(said === undefined || said === null ? '' : said).toLowerCase().replace(/[^a-z]/g, '')) : Boolean(fault);
+      const yes = said === true || said === 1 || (typeof said === 'string' && SAID_YES.test(said));
+      const no = said === false || said === 0 || (typeof said === 'string' && SAID_NO.test(said)) || (Boolean(fault) && !yes);
       if (!no || failed.has(k)) continue;
       const words = fault ? evidence(a.text, fault.words) : '';
-      failed.set(k, { check: k, ...(words ? { words } : {}), why: fault ? clean(fault.why, 220) : '' });
+      failed.set(k, { check: k, ...(words ? { words } : { unverified: true }), why: fault ? clean(fault.why, 220) : '' });
     }
   }
   if (!answered) return null;
   if (a.stock.length && !(failed.get('fresh') || {}).words) {
     failed.set('fresh', { check: 'fresh', words: a.stock[0].words, why: 'stock wording — far more common in machine-made fiction than in books people write', counted: true });
   }
+  if ((a.strays || []).length && !(failed.get('sentences') || {}).words) {
+    const h = a.strays[0];
+    failed.set('sentences', { check: 'sentences', words: a.text.slice(h.start, h.end), why: 'a stray character of another script stands in it', counted: true });
+  }
   const faults = JUDGE_CHECKS.map(([k]) => failed.get(k)).filter(Boolean);
-  const grade = { overall: JUDGE_CHECKS.length - faults.length, of: JUDGE_CHECKS.length, faults, model: a.model };
+  const held = faults.filter((f) => !f.unverified);
+  const grade = { overall: JUDGE_CHECKS.length - held.length, of: JUDGE_CHECKS.length, faults, model: a.model };
   if (grade.overall < judge.target) {
     const lift = list.map((g) => String((g && g.lift) || '').trim()).filter(Boolean).join('\n');
-    grade.lift = (lift || `Fix what falls short — ${faults.map((f) => `${CHECK_NAME[f.check].toLowerCase()}: ${f.why || `“${f.words}”`}`).join('; ')}.`).slice(0, 1200);
+    /* only from what the page bears out: never "undefined", never a fail it could not show */
+    const why = held.map((f) => { const w = f.why || (f.words ? `“${f.words}”` : ''); return w ? `${CHECK_NAME[f.check].toLowerCase()}: ${w}` : CHECK_NAME[f.check].toLowerCase(); });
+    grade.lift = cutWords(lift || `Fix what falls short — ${why.join('; ')}.`, 1200);
   }
   return grade;
 }
@@ -480,6 +588,47 @@ function evidence(text, words) {
   return '';
 }
 
+/* A passage's number as an answer gives it — "2.3", "[2.3]", "2:3",
+ * "Chapter Two, passage 3", a bare 3 in a batch of one chapter — read against
+ * the numbers this checking asked about; a JSON number only when its
+ * trailing-nought readings name one of them (2.1 is 2.10 only when there is no
+ * 2.1). null when it names none, or more than one (S15-G10). */
+export function refOf(raw, keys) {
+  const list = [...keys];
+  if (raw === undefined || raw === null || raw === '') return list.length === 1 ? list[0] : null;
+  /* a whole JSON number is a bare passage number, as "3" is */
+  if (typeof raw === 'number' && Number.isInteger(raw)) return refOf(String(raw), keys);
+  if (typeof raw === 'number') {
+    const t = String(raw);
+    const hits = [t, `${t}0`, `${t}00`].filter((k) => keys.has(k));
+    return hits.length === 1 ? hits[0] : null;
+  }
+  const t = String(raw).trim();
+  let m = /^\[?\s*(\d+)\s*[.:]\s*(\d+)\s*\]?$/.exec(t);
+  if (m) { const k = `${Number(m[1])}.${Number(m[2])}`; return keys.has(k) ? k : null; }
+  m = /chapter\s+([\p{L}\d][\p{L}\d -]*?)\s*[,;:]?\s*passage\s+(\d+)/iu.exec(t);
+  if (m) { const ci = chapterNum(m[1]); const k = `${ci}.${Number(m[2])}`; return ci && keys.has(k) ? k : null; }
+  m = /^(?:passage\s+)?(\d+)$/i.exec(t);
+  if (m) { const hits = list.filter((k) => k.split('.')[1] === String(Number(m[1]))); return hits.length === 1 ? hits[0] : null; }
+  return null;
+}
+
+/* the chapter a passage stands in now — it may have moved (A new chapter from here) while it was checked */
+function homeOf(novelId, chapterId, pid) {
+  const c = store.peek('chapter', chapterId);
+  if (c && (c.passages || []).some((x) => x.id === pid)) return chapterId;
+  for (const x of chaptersOf(novelId)) if ((x.passages || []).some((y) => y.id === pid)) return x.id;
+  return null;
+}
+
+/* a passage its model would not check, set aside while its words stand:
+ * kept as checked, nothing found, and why — Check it again lets it go */
+function setAsideCheck(novelId, chapterId, a, why, conn) {
+  const home = homeOf(novelId, chapterId, a.pid);
+  if (!home) return;
+  store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at: Date.now(), items: [], aside: cutWords(why || 'its model would not check it', 300), conn: archivist.connPrint(conn) }), { checkpoint: true });
+}
+
 /* one checking: these passages read (a passage longer than one request
  * carries, in parts); what it would change, kept */
 async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
@@ -487,6 +636,9 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   const novel = store.peek('novel', novelId);
   const chapter = store.peek('chapter', batch.chapterId);
   if (!novel || !chapter) return;
+  /* the notes as everyone reads them while the whole book is read again (Cozy Tavern M262) */
+  const view = standingNotes(novel);
+  const notesFit = archivist.notesRoomOf(conn);
   const avoid = avoidList(house);
   const ci = chapterNumber(novel, chapter.id);
   const nums = passageNumbers(chapter);
@@ -495,49 +647,109 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   for (const p of batch.passages) {
     const v = picked(p);
     const text = String(v.text || '');
-    asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, text, sig: sigOf(v), model: v.model || '', items: [], stock: stockIn(text), ask: askWords(v) });
+    const ask = askWords(v);
+    /* stock wording counted — never a kind his own words for it asked for (Cozy Tavern M355) — and strays of another script */
+    asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, text, sig: sigOf(v), model: v.model || '', items: [], stock: stockIn(text, { not: ask }), strays: straysIn(text), ask, tries: ((entryFor(chapter, p) || {}).tries || 0) });
   }
-  const system = [checkerFrame(house, novel), avoidLine(avoid)].filter(Boolean).join('\n\n');
+  const keys = new Set(asked.keys());
+  const system = [checkerFrame(house, view), avoidLine(avoid)].filter(Boolean).join('\n\n');
   const one = asked.size === 1 ? [...asked.entries()][0] : null;
   const numbered = one && countWords(one[1].text) > limit
     ? archivist.partsOf(one[1].text, limit).map((part) => `[${one[0]}] ${part}`)
     : [numberedText(novel, chapter, batch.passages)];
+  /* what I asked the writer for in each passage this request carries (Cozy Tavern G3) */
+  const askedOf = (words) => [...asked.entries()].filter(([n]) => words.includes(`[${n}]`)).map(([n, a]) => ({ n, words: a.ask }));
   /* the story right before them, so a slip against what was just written is caught —
    * and the passages are the truth where the notes lag behind them — as much of it
    * as the room left beside the passages holds (up to 6,000 characters; of the
    * chapter before, its last 2,500) */
   const lead = storyBefore(novel, chapter, batch.passages[0].id);
-  const spare = archivist.readingRoom(conn, fixedOf(house, novel)) - Math.max(...numbered.map((x) => estimateTokens(x)));
+  const askCost = Math.max(0, ...numbered.map((w) => askedOf(w).reduce((t, x) => t + estimateTokens(x.words) + 12, 0)));
+  const spare = archivist.readingRoom(conn, fixedOf(house, novel, conn)) - Math.max(...numbered.map((x) => estimateTokens(x))) - askCost;
   const keep = Math.max(0, Math.min(lead.from === 'last' ? 2500 : 6000, Math.floor(spare * 0.4 * 3.5)));
   const before = tailOf(lead.text, keep);
-  /* what the writer is told too: his words for how it is written, and the chapters before as their summaries */
+  /* what the writer is told too: his words for how it is written, and the chapters before as their summaries — the ones left out said */
   const his = hisWords(house);
-  const sofar = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
+  const story = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
+  /* the passages before these that the notes have not read, or never will (set aside) */
+  const behind = notesBehind(view, Object.fromEntries(chaptersOf(novelId).map((c) => [c.id, c])), chapter, { before: batch.passages[0].id }, 'write');
   const edits = [];
   const grades = [];
   const judge = judgeOf(house);
-  /* what he asked the writer for in each passage this request carries (Cozy Tavern G3) */
-  const askedOf = (words) => [...asked.entries()].filter(([n]) => words.includes(`[${n}]`)).map(([n, a]) => ({ n, words: a.ask }));
-  for (const words of numbered) {
-    /* the stock wording counted in what this request carries */
+  const request = (words, extra = {}) => {
     const stock = {};
+    const strays = {};
     for (const [n, a] of asked) {
       const here = [...new Set(a.stock.map((h) => h.words))].filter((w) => words.includes(w)).slice(0, 8);
       if (here.length) stock[n] = here;
+      const off = a.strays.filter((h) => words.includes(a.text.slice(h.start, h.end))).map((h) => h.words).slice(0, 4);
+      if (off.length) strays[n] = off;
     }
-    const got = await archivist.askJson(conn, system, checkRequest({ novel, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, beforeFrom: lead.from, judge, stock, his, sofar, asked: askedOf(words) }), { want: (o) => Array.isArray(o.edits) });
+    return checkRequest({ novel: view, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, beforeFrom: lead.from, judge, stock, strays, his, sofar: story.text, left: story.left, notesFit, asked: askedOf(words), behind, ...extra });
+  };
+  for (const words of numbered) {
+    const got = await archivist.askJson(conn, system, request(words), { want: (o) => Array.isArray(o.edits) });
     await archivist.mustHold('checker', novelId);
-    if (!got.ok) throw failed(got);
+    if (!got.ok) {
+      /* WHOSE FAULT (Cozy Tavern M316, M675-7): the connection's stops the
+       * checker until it changes; the model's (down, busy, let go on its
+       * leash) waits; the words' — its model answers a harmless ask but not
+       * this one — a checking of several is read one passage at a time, and
+       * one passage refused a second time is set aside, never asked for ever,
+       * never holding up the passages after it */
+      const several = asked.size > 1;
+      if (got.leashed && got.leashed !== 'long') { if (several) narrowC.add(novelId); throw failed(got); }
+      const fault = got.leashed === 'long' ? 'words' : await archivist.whoseFault(conn, got);
+      if (fault !== 'words') throw failed(fault === 'model' ? archivist.passingFrom(got) : fault);
+      if (several) { narrowC.add(novelId); const e = failed(got); e.soon = true; throw e; }
+      const a = [...asked.values()][0];
+      const key = `${a.pid}:${a.vid}:${a.sig}`;
+      const n = (stuckC.get(key) || 0) + 1;
+      stuckC.set(key, n);
+      if (n < 2) throw failed({ error: got.error });
+      stuckC.delete(key);
+      setAsideCheck(novelId, chapter.id, a, got.error, conn);
+      await store.flush('chapter', chapter.id);
+      tell(novelId);
+      return;
+    }
     edits.push(...got.obj.edits);
     if (Array.isArray(got.obj.grades)) grades.push(...got.obj.grades);
+  }
+  /* each passage's grade, from all it was answered (a passage read in parts: every part) */
+  const byPassage = new Map();
+  const gather = (list) => {
+    for (const g of list) {
+      if (!g || typeof g !== 'object') continue;
+      const ref = refOf(g.passage, keys);
+      const a = ref ? asked.get(ref) : null;
+      if (!a) continue;
+      if (!byPassage.has(a.pid)) byPassage.set(a.pid, { a, list: [] });
+      byPassage.get(a.pid).list.push(g);
+    }
+  };
+  /* a passage whose grades could not be asked for again just now: graded on a later look */
+  const gradeLater = new Set();
+  if (judge) {
+    gather(grades);
+    /* a passage the answer gave no grade: asked once more for its grades alone (S06-G6) — never for one read in parts */
+    const missing = numbered.length === 1 ? [...asked.values()].filter((a) => !byPassage.has(a.pid) || !judged(a, byPassage.get(a.pid).list, judge)) : [];
+    if (missing.length) {
+      const passages = batch.passages.filter((p) => missing.some((a) => a.pid === p.id));
+      const again = await archivist.askJson(conn, system, request(numberedText(novel, chapter, passages), { gradesOnly: true }), { want: (o) => Array.isArray(o.grades) });
+      await archivist.mustHold('checker', novelId);
+      /* answered and still no grade: its model will not grade it — checked, never asked in a loop */
+      if (again.ok) gather(again.obj.grades);
+      else for (const a of missing) gradeLater.add(a.pid);
+    }
   }
   /* what he left as it is (as the chapter stands now) is not offered for that passage again */
   const now = store.peek('chapter', chapter.id) || chapter;
   const wasLeft = (a, find, replace) => ((now.checksLeft && now.checksLeft[a.pid]) || []).some((l) => l.find === find && l.replace === replace);
   for (const e of edits) {
     if (!e || typeof e !== 'object') continue;
-    const ref = String(e.passage === undefined ? '' : e.passage).replace(/[^\d.]/g, '');
-    const a = asked.get(ref) || (asked.size === 1 && !ref ? [...asked.values()][0] : null);
+    const ref = refOf(e.passage, keys);
+    const a = ref ? asked.get(ref) : null;
     if (!a) continue;
     if (typeof e.find !== 'string' || typeof e.replace !== 'string') continue;
     const spot = locate(a.text, e.find);
@@ -575,19 +787,17 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
       a.items.push({ id: newId('sg'), kind: 'humanize', find: sentence, replace: null, stock: true, phrases: [hit.words], start: s.start, end: s.end });
     }
     for (const x of a.items) if (x.stock) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} stock wording — far more common in machine-made fiction than in books people write`;
+    /* a stray of another script no fix here takes out: its sentence offered to be written again (Cozy Tavern M119) */
+    for (const hit of a.strays) {
+      if (a.items.some((x) => overlaps(x, hit))) continue;
+      const s = sentenceAround(a.text, hit.start, hit.end);
+      const sentence = a.text.slice(s.start, s.end);
+      if (a.items.some((x) => overlaps(x, s)) || wasLeft(a, sentence, null)) continue;
+      a.items.push({ id: newId('sg'), kind: 'grammar', find: sentence, replace: null, stray: true, phrases: [a.text.slice(hit.start, hit.end)], why: 'a stray character of another script stands here', start: s.start, end: s.end });
+    }
   }
-  /* each passage's grade, from all it was answered (a passage read in parts: every part) */
   const graded = new Map();
   if (judge) {
-    const byPassage = new Map();
-    for (const g of grades) {
-      if (!g || typeof g !== 'object') continue;
-      const ref = String(g.passage === undefined ? '' : g.passage).replace(/[^\d.]/g, '');
-      const a = asked.get(ref) || (asked.size === 1 && !ref ? [...asked.values()][0] : null);
-      if (!a) continue;
-      if (!byPassage.has(a.pid)) byPassage.set(a.pid, { a, list: [] });
-      byPassage.get(a.pid).list.push(g);
-    }
     for (const { a, list } of byPassage.values()) {
       const grade = judged(a, list, judge);
       if (grade) graded.set(a.pid, grade);
@@ -600,7 +810,12 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     const grade = graded.get(a.pid) || null;
     /* under his mark: a suggestion of its own, to write it again toward it — or leave it */
     if (grade && judge && grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: '', lift: grade.lift || '', target: judge.target, grade });
-    store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}) }), { checkpoint: true });
+    /* where the passage stands now (moved while it was checked: there; taken out: nowhere) */
+    const home = homeOf(novelId, chapter.id, a.pid);
+    if (!home) continue;
+    /* no grade, its asking again stopped by a fault: checked again on a later look (twice at most), never counted judged */
+    const ungraded = judge && !grade && gradeLater.has(a.pid) ? { graded: false, tries: a.tries + 1 } : {};
+    store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}), ...ungraded }), { checkpoint: true });
   }
   await store.flush('chapter', chapter.id);
   tell(novelId);
@@ -732,22 +947,30 @@ async function duel(novelId, conn, d) {
   const vy = p && (p.versions || []).find((v) => v.id === d.y);
   if (!novel || !vx || !vy) return null;
   const pages = evenUp(String(vx.text || ''), String(vy.text || ''));
-  const system = checkerFrame(house, novel);
+  /* the notes as everyone reads them, fitted to its model (S06-G3, M262) */
+  const view = standingNotes(novel);
+  const notesFit = archivist.notesRoomOf(conn);
+  const system = checkerFrame(house, view);
   const lead = storyBefore(novel, chapter, p.id);
   const label = chapterLabel(novel, chapter);
   const his = hisWords(house);
-  let sofar = '';
-  const build = (first, second, before) => duelRequest({ novel, chapterLabel: label, before, beforeFrom: lead.from, asked: askedOf(vx), first, second, cut: pages.cut, his, sofar });
+  let story = { text: '', left: 0 };
+  /* the passages before this one the notes have not read, or never will (set aside) — as the checker is told */
+  const behind = notesBehind(view, Object.fromEntries(chaptersOf(novelId).map((c) => [c.id, c])), chapter, { before: p.id }, 'write');
+  const build = (first, second, before) => duelRequest({ novel: view, chapterLabel: label, before, beforeFrom: lead.from, asked: askedOf(vx), first, second, cut: pages.cut, his, sofar: story.text, left: story.left, notesFit, behind });
   const spare = archivist.readingRoom(conn, estimateTokens(system) + estimateTokens(build(pages.x, pages.y, '')));
   /* two pages that do not fit beside the notes are not read */
   if (spare < 0) return null;
   const before = tailOf(lead.text, Math.max(0, Math.min(lead.from === 'last' ? 2500 : 6000, Math.floor(spare * 0.4 * 3.5))));
-  sofar = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
-  const said = (o) => { const b = String(o.better || '').trim().toUpperCase(); return b === 'A' || b === 'B' ? b : 'same'; };
+  story = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
+  /* the page it names, however it names it: "A", "A.", "Page A", "a (the first)" (Cozy Tavern M439) */
+  const said = (o) => { const m = /^\s*(?:page\s+)?([AB])(?![\p{L}\p{N}])/iu.exec(String(o.better || '')); return m ? m[1].toUpperCase() : 'same'; };
+  /* a pair its model would not read for the pages' own words is let go — never a stop for the checker (S06-G2); only the connection's own fault is */
+  const stopOf = async (got) => { if (got.leashed) return null; const f = await archivist.whoseFault(conn, got); return f && typeof f === 'object' ? { stop: failed(f) } : null; };
   const one = await archivist.askJson(conn, system, build(pages.x, pages.y, before), { want: (o) => typeof o.better === 'string' });
-  if (!one.ok) return one.permanent ? { stop: failed(one) } : null;
+  if (!one.ok) return stopOf(one);
   const two = await archivist.askJson(conn, system, build(pages.y, pages.x, before), { want: (o) => typeof o.better === 'string' });
-  if (!two.ok) return two.permanent ? { stop: failed(two) } : null;
+  if (!two.ok) return stopOf(two);
   const first = said(one.obj) === 'A' ? 'x' : said(one.obj) === 'B' ? 'y' : 'tie';
   const second = said(two.obj) === 'A' ? 'y' : said(two.obj) === 'B' ? 'x' : 'tie';
   const winner = first === second ? first : 'tie';
@@ -785,7 +1008,8 @@ function stockCount(v) {
   const t = String((v && v.text) || '');
   const was = stockSeen.get(v);
   if (was && was.text === t) return was.n;
-  const n = stockIn(t).length;
+  /* never a kind of stock wording his own words for it asked for (Cozy Tavern M355) */
+  const n = stockIn(t, { not: askWords(v) }).length;
   if (v && typeof v === 'object') stockSeen.set(v, { text: t, n });
   return n;
 }
@@ -828,7 +1052,8 @@ export function gradesOf(novelId) {
       /* every grade counts for the book; a writer's row holds only what that writer wrote whole */
       rows.push({ chapterId: c.id, passageId: p.id, ...e.grade });
       if (who) { const r = row(who); r.n++; r.sum += e.grade.overall; }
-      for (const f of e.grade.faults || []) fails.set(f.check, (fails.get(f.check) || 0) + 1);
+      /* a "no" whose words were not on the page is not counted here either */
+      for (const f of e.grade.faults || []) if (!f.unverified) fails.set(f.check, (fails.get(f.check) || 0) + 1);
     }
     for (const d of Object.values(c.duels || {})) {
       if (!d || !d.xModel || !d.yModel) continue;
@@ -869,37 +1094,40 @@ export function applyOne(novelId, chapterId, passageId, itemId) {
   return { ok: true };
 }
 
-/* every suggestion of a passage that has words to put in, applied at once */
 /* HOW MUCH A FIX MAY CHANGE BY ITSELF (Cozy Tavern M259, M275): a mend is
  * small. Put in without him, no fix rewrites a large stretch or cuts much
  * away, and all of them together never change more than half the passage,
  * leave it shorter than 85% of what it was, or lose its ending — whatever is
  * bigger waits behind the bubble for him. */
+/* by the words changed (Cozy Tavern M275: by lines, a comma fixed in each of
+ * two paragraphs read as half the passage rewritten) */
 export function changeShare(a, b) {
-  const la = String(a).split('\n'); const lb = String(b).split('\n');
-  const set = new Set(la);
-  let same = 0;
-  for (const line of lb) if (set.has(line)) same += 1;
-  const byLines = 1 - same / Math.max(la.length, lb.length, 1);
   const words = (t) => String(t || '').toLowerCase().split(/\s+/).filter(Boolean);
   const wa = words(a); const wb = words(b);
   const pool = new Map();
   for (const x of wb) pool.set(x, (pool.get(x) || 0) + 1);
   let kept = 0;
   for (const x of wa) { const c = pool.get(x) || 0; if (c > 0) { kept += 1; pool.set(x, c - 1); } }
-  const byWords = 1 - kept / Math.max(wa.length, wb.length, 1);
-  return Math.max(la.length, lb.length) <= 1 ? byWords : Math.max(byLines, byWords);
+  return 1 - kept / Math.max(wa.length, wb.length, 1);
 }
 export function smallMend(before, after) {
   const b = String(before || ''); const a = String(after || '');
-  if (Math.abs(a.length - b.length) > b.length * 0.5 || changeShare(b, a) > 0.5) return false;
-  if (a.length < b.length * 0.85) return false;
+  if (Math.abs(a.length - b.length) > Math.max(40, b.length * 0.5) || changeShare(b, a) > 0.5) return false;
+  /* never shorter by more than a few words and a sixth of them (by characters, a doubled word taken out of a short passage was "cut much away") */
+  const wb = countWords(b);
+  if (wb - countWords(a) > Math.max(3, wb * 0.15)) return false;
   const lines = (t) => t.trim().split('\n');
   const lostEnding = lines(a).length < lines(b).length && !a.includes(b.trim().slice(-60).trim()) && lines(a).slice(-1)[0] !== lines(b).slice(-1)[0];
-  return !lostEnding;
+  if (lostEnding) return false;
+  /* and no paragraph written anew whole: each keeps more than half its words */
+  const pb = lines(b);
+  const pa = lines(a);
+  if (pa.length === pb.length && pb.some((x, i) => x.trim() && changeShare(x, pa[i]) > 0.5)) return false;
+  return true;
 }
 const smallFix = (item, text) => item.find.length <= Math.max(400, text.length * 0.4) && !(item.find.length > 120 && item.replace.length < item.find.length * 0.5);
 
+/* every suggestion of a passage that has words to put in, applied at once */
 function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) {
   const w = where(chapterId, passageId);
   if (w.why) return 0;
@@ -912,8 +1140,10 @@ function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) 
   const spots = [];
   for (const item of w.e.items || []) {
     if (typeof item.replace !== 'string') { rest.push(item); continue; }
-    /* by itself: only a small fix (the rest wait for him) */
-    if (byItself && !smallFix(item, text)) { rest.push(item); continue; }
+    /* by itself: only a small fix — and never one that holds the page to
+     * the notes (a fact the notes say may be the notes' slip, Cozy Tavern
+     * M447/M448): continuity waits for him; the rest wait if large */
+    if (byItself && (item.kind === 'continuity' || !smallFix(item, text))) { rest.push(item); continue; }
     const spot = locate(text, item.find);
     if (spot.why || spots.some((s) => overlaps(s, spot))) { rest.push(item); continue; }
     spots.push({ ...spot, item });
@@ -987,6 +1217,11 @@ const LIFTABLE = ['write', 'another', 'rewrite', 'play'];
 export const MAX_LIFTS = 2;
 const liftsOf = (p) => (p.versions || []).filter((v) => v.lift);
 const liftTried = new Set();
+/* the passages open in his edit box: nothing goes in by itself under his hand (Cozy Tavern M429) */
+const editingNow = new Set();
+export function setEditing(passageId, on) { if (on) editingNow.add(passageId); else editingNow.delete(passageId); }
+/* under his mark only for being untrue to the book: the notes may be what is wrong — never written again by itself (Cozy Tavern M447) */
+const onlyCanon = (g) => { const held = (g.faults || []).filter((f) => !f.unverified); return held.length > 0 && held.every((f) => f.check === 'canon'); };
 const lifting = new Map();
 const checkOf = (c, p, v) => { const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id]; return e && e.sig === sigOf(v) ? e : null; };
 
@@ -1013,8 +1248,8 @@ function autoAfter(novelId) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       let v = picked(p);
-      /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) */
-      if (!v || v.streaming || v.cut || HIS_HOW.includes(howOf(v))) continue;
+      /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) — nor under his hand in the edit box */
+      if (!v || v.streaming || v.cut || HIS_HOW.includes(howOf(v)) || editingNow.has(p.id)) continue;
       let e = checkOf(c, p, v);
       if (!e) continue;
       if (a.lift !== null && judge) {
@@ -1043,7 +1278,7 @@ function autoAfter(novelId) {
         const g = e.grade;
         const card = (e.items || []).find((x) => x.kind === 'grade');
         const under = g && g.of && g.overall < judge.target && card;
-        if (under && LIFTABLE.includes(v.how) && bornOf(v) >= a.lift && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && (card.lift || g.lift)) {
+        if (under && LIFTABLE.includes(v.how) && bornOf(v) >= a.lift && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
           if (!next) next = { chapterId: c.id, passageId: p.id, v, note: card.lift || g.lift, lift: liftsOf(p).length + 1 };
           /* its fixes wait for the passage written again */
           continue;
@@ -1055,7 +1290,14 @@ function autoAfter(novelId) {
   if (next && !writerBusy(novelId) && !lifting.has(novelId)) {
     liftTried.add(next.v.id);
     const job = writeAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, note: next.note, fromVersion: next.v, lift: next.lift })
-      .then((out) => { if (out && out.ok) archivist.nudge(novelId); return out; })
+      .then((out) => {
+        if (out && out.ok) archivist.nudge(novelId);
+        /* failed for a real reason: kept on the version, never tried by itself again, and said on its grade (S11-G6) */
+        else if (out && !out.stopped && !out.yielded && !out.passing && !out.busy && !out.needsConnection) {
+          try { store.change('chapter', next.chapterId, chapterSteps.setVersion(next.passageId, next.v.id, { liftFailed: { at: Date.now(), why: cutWords(out.error || 'no words came', 200) } }), { now: true }); } catch (_) { /* the chapter is gone */ }
+        }
+        return out;
+      })
       .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
       .finally(() => lifting.delete(novelId));
     lifting.set(novelId, job);
@@ -1063,4 +1305,4 @@ function autoAfter(novelId) {
   tell(novelId);
 }
 
-export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor }; }
+export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried }; }

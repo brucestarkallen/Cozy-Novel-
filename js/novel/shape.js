@@ -395,15 +395,42 @@ export const novelSteps = {
 function findPassage(c, pid) { return (c.passages || []).find((p) => p.id === pid); }
 function findVersion(p, vid) { return p && (p.versions || []).find((v) => v.id === vid); }
 
+/* What the checker kept for a passage or its versions, put aside when they
+ * went (pruneChecks), back with them: only for versions there again, never
+ * over what was found since */
+function checksBack(c, pid) {
+  const g = c.checksGone && c.checksGone[pid];
+  const p = findPassage(c, pid);
+  if (!g || !p) return;
+  for (const [vid, e] of Object.entries(g.checks || {})) {
+    if (!findVersion(p, vid)) continue;
+    c.checks = c.checks || {};
+    c.checks[pid] = c.checks[pid] || {};
+    if (!c.checks[pid][vid]) c.checks[pid][vid] = e;
+    delete g.checks[vid];
+  }
+  if (g.left) { c.checksLeft = c.checksLeft || {}; c.checksLeft[pid] = [...(c.checksLeft[pid] || []), ...g.left.filter((x) => !(c.checksLeft[pid] || []).some((y) => y.find === x.find && y.replace === x.replace))]; g.left = null; }
+  for (const [key, d] of Object.entries(g.duels || {})) {
+    if (!findVersion(p, d.x) || !findVersion(p, d.y)) continue;
+    c.duels = c.duels || {};
+    if (!c.duels[key]) c.duels[key] = d;
+    delete g.duels[key];
+  }
+  if (!Object.keys(g.checks || {}).length && !g.left && !Object.keys(g.duels || {}).length) delete c.checksGone[pid];
+}
+
 export const chapterSteps = {
   setName: (name, by) => (c) => { c.name = name; c.nameBy = by; },
   /* add a passage after another (or at the end), if it is not there yet */
   addPassage: (passage, afterId = null) => (c) => {
     if (findPassage(c, passage.id)) return;
     const copy = JSON.parse(JSON.stringify(passage));
-    if (afterId === '^') { c.passages.unshift(copy); return; }
-    const i = afterId ? c.passages.findIndex((p) => p.id === afterId) : -1;
-    if (i >= 0) c.passages.splice(i + 1, 0, copy); else c.passages.push(copy);
+    if (afterId === '^') c.passages.unshift(copy);
+    else {
+      const i = afterId ? c.passages.findIndex((p) => p.id === afterId) : -1;
+      if (i >= 0) c.passages.splice(i + 1, 0, copy); else c.passages.push(copy);
+    }
+    checksBack(c, copy.id);
   },
   removePassage: (pid) => (c) => { c.passages = c.passages.filter((p) => p.id !== pid); },
   /* a new version on a passage (if not there yet), shown */
@@ -430,6 +457,7 @@ export const chapterSteps = {
     p.versions = [...back, ...since];
     const i = p.versions.findIndex((v) => v.id === shownId);
     if (i >= 0) p.pick = i;
+    checksBack(c, pid);
   },
   removeVersion: (pid, vid) => (c) => {
     const p = findPassage(c, pid);
@@ -515,20 +543,34 @@ export const chapterSteps = {
     c.duels = c.duels || {};
     c.duels[key] = JSON.parse(JSON.stringify(row));
   },
-  /* what was kept for passages and versions no longer in the chapter goes */
-  pruneChecks: () => (c) => {
-    for (const pid of Object.keys(c.checksLeft || {})) if (!findPassage(c, pid)) delete c.checksLeft[pid];
+  /* what was kept for passages and versions no longer in the chapter goes —
+   * kept aside a while (checksGone), so an Undo that brings the passage or
+   * its versions back brings back what the checker found, what he left and
+   * the head to head with them (Cozy Tavern M578: removal and undo whole) */
+  pruneChecks: (now = Date.now()) => (c) => {
+    const gone = (c.checksGone = c.checksGone || {});
+    /* the two days count from the newest thing kept aside for the passage */
+    const stash = (pid) => { const g = (gone[pid] = gone[pid] && typeof gone[pid] === 'object' ? gone[pid] : { checks: {}, left: null, duels: {} }); g.checks = g.checks || {}; g.duels = g.duels || {}; g.at = now; return g; };
+    for (const pid of Object.keys(c.checksLeft || {})) if (!findPassage(c, pid)) { stash(pid).left = c.checksLeft[pid]; delete c.checksLeft[pid]; }
     for (const [key, d] of Object.entries(c.duels || {})) {
       const p = d && findPassage(c, d.pid);
-      if (!p || !findVersion(p, d.x) || !findVersion(p, d.y)) delete c.duels[key];
+      if (!p || !findVersion(p, d.x) || !findVersion(p, d.y)) { if (d && d.pid) stash(d.pid).duels[key] = d; delete c.duels[key]; }
     }
-    if (!c.checks) return;
-    for (const pid of Object.keys(c.checks)) {
+    for (const pid of Object.keys(c.checks || {})) {
       const p = findPassage(c, pid);
-      if (!p) { delete c.checks[pid]; continue; }
-      for (const vid of Object.keys(c.checks[pid])) if (!findVersion(p, vid)) delete c.checks[pid][vid];
+      for (const vid of Object.keys(c.checks[pid])) if (!p || !findVersion(p, vid)) { stash(pid).checks[vid] = c.checks[pid][vid]; delete c.checks[pid][vid]; }
       if (!Object.keys(c.checks[pid]).length) delete c.checks[pid];
     }
+    /* kept two days, forty passages at most */
+    for (const k of Object.keys(gone)) if (!gone[k] || typeof gone[k] !== 'object') delete gone[k];
+    const keys = Object.keys(gone).filter((k) => now - (gone[k].at || 0) < 2 * 86400000).sort((a, b) => (gone[b].at || 0) - (gone[a].at || 0)).slice(0, 40);
+    for (const k of Object.keys(gone)) if (!keys.includes(k)) delete gone[k];
+  },
+  /* the checker's entry for one version let go (Check it again) */
+  dropCheck: (pid, vid) => (c) => {
+    if (!c.checks || !c.checks[pid]) return;
+    delete c.checks[pid][vid];
+    if (!Object.keys(c.checks[pid]).length) delete c.checks[pid];
   },
   /* he asked for the whole chapter to be checked, older passages too */
   checkAll: () => (c) => { c.checkAll = true; },

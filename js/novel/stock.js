@@ -180,19 +180,32 @@ const all = () => {
   return [...compiled.stock, ...compiled.swivel];
 };
 
-/* the words as narration: what is said inside double quotes blanked out, the
- * rest where it stands (so a place found here is the same place in the text) */
+/* the words as narration: what is said inside quotes blanked out — double,
+ * and single (‘…’ and '…', opened after no letter, closed by one no letter
+ * follows, on one line: a book whose people speak in single quotes, Cozy
+ * Tavern M471-1; "don’t" never opens one) — the rest where it stands (so a
+ * place found here is the same place in the text) */
 export function narrationOf(text) {
-  return String(text || '').replace(/"[^"\n]*"|“[^”\n]*”/g, (m) => ' '.repeat(m.length));
+  const blank = (m) => ' '.repeat(m.length);
+  return String(text || '')
+    .replace(/"[^"\n]*"|“[^”\n]*”/g, blank)
+    .replace(/(?<![\p{L}\p{N}])‘[^\n]{0,400}?’(?![\p{L}])/gu, blank)
+    .replace(/(?<![\p{L}\p{N}])'[^\n]{0,400}?'(?![\p{L}])/gu, blank);
 }
 
-/* every place stock wording stands in the narration: {start, end, words}, in
- * order, never two over the same words */
-export function stockIn(text) {
+/* every place stock wording stands in the narration: {start, end, words,
+ * family} (family: which kind of stock wording it is), in order, never two
+ * over the same words. not: words of his (what he asked the writer for) —
+ * a kind of stock wording that stands in them too is his, never counted
+ * against the page (Cozy Tavern M355/M357) */
+export function stockIn(text, { not = '' } = {}) {
   const t = String(text || '');
   const n = narrationOf(t);
   const hits = [];
-  for (const re of all()) {
+  const res = all();
+  const his = String(not || '').trim() ? familiesIn(String(not)) : null;
+  res.forEach((re, family) => {
+    if (his && his.has(family)) return;
     re.lastIndex = 0;
     for (const m of n.matchAll(re)) {
       let start = m.index;
@@ -201,10 +214,19 @@ export function stockIn(text) {
       while (end > start && /[\s,—–]/.test(t[end - 1])) end--;
       if (end <= start) continue;
       if (hits.some((h) => h.start < end && start < h.end)) continue;
-      hits.push({ start, end, words: t.slice(start, end) });
+      hits.push({ start, end, words: t.slice(start, end), family });
     }
-  }
+  });
   return hits.sort((a, b) => a.start - b.start);
+}
+
+/* the kinds of stock wording some words of his name anywhere — inside quotes
+ * too: an ask names the phrase it wants in quotes ("have her say “a testament
+ * to” him") */
+function familiesIn(text) {
+  const out = new Set();
+  all().forEach((re, family) => { re.lastIndex = 0; if (re.test(text)) out.add(family); re.lastIndex = 0; });
+  return out;
 }
 
 /* how much of it a piece of writing holds: places, words, and places in every

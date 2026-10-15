@@ -943,12 +943,16 @@ function unreadWhy(out) {
 }
 
 /* Is the helper's model there at all? A small harmless ask — when a reading
- * fails, it tells the passage's fault from the model's (Cozy Tavern's M316). */
+ * fails, it tells the passage's fault from the model's (Cozy Tavern's M316).
+ * Any words back prove it alive, as Cozy Tavern's keeperAlive: a model that
+ * answers but not in the shape asked is there — what it would not answer is
+ * the words' (set aside after two runs), never "down" for ever (D-U1). */
 export async function probe(conn) {
   /* asked once, never waited out: a model that does not answer it now is down, and waited out as ever */
   const out = await ask(conn, { build: () => ({ system: 'Answer with JSON only.', messages: [{ role: 'user', content: 'Answer with {"ok": true} and nothing else.' }], maxTokens: helperRoom(conn) }), stream: true, worker: true });
   if (!out.ok) return { ok: false, error: out.error, permanent: out.permanent, status: out.status };
-  return parseFirstObject(out.text) ? { ok: true } : { ok: false, error: unreadWhy(out), unreadable: true };
+  const said = String(out.text || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').trim() || String(out.thinking || '').trim();
+  return said ? { ok: true } : { ok: false, error: unreadWhy(out), unreadable: true };
 }
 
 /* split a long text into parts of about `words` words, at paragraph ends */
@@ -1096,7 +1100,7 @@ function failed(got) {
  * this one), the model's ('model': it is down, waited out as ever), or the
  * probe's own failure (a connection refused for good stays refused). A
  * passing fault is never probed: it is waited out. */
-async function whoseFault(conn, got) {
+export async function whoseFault(conn, got) {
   const passing = !got.unreadable && !got.permanent;
   if (passing) return 'model';
   /* the key, the account, the model's address: the connection's, never asked again to find out */
@@ -1105,6 +1109,10 @@ async function whoseFault(conn, got) {
   if (alive.ok) return 'words';
   return alive.permanent ? alive : 'model';
 }
+/* the model's fault: it is down just now, so the failed ask is waited out —
+ * never kept as a refusal for good, whatever the failed ask was called (a
+ * refusal while its model was down could not be told from the model's) */
+export const passingFrom = (got) => ({ ...got, permanent: false });
 /* what one ask held, for counting its failed runs */
 function askedKey(B) {
   return [...B.items.map((c) => c.sig + (c.partial || c.whole !== undefined ? ':' + hashText(c.text) : '')), ...B.removed.map((r) => 'out:' + (r.key || r.pid) + (r.partial !== undefined ? ':' + hashText(r.text) : '')), ...B.chapters.map((r) => 'chapter:' + r.id + ':' + hashText(r.text))].join('|');
@@ -1385,7 +1393,7 @@ async function readChanges(novelId, conn) {
           if (got.leashed !== 'long') throw giveUp(failed(got));
         }
         const fault = got.leashed === 'long' ? 'words' : await whoseFault(conn, got);
-        if (fault !== 'words') throw giveUp(failed(fault === 'model' ? got : fault));
+        if (fault !== 'words') throw giveUp(failed(fault === 'model' ? passingFrom(got) : fault));
         if (B.items.length + B.removed.length + B.chapters.length > 1) { narrow.add(novelId); const e = failed(got); e.soon = true; throw giveUp(e); }
         const key = askedKey(B);
         const n = (stuck.get(key) || 0) + 1;
@@ -1680,7 +1688,7 @@ async function summarise(novelId, conn) {
       if (!got.ok) {
         if (got.leashed) throw failed(got);
         const fault = await whoseFault(conn, got);
-        if (fault !== 'words') throw failed(fault === 'model' ? got : fault);
+        if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
         const key = `summary:${c.id}:${fp}`;
         const n = (stuck.get(key) || 0) + 1;
         stuck.set(key, n);
@@ -1860,7 +1868,7 @@ async function keepTheBook(novelId, conn) {
   await mustHold('helper', novelId);
   if (!got.ok) {
     const fault = await whoseFault(conn, got);
-    if (fault !== 'words') throw failed(fault === 'model' ? got : fault);
+    if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
     /* this book's: another book's failure never counts toward giving up on this one */
     const key = `keep:${novelId}:${keeps.join(',')}`;
     const n = (stuck.get(key) || 0) + 1;
@@ -2045,7 +2053,7 @@ async function auditNotes(novelId, conn) {
     /* let go on its leash: never the notes' fault — tried again later as it was */
     if (got.leashed) throw failed(got);
     const fault = await whoseFault(conn, got);
-    if (fault !== 'words') throw failed(fault === 'model' ? got : fault);
+    if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
     const n = (stuck.get('audit:' + novelId) || 0) + 1;
     stuck.set('audit:' + novelId, n);
     if (n < 2) throw failed({ error: got.error });

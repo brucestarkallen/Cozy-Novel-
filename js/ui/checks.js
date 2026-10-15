@@ -19,7 +19,7 @@ let bubble = null;
 let hooks = {};
 const C = { novelId: null, chapterId: null, offs: [], frame: 0, sheet: null };
 
-const KIND = { grammar: 'Grammar', humanize: 'Humanize', avoid: 'Words to avoid', continuity: 'Continuity', craft: 'Craft', grade: 'Under your mark' };
+const KIND = { grammar: 'Grammar', humanize: 'Humanize', avoid: 'Words to avoid', seam: 'Where it joins', continuity: 'Continuity', craft: 'Craft', grade: 'Under your mark' };
 
 export function initChecks(el, appHooks) {
   bubble = el;
@@ -94,7 +94,7 @@ function drawSheet() {
   const row = h('div.btnrow');
   /* Apply all puts in every change that has its words (a sentence to write again is his to ask for) */
   const can = list.filter((x) => typeof x.item.replace === 'string').length;
-  if (can > 1) row.append(h('button.btn.primary.small', { onclick: () => {
+  if (can > 1) row.append(h('button.btn.primary.small', { title: 'Every change below that has its words goes in — one new version for each passage, the words before one arrow away.', onclick: () => {
     const n = checker.applyAll(novelId);
     toast(n ? `${plural(n, 'change')} applied — the words before are one arrow away.` : 'Nothing could be applied — the words had changed.');
   } }, `Apply all (${can})`));
@@ -102,8 +102,8 @@ function drawSheet() {
   const here = checker.unchecked(novelId, C.chapterId);
   const all = checker.unchecked(novelId);
   const busyNow = st.state === 'checking' || st.state === 'waiting';
-  if (here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
-  if (all.passages > here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small.quiet', { onclick: async () => {
+  if (here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s older passages too.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
+  if (all.passages > here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small.quiet', { title: 'The checker reads every passage of the book not checked yet, a chapter at a time.', onclick: async () => {
     if (!(await confirmIt('Check the whole book?', `${plural(all.passages, 'passage')} that haven’t been checked — about ${all.words.toLocaleString()} words — go to the checker, a chapter at a time.`, 'Check the whole book'))) return;
     checker.checkBook(novelId);
   } }, 'Check the whole book'));
@@ -111,8 +111,11 @@ function drawSheet() {
   /* the judge: the book's passages graded, and which writer writes best by it — folded */
   const jb = judgeBox(novelId);
   if (jb) s.body.append(jb);
+  /* the passages its model would not check — each with Check it again */
+  const ab = asideBox(novelId);
+  if (ab) s.body.append(ab);
   if (st.state === 'off') {
-    s.body.append(h('div.btnrow', h('button.btn.small', { onclick: () => { s.close(); hooks.openSettings('roles'); } }, 'Open Who does what')));
+    s.body.append(h('div.btnrow', h('button.btn.small', { title: 'Choose who checks the writing.', onclick: () => { s.close(); hooks.openSettings('roles'); } }, 'Open Who does what')));
   }
   if (!list.length) {
     /* (older writing: the line above says so, and the buttons are there) */
@@ -165,6 +168,27 @@ function judgeBox(novelId) {
   return box;
 }
 
+/* Set aside, folded: each passage its model would not check, why, and Check
+ * it again (Cozy Tavern M675-7: never asked for ever, never lost from sight) */
+function asideBox(novelId) {
+  const list = checker.setAsideList(novelId);
+  if (!list.length) return null;
+  const novel = store.peek('novel', novelId);
+  const box = h('details.judgebox.asidebox', h('summary', `Set aside — ${list.length === 1 ? 'one passage' : plural(list.length, 'passage')} its model would not check`));
+  for (const x of list) {
+    const c = store.peek('chapter', x.chapterId);
+    const go = () => { if (C.sheet) C.sheet.close(); desk.whenOpen(x.chapterId, { passageId: x.passageId, show: {} }); };
+    box.append(h('div.sug', { 'data-kind': 'aside' },
+      h('div.sugtop', h('span.tag', 'Set aside'), h('button.link', { title: 'Go to this passage.', onclick: go }, `${c && novel ? `${chapterLabel(novel, c, { withName: false })}, passage` : 'Passage'} ${x.number}`)),
+      h('div.sugwhy', x.why),
+      h('div.btnrow', h('button.btn.small', { title: 'Its model is asked to check this passage again, by itself, now.', onclick: () => {
+        toast(checker.checkAgain(novelId, x.chapterId, x.passageId) ? 'Checking it again.' : 'That passage has changed since — it is checked as it reads now.');
+      } }, 'Check it again'))));
+  }
+  box.append(h('p.say.quiet', 'Its model answered other passages but not these, twice, so they were set aside rather than asked for ever. A passage written again, or another checker (Settings → Who does what), is checked afresh by itself.'));
+  return box;
+}
+
 const phrasesOf = (item) => (item.phrases && item.phrases.length ? item.phrases : item.phrase ? [item.phrase] : []);
 /* a sentence with each of some words marked where it stands */
 function marked(text, words) {
@@ -199,17 +223,21 @@ function card(novelId, x) {
           if (C.sheet) C.sheet.close();
           desk.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: f.words } });
         } }, `“${f.words}”`)] : null,
-        f.why ? ` — ${f.why}` : null))));
+        f.why ? ` — ${f.why}` : null,
+        /* a "no" whose words are not in the passage: shown, never counted (Cozy Tavern M644) */
+        f.unverified ? h('small.notcounted', ' — its words were not found in the passage, so it is not counted') : null))));
     }
     if (item.why) el.append(h('div.sugwhy', item.why));
     if (item.lift) el.append(h('div.sugwhy', h('b', 'To reach it: '), item.lift));
+    /* written again by itself, and it failed: said, and never tried by itself again (S11-G6) */
+    if (item.liftFailed) el.append(h('div.sugwhy', h('b', 'Written again by itself, it did not come: '), `${item.liftFailed.why}. It is not tried by itself again — the button below still asks for it.`));
     el.append(h('div.btnrow',
       item.lift ? h('button.btn.primary.small', { title: 'The writer writes the passage again with this as its note; the words before stay one arrow away.', onclick: () => {
         if (C.sheet) C.sheet.close();
         checker.leaveOne(x.chapterId, x.passageId, item.id, { remember: false });
         desk.rewritePassage({ chapterId: x.chapterId, passageId: x.passageId, note: item.lift });
       } }, `Write it again toward ${item.target}`) : null,
-      h('button.btn.quiet.small', { title: 'Keep the passage as it is.', onclick: () => checker.leaveOne(x.chapterId, x.passageId, item.id) }, 'Leave it')));
+      h('button.btn.quiet.small', { title: 'Keep the passage as it is — this grade is not offered again.', onclick: () => checker.leaveOne(x.chapterId, x.passageId, item.id) }, 'Leave it')));
     return el;
   }
   if (typeof item.replace === 'string') {
@@ -221,12 +249,12 @@ function card(novelId, x) {
   if (item.why) el.append(h('div.sugwhy', item.why));
   const btns = h('div.btnrow');
   if (typeof item.replace === 'string') {
-    btns.append(h('button.btn.primary.small', { onclick: () => {
+    btns.append(h('button.btn.primary.small', { title: 'This change goes in — a new version, the words before one arrow away.', onclick: () => {
       const out = checker.applyOne(novelId, x.chapterId, x.passageId, item.id);
       if (!out.ok) toast(`It couldn’t be applied: ${out.said}.`, 5000);
     } }, 'Apply'));
   } else {
-    btns.append(h('button.btn.primary.small', { onclick: () => {
+    btns.append(h('button.btn.primary.small', { title: 'The writer writes this sentence again without them — a new version, the words before one arrow away.', onclick: () => {
       const spot = checker.spotOf(x.chapterId, x.passageId, item);
       if (!spot) { toast('Those words are not there any more.'); checker.leaveOne(x.chapterId, x.passageId, item.id, { remember: false }); return; }
       if (C.sheet) C.sheet.close();
@@ -235,7 +263,7 @@ function card(novelId, x) {
       desk.rewriteSpan({ chapterId: x.chapterId, passageId: x.passageId, start: spot.start, end: spot.end, note });
     } }, 'Write it again'));
   }
-  btns.append(h('button.btn.quiet.small', { onclick: () => checker.leaveOne(x.chapterId, x.passageId, item.id) }, 'Leave it'));
+  btns.append(h('button.btn.quiet.small', { title: 'Keep the words as they are — this is not offered for the passage again.', onclick: () => checker.leaveOne(x.chapterId, x.passageId, item.id) }, 'Leave it'));
   el.append(btns);
   return el;
 }

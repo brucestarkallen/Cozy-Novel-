@@ -1334,6 +1334,122 @@ async def scenario_judge(b):
     check('no page errors (the judge)', not errs, errs[:5])
     await pg.close()
 
+async def scenario_suggestions_more(b):
+    """Suggestions: a passage set aside with Check it again, a fault not counted, a writing-again that failed, where it joins; an edit made on the words it opened"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Set Aside Book')
+    await add_conn(pg)
+    await pg.fill('#direction', 'Mara climbed the stair. The lamp was lit.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(300)
+    for i in range(80):
+        if await pg.get_attribute('#checkBubble', 'data-state') == 'clean': break
+        await pg.wait_for_timeout(250)
+    # the checker's model would not check it, twice: set aside as the checker keeps it
+    ids = await pg.evaluate("""async () => {
+      const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js'); const util = await import('/js/util.js');
+      const checker = await import('/js/novel/checker.js'); const archivist = await import('/js/novel/archivist.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const nid = D.novelId; const cid = D.chapterId;
+      const c = store.peek('chapter', cid); const p = c.passages[0]; const v = shape.picked(p);
+      const conn = archivist.connPrint(checker.checkerConn(store.peek('house', 'house')));
+      store.change('chapter', cid, shape.chapterSteps.setCheck(p.id, v.id, { round: 'ck-x', sig: util.hashText(v.text), at: Date.now(), items: [], aside: 'its answer could not be read (it began: “I am sorry, I cannot help with that.”)', conn }), { now: true });
+      return { nid, cid, pid: p.id, vid: v.id };
+    }""")
+    await pg.wait_for_timeout(300)
+    words = await pg.get_attribute('#checkBubble', 'aria-label')
+    check('the bubble says a passage was set aside, and where to find it', 'One passage its model would not check — in Suggestions, with Check it again.' in (words or ''), words)
+    await pg.click('#checkBubble')
+    await pg.wait_for_selector('.sheet.on .asidebox')
+    summary = (await pg.inner_text('.sheet.on .asidebox summary')).strip()
+    check('Suggestions holds the passage set aside, folded', summary == 'Set aside — one passage its model would not check', summary)
+    await pg.click('.sheet.on .asidebox summary'); await pg.wait_for_timeout(200)
+    box = await pg.inner_text('.sheet.on .asidebox')
+    btn = pg.locator('.sheet.on .asidebox button:has-text("Check it again")')
+    title = (await btn.get_attribute('title') or '') if await btn.count() else ''
+    check('each with why, where it is, and Check it again — saying what it does', 'I am sorry, I cannot help' in box and 'Chapter One, passage 1' in box and await btn.count() == 1 and 'check this passage again' in title.lower(), (box[:300], title))
+    await btn.click()
+    for i in range(80):
+        if not await pg.locator('.sheet.on .asidebox').count() and await pg.get_attribute('#checkBubble', 'data-state') == 'clean': break
+        await pg.wait_for_timeout(250)
+    check('Check it again checks it afresh: the box goes and the bubble is green', not await pg.locator('.sheet.on .asidebox').count() and await pg.get_attribute('#checkBubble', 'data-state') == 'clean', await pg.get_attribute('#checkBubble', 'aria-label'))
+    await close_sheet(pg)
+    # a passage under his mark: a "no" whose words are not on the page, and a writing-again by itself that failed
+    await pg.fill('#direction', 'He gave her a look that meant he was sorry. Her voice was barely above a whisper. And she knew, at last, that she was home.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(300)
+    for i in range(80):
+        if await pg.get_attribute('#checkBubble', 'data-state') == 'found': break
+        await pg.wait_for_timeout(250)
+    await pg.evaluate("""async () => {
+      const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const nid = D.novelId; const cid = D.chapterId;
+      const c = store.peek('chapter', cid);
+      const p1 = c.passages[0]; const p2 = c.passages[1];
+      store.change('chapter', cid, (ch) => {
+        const e = ch.checks[p2.id][shape.picked(p2).id];
+        const card = e.items.find((x) => x.kind === 'grade');
+        card.grade.faults.push({ check: 'pacing', unverified: true, why: 'it rushes the end' });
+        const e1 = ch.checks[p1.id][shape.picked(p1).id];
+        e1.items.push({ id: 'sg-seam', kind: 'seam', find: 'Mara climbed the stair.', replace: 'Mara climbed on up the stair.', why: 'it carries on from where the story stopped' });
+      }, { now: true });
+      store.change('chapter', cid, shape.chapterSteps.setVersion(p2.id, shape.picked(p2).id, { liftFailed: { at: Date.now(), why: 'the provider refused the request' } }), { now: true });
+    }""")
+    await pg.wait_for_timeout(300)
+    await pg.click('#checkBubble')
+    await pg.wait_for_selector('.sheet.on .sug')
+    cards = await pg.locator('.sheet.on .sug').all_inner_texts()
+    grade = next((c for c in cards if 'UNDER YOUR MARK' in c.upper()), '')
+    check('a “no” whose words are not in the passage is shown, said not counted', 'Pacing — it rushes the end — its words were not found in the passage, so it is not counted' in grade and '7 of 10' in grade, grade)
+    check('a writing-again by itself that failed is said on its grade, and the button is still there', 'Written again by itself, it did not come: the provider refused the request. It is not tried by itself again' in grade and 'Write it again toward 9' in grade, grade)
+    seam = next((c for c in cards if 'WHERE IT JOINS' in c.upper()), '')
+    check('a fix where a passage joins the one before has its own name', 'Mara climbed on up the stair.' in seam and 'it carries on from where the story stopped' in seam, cards)
+    titles = await pg.evaluate("[...document.querySelectorAll('.sheet.on .sug button')].filter((x) => !x.classList.contains('link')).map((x) => [x.textContent.trim(), x.title])")
+    check('every button in Suggestions says what it does', titles and all(t for _, t in titles), titles)
+    await close_sheet(pg)
+    # his edit, made on the words he opened: a version that comes meanwhile stays one arrow back
+    await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected .pctl button:has-text("Edit")')
+    await pg.wait_for_selector('.editbox')
+    opened = await pg.evaluate("""async () => { const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const nid = D.novelId; const cid = D.chapterId; const p = store.peek('chapter', cid).passages[0]; const v = shape.picked(p);
+      store.change('chapter', cid, shape.chapterSteps.addVersion(p.id, shape.newVersion({ text: 'Mara climbed the long stair. The lamp was lit.', how: 'suggested' })), { now: true });
+      return v.id; }""")
+    await pg.wait_for_timeout(300)
+    box = await pg.input_value('.editbox')
+    check('the box keeps the words it was opened on while another version comes', box == 'Mara climbed the stair. The lamp was lit.', box)
+    await pg.fill('.editbox', 'Mara climbed the stair slowly. The lamp was lit.')
+    await pg.click('.editrow button:has-text("Save")')
+    await pg.wait_for_timeout(400)
+    toast = await pg.inner_text('#toast')
+    got = await pg.evaluate("""async () => { const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const nid = D.novelId; const cid = D.chapterId; const p = store.peek('chapter', cid).passages[0];
+      return { n: p.versions.length, text: shape.picked(p).text, from: shape.picked(p).from, before: p.versions[1].text }; }""")
+    check('his edit is made on the words he opened, the version that came meanwhile one arrow back — and said', got['n'] == 3 and got['text'] == 'Mara climbed the stair slowly. The lamp was lit.' and got['from'] == opened and got['before'] == 'Mara climbed the long stair. The lamp was lit.' and 'Another version came while you edited — it is one arrow back.' in toast, (got, toast))
+    # nothing goes in by itself under his open box: the fixes wait, and go in once it closes
+    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { h.autoFix = { on: true, from: 0 }; h.judge = { on: false }; }, { now: true }))")
+    await write(pg, 'The keeper waits.')
+    await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected .pctl button:has-text("Edit")')
+    await pg.wait_for_selector('.editbox')
+    for i in range(80):
+        if await pg.get_attribute('#checkBubble', 'data-state') == 'found': break
+        await pg.wait_for_timeout(250)
+    count = "(async () => { const store = await import('/js/store.js'); const D = (await import('/js/ui/desk.js')).deskState(); const c = store.peek('chapter', D.chapterId); const p = c.passages[c.passages.length - 1]; return [p.versions.length, p.versions[p.versions.length - 1].how]; })()"
+    held = await pg.evaluate(count)
+    check('a fix found while his box is open waits behind the bubble, never put in under his hand', held == [1, 'write'] and await pg.get_attribute('#checkBubble', 'data-state') == 'found', held)
+    await pg.click('.editrow button:has-text("Cancel")')
+    went = held
+    for i in range(40):
+        went = await pg.evaluate(count)
+        if went[0] == 2: break
+        await pg.wait_for_timeout(250)
+    check('once the box is closed, it goes in by itself', went == [2, 'suggested'], went)
+    # (the house as it was, for the walks after)
+    await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { delete h.autoFix; delete h.judge; }, { now: true }))")
+    await pg.wait_for_timeout(300)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (Suggestions, the edit box)', not errs, errs[:5])
+    await pg.close()
+
 async def scenario_auto(b):
     """by itself: the checker's fixes put in, and a passage under the mark written again, from Who does what"""
     logs = []
@@ -1758,7 +1874,7 @@ async def main():
             async def offline(b):
                 """the server stops under an open page, then comes back"""
                 await scenario_offline(b, env)
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_suggestions_more, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

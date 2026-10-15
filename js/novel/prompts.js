@@ -23,7 +23,7 @@
  */
 
 import { LENGTHS, soundOf, hisField, NOTE_KINDS } from './shape.js';
-import { numberWords, estimateTokens } from '../util.js';
+import { numberWords, estimateTokens, cutWords } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
 
 /* ------------------------------------------------- the starting words */
@@ -649,7 +649,7 @@ export function avoidLine(list) {
 
 /* ------------------------------------------------------- the checker */
 
-export const CHECK_KINDS = ['grammar', 'humanize', 'avoid', 'continuity', 'craft'];
+export const CHECK_KINDS = ['grammar', 'humanize', 'avoid', 'seam', 'continuity', 'craft'];
 /* the judge's five of 2.4.1–2.4.2 (Cozy Tavern's benchmark, for a novel): a
  * grade kept from then still shows by them */
 export const GRADE_AXES = [['prose', 'Prose'], ['people', 'People'], ['continuity', 'Continuity'], ['pacing', 'Pacing'], ['pull', 'Pull']];
@@ -712,36 +712,61 @@ function stockLine(stock) {
  * it (Cozy Tavern G3) */
 const NOTES_FOR_A_READER = 'The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right). They are kept to the newest page of the book: each “Right now” is where someone stands at the end of the book so far (a “Last seen” where they were last told to be), never at these passages — a passage from earlier in the book is not wrong for coming before it:';
 
-/* what I asked the writer for in these passages, each by its number — doing it is never a fault */
+/* what I asked the writer for in these passages, each by its number — doing
+ * it is never a fault; whole (a very long ask, its opening, said so: never cut
+ * without a word — S14-G5) */
+export const ASK_ROOM = 6000;
 function askedLines(asked) {
-  const rows = (asked || []).filter((a) => a && String(a.words || '').trim()).map((a) => `[${a.n}] ${String(a.words).replace(/\s+/g, ' ').trim().slice(0, 400)}`);
+  const rows = (asked || []).filter((a) => a && String(a.words || '').trim()).map((a) => {
+    const t = String(a.words).replace(/\s+/g, ' ').trim();
+    return `[${a.n}] ${t.length > ASK_ROOM ? `${cutWords(t, ASK_ROOM)} (the rest of what I asked is left out here to save room)` : t}`;
+  });
   return rows.length ? `What I asked the writer for in these passages — whatever a passage does because I asked for it is never a fault:\n${rows.join('\n')}` : '';
 }
 
-function writerSees({ his = '', sofar = '' }) {
+/* left: how many chapters before these are left out of the story so far, said (S06-G7) */
+function writerSees({ his = '', sofar = '', left = 0 }) {
   const out = [];
   if (his && his.trim()) out.push(`How I want the book written — what the writer is told; nothing it asks for is ever a fault:\n${fence(his)}`);
-  if (sofar && sofar.trim()) out.push(`The story so far, chapter by chapter:\n${fence(sofar)}`);
+  const gone = left ? `(The first ${left === 1 ? 'chapter is' : `${numberWords(left).toLowerCase()} chapters are`} left out here to save room — what ${left === 1 ? 'it sets' : 'they set'} up is not shown, and what is not shown is never a slip.)` : '';
+  if (sofar && sofar.trim()) out.push(`The story so far, chapter by chapter:${gone ? `\n${gone}` : ''}\n${fence(sofar)}`);
+  else if (gone) out.push(gone);
   return out;
 }
+/* strays of another script counted in the passages (textshape.js straysIn), one line */
+function straysLine(strays) {
+  const rows = Object.entries(strays || {}).filter(([, list]) => list && list.length);
+  if (!rows.length) return '';
+  return `\nA stray character of another script stands in these passages, among words in the Latin alphabet — take it out and mend the words around it (a garbled repeat kept once), unless someone in the scene speaks or writes that language: ${rows.map(([n, list]) => `[${n}] ${list.map((w) => `“…${w}…”`).join(', ')}`).join('; ')}.`;
+}
 
-export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, his = '', sofar = '', notesFit = 0, asked = [] }) {
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, strays = {}, his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', gradesOnly = false }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });
-  if (notes) parts.push(`${NOTES_FOR_A_READER}\n${notes}`);
+  if (notes) parts.push(`${NOTES_FOR_A_READER}\n${behind ? `${behind}\n` : ''}${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
-  parts.push(...writerSees({ his, sofar }));
+  parts.push(...writerSees({ his, sofar, left }));
   if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to these passages, for what has just happened:\n${fence(before)}`);
   const askedPart = askedLines(asked);
   if (askedPart) parts.push(askedPart);
   parts.push(`Check these passages from ${chapterLabel}, each numbered as it is on the page:\n${fence(numbered)}`);
   const allowed = judge ? allowedFails(judge.target) : 0;
+  /* the passages an answer gave no grade for, asked once more for their grades alone (S06-G6) */
+  if (gradesOnly && judge) {
+    parts.push(`Judge each passage’s craft as a page of a finished novel, by ten checks. Answer every check of every passage "yes" or "no" — "no" only where you can point to the words in it that fail the check; a check with nothing to try in a passage is "yes".
+${JUDGE_CHECKS.map(([k, , what]) => `- ${k}: ${what}.`).join('\n')}
+For each "no", a fault: the check, "words" — the words that fail it, copied exactly from the passage, no more than a sentence — and "why", in a few words. A passage with ${allowed ? `more than ${numberWords(allowed).toLowerCase()} “no”` : 'any “no”'} is under my mark of ${judge.target}: in "lift" say, in a few lines in my voice, what writing it again would need to reach ${judge.target}.
+
+Answer with one JSON object and nothing else: {"grades": [{"passage": "2.3", "checks": {${JUDGE_CHECKS.map(([k], i) => `"${k}": "${i === 9 ? 'no' : 'yes'}"`).join(', ')}}, "faults": [{"check": "ending", "words": "…", "why": "…"}], "lift": "…"}]}`);
+    return parts.join('\n\n');
+  }
   parts.push(`Suggest only what is worth changing, each a small fix in place:
 - "grammar": spelling, grammar, punctuation, a word missing or doubled.
-- "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${avoid.length ? `
+- "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${straysLine(strays)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
-- "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix. And the seams: this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
+- "seam": this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
+- "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix.
 
 Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake${his && his.trim() ? ', and nothing I ask the writer for (above) is one' : ''}. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
 
@@ -762,13 +787,13 @@ Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kin
  * the first or the second cancels out). Asking which of two is better is the
  * judging that agrees with readers most (LitBench, arXiv 2507.00769; EQ-Bench
  * ranks its writers the same way). */
-export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false, his = '', sofar = '', notesFit = 0 }) {
+export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'this', asked = '', first, second, cut = false, his = '', sofar = '', left = 0, notesFit = 0, behind = '' }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${first}\n${second}` });
-  if (notes) parts.push(`${NOTES_FOR_A_READER}\n${notes}`);
+  if (notes) parts.push(`${NOTES_FOR_A_READER}\n${behind ? `${behind}\n` : ''}${notes}`);
   const about = aboutTheBook(novel, { plans: false });
   if (about) parts.push(about);
-  parts.push(...writerSees({ his, sofar }));
+  parts.push(...writerSees({ his, sofar, left }));
   if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to this passage, for what has just happened:\n${fence(before)}`);
   if (asked && asked.trim()) parts.push(`What I asked for here:\n${fence(asked)}`);
   parts.push(`Two writers each wrote this passage of ${chapterLabel}, for the same moment.\n\nPage A:\n${fence(first)}\n\nPage B:\n${fence(second)}`);

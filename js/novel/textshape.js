@@ -229,3 +229,30 @@ export function dropGluedStrays(text, { from = 0 } = {}) {
   const out = src.replace(new RegExp('(?<![\\p{L}\\p{N}])' + STRAY + '{1,4}(?=\\p{Script=Latin})', 'gu'), (m, at) => (at >= from ? '' : m));
   return { text: out, changed: out !== src };
 }
+
+/* STRAYS OF ANOTHER SCRIPT LEFT ON A LATIN PAGE (Cozy Tavern M119, M121):
+ * what dropGluedStrays could not take off by itself — one to four characters
+ * standing apart ("the 틀 door"), or inside a word, and a short run (to sixty
+ * characters) — each with the words either side, for the checker to mend.
+ * Never inside quotes: a line someone speaks or writes in another language
+ * stays. On a page that is Latin nearly whole (two hundred letters at least). */
+export function straysIn(text) {
+  const src = String(text == null ? '' : text);
+  if (!new RegExp(STRAY, 'u').test(src)) return [];
+  const latin = (src.match(/\p{Script=Latin}/gu) || []).length;
+  const other = (src.match(new RegExp(STRAY, 'gu')) || []).length;
+  if (latin < 200 || other > latin / 4) return [];
+  const quoted = [];
+  for (const m of src.matchAll(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]{0,400}’/g)) quoted.push([m.index, m.index + m[0].length]);
+  const out = [];
+  for (const m of src.matchAll(new RegExp(`${STRAY}(?:[\\s·]*${STRAY}){0,59}`, 'gu'))) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (quoted.some(([a, b]) => start >= a && end <= b)) continue;
+    const left = src.slice(Math.max(0, start - 24), start).replace(/^\S*\s/, '');
+    const right = src.slice(end, end + 24).replace(/\s\S*$/, '');
+    out.push({ start, end, words: `${left}${m[0]}${right}`.trim() });
+    if (out.length >= 8) break;
+  }
+  return out;
+}

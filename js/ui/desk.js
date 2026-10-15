@@ -6,6 +6,7 @@ import * as store from '../store.js';
 import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
 import * as talk from '../novel/talk.js';
+import * as checker from '../novel/checker.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
 import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS } from '../novel/shape.js';
@@ -329,7 +330,8 @@ function drawPassage(p, { tint }) {
   if (thinking) el.append(thinkBox(p.id, thinking, Boolean(live && !live.text)));
   if (S.editing === p.id) {
     const ta = h('textarea.editbox', { 'aria-label': 'Edit the passage' });
-    ta.value = v.text || '';
+    /* the words the box was opened on, whatever came meanwhile */
+    ta.value = ((S.editFrom && p.versions.find((x) => x.id === S.editFrom)) || v).text || '';
     el.append(ta, h('div.editrow',
       h('button.btn.primary.small', { onclick: () => finishEdit(p.id, ta.value) }, 'Save'),
       h('button.btn.quiet.small', { onclick: () => closeEdit() }, 'Cancel'),
@@ -472,11 +474,29 @@ function pickVersion(p, i) {
 function openEdit(pid) {
   keepOpenEdit();
   S.editing = pid;
+  /* the version the box opens on: his edit is made on it, whatever comes meanwhile — and nothing goes in by itself under his hand (Cozy Tavern M429) */
+  { const c = chapter(); const p = c && (c.passages || []).find((x) => x.id === pid); S.editFrom = p && picked(p) ? picked(p).id : null; }
+  checker.setEditing(pid, true);
   S.focusNext = 'edit';
   S.editBack = onBack(() => { S.editBack = null; keepOpenEdit(true); });
   drawPage();
 }
+/* the box closed: what waited for it may go in now */
+function editDone(pid) {
+  if (!pid) return;
+  checker.setEditing(pid, false);
+  checker.schedule(S.novelId, 1500);
+}
+/* the words the box was opened on — and whether another version came meanwhile */
+function editBase(pid) {
+  const c = chapter();
+  const p = c && (c.passages || []).find((x) => x.id === pid);
+  const shown = p && picked(p);
+  const v = p && ((S.editFrom && p.versions.find((x) => x.id === S.editFrom)) || shown);
+  return { from: v ? v.id : null, text: String((v && v.text) || ''), meanwhile: Boolean(v && shown && v.id !== shown.id) };
+}
 function closeEdit() {
+  editDone(S.editing);
   S.editing = null;
   if (S.editBack) { const r = S.editBack; S.editBack = null; r(); }
   drawPage();
@@ -485,33 +505,32 @@ function keepOpenEdit(fromBack = false) {
   if (!S.editing) return;
   const box = ui && ui.passages.querySelector('.editbox');
   const pid = S.editing;
+  const base = editBase(pid);
   S.editing = null;
   if (!fromBack && S.editBack) { const r = S.editBack; S.editBack = null; r(); }
   if (box) {
     if (!box.value.trim()) toast(EMPTY_EDIT, 6000);
     else {
-      const before = shownText(pid);
-      if (writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text: box.value })) editKept(pid, before, box.value, 'Your edit is kept — the earlier words are one arrow away.');
+      if (writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text: box.value, fromId: base.from })) editKept(pid, base.text, box.value, `Your edit is kept — the earlier words are one arrow away.${base.meanwhile ? MEANWHILE : ''}`);
     }
   }
+  editDone(pid);
   if (fromBack) drawPage();
 }
+/* another version came while he edited (his partner, a fix): said, never lost */
+const MEANWHILE = ' Another version came while you edited — it is one arrow back.';
 /* a passage emptied in the edit box is not kept empty: taking it out is its own step */
 const EMPTY_EDIT = 'An empty passage is not kept, so the words stay as they were. To take the passage out, use ⋯ → Remove the passage.';
 function finishEdit(pid, text) {
   const empty = !String(text || '').trim();
-  const before = shownText(pid);
-  const changed = !empty && writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text });
+  const base = editBase(pid);
+  const changed = !empty && writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text, fromId: base.from });
   S.editing = null;
   if (S.editBack) { const r = S.editBack; S.editBack = null; r(); }
+  editDone(pid);
   drawPage();
   if (empty) toast(EMPTY_EDIT, 6000);
-  else if (changed) editKept(pid, before, text, 'Saved — the earlier words are one arrow away.');
-}
-function shownText(pid) {
-  const c = chapter();
-  const p = c && (c.passages || []).find((x) => x.id === pid);
-  return String(((p && picked(p)) || {}).text || '');
+  else if (changed) editKept(pid, base.text, text, `Saved — the earlier words are one arrow away.${base.meanwhile ? MEANWHILE : ''}`);
 }
 /* His edit kept, and said. When it changed a name everywhere it stood in the
  * passage, and the rest of the book still holds the old one, changing it

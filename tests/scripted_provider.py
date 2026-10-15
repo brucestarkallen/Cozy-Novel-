@@ -19,6 +19,7 @@ POST /models {"data": [...]}  what the provider's list of models says (GET .../m
 A request whose caller hung up partway is marked "hung_up" in /requests.
 GET /requests  every request body seen.  GET /reset clears both."""
 import json
+import re
 import sys
 import threading
 import time
@@ -27,6 +28,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 REQUESTS, QUEUE, LOCK = [], [], threading.Lock()
 ONE_MODEL = [{"id": "scripted"}]
 MODELS = list(ONE_MODEL)
+
+
+JUDGE_CHECKS = ["opening", "canon", "shown", "pacing", "specific", "fresh", "sentences", "people", "moves", "ending"]
+
+
+def default_check(ask):
+    part = ask[ask.index("Check these passages from"):]
+    nums = []
+    for n in re.findall(r"\[(\d+\.\d+)\]", part):
+        if n not in nums:
+            nums.append(n)
+    grades = [{"passage": n, "checks": {k: "yes" for k in JUDGE_CHECKS}, "faults": []} for n in nums]
+    if "Answer every check of every passage" in ask and "Suggest only what is worth changing" not in ask:
+        return {"grades": grades}
+    if "Then judge each passage" in ask:
+        return {"edits": [], "grades": grades}
+    return {"edits": []}
 
 
 class H(BaseHTTPRequestHandler):
@@ -89,7 +107,8 @@ class H(BaseHTTPRequestHandler):
             elif "for the writer to read before every page" in last_user:
                 beh = {"text": json.dumps({"about": "DEFAULT ABOUT", "style": "DEFAULT STYLE"})}
             elif "Check these passages from" in last_user:
-                beh = {"text": json.dumps({"edits": []})}
+                # a checker that does as it is asked: nothing to fix — and, when the judge asks, every check of every passage passed
+                beh = {"text": json.dumps(default_check(last_user))}
             elif "Which is the better page" in last_user:
                 beh = {"text": json.dumps({"better": "same", "why": "DEFAULT DUEL"})}
             elif "Update the notes" in last_user or "could not be read as JSON" in last_user or "cut off before it finished" in last_user:
