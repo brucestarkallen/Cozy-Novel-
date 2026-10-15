@@ -74,13 +74,13 @@ function excerpt(text, n = 900) {
   return `${t.slice(0, n).trim()}\n[…]\n${t.slice(-n).trim()}`;
 }
 
-/* The chapter's summary — said to be older than the chapter when the chapter
- * has changed since — or, with none yet, the chapter's opening and close. */
+/* A stale summary can preserve an event deleted from the book. Until the
+ * helper catches up, use the current chapter’s words, clearly excerpted. */
 export function shortOf(chapter) {
   const s = chapter && chapter.summary;
   const text = chapterText(chapter);
   if (!text.trim()) return '(nothing written in it yet)';
-  if (s && s.text) return s.fp && s.fp !== chapterPrint(chapter) ? `(This summary was written before the chapter's latest changes.)\n${s.text.trim()}` : s.text.trim();
+  if (s && s.text) return s.fp && s.fp !== chapterPrint(chapter) ? `(The summary is waiting for the chapter’s latest changes — its current opening and close follow instead.)\n${excerpt(text)}` : s.text.trim();
   return `(not summarised yet — its opening and close)\n${excerpt(text)}`;
 }
 
@@ -118,6 +118,7 @@ function currentPart(novel, chapter, target, purpose = 'write', notesAs = 'syste
     }
   }
   if (target.through) {
+    if (target.through === '^') return { label, note, text: '', afterText: join(list) };
     const i = list.findIndex((p) => p.id === target.through);
     if (i >= 0) return { label, note, text: join(list.slice(0, i + 1)), afterText: join(list.slice(i + 1)) };
   }
@@ -213,13 +214,20 @@ function notesRunOn(novel, chapters) {
  * so, or ''. The passage being written again is not counted. */
 export function notesBehind(novel, chapters, chapter, target = {}, purpose = 'write', alsoBack = []) {
   let point = {};
-  if (purpose === 'write' && chapter && chapter.id) {
+  if ((purpose === 'write' || purpose === 'play') && chapter && chapter.id) {
     const list = chapter.passages || [];
     if (target.mark || target.before) point = { chapterId: chapter.id, before: target.mark || target.before, skip: target.mark || target.before };
+    else if (target.through === '^') point = { chapterId: chapter.id, before: '^' };
     else if (target.through) {
       const i = list.findIndex((p) => p.id === target.through);
-      point = { chapterId: chapter.id, before: i >= 0 && list[i + 1] ? list[i + 1].id : null, skip: target.through };
-      if (!point.before) point = { skip: target.through };
+      /* Go on is writing the anchor itself; a played scene follows it and
+       * still needs to know when its facts have not reached the notes. */
+      const skip = purpose === 'write' ? target.through : null;
+      point = { chapterId: chapter.id, before: i >= 0 && list[i + 1] ? list[i + 1].id : null, skip };
+      if (!point.before) {
+        const next = (novel.order || []).slice((novel.order || []).indexOf(chapter.id) + 1).find((id) => chapters[id]);
+        point = next ? { chapterId: next, before: '^', skip } : { skip };
+      }
     }
   }
   const rows = unread(novel, chapters, point);
@@ -311,7 +319,7 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const woken = withMacros(ride.woken.join('\n\n'), names);
   /* his own words first, then the words he never wants (when he listed any),
    * then the modules that always ride, then the frame */
-  const head = withHis(withMacros([String(own || '').trim(), avoidLine(avoidList(house)), ...ride.always].filter(Boolean).join('\n\n'), names), frame);
+  const head = withHis(withMacros([String(own || ''), avoidLine(avoidList(house)), ...ride.always].filter((text) => String(text || '').trim()).join('\n\n'), names), frame);
   const opening = notesAs === 'system' ? '' : notesOpening(house, novel, notesAs, purpose);
   /* his note at the end: the writer's, or the scenes' own (prompts.js lateFor), as he chose it to ride — the
    * storyteller's own voice marked, for the model layer to send it as the setup's words where it cannot go so */

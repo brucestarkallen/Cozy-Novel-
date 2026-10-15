@@ -30,6 +30,15 @@
 .booksheet .keptlabel { margin-bottom: 8px; font-size: 10px; letter-spacing: .09em; }
 .booksheet .keptcontent .say { font-size: 12px; line-height: 1.6; }
 .booksheet .keptcontent .btnrow { margin-top: 12px; }
+.booksheet .book-narration { padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.booksheet .book-narration h3 { margin: 0 0 12px; font: 600 25px/1.2 var(--display); }
+.booksheet .book-narration > .say { font-size: 12px; line-height: 1.65; margin: 0 0 17px; max-width: 66ch; }
+.booksheet .book-narration-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.booksheet .book-narration-fields .field { min-width: 0; margin-bottom: 0; }
+.booksheet .book-narration-fields select { width: 100%; min-width: 0; font-size: 13px; }
+.booksheet .book-narration-fields em { font-size: 12px; line-height: 1.65; }
+.booksheet .book-narration > .book-narration-note { margin: 14px 0 0; }
+:root[data-world="tokyo"] .booksheet .book-narration h3 { font-size: 18px; font-weight: 550; letter-spacing: -.025em; }
 .booksheet .book-sound { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 20px; margin-bottom: 25px; }
 .booksheet .book-sound > span { margin: 0; font: 600 25px/1.15 var(--display); }
 .booksheet .book-sound > em { grid-column: 1 / -1; margin: 0; font-size: 12px; line-height: 1.65; }
@@ -83,6 +92,7 @@
   .booksheet .keptrow { align-items: start; flex-direction: column; gap: 10px; }
   .booksheet .keptrow .segmented { align-self: stretch; }
   .booksheet .keptrow .segmented button { flex: 1; }
+  .booksheet .book-narration-fields { grid-template-columns: minmax(0, 1fr); gap: 17px; }
   .booksheet .book-intro, .sentsheet .sent-intro { font-size: 12px; margin-bottom: 20px; }
   .sentsheet .sent-facts { padding: 4px 14px; gap: 0 16px; }
   .sentsheet .sentmsg > button { padding: 13px 12px; gap: 8px; }

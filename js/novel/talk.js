@@ -24,7 +24,7 @@ import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN } from './prompts.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop } from './textshape.js';
 import { numberedText } from './context.js';
-import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf } from './changes.js';
+import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot } from './changes.js';
 import { searchBook } from './search.js';
 import { listModules } from './modules.js';
 import { nameKey } from '../util.js';
@@ -253,6 +253,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   let seen = new Set();
   /* the page as it was numbered for the round its changes answer */
   let numbers = null;
+  let snapshot = null;
   /* the cards it was shown by their first line, and the ones it read whole since */
   let shortCards = new Set();
   /* the oldest chapters its room left out even as summaries — said under the answer (Cozy Tavern M265: no silent cut) */
@@ -270,7 +271,17 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   const key = `${kind}/${id}`;
   const house = store.peek('house', 'house') || {};
   const conn = connFor(house, role);
-  const undo = () => { try { store.change(kind, id, (d) => { const t = (d.turns || []).find((x) => x.id === turnId); if (!t) return; if (t.versions.length < 2) d.turns = d.turns.filter((x) => x.id !== turnId); else turnSteps.removeVersion(turnId, versionId)(d); }, { now: true }); } catch (_) { /* gone */ } };
+  const conversation = (store.peek(kind, id) || {}).convId || null;
+  /* A reply can outlive a conversation replaced in another window or a
+   * restored copy. It must still belong here before any of its changes land. */
+  const ownsReply = () => {
+    const rec = store.peek(kind, id);
+    if (!store.peek('novel', novelId) || !rec || (kind === 'talk' && (rec.convId || null) !== conversation)) return false;
+    const turn = (rec.turns || []).find((t) => t.id === turnId);
+    return Boolean(turn && (turn.versions || []).some((v) => v.id === versionId));
+  };
+  const gone = () => ({ ok: false, stopped: true, gone: true, error: 'the conversation changed while its reply was on the way' });
+  const undo = () => { if (!ownsReply()) return; try { store.change(kind, id, (d) => { const t = (d.turns || []).find((x) => x.id === turnId); if (!t) return; if (t.versions.length < 2) d.turns = d.turns.filter((x) => x.id !== turnId); else turnSteps.removeVersion(turnId, versionId)(d); }, { now: true }); } catch (_) { /* gone */ } };
   if (!conn) { undo(); return { ok: false, error: 'no connection is chosen for this yet — Settings → Connections', needsConnection: true }; }
   if (running.has(key)) { undo(); return { ok: false, error: 'a reply is already on its way — Stop it first' }; }
   const ctl = new AbortController();
@@ -292,16 +303,19 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   /* it beats while the model is silent too, so another window never takes a
    * reply still coming for one whose window closed */
   const beating = setInterval(() => {
+    if (!ownsReply()) { ctl.abort(); return; }
     if (Date.now() - last < 25000) return;
     last = Date.now();
-    try { store.change(kind, id, turnSteps.setVersion(turnId, versionId, { ...(keptNow() ? { text: keptNow() } : {}), ...alive() }), { checkpoint: true, delay: 50 }); } catch (_) { /* gone */ }
+    try { store.change(kind, id, turnSteps.setVersion(turnId, versionId, { ...(keptNow() ? { text: keptNow() } : {}), thinking: allThought(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 }); } catch (_) { /* gone */ }
   }, 30000);
   try {
     let out;
     const askNow = () => ask(conn, {
         build: (c) => {
+          if (!ownsReply()) throw new Error('the conversation changed while its reply was on the way');
           const { novel, chapters } = bookNow(novelId);
           numbers = numbersOf(novel);
+          snapshot = kind === 'talk' ? snapshotForChanges(novelId) : null;
           const rec = store.peek(kind, id);
           const args = buildArgs(rec, c);
           const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length, notesKept: archivist.keepingNotes(novelId) });
@@ -329,14 +343,16 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         /* the partner talks the book over: never his page's started reply, nor its template (Cozy Tavern's M328) */
         ...(kind === 'talk' ? { noPrefill: true, noStructured: true } : {}),
         onText: (s) => {
+          if (!ownsReply()) { ctl.abort(); return; }
           text += s;
           live({ kind, id, turnId, versionId, text: prefix + text, thinking });
-          if (Date.now() - last > 3000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, { text: keptNow(), ...alive() }), { checkpoint: true, delay: 50 }); }
+          if (Date.now() - last > 3000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, { text: keptNow(), thinking: allThought(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 }); }
         },
         onThinking: (s) => {
+          if (!ownsReply()) { ctl.abort(); return; }
           thinking += s;
           live({ kind, id, turnId, versionId, text: prefix + text, thinking });
-          if (Date.now() - last > 20000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, alive()), { checkpoint: true, delay: 50 }); }
+          if (Date.now() - last > 20000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, { thinking: allThought(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 }); }
         },
       });
     /* one ask — and when the partner asks to read chapters whole, find words
@@ -348,6 +364,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     const askReading = async () => {
       for (;;) {
         const o = await askNow();
+        if (!ownsReply()) throw new Error('the conversation changed while its reply was on the way');
         const said = finalWords(o, text);
         const all = kind === 'talk' && o.ok && !o.cut ? readAsks(said) : [];
         const asked = all.slice(0, READ_AT_ONCE);
@@ -422,7 +439,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       const all = [];
       let askedWhole = false;
       for (let fix = 0; ; fix++) {
-        const changes = settleChanges(novelId, turnId, versionId, segment, store.peek('house', 'house') || house, all, seen, numbers, new Set([...shortCards].filter((x) => !cardsRead.has(x))));
+        const changes = settleChanges(novelId, turnId, versionId, segment, store.peek('house', 'house') || house, all, seen, numbers, new Set([...shortCards].filter((x) => !cardsRead.has(x))), snapshot);
         all.push(...changes);
         if (fix >= 2 || out.cut || out.stopped || ctl.signal.aborted) break;
         const missed = changes.filter((c) => c.status === 'refused' && MISSED.test(String(c.said || '')));
@@ -463,6 +480,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     await store.flush(kind, id);
     return { ok: true };
   } catch (e) {
+    if (!ownsReply()) return gone();
     /* what arrived stays, said to be cut — never left "being written". An
      * answer already in hand (its changes made) is never taken back by a
      * round that failed after it: it stays, with whatever the round added */
@@ -554,11 +572,12 @@ function readRows(novelId, asked) {
   });
 }
 
-function settleChanges(novelId, turnId, versionId, text, house, before = [], seen = null, numbers = null, short = null) {
+function settleChanges(novelId, turnId, versionId, text, house, before = [], seen = null, numbers = null, short = null, snapshot = null) {
   const ops = opsOf(text);
   if (!ops.length) return [];
   const wait = house && house.partnerApplies === 'wait';
   const novel = store.peek('novel', novelId);
+  const changed = ops.map((op) => changedSinceSnapshot(novelId, op, snapshot, { where: whereOf(novel, op, numbers), numbers }));
   /* changes across the book that touch each other are made together, in one
    * pass over the book as it stood (Cozy Tavern's M675-8); the rest one by
    * one, each passage and chapter found as the page it was shown numbered
@@ -569,6 +588,7 @@ function settleChanges(novelId, turnId, versionId, text, house, before = [], see
   const out = new Array(ops.length).fill(null);
   ops.forEach((op, i) => {
     if (out[i]) return;
+    if (changed[i]) { out[i] = { id: newId('cg'), op, label: labelOf(op), why: String(op.why || ''), status: 'refused', said: changed[i] }; return; }
     if (groupOf.has(i)) {
       const g = groups[groupOf.get(i)];
       const made = makeTogether(novelId, g.map((k) => ops[k]), { dry: wait });
@@ -818,6 +838,7 @@ export async function partnerSay({ novelId, chapterId, text }) {
   store.change('talk', novelId, turnSteps.addTurn(reply), { now: true });
   const out = await runTurn({ kind: 'talk', id: novelId, novelId, turnId: reply.id, versionId: reply.versions[0].id, role: 'partner',
     buildArgs: (rec, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(rec, { upto: reply.id, conn: c }), request: '', moment: hisLast(rec, reply.id) }) });
+  if (out.gone) return out;
   if (!out.ok && !replied('talk', novelId, reply.id)) {
     try { store.change('talk', novelId, turnSteps.removeTurn(mine.id), { now: true }); } catch (_) { /* gone */ }
     /* asked again after Edit and ask again, and no answer came: what it let go is back as it was (unless the talk moved on since) */
@@ -986,7 +1007,7 @@ export async function partnerAgain({ novelId, chapterId, turnId }) {
 export async function newPlay({ novelId, chapterId, who, from = '' }) {
   const id = newId('pl');
   const chapter = store.peek('chapter', chapterId);
-  const after = chapter && chapter.passages.length ? chapter.passages[chapter.passages.length - 1].id : null;
+  const after = chapter && chapter.passages.length ? chapter.passages[chapter.passages.length - 1].id : '^';
   const play = { id, novelId, chapterId, after, who: String(who || '').trim(), from: String(from || '').trim(), title: '', turns: [], turned: null, created: Date.now(), updated: Date.now() };
   await store.create('play', id, play);
   store.change('novel', novelId, novelSteps.addPlay(id), { now: true });
@@ -1050,6 +1071,7 @@ export async function playSay({ playId, text, tell = '' }) {
   store.change('play', playId, turnSteps.addTurn(reply), { now: true });
   const out = await runTurn({ kind: 'play', id: playId, novelId: p.novelId, turnId: reply.id, versionId: reply.versions[0].id, role: 'writer', length: 'paragraphs',
     buildArgs: playArgs(p, reply.id) });
+  if (out.gone) return out;
   if (!out.ok && mine && !replied('play', playId, reply.id)) {
     try { store.change('play', playId, turnSteps.removeTurn(mine.id), { now: true }); } catch (_) { /* gone */ }
     return { ...out, giveBack: t, giveBackTell: tl };
@@ -1085,10 +1107,10 @@ export async function repairStaleTurns(kind, id) {
       const here = v.browser && v.browser === store.BROWSER && tabs;
       const gone = here ? !tabs.has(v.tab) : Date.now() - (v.beat || v.at || 0) > 2 * 60 * 1000;
       if (!gone) continue;
-      if (!String(v.text || '').trim()) {
+      if (!String(v.text || '').trim() && !String(v.thinking || '').trim()) {
         if (t.versions.length < 2) store.change(kind, id, turnSteps.removeTurn(t.id), { now: true });
         else store.change(kind, id, turnSteps.removeVersion(t.id, v.id), { now: true });
-      } else store.change(kind, id, turnSteps.setVersion(t.id, v.id, { streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true }), { now: true });
+      } else store.change(kind, id, turnSteps.setVersion(t.id, v.id, { streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'the reply stopped when its window closed' }), { now: true });
       fixed++;
     }
   }

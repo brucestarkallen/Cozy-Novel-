@@ -58,8 +58,8 @@ export function ownWordsFor(house, purpose, fill = (t) => t) {
   const out = [];
   for (const w of cleanOwn(house && house.ownWords)) {
     if (!w.on || (w.to !== 'both' && w.to !== purpose)) continue;
-    const text = String(fill(w.text) || '').trim();
-    if (!text) continue;
+    const text = String(fill(w.text) || '');
+    if (!text.trim()) continue;
     out.push({ role: ROLE_OF[w.role], place: w.place, text, name: w.name.trim() || 'Own words' });
   }
   return out;

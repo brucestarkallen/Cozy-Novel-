@@ -1248,6 +1248,94 @@ export function fieldsOf(op) {
   if (openOf(o) !== undefined) out.push('open');
   return out;
 }
+function cardBase(op, card) {
+  if (!card) return 'none';
+  const fields = fieldsOf(op);
+  return fields ? `f:${hashText(JSON.stringify(fields.map((k) => (card[k] === undefined ? null : card[k]))))}`
+    : `w:${hashText(JSON.stringify({ ...card, updated: null }))}`;
+}
+function moduleNamed(rows, name) {
+  const want = nameKey(name);
+  const exact = rows.find((m) => nameKey(m.name) === want || m.id === String(name));
+  if (exact) return exact;
+  const starts = rows.filter((m) => nameKey(m.name).startsWith(want));
+  return starts.length === 1 ? starts[0] : null;
+}
+/* Follow makeChange's routing: extra fields a model supplied must not turn
+ * a whole edit into a quote or addition that the applying branch ignores. */
+function scopeOf(op) {
+  return ['module', 'summary', 'passage', 'chapter', 'book', 'note'].find((key) => op[key] !== undefined);
+}
+function quotedChange(op, scope = scopeOf(op)) {
+  return op.find !== undefined && (['module', 'summary', 'book'].includes(scope)
+    || (scope === 'passage' && truthOf(op.remove) !== true));
+}
+
+/* What the partner was shown when this round began. Keep only fingerprints
+ * of long pages and instructions; cards keep their fields so a change to
+ * who someone is can still land while the helper updates where they are. */
+export function snapshotForChanges(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return null;
+  const snapshot = { book: {}, chapters: {}, passages: {}, notes: clone(novel.notes || {}),
+    modules: listModules(store.peek('house', 'house') || {}).map((m) => ({ id: m.id, name: m.name, base: hashText(String(m.text || '')) })) };
+  for (const book of Object.keys(BOOK_FIELDS)) snapshot.book[book] = baseOf(novelId, { book });
+  for (const chapterId of novel.order || []) {
+    const chapter = store.peek('chapter', chapterId);
+    if (!chapter) continue;
+    snapshot.chapters[chapterId] = { name: hashText(String(chapter.name || '')), summary: hashText(String((chapter.summary && chapter.summary.text) || '')) };
+    for (const passage of chapter.passages || []) {
+      const v = picked(passage);
+      if (v) snapshot.passages[passage.id] = `${v.id}:${hashText(String(v.text || ''))}`;
+    }
+  }
+  return snapshot;
+}
+
+/* Whole replacements must still answer the words they were asked about.
+ * Exact quoted replacements and additions find their own place as before.
+ * Compare all operations before applying a round: its own first change must
+ * not make its second one look like somebody changed the book meanwhile. */
+export function changedSinceSnapshot(novelId, op, snapshot, { where = null, numbers = null } = {}) {
+  const o = op || {};
+  const scope = scopeOf(o);
+  if (!snapshot || quotedChange(o, scope) || (scope === 'book' && o.add !== undefined)
+    || (o.rename && typeof o.rename === 'object') || o.replace_all !== undefined || o.unreadable) return '';
+  const novel = store.peek('novel', novelId);
+  if (!novel) return '';
+  const changed = 'it changed while this reply was on the way — ask again for this one';
+  let before;
+  let now;
+  if (scope === 'passage') {
+    const spot = passageAt(novel, o.passage, { where, numbers });
+    const id = (where && where.passageId) || (spot.passage && spot.passage.id);
+    before = id && snapshot.passages[id];
+    now = baseOf(novelId, { passage: o.passage }, where);
+  } else if (scope === 'summary' || scope === 'chapter') {
+    const spot = chapterAt(novel, o[scope], { where, numbers });
+    const id = (where && where.chapterId) || spot.chapterId;
+    const row = id && snapshot.chapters[id];
+    before = row && row[scope === 'summary' ? 'summary' : 'name'];
+    now = baseOf(novelId, { [scope]: o[scope] }, where);
+  } else if (scope === 'book') {
+    before = snapshot.book[o.book];
+    now = baseOf(novelId, { book: o.book }, where);
+  } else if (scope === 'module') {
+    const old = moduleNamed(snapshot.modules, o.module);
+    const current = moduleNamed(listModules(store.peek('house', 'house') || {}), o.module);
+    if (old && (!current || old.id !== current.id)) return changed;
+    before = old && old.base;
+    now = current && hashText(String(current.text || ''));
+  } else if (scope === 'note' && NOTE_KINDS.includes(o.note)) {
+    const name = archivist.cleanName(o.name) || text(o.name);
+    const old = matchCard(snapshot.notes[o.note] || [], name, [], { kind: o.note, near: false }).card;
+    const current = matchCard((novel.notes || {})[o.note] || [], name, [], { kind: o.note, near: false }).card;
+    if ((old && old.id) !== (current && current.id)) return changed;
+    before = cardBase(o, old);
+    now = cardBase(o, current);
+  }
+  return before !== undefined && before !== now ? changed : '';
+}
 /* how what it writes stood when it was offered: a print of it — for a card,
  * of the parts it writes ("f:"), or the whole card it takes out ("w:") */
 export function baseOf(novelId, op, where = null) {
@@ -1258,14 +1346,12 @@ export function baseOf(novelId, op, where = null) {
     if (o.passage !== undefined) { const w = passageAt(novel, o.passage, { where }); const v = w.passage && picked(w.passage); return v ? `${v.id}:${hashText(String(v.text || ''))}` : ''; }
     if (o.note !== undefined) {
       const m = matchCard((novel.notes || {})[o.note] || [], archivist.cleanName(o.name) || text(o.name), [], { kind: o.note, near: false });
-      if (!m.card) return 'none';
-      const fields = fieldsOf(o);
-      return fields ? `f:${hashText(JSON.stringify(fields.map((k) => (m.card[k] === undefined ? null : m.card[k]))))}` : `w:${hashText(JSON.stringify({ ...m.card, updated: null }))}`;
+      return cardBase(o, m.card);
     }
     if (o.book !== undefined) { const f = BOOK_FIELDS[o.book]; return f ? hashText(String(((f === 'title' || f === 'subtitle') ? novel.meta[f] : novel[f]) || '')) : ''; }
     if (o.summary !== undefined) { const c = chapterAt(novel, o.summary, { where }).chapter; return c ? hashText(String((c.summary && c.summary.text) || '')) : ''; }
     if (o.chapter !== undefined) { const c = chapterAt(novel, o.chapter, { where }).chapter; return c ? hashText(String(c.name || '')) : ''; }
-    if (o.module !== undefined) { const m = listModules(store.peek('house', 'house') || {}).find((x) => nameKey(x.name) === nameKey(o.module) || x.id === String(o.module)); return m ? hashText(String(m.text || '')) : ''; }
+    if (o.module !== undefined) { const m = moduleNamed(listModules(store.peek('house', 'house') || {}), o.module); return m ? hashText(String(m.text || '')) : ''; }
   } catch (_) { /* nothing to print */ }
   return '';
 }
@@ -1284,7 +1370,7 @@ function wholeCardBase(novelId, op) {
  * (Cozy Tavern's M602). */
 export function driftOf(novelId, change) {
   const c = change || {};
-  if (!c.base || !c.op || c.op.find !== undefined) return '';
+  if (!c.base || !c.op || quotedChange(c.op)) return '';
   const legacy = c.op.note !== undefined && c.base !== 'none' && !/^[fw]:/.test(c.base);
   const now = legacy ? wholeCardBase(novelId, c.op) : baseOf(novelId, c.op, c.where || null);
   return now && now !== c.base ? 'it has changed since this was offered — ask again for this one' : '';

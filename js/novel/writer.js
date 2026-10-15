@@ -15,7 +15,7 @@ import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn } from './textshape.js';
 import { renameIn } from './names.js';
@@ -278,6 +278,26 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   if (running.has(novelId) || !conn) { undo(); return preflight(novelId) || { ok: false, error: 'the writer could not start' }; }
   const ctl = new AbortController();
   const job = { kind: how, chapterId, passageId, versionId, ctl, at: Date.now(), conn: connName(conn), auto: Boolean(auto) };
+  const autoSetting = auto ? (how === 'selection' ? 'autoFix' : 'autoLift') : '';
+  const autoFrom = autoSetting && h[autoSetting] ? h[autoSetting].from : null;
+  /* Switching automatic writing off ends the permission that started this
+   * attempt. Switching it on again starts a new period, never revives it. */
+  const automaticAllowed = () => {
+    if (!job.auto) return true;
+    const current = house()[autoSetting];
+    if (!job.yielded && current && current.on && Number.isFinite(current.from) && current.from === autoFrom) return true;
+    job.yielded = true;
+    ctl.abort();
+    return false;
+  };
+  const unwatchAuto = auto ? store.subscribe('house', 'house', automaticAllowed) : () => {};
+  const ownsPage = () => {
+    const novel = store.peek('novel', novelId);
+    const chapter = store.peek('chapter', chapterId);
+    if (!novel || !(novel.order || []).includes(chapterId) || !chapter) return false;
+    const passage = (chapter.passages || []).find((p) => p.id === passageId);
+    return Boolean(passage && (passage.versions || []).some((v) => v.id === versionId));
+  };
   /* what the page hears as words arrive: a page the app writes by itself says so (the page never follows it) */
   const live = (ev) => tellLive(job.auto ? { ...ev, auto: true } : ev);
   running.set(novelId, job);
@@ -291,6 +311,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
    * writer closed (repairStale) */
   const alive = () => ({ beat: Date.now(), tab: store.CLIENT, browser: store.BROWSER });
   const checkpoint = () => {
+    if (!ownsPage()) { job.gone = true; ctl.abort(); return; }
+    if (!automaticAllowed()) return;
     lastSave = Date.now();
     const words = shown();
     store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: words, thinking: thoughtOf(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 });
@@ -302,10 +324,13 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   const beating = setInterval(() => { if (Date.now() - lastSave > 25000) checkpoint(); }, 30000);
   try {
     if (notesWait) { try { await notesWait(novelId, 5000, ctl.signal); } catch (_) { /* it goes anyway */ } }
+    if (!automaticAllowed()) { undo(); await store.flush('chapter', chapterId); return { ok: false, stopped: true, yielded: true }; }
     /* what the last request built held of the chapter open (context.js stats) */
     let told = null;
     const out = await ask(askConn, {
       build: (c) => {
+        if (!ownsPage()) { job.gone = true; throw new Error('that passage is not there any more'); }
+        if (!automaticAllowed()) throw new Error('automatic writing stopped');
         const { novel, chapters } = bookNow(novelId);
         const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '' });
         told = a.stats;
@@ -315,11 +340,15 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       signal: ctl.signal,
       noStructured: carryOn,
       onText: (s) => {
+        if (!ownsPage()) { job.gone = true; ctl.abort(); return; }
+        if (!automaticAllowed()) return;
         text += s;
         live({ novelId, chapterId, passageId, versionId, text: shown(), thinking: thoughtOf(thinking), phase: 'text' });
         if (Date.now() - lastSave > 3000) checkpoint();
       },
       onThinking: (s) => {
+        if (!ownsPage()) { job.gone = true; ctl.abort(); return; }
+        if (!automaticAllowed()) return;
         thinking += s;
         live({ novelId, chapterId, passageId, versionId, text: shown(), thinking: thoughtOf(thinking), phase: 'thinking' });
         /* a long, silent think still beats */
@@ -327,7 +356,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       },
     });
     /* the book or the chapter was removed while it wrote: nothing is left to keep it in */
-    if (job.gone) return { ok: false, stopped: true, gone: true };
+    if (job.gone || !ownsPage()) return { ok: false, stopped: true, gone: true };
     /* carried on: its request kept beside the first part's, never over it (Tavern M674) */
     const more = mode === 'append' && original && original.sent;
     const key = more ? `${versionId}-g${((original.sentMore || []).length) + 2}` : versionId;
@@ -396,7 +425,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     }
     const arrived = String(answer).trim();
     /* the app's own page, given way to his hand: taken away whole */
-    if (job.yielded) {
+    if (job.yielded || !automaticAllowed()) {
       undo();
       await store.flush('chapter', chapterId);
       return { ok: false, stopped: true, yielded: true };
@@ -461,13 +490,19 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     recount(novelId);
     return { ok: true, cut: patch.cut, notes, passageId };
   } catch (e) {
-    if (job.gone) return { ok: false, stopped: true, gone: true };
+    if (job.gone || !ownsPage()) return { ok: false, stopped: true, gone: true };
+    if (!automaticAllowed()) {
+      undo();
+      await store.flush('chapter', chapterId);
+      return { ok: false, stopped: true, yielded: true };
+    }
     try {
       if (job.yielded || !String(text || '').trim()) undo();
       else store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: shown(), thinking: thoughtOf(thinking) || undefined, streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'something went wrong partway' }), { now: true });
     } catch (_) { /* the record is gone */ }
     return { ok: false, error: (e && e.message) || String(e), thought: !String(text || '').trim() && thinking.trim() ? thinking : undefined };
   } finally {
+    unwatchAuto();
     clearInterval(beating);
     running.delete(novelId);
     tellJob(novelId);
@@ -646,12 +681,9 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = rewriteRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text, last: lastInBook(book, chapterId, passageId) });
   const words = countWords(text);
-  const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
+  return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
     length: words > 2600 ? 'chapter' : words > 1500 ? 'long' : 'scene',
     build: { target: { chapterId, mark: passageId }, request, moment }, auto: Boolean(lift) });
-  /* given way to him: the version it lifted from is on show again */
-  if (out && out.yielded && from.id) store.change('chapter', chapterId, chapterSteps.pick(passageId, from.id), { now: true });
-  return out;
 }
 
 /* Only the words he selected, rewritten; the rest of the passage untouched. */
@@ -728,11 +760,13 @@ export async function goOn({ novelId, chapterId, passageId }) {
   /* what he asked for in it, and who decides how it turns out — as the chip
    * says now; a rewrite (his note settles it) and a scene written into prose
    * (the scene did) carry on with neither */
-  const settled = v.how === 'rewrite' || v.how === 'play';
-  const asked = settled ? '' : (v.ask && v.ask.direction) || '';
-  const change = v.how === 'rewrite' ? (v.ask && v.ask.note) || '' : '';
-  const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail, direction: asked, change, outcome: settled ? '' : outcomeOf(book.novel) });
-  return runVersion({ novelId, chapterId, passageId, versionId: v.id, original, mode: 'append', how: 'go on', length: (v.ask && v.ask.length) || 'scene',
+  const origin = requestOf(p, v);
+  const settled = origin.how === 'rewrite' || origin.how === 'play';
+  const asked = settled ? '' : origin.ask.direction || '';
+  const change = [origin.how === 'rewrite' ? origin.ask.note : '', ...origin.notes].filter((x) => String(x || '').trim()).join('\n');
+  const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail, direction: asked, change,
+    ...(origin.how === 'play' ? { transcript: origin.ask.transcript || '', who: origin.ask.who || '' } : {}), outcome: settled ? '' : outcomeOf(book.novel) });
+  return runVersion({ novelId, chapterId, passageId, versionId: v.id, original, mode: 'append', how: 'go on', length: origin.ask.length || 'scene',
     splice: (answer) => ({ text: original.text + joinOn(original.text, answer) }),
     build: { target: { chapterId, through: passageId }, request, moment } });
 }
@@ -750,9 +784,9 @@ export async function playToProse({ novelId, chapterId, play, transcript, mine =
   /* where the scene was set — the narrator was shown the chapter to there, and what came after it as after —
    * never past passages written since (Cozy Tavern M548: a result kept where its anchor stands) */
   const list = chapter.passages || [];
-  const at = play.after && list.some((x) => x.id === play.after) ? play.after : null;
-  const between = Boolean(at) && list.slice(list.findIndex((x) => x.id === at) + 1).some(hasWords);
-  store.change('chapter', chapterId, chapterSteps.addPassage(passage, between ? at : null), { now: true });
+  const at = play.after === '^' || (play.after && list.some((x) => x.id === play.after)) ? play.after : null;
+  const between = at === '^' ? list.some(hasWords) : Boolean(at) && list.slice(list.findIndex((x) => x.id === at) + 1).some(hasWords);
+  store.change('chapter', chapterId, chapterSteps.addPassage(passage, at), { now: true });
   const request = playToProseRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), who, transcript, length, between });
   return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'play', length,
     build: { target: { chapterId, before: passage.id }, request, moment: hisWordsIn(passage) } });

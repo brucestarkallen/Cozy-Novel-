@@ -73,8 +73,28 @@ const wordsPattern = (min, max, word = WORD) => {
 };
 function numberPattern(lo, hi) {
   if (hi - lo <= 30) return '(?:' + Array.from({ length: hi - lo + 1 }, (_, i) => String(lo + i)).join('|') + ')';
-  const minDigits = String(lo).length; const maxDigits = String(hi).length;
-  return '[0-9]{' + minDigits + ',' + maxDigits + '}';
+  /* Equal-width decimal intervals, split at their first different digit.
+   * A digit count alone would allow 999 for a requested range of 10–100. */
+  const digit = (a, b) => a === b ? String(a) : `[${a}-${b}]`;
+  const any = (n) => n ? (n === 1 ? '[0-9]' : `[0-9]{${n}}`) : '';
+  const between = (a, b) => {
+    if (a === b) return a;
+    if (/^0+$/.test(a) && /^9+$/.test(b)) return any(a.length);
+    if (a[0] === b[0]) return a[0] + between(a.slice(1), b.slice(1));
+    const first = Number(a[0]); const last = Number(b[0]); const rest = a.length - 1;
+    if (!rest) return digit(first, last);
+    const parts = [a[0] + between(a.slice(1), '9'.repeat(rest))];
+    if (last > first + 1) parts.push(digit(first + 1, last - 1) + any(rest));
+    parts.push(b[0] + between('0'.repeat(rest), b.slice(1)));
+    return '(?:' + parts.join('|') + ')';
+  };
+  const parts = [];
+  for (let digits = String(lo).length; digits <= String(hi).length; digits += 1) {
+    const a = Math.max(lo, digits === 1 ? 0 : 10 ** (digits - 1));
+    const b = Math.min(hi, 10 ** digits - 1);
+    parts.push(between(String(a), String(b)));
+  }
+  return '(?:' + parts.join('|') + ')';
 }
 
 /* a slot's pattern, or null when the marker is not a slot (it is then written as it stands) */
@@ -176,6 +196,8 @@ export function hiddenMatcher(text) {
 export function makeStructuredDecoder({ hidden = null, holdMax = 6000 } = {}) {
   let mode = 'start'; /* start → seek → string → done | plain */
   let seekBuf = '';
+  let seekAt = 0; let depth = 0; let quoted = false; let escaped = false;
+  let keyAt = -1; let key = ''; let position = 'key';
   let esc = '';   /* an escape split across pieces */
   let words = ''; /* every decoded word of the answer */
   let shownUpTo = 0;
@@ -228,11 +250,43 @@ export function makeStructuredDecoder({ hidden = null, holdMax = 6000 } = {}) {
       }
       if (mode === 'seek') {
         seekBuf += s;
-        const m = seekBuf.match(/"(?:response|value|content|text)"\s*:\s*"/);
-        if (!m) { if (seekBuf.length > 400) { mode = 'plain'; words += seekBuf; seekBuf = ''; return release(); } return ''; }
-        mode = 'string';
-        s = seekBuf.slice(m.index + m[0].length);
-        seekBuf = '';
+        /* Only the schema's top-level response is the page. A nested text
+         * field or a provider's metadata must not close the page early and
+         * discard the actual response that follows it. Other shapes are
+         * recovered at end(), after all their fields can be read. */
+        for (; seekAt < seekBuf.length; seekAt += 1) {
+          const ch = seekBuf[seekAt];
+          if (quoted) {
+            if (escaped) { escaped = false; continue; }
+            if (ch === '\\') { escaped = true; continue; }
+            if (ch !== '"') continue;
+            quoted = false;
+            if (keyAt !== -1) {
+              try { key = JSON.parse(seekBuf.slice(keyAt, seekAt + 1)); } catch (_) { key = ''; }
+              keyAt = -1; position = 'colon';
+            }
+            continue;
+          }
+          if (ch === '"') {
+            if (depth === 1 && position === 'value' && key === 'response') {
+              mode = 'string'; s = seekBuf.slice(seekAt + 1); seekBuf = ''; break;
+            }
+            quoted = true;
+            if (depth === 1 && position === 'key') keyAt = seekAt;
+          } else if (ch === '{' || ch === '[') depth += 1;
+          else if (ch === '}' || ch === ']') depth -= 1;
+          else if (depth === 1 && ch === ':' && position === 'colon') position = 'value';
+          else if (depth === 1 && ch === ',') { position = 'key'; key = ''; }
+        }
+        if (mode === 'seek') {
+          /* A malformed object must not hold an ever-growing answer out of
+           * sight. Keep a generous prefix for non-schema metadata, then let
+           * its original words through if no root response has appeared. */
+          if (seekBuf.length > 64 * 1024) {
+            mode = 'plain'; words += seekBuf; seekBuf = ''; return release();
+          }
+          return '';
+        }
       }
       if (mode === 'string') decodeString(s);
       return release();

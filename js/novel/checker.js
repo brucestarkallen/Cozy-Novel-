@@ -66,6 +66,23 @@ export function checkerConn(house) {
   return own || connFor(house, 'helper');
 }
 
+/* A completed reading may be kept, but the next ask belongs to the choice
+ * he has now, not a connection captured before he changed it. */
+function checkerChoice(conn) {
+  const id = conn.id;
+  const print = archivist.connPrint(conn);
+  const current = () => {
+    const now = checkerConn(store.peek('house', 'house') || {});
+    return Boolean(now && now.id === id && archivist.connPrint(now) === print);
+  };
+  return { current, beforeAsk: () => {
+    if (current()) return;
+    const error = new Error('the checker choice changed');
+    error.checkerChanged = true;
+    throw error;
+  } };
+}
+
 /* ------------------------------------------------------------ what it found */
 
 /* a version's words, as one short mark — kept for each version once */
@@ -432,10 +449,12 @@ export async function runCheck(novelId) {
   if (runningFor.has(novelId) || entering.has(novelId)) { schedule(novelId, 5000); return; }
   if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
   const house = store.peek('house', 'house') || {};
-  const conn = checkerConn(house);
+  const selected = checkerConn(house);
+  const conn = selected ? JSON.parse(JSON.stringify(selected)) : null;
   const novel = store.peek('novel', novelId);
   if (!novel) return;
   if (!conn) { setState(novelId, null); return; }
+  const choice = checkerChoice(conn);
   if (blocked.has(novelId) && blocked.get(novelId) === archivist.connPrint(conn)) return;
   blocked.delete(novelId);
   const work = async () => {
@@ -452,6 +471,7 @@ export async function runCheck(novelId) {
       }
       let lastAsked = '';
       for (let n = 0; ; n++) {
+        choice.beforeAsk();
         if (writerBusy(novelId)) { schedule(novelId, 4000); break; }
         const limit = batchWords(conn, store.peek('house', 'house') || {}, store.peek('novel', novelId) || novel);
         const batch = nextBatch(novelId, limit, { one: narrowC.has(novelId) });
@@ -463,16 +483,24 @@ export async function runCheck(novelId) {
         if (n >= 60) { schedule(novelId, 2000); break; }
         lastAsked = asking;
         setState(novelId, 'checking', `Checking ${batch.label}…`);
-        await checkBatch(novelId, conn, batch, limit);
+        await checkBatch(novelId, conn, batch, limit, choice);
       }
+      choice.beforeAsk();
       /* the judge's head to head, once the reading is done */
-      if (judgeOf(store.peek('house', 'house') || {})) await runDuels(novelId, conn);
+      if (judgeOf(store.peek('house', 'house') || {})) await runDuels(novelId, conn, choice);
+      choice.beforeAsk();
       /* and what he switched on to happen by itself */
       autoAfter(novelId);
       failures.delete(novelId);
       setState(novelId, null);
     } catch (e) {
       const why = (e && e.message) || String(e);
+      if (e && e.checkerChanged) {
+        failures.delete(novelId);
+        setState(novelId, null);
+        if (checkerConn(store.peek('house', 'house') || {})) schedule(novelId, 300);
+        return;
+      }
       /* another browser has the book now: it finishes the checking */
       if (e && e.yielded) { setState(novelId, 'elsewhere', ELSEWHERE); schedule(novelId, 30000); return; }
       /* it made way for his page on its connection: it reads on once the page has gone */
@@ -609,24 +637,34 @@ const squash = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, 
 const CHECK_KEY = new Map(JUDGE_CHECKS.flatMap(([k, name]) => [[squash(k), k], [squash(name), k]]));
 const checkKey = (s) => CHECK_KEY.get(squash(s)) || '';
 
+const saidYes = (said) => said === true || said === 1 || (typeof said === 'string' && SAID_YES.test(said));
+const saidNo = (said) => said === false || said === 0 || (typeof said === 'string' && SAID_NO.test(said));
+function gradeAnswers(g) {
+  const raw = g && g.checks && typeof g.checks === 'object' && !Array.isArray(g.checks) ? g.checks : null;
+  const checks = {};
+  for (const [name, said] of Object.entries(raw || {})) { const k = checkKey(name); if (k && !(k in checks)) checks[k] = said; }
+  const faults = (g && Array.isArray(g.faults) ? g.faults : []).filter((f) => f && typeof f === 'object' && checkKey(f.check));
+  /* A missing or unreadable answer is not a pass. A named fault can supply
+   * its own no; every other check still needs a clear yes or no. */
+  const complete = JUDGE_CHECKS.every(([k]) => saidYes(checks[k]) || saidNo(checks[k]) || faults.some((f) => checkKey(f.check) === k));
+  return { checks, faults, complete };
+}
+
 function judged(a, list, judge) {
   const failed = new Map();
+  const completeGrades = [];
   let answered = false;
   for (const g of list) {
     if (!g || typeof g !== 'object') continue;
-    const raw = g.checks && typeof g.checks === 'object' && !Array.isArray(g.checks) ? g.checks : null;
-    /* the checks it answered, by their keys */
-    const checks = {};
-    for (const [name, said] of Object.entries(raw || {})) { const k = checkKey(name); if (k && !(k in checks)) checks[k] = said; }
-    const faults = (Array.isArray(g.faults) ? g.faults : []).filter((f) => f && typeof f === 'object' && checkKey(f.check));
-    /* an answer that names none of the ten is no grade: asked again, never taken for ten passes */
-    if (!Object.keys(checks).length && !faults.length) continue;
+    const { checks, faults, complete } = gradeAnswers(g);
+    if (!complete) continue;
+    completeGrades.push(g);
     answered = true;
     for (const [k] of JUDGE_CHECKS) {
       const said = checks[k];
       const fault = faults.find((f) => checkKey(f.check) === k);
-      const yes = said === true || said === 1 || (typeof said === 'string' && SAID_YES.test(said));
-      const no = said === false || said === 0 || (typeof said === 'string' && SAID_NO.test(said)) || (Boolean(fault) && !yes);
+      const yes = saidYes(said);
+      const no = saidNo(said) || (Boolean(fault) && !yes);
       if (!no || failed.has(k)) continue;
       const words = fault ? evidence(a.text, fault.words) : '';
       /* a "no" whose words are not in the passage: kept with what the judge quoted, shown — never counted */
@@ -646,7 +684,7 @@ function judged(a, list, judge) {
   const held = faults.filter((f) => !f.unverified);
   const grade = { overall: JUDGE_CHECKS.length - held.length, of: JUDGE_CHECKS.length, faults, model: a.model };
   if (grade.overall < judge.target) {
-    const lift = list.map((g) => String((g && g.lift) || '').trim()).filter(Boolean).join('\n');
+    const lift = completeGrades.map((g) => String(g.lift || '').trim()).filter(Boolean).join('\n');
     grade.lift = lift ? cutWords(lift, 1200) : liftOfFaults(held);
   }
   return grade;
@@ -729,7 +767,7 @@ function setAsideCheck(novelId, chapterId, a, why, conn) {
 
 /* one checking: these passages read (a passage longer than one request
  * carries, in parts); what it would change, kept */
-async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
+async function checkBatch(novelId, conn, batch, limit, choice) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
   const chapter = store.peek('chapter', batch.chapterId);
@@ -781,6 +819,7 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   const behind = notesBehind(view, Object.fromEntries(chaptersOf(novelId).map((c) => [c.id, c])), chapter, { before: batch.passages[0].id }, 'write');
   const edits = [];
   const grades = [];
+  const incompleteParts = new Set();
   const judge = judgeOf(house);
   const request = (words, extra = {}) => {
     const stock = {};
@@ -802,7 +841,8 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   /* no grade will come for it: kept as checked, never asked in a loop — what it found stays */
   const noGrade = (a) => { const old = keptOf(a); if (old && old.sig === a.sig) store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { ...old, graded: false, tries: 2 }), { checkpoint: true }); };
   for (const words of numbered) {
-    const got = await archivist.askJson(conn, system, gradeOnly ? request(words, { gradesOnly: true }) : request(words), { want: gradeOnly ? (o) => Array.isArray(o.grades) : (o) => Array.isArray(o.edits) });
+    choice.beforeAsk();
+    const got = await archivist.askJson(conn, system, gradeOnly ? request(words, { gradesOnly: true }) : request(words), { want: gradeOnly ? (o) => Array.isArray(o.grades) : (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
     await archivist.mustHold('checker', novelId);
     if (!got.ok) {
       /* WHOSE FAULT (Cozy Tavern M316, M675-7): the connection's stops the
@@ -814,7 +854,7 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
       const several = asked.size > 1;
       if (got.leashed === 'gaveway') throw failed(got);
       if (got.leashed && got.leashed !== 'long') { if (several) narrowC.add(novelId); throw failed(got); }
-      const fault = got.leashed === 'long' ? 'words' : await archivist.whoseFault(conn, got);
+      const fault = got.leashed === 'long' ? 'words' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
       if (fault !== 'words') throw failed(fault === 'model' ? archivist.passingFrom(got) : fault);
       if (several) { narrowC.add(novelId); const e = failed(got); e.soon = true; throw e; }
       const a = [...asked.values()][0];
@@ -830,6 +870,9 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     }
     if (!gradeOnly) edits.push(...got.obj.edits);
     if (Array.isArray(got.obj.grades)) grades.push(...got.obj.grades);
+    if (judge && numbered.length > 1) for (const [ref, a] of asked) {
+      if (words.includes(`[${ref}]`) && !(Array.isArray(got.obj.grades) ? got.obj.grades : []).some((g) => g && refOf(g.passage, keys) === ref && gradeAnswers(g).complete)) incompleteParts.add(a.pid);
+    }
   }
   /* each passage's grade, from all it was answered (a passage read in parts: every part) */
   const byPassage = new Map();
@@ -849,9 +892,9 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
     gather(grades);
     /* a passage the answer gave no grade: asked once more for its grades alone (S06-G6) — never for one read in parts */
     const missing = numbered.length === 1 && !gradeOnly ? [...asked.values()].filter((a) => !byPassage.has(a.pid) || !judged(a, byPassage.get(a.pid).list, judge)) : [];
-    if (missing.length) {
+    if (missing.length && choice.current() && judgeOf(store.peek('house', 'house') || {})) {
       const passages = batch.passages.filter((p) => missing.some((a) => a.pid === p.id));
-      const again = await archivist.askJson(conn, system, request(numberedText(novel, chapter, passages), { gradesOnly: true }), { want: (o) => Array.isArray(o.grades) });
+      const again = await archivist.askJson(conn, system, request(numberedText(novel, chapter, passages), { gradesOnly: true }), { want: (o) => Array.isArray(o.grades), beforeAsk: choice.beforeAsk });
       await archivist.mustHold('checker', novelId);
       /* answered and still no grade: its model will not grade it — checked, never asked in a loop */
       if (again.ok) gather(again.obj.grades);
@@ -880,6 +923,7 @@ async function checkBatch(novelId, conn, batch, limit = BATCH_WORDS) {
   const graded = new Map();
   if (judge) {
     for (const { a, list } of byPassage.values()) {
+      if (incompleteParts.has(a.pid)) continue;
       const grade = judged(a, list, judge);
       if (grade) graded.set(a.pid, grade);
     }
@@ -1129,7 +1173,7 @@ function askedOf(v) {
 /* One pair read head to head, blind and both ways round (Cozy Tavern's
  * duel): a win only when both readings agree, a tie otherwise. Kept on the
  * chapter while both versions are there. */
-async function duel(novelId, conn, d) {
+async function duel(novelId, conn, d, choice) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
   const chapter = store.peek('chapter', d.chapterId);
@@ -1155,12 +1199,14 @@ async function duel(novelId, conn, d) {
   const before = tailOf(lead.text, Math.max(0, Math.min(lead.from === 'last' ? 2500 : 6000, Math.floor(spare * 0.4 * 3.5))));
   story = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
   /* the page it names, however it names it: "A", "A.", "Page A", "a (the first)" (Cozy Tavern M439) */
-  const said = (o) => { const m = /^\s*(?:page\s+)?([AB])(?![\p{L}\p{N}])/iu.exec(String(o.better || '')); return m ? m[1].toUpperCase() : 'same'; };
+  const said = (o) => { const text = String(o.better || ''); const m = /^\s*(?:page\s+)?([AB])(?![\p{L}\p{N}])/iu.exec(text); return m ? m[1].toUpperCase() : /^\s*(?:same|tie|equal)(?![\p{L}\p{N}])/iu.test(text) ? 'same' : ''; };
   /* a pair its model would not read for the pages' own words is let go — never a stop for the checker (S06-G2); only the connection's own fault is */
-  const stopOf = async (got) => { if (got.leashed === 'gaveway') return { gaveWay: true }; if (got.leashed) return null; const f = await archivist.whoseFault(conn, got); return f && typeof f === 'object' ? { stop: failed(f) } : null; };
-  const one = await archivist.askJson(conn, system, build(pages.x, pages.y, before), { want: (o) => typeof o.better === 'string' });
+  const stopOf = async (got) => { if (got.leashed === 'gaveway') return { gaveWay: true }; if (got.leashed) return null; const f = await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk }); return f && typeof f === 'object' ? { stop: failed(f) } : null; };
+  const one = await archivist.askJson(conn, system, build(pages.x, pages.y, before), { want: (o) => typeof o.better === 'string' && Boolean(said(o)), beforeAsk: choice.beforeAsk });
   if (!one.ok) return stopOf(one);
-  const two = await archivist.askJson(conn, system, build(pages.y, pages.x, before), { want: (o) => typeof o.better === 'string' });
+  choice.beforeAsk();
+  if (!judgeOf(store.peek('house', 'house') || {})) return { changed: true };
+  const two = await archivist.askJson(conn, system, build(pages.y, pages.x, before), { want: (o) => typeof o.better === 'string' && Boolean(said(o)), beforeAsk: choice.beforeAsk });
   if (!two.ok) return stopOf(two);
   const first = said(one.obj) === 'A' ? 'x' : said(one.obj) === 'B' ? 'y' : 'tie';
   const second = said(two.obj) === 'A' ? 'y' : said(two.obj) === 'B' ? 'x' : 'tie';
@@ -1176,9 +1222,11 @@ async function duel(novelId, conn, d) {
 /* a few pairs at a time (the rest in a moment); a pair that could not be read
  * is not asked again in a loop, and a connection turned away for good stops
  * the checker as any refusal does */
-async function runDuels(novelId, conn) {
+async function runDuels(novelId, conn, choice) {
   let n = 0;
   for (const d of duelsDue(novelId)) {
+    choice.beforeAsk();
+    if (!judgeOf(store.peek('house', 'house') || {})) return;
     if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
     if (n >= 3) { schedule(novelId, 3000); return; }
     n++;
@@ -1186,7 +1234,10 @@ async function runDuels(novelId, conn) {
     const chapter = store.peek('chapter', d.chapterId);
     const novel = store.peek('novel', novelId);
     setState(novelId, 'checking', `Reading two versions of ${chapter && novel ? `${chapterLabel(novel, chapter, { withName: false })}, passage ${passageNumbers(chapter).get(d.pid)}` : 'a passage'} side by side…`);
-    const out = await duel(novelId, conn, d);
+    let out;
+    try { out = await duel(novelId, conn, d, choice); }
+    catch (error) { if (error && error.checkerChanged) duelTried.delete(d.key); throw error; }
+    if (out && out.changed) { duelTried.delete(d.key); return; }
     /* it made way for his page: read again once the page has gone */
     if (out && out.gaveWay) { duelTried.delete(d.key); schedule(novelId, 20000); return; }
     if (out && out.stop) throw out.stop;

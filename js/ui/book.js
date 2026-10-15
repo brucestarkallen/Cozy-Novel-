@@ -11,7 +11,7 @@
 import * as store from '../store.js';
 import * as archivist from '../novel/archivist.js';
 import { h, openSheet, field, toast, confirmIt, download, group } from './dom.js';
-import { novelSteps, COVERS, soundOf } from '../novel/shape.js';
+import { novelSteps, COVERS, soundOf, POVS, TENSES, povOf, tenseOf } from '../novel/shape.js';
 import { autoOn, bookHasMacro, bookNames } from '../novel/prompts.js';
 import { connFor, stopIn } from '../novel/writer.js';
 import { stopTalk } from '../novel/talk.js';
@@ -157,17 +157,48 @@ export function openBook(novelId, { onGone, onClose } = {}) {
     ownPlaceholder: 'e.g. Third person, past tense, close on Mara. Quiet, wry, a little melancholy. Short chapters.',
     keptPlaceholder: 'Written by the helper from the book: its point of view and tense, its voice, its rhythm.',
   });
+  /* These defaults belong to this book, separately from his prose and the
+   * helper's description of it. Picking one never rewrites either. */
+  const narrationFields = [];
+  const narrationField = (key, label, choices, chosen) => {
+    const select = h('select', { 'aria-label': label });
+    for (const [value, choice] of Object.entries(choices)) select.append(h('option', { value }, choice.label));
+    const hint = h('em', { id: `book-${key}-hint` });
+    select.setAttribute('aria-describedby', hint.id);
+    const draw = () => {
+      const value = chosen(store.peek('novel', novelId));
+      select.value = value;
+      hint.textContent = choices[value].hint;
+    };
+    select.addEventListener('change', () => {
+      const value = select.value;
+      if (!Object.hasOwn(choices, value)) return;
+      store.change('novel', novelId, novelSteps.setPref(key, value === 'auto' ? '' : value), { now: true });
+      draw();
+    });
+    narrationFields.push(draw);
+    draw();
+    return h('label.field', h('span', label), select, hint);
+  };
+  const narration = h('section.book-narration', { 'aria-labelledby': 'book-narration-title' },
+    h('h3', { id: 'book-narration-title' }, 'Point of view & tense'),
+    h('p.say', 'Choose how new pages are told. Your own instructions and requests for a particular passage still come first; existing pages stay as they are.'),
+    h('div.book-narration-fields',
+      narrationField('pov', 'Point of view', POVS, povOf),
+      narrationField('tense', 'Tense', TENSES, tenseOf)),
+    h('p.say.book-narration-note', 'In a scene, your character’s words, actions and feelings still come from you.'));
+  const drawNarration = () => { for (const draw of narrationFields) draw(); };
   /* how the world's sounds are written: his sound law as comics have it, or as a printed novel does */
   const sound = h('div.segmented', { role: 'group', 'aria-label': 'Sound' });
   const soundSay = h('em');
   const SOUND_SAY = {
-    comic: 'Comic: the world’s sounds as sound effects in asterisks — *CLANG!* *thud thud* — the way your scenes in Cozy Tavern have them.',
-    novel: 'Novel: the same sounds written into the sentences — steel shrieking off steel, the crack of a rib — the way a printed novel has them.',
+    comic: 'Comic: meaningful sounds as effects in asterisks — *CLANG!* or *tap tap* — where the moment calls for them.',
+    novel: 'Novel: sounds written into the sentences — rain tapping the glass, a door clicking shut — as in a printed novel.',
   };
   const drawSound = () => {
     const cur = soundOf(store.peek('novel', novelId));
     for (const b of sound.children) b.setAttribute('aria-pressed', String(b.dataset.v === cur));
-    soundSay.textContent = `${SOUND_SAY[cur]} Voices — moans, cries, war cries — are written out in quotes either way. The writer and the narrator follow it from the next page on.`;
+    soundSay.textContent = `${SOUND_SAY[cur]} Spoken words stay in quotes. Other vocal sounds may be written out or described when they fit the scene. The writer and narrator follow this from the next page on.`;
   };
   for (const [v, label] of [['comic', 'Comic'], ['novel', 'Novel']]) {
     sound.append(h('button', { title: v === 'comic' ? 'Write sounds as effects in asterisks.' : 'Write sounds into the prose.', 'data-v': v, 'aria-pressed': 'false', onclick: () => {
@@ -194,12 +225,13 @@ export function openBook(novelId, { onGone, onClose } = {}) {
   s.body.append(
     about.el,
     reads.el,
+    narration,
     h('div.field.book-sound', h('span', 'Sound'), sound, soundSay),
     h('section.book-plans', field('Where it’s headed', plans)),
     charField,
     h('p.say.book-wordcount', `${plural(n.meta.words || 0, 'word')} · ${plural((n.order || []).length, 'chapter')}`));
   /* what the helper keeps arrives while the sheet is open */
-  off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); drawChar(); });
+  off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); drawNarration(); drawSound(); drawChar(); });
 
   /* what the first Cozy Novel held that has no place of its own here, word for word */
   const kept = (n.migrated && Array.isArray(n.migrated.kept)) ? n.migrated.kept : [];

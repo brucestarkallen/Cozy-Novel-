@@ -60,7 +60,7 @@ and open **http://127.0.0.1:8081**. Another port: `COZYNOVEL_PORT=8091 python3 s
 - **The book's title** at the top opens the chapters; **Notes**, **Partner**, **Search** and **⋯** (Scenes, About this book, Full screen, Reading mode, Settings) sit beside it. On a wide screen the chapters and notes stand beside the page.
 - **Search** (the magnifier) finds any words — in **This book** or **All books**: the passages as they stand on the page, chapter names, the notes, what the book is about, the partner and the scenes. Capitals, accents, curly quotes, line breaks, italics and the way a dash is typed don't matter. Tap a place and you're there, the words marked for a moment.
 - **Full screen** is the writing page with nothing above it — the bars go (and the browser's own, where it allows), the page and the box stay; moving to the next chapter keeps it. **Reading mode** is only the page, for reading. A scene has its own full screen button. Back, or the small button in the corner, brings the bars back.
-- **About this book**: *What it's about* and *How it reads* are each **Manual** (only your words) or **Automatic** (your words, if any, and what the helper keeps of the book as it stands — current as the book goes on). Correct what the helper keeps and your correction stands until you press *Write it from the book again*. **Sound** is **Comic** (the world's sounds as sound effects in asterisks — \*CLANG!\* — as in Cozy Tavern) or **Novel** (the same sounds written into the sentences); voices are written out in quotes either way. Words brought from SillyTavern that say {{user}} and {{char}} are read by every model as names: {{user}} as your name, {{char}} as the name you give it here (asked only when your words have the marks).
+- **About this book**: *What it's about* and *How it reads* are each **Manual** (only your words) or **Automatic** (your words, if any, and what the helper keeps of the book as it stands — current as the book goes on). Correct what the helper keeps and your correction stands until you press *Write it from the book again*. **Sound** is **Comic** (the world's sounds as sound effects in asterisks — \*CLANG!\* — as in Cozy Tavern) or **Novel** (the same sounds written into the sentences); spoken words stay in quotes; nonverbal sounds follow the chosen voice, without a forced quota. Words brought from SillyTavern that say {{user}} and {{char}} are read by every model as names: {{user}} as your name, {{char}} as the name you give it here (asked only when your words have the marks).
 - The phone's **Back** closes whatever is open — a menu, a sheet, a drawer, the edit box (keeping what you typed) — before it ever leaves the book.
 
 ## The notes, the summaries and the partner
@@ -125,6 +125,12 @@ Everything the app itself says is in your voice and plain words ("our novel", "I
 
 The crafts are long (about 17,000 tokens each), so a model that holds less than your instructions and modules with room for its answer is never sent the page: it says so in plain words, naming what takes the room and the ways out that would help — lower **Longest reply** when that is what tips it, a model with more room, or a module switched off.
 
+## Point of view and automatic work
+
+**About this book → Point of view & tense** lets you choose **First person — I**, **Second person — you**, **Third person — close**, or **Third person — all-knowing**, and past or present tense. **Follow the book** uses your instructions and the established writing. Your specific written directions still come first. The choices guide new prose across the writer, scenes, rewrites and partner, and reach the helper and checker too; changing one does not rewrite existing pages. Describe alternating viewpoints or other arrangements in **How it reads**.
+
+The helper and checker recover from temporary failures while the app can run. They cannot continue model work after Android closes the browser or Termux. Summaries follow a completed chapter, or ten quiet minutes on the last chapter; obsolete summaries give way to current excerpts until refreshed. Automatic proofreading and rewriting remain separate switches in **Who does what**. [The writing audit](WRITING-AUDIT.md) records the triggers, protections, changes and limits for every writing workflow.
+
 ## Keeping it safe
 
 - Every save is numbered; a window holding an older copy can never write over newer work — its change is played again over the newer copy.
@@ -145,6 +151,12 @@ No build step: `index.html`, `css/`, `js/` and `serve.py` are the whole app. `AG
 python3 tests/server.py             # the server: saves, copies, trash, the relay, the upgrade from 1.x
 node tests/app.mjs                  # the app's own modules against the real server and a scripted model
 node tests/thinking.mjs             # thinking parity with Cozy Tavern
+node tests/instructions.mjs         # viewpoint, instruction priority and worker request contracts
+node tests/craft.mjs                # custom modules, routing, craft activation and sound scope
+node tests/archivist_reliability.mjs # summary races, leases, long readings and recovery
+node tests/checker_edges.mjs        # grades, worker changes, comparisons and cancelling automatic rewrites
+node tests/provider_edges.mjs       # malformed provider blocks and structured output
+node tests/workflows.mjs            # scenes, Go on, late replies and concurrent edits
 python3 tests/browser/walk_main.py  # the whole app in a real browser (needs playwright + chromium)
 python3 tests/browser/walk_more.py
 python3 tests/browser/walk_accessibility.py  # dialogs, keyboard, search and file picking
@@ -153,6 +165,7 @@ python3 tests/browser/walk_checks.py         # checker review, focus and all thr
 python3 tests/browser/walk_settings.py       # pending edits, connection tests and module resets
 python3 tests/browser/walk_dialogs.py        # book exports, saved fields and sent words
 python3 tests/browser/walk_worlds.py         # illustrated worlds, light/dark, animation and saved preferences
+python3 tests/browser/walk_viewpoint.py      # per-book viewpoint/tense, persistence and phone layouts
 ```
 
 All of them use synthetic books in a temporary folder and stand-in models; nothing paid is ever called.

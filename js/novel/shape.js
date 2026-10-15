@@ -52,6 +52,23 @@ export function outcomeOf(novel) { return novel && novel.prefs && novel.prefs.ou
 export const SOUNDS = ['comic', 'novel'];
 export function soundOf(novel) { return novel && novel.prefs && SOUNDS.includes(novel.prefs.sound) ? novel.prefs.sound : 'comic'; }
 
+/* Optional defaults for new narration. Missing and unrecognised values
+ * follow his instructions and the established book, as older books did. */
+export const POVS = {
+  auto: { label: 'Follow the book', hint: 'Use your instructions and the point of view already established in the story.' },
+  first: { label: 'First person — I', hint: 'Tell the story as “I”, through the narrator’s own experience and knowledge.' },
+  second: { label: 'Second person — you', hint: 'Address the viewpoint character as “you”, through what they experience.' },
+  'third-limited': { label: 'Third person — close', hint: 'Use names, “he”, “she” or “they”, staying with one character’s experience and knowledge at a time.' },
+  'third-omniscient': { label: 'Third person — all-knowing', hint: 'An all-knowing narrator may reveal more than any one character knows, including different people’s thoughts.' },
+};
+export const TENSES = {
+  auto: { label: 'Follow the book', hint: 'Use your instructions and the tense already established in the story.' },
+  past: { label: 'Past — she opened the door', hint: 'Tell the main action as something that happened: “She opened the door.”' },
+  present: { label: 'Present — she opens the door', hint: 'Tell the main action as it happens: “She opens the door.”' },
+};
+export function povOf(novel) { const v = novel && novel.prefs && novel.prefs.pov; return Object.hasOwn(POVS, v) ? v : 'auto'; }
+export function tenseOf(novel) { const v = novel && novel.prefs && novel.prefs.tense; return Object.hasOwn(TENSES, v) ? v : 'auto'; }
+
 export function coverFor(title) {
   const h = parseInt(hashText(title).slice(0, 6), 36) || 0;
   return COVERS[h % COVERS.length];
@@ -159,6 +176,28 @@ export function picked(passage) {
   const i = Number.isInteger(passage.pick) && passage.pick >= 0 && passage.pick < passage.versions.length ? passage.pick : passage.versions.length - 1;
   return passage.versions[i];
 }
+/* The request that made these words, through changes made in place. Follow
+ * this version's ancestry, never an unrelated take or an older rewrite it
+ * replaced. Selection notes still apply beside the whole passage's request. */
+export function requestOf(passage, version = picked(passage)) {
+  const versions = (passage && passage.versions) || [];
+  const visited = new Set();
+  const notes = [];
+  let v = version;
+  while (v && !visited.has(v.id)) {
+    visited.add(v.id);
+    const ask = v.ask || {};
+    if (['write', 'another', 'rewrite', 'play'].includes(v.how)) return { how: v.how, ask, notes };
+    if (v.how === 'selection' && String(ask.note || '').trim()) notes.unshift(String(ask.note));
+    v = versions.find((x) => x.id === (v.from || v.base));
+  }
+  /* An earlier version can have been removed. An edit keeps its request,
+   * so use those kept words, without guessing from a different branch. */
+  const ask = (version && version.ask) || {};
+  const how = ask.transcript ? 'play' : ask.direction !== undefined ? 'write'
+    : ask.note !== undefined && ask.from === undefined && ask.to === undefined ? 'rewrite' : '';
+  return { how, ask, notes };
+}
 export function passageText(passage) {
   if (!passage) return '';
   if (passage.by === 'break') return '* * *';
@@ -183,7 +222,8 @@ export function hisWordsIn(passage) {
   if (!passage || passage.by === 'break') return '';
   const shown = picked(passage) || {};
   const versions = passage.versions || [];
-  const note = (shown.how === 'rewrite' || shown.how === 'selection') && shown.ask && shown.ask.note ? String(shown.ask.note) : '';
+  const request = requestOf(passage, shown);
+  const note = [request.how === 'rewrite' ? request.ask.note : '', ...request.notes].filter((x) => String(x || '').trim()).join('\n');
   if (passage.by === 'you') {
     /* brought in from a file: only a note he gave it in a rewrite is his */
     if ((versions[0] || {}).how === 'imported') return note.trim();

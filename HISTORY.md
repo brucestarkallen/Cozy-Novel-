@@ -311,3 +311,17 @@ Checked with all five suites — server 63/63, app 365/365, thinking 348/348 (0 
 - The picture follows the screen's shape: the portrait rainy window on a narrow outer screen, the wider room when a foldable opens. Folding or rotating does not reload the book or its draft. The photographs load only when this room is selected.
 - Room choices fit narrow outer screens and wider inner screens, with clear previews in Appearance. The original picture stays still, with optional gentle lamplight that respects pause and reduced motion.
 - Open menus reposition when the phone folds or its keyboard changes the available space. A pane being used keeps its words and focus when it changes between a drawer and a desktop column.
+
+
+## 2.9.0, a steadier storyteller
+
+- About this book has explicit first-person, second-person, close-third and omniscient-third choices, with past or present tense. Follow the book preserves existing behavior. The choices reach the writer, narrator, partner, helper, checker and comparisons; explicit written instructions retain priority, and existing pages are not rewritten.
+- The default novel, scene and voice crafts respect chosen viewpoint, narrative distance and style. Contradictory camera-only rules, fixed dialogue/detail quotas and forced reactions give way to character, context and the requested voice. Scene agency and character knowledge remain protected; sound formatting does not invent events or speech. Custom modules and instructions remain intact.
+- Untouched starting instructions adopt clearer viewpoint-aware writer and scene guidance. Edited instructions, empty boxes and saved presets keep their exact words.
+- Summaries reject responses to chapters or summaries changed while they were being read, including saves replayed over a newer server copy. Repaired summaries return with their versions; stale summaries give way to current excerpts. Very long individual paragraphs can be read in bounded parts, and malformed summaries are not accepted as prose.
+- The checker requires complete yes/no grades, including every part of a long passage; missing answers cannot become perfect scores. Invalid comparison decisions receive a bounded repair. Changing the selected helper or checker stops subsequent requests on its old choice, including JSON repairs and probes.
+- Scenes keep their insertion point at an empty chapter or scene break. Go on follows the chosen version’s generating request through edits and fixes, retaining rewrite directions and a played scene’s events. Removed conversation replies and removed writing targets cannot apply late results. Interrupted partner or scene thinking is retained.
+- Long old and replacement versions are read in bounded parts, with an incomplete reading rolled back. Late whole-field partner replacements cannot overwrite newer edits to instructions, modules, summaries, names, notes or passages.
+- Turning off automatic whole-passage or sentence rewriting cancels its pending result. Stopping a background rewrite preserves a version manually selected while the request was running.
+- Malformed provider content blocks are handled safely. Structured output finds the actual story response rather than nested metadata, and numeric template bounds are enforced.
+- WRITING-AUDIT.md describes what runs automatically, how it recovers and where user action or a running browser is required. Behavioral regressions use synthetic books and local stand-in providers; no paid model call is made.

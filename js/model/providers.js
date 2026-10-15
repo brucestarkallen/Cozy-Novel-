@@ -981,16 +981,16 @@ export function readAnswer(wire, data) {
   }
   if (wire === 'anthropic') {
     const blocks = Array.isArray(data.content) ? data.content : [];
-    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('');
-    const thinking = blocks.filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('');
-    const hiddenThought = blocks.some((b) => b.type === 'redacted_thinking');
+    const text = blocks.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('');
+    const thinking = blocks.filter((b) => b && b.type === 'thinking' && typeof b.thinking === 'string').map((b) => b.thinking).join('');
+    const hiddenThought = blocks.some((b) => b && b.type === 'redacted_thinking');
     return { text, thinking, finish: data.stop_reason || 'stop', hiddenThought, thinkTokens: 0 };
   }
   const choice = (data.choices && data.choices[0]) || {};
   const msg = choice.message || {};
   const text = typeof msg.content === 'string'
     ? msg.content
-    : Array.isArray(msg.content) ? msg.content.map((c) => c.text || '').join('') : '';
+    : Array.isArray(msg.content) ? msg.content.filter((c) => c && typeof c.text === 'string').map((c) => c.text).join('') : '';
   let thinking = [msg.reasoning_content, msg.reasoning].find((v) => typeof v === 'string' && v) || '';
   if (!thinking) {
     for (const [k, v] of Object.entries(msg)) {
@@ -1008,8 +1008,8 @@ export function readChunk(wire, obj) {
   if (wire === 'anthropic') {
     if (obj.type === 'content_block_delta') {
       const d = obj.delta || {};
-      if (d.type === 'text_delta') return { text: d.text || '', thinking: '' };
-      if (d.type === 'thinking_delta') return { text: '', thinking: d.thinking || '' };
+      if (d.type === 'text_delta') return { text: typeof d.text === 'string' ? d.text : '', thinking: '' };
+      if (d.type === 'thinking_delta') return { text: '', thinking: typeof d.thinking === 'string' ? d.thinking : '' };
     }
     if (obj.type === 'message_delta' && obj.delta && obj.delta.stop_reason === 'max_tokens') return { text: '', thinking: '', cut: true };
     return null;

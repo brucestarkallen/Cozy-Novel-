@@ -678,7 +678,7 @@ await test('a chapter he named — or cleared — is never renamed by the helper
   await putAway(b);
 });
 
-await test('a finished chapter gets a summary; a summary older than its chapter is said to be', async () => {
+await test('a finished chapter gets a summary; stale summaries give way to current excerpts', async () => {
   const b = await makeBook([['Chapter one words.'], ['Chapter two words.']]);
   markAllSeen(b);
   await script([{ text: JSON.stringify({ summary: 'Mara finds the letter.', name: 'The Letter' }) }]);
@@ -686,13 +686,16 @@ await test('a finished chapter gets a summary; a summary older than its chapter 
   const c1 = await onPhone('chapter', b.ids[0]);
   assert.equal(c1.summary.text, 'Mara finds the letter.');
   assert.equal(c1.name, 'The Letter');
-  /* the chapter changes: its summary rides marked as older, until summed up again */
+  /* the chapter changes: current excerpts replace obsolete summary facts until it is read again */
   writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'A line added later. '.repeat(3000) });
   const n = b.novel();
   const chapters = { [b.ids[0]]: b.ch(0), [b.ids[1]]: b.ch(1) };
   const a = context.assemble({ house: quietHouse(), novel: n, chapters, conn: { ...CONN, context: 9000, maxTokens: 500 }, target: { chapterId: b.ids[1] }, request: 'Go.' });
-  assert.ok(a.system.includes("(This summary was written before the chapter's latest changes.)\nMara finds the letter."), a.system.slice(0, 2000));
-  assert.ok(!a.system.includes('A line added later. A line added later. A line added later. A line added later.'), 'never the chapter both whole and in short');
+  assert.ok(a.system.includes('current opening and close'), a.system.slice(0, 2000));
+  assert.ok(!a.system.includes('Mara finds the letter.'), 'obsolete summary facts never reach the writer');
+  assert.ok(a.system.includes('A line added later.'), 'current chapter words reach the writer');
+  assert.equal(a.stats.short, 1, 'one earlier chapter sent only in short');
+  assert.equal(a.stats.whole, 1, 'only the current chapter sent whole');
   await putAway(b);
 });
 
@@ -1938,7 +1941,7 @@ await test('a scene sends the narrator\'s own words first — nothing of his whe
   body = (await requests())[0].body;
   const emptied = body.messages[0].content;
   assert.ok(!emptied.includes('HIS OWN WORDS FIRST'), 'the narrator box emptied: not his writing words');
-  assert.ok(emptied.startsWith('## The Telling\nProse is grounded, concrete, literal. You tell the world around my character.'), `nothing of his: the scene craft comes first — ${emptied.slice(0, 120)}`);
+  assert.ok(emptied.startsWith(crafts.SCENE_CRAFT), `nothing of his: the scene craft comes first — ${emptied.slice(0, 120)}`);
   await setHouse();
   await putAway(b);
 });
@@ -3349,7 +3352,7 @@ await test('the judge holds each passage to ten checks: its grade the number pas
       { check: 'Ending', words: 'And she knew, at last … that she was home.', why: 'closes on what it meant' },
       { check: 'people', words: 'words that are not there', why: 'nobody wants anything' }], lift: 'Let the look stand; end on what Mara does.' },
     /* no lift given: what would lift it is said from what it fails */
-    { passage: '1.3', faults: [{ check: 'moves', words: 'The tide went out.', why: 'nothing changes' }, { check: 'specific', words: 'Gulls wheeled.', why: 'any shore' }] }] }) }]);
+    { passage: '1.3', checks: { ...yes, moves: 'no', specific: 'no' }, faults: [{ check: 'moves', words: 'The tide went out.', why: 'nothing changes' }, { check: 'specific', words: 'Gulls wheeled.', why: 'any shore' }] }] }) }]);
   await checker.runCheck(b.novelId);
   const ask = (await requests())[0].body.messages.at(-1).content;
   assert.ok(ask.includes('Then judge each passage’s craft') && ask.includes('A passage with more than one “no” is under my mark of 8.5'), 'his mark, as checks');
@@ -3362,7 +3365,7 @@ await test('the judge holds each passage to ten checks: its grade the number pas
   assert.deepEqual(two.grade.faults.map((f) => [f.check, f.words || '', Boolean(f.unverified)]), [['shown', 'a look that meant he was sorry', false], ['people', '', true], ['ending', 'And she knew, at last', false]],
     'in the order of the checks; the words as they stand in the passage, a part of them when they were cut, none when they are not there — shown, not counted');
   assert.equal(two.lift, 'Let the look stand; end on what Mara does.');
-  assert.equal(grades[1].item.lift, 'Fix what falls short — specific: any shore; moves: nothing changes.', 'faults alone are a grade, and say what would lift it');
+  assert.equal(grades[1].item.lift, 'Fix what falls short — specific: any shore; moves: nothing changes.', 'a complete grade without lift derives it from the verified faults, and say what would lift it');
   assert.ok(s.some((x) => x.item.kind === 'craft'), 'its fixes that lift it');
   const g = checker.gradesOf(b.novelId);
   assert.equal(g.rows.length, 3);
@@ -4130,15 +4133,15 @@ const OLD_NARRATOR = `You tell the scene the way the book itself is told — its
 
 The people in it have their own minds. They want things, they push back, they lie, they surprise; nobody waits politely for a turn or exists only to agree. The world keeps moving around the scene. Keep it concrete and alive, let quiet moments breathe and big ones land, and end each telling at a moment that asks for an answer.`;
 
-await test('boxes still holding the starting words of before get today\'s — the master novelist, his preset\'s own opening — and words he wrote stay his', async () => {
+await test('boxes still holding former starting words get today\'s viewpoint-aware defaults, and words he wrote stay his', async () => {
   await setHouse({}, { instructions: { system: OLD_WRITING, narrator: OLD_NARRATOR, partner: 'HIS PARTNER WORDS', late: '' } });
   assert.equal(prompts.startingIsOld(store.peek('house', 'house')), true);
   store.change('house', 'house', prompts.freshStarting, { now: true });
   await store.flush('house', 'house');
   let ins = (await onPhone('house', 'house')).instructions;
   assert.equal(ins.system, prompts.DEFAULT_WRITING);
-  assert.ok(ins.system.startsWith('You are a master novelist') && ins.system.includes('New York Times bestseller'), ins.system);
-  assert.equal(ins.narrator, 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.');
+  assert.ok(ins.system.startsWith('You are a master novelist') && ins.system.includes('chosen voice, point of view and tense'), ins.system);
+  assert.equal(ins.narrator, prompts.DEFAULT_NARRATOR);
   assert.equal(ins.partner, 'HIS PARTNER WORDS');
   assert.equal(prompts.startingIsOld(store.peek('house', 'house')), false, 'once is all it takes');
   /* a box he wrote in — one letter is enough — keeps his words */
@@ -4276,7 +4279,7 @@ await test('a scene with the narrator\'s starting words: his preset\'s opening, 
   await script([{ text: 'The gate creaks.' }]);
   await talk.playSay({ playId: id, text: '' });
   const sys = systemOf((await requests())[0]);
-  assert.ok(sys.startsWith('You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.\n\n## The Telling'), sys.slice(0, 140));
+  assert.ok(sys.startsWith(`${prompts.DEFAULT_NARRATOR}\n\n${crafts.SCENE_CRAFT}`), sys.slice(0, 140));
   assert.ok(!sys.includes('HIS OWN WORDS FIRST'));
   await putAway(b);
 });

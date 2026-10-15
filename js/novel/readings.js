@@ -179,6 +179,7 @@ export function notesAtPoint(novel, chapters, chapterId, point = {}) {
   let from = list.length;
   if (point.mark && at(point.mark) >= 0) from = at(point.mark);
   else if (point.before && at(point.before) >= 0) from = at(point.before);
+  else if (point.through === '^') from = 0;
   else if (point.through && at(point.through) >= 0) from = at(point.through) + 1;
   const after = [...list.slice(from).map((p) => [chapterId, p.id]), ...order.slice(ci + 1).flatMap((id) => (((chapters[id] || {}).passages) || []).map((p) => [id, p.id]))];
   const laterIds = new Set(after.map(([, pid]) => pid));
@@ -250,6 +251,7 @@ export function asideRows(novel, chapters, { chapterId = null, before = null, sk
   if (!Object.keys(aside).length) return [];
   const out = [];
   for (const id of (novel && novel.order) || []) {
+    if (id === chapterId && before === '^') return out;
     const c = chapters[id];
     if (!c) continue;
     let n = 0;
@@ -269,6 +271,7 @@ export function unread(novel, chapters, { chapterId = null, before = null, skip 
   const seen = (novel && novel.memory && novel.memory.seen) || {};
   const out = [];
   for (const id of (novel && novel.order) || []) {
+    if (id === chapterId && before === '^') return out;
     const c = chapters[id];
     if (!c) continue;
     let n = 0;

@@ -32,7 +32,7 @@ export const BUILTIN = [
   { id: 'contested', name: 'When words won’t carry it', text: CONTESTED_RULE, to: ['narrator'], rides: 'fight',
     about: 'A fight, a chase, a wager in a scene you play: the narrator gives it a board and lets the result stand. For the writer, the novel craft carries it — and the chip by the box says whose call the outcome is.' },
   { id: 'voice', name: 'The sound of a voice', text: VOICE_RULE, to: ['writer', 'narrator'], rides: 'always',
-    about: 'Every woman in the book sounds like herself, never like the next one.' },
+    about: 'Every person has a voice of their own, shaped by their history and the moment.' },
   { id: 'spectacle', name: 'Spectacle combat (for the anime arcs)', text: SPECTACLE_RULE, to: ['writer', 'narrator'], rides: 'off',
     about: 'Fights as kinetic spectacle, the board still deciding. Off until you choose when it rides.' },
 ];
@@ -92,6 +92,7 @@ export function rideLine(m) {
 }
 
 const READER_OF = { write: 'writer', play: 'narrator', partner: 'partner' };
+const SOUND_SCOPE = `Sound Belongs To This Book = the chosen sound mode governs how audible events are written, not which events must happen. It never requires an invented noise or action, a detail the viewpoint cannot hear, or words for the character whose part I play. Keep the chosen narrative person and tense; examples are illustrations, not pronoun or rhythm templates. My explicit voice and pacing instructions govern the treatment of sound, including purposeful silence; no built-in sound quota overrides them.`;
 
 /* What rides for one of them this time — always: the part that stays the
  * same page after page, right after his own words; woken: what his words
@@ -99,7 +100,7 @@ const READER_OF = { write: 'writer', play: 'narrator', partner: 'partner' };
  * same). wake: {intimate, fight}, from his own words (crafts.js wakesOn —
  * never the page). A module he
  * emptied sends nothing. The sound law rides for the two who tell the story,
- * as the book's Sound switch writes it: always its two lanes, how a fight
+ * as the book's Sound switch writes it: always its chosen format, how a fight
  * sounds once one starts, and how sex sounds with the intimate rule. */
 export function ridingFor(house, novel, purpose, wake = {}) {
   const who = READER_OF[purpose];
@@ -113,14 +114,14 @@ export function ridingFor(house, novel, purpose, wake = {}) {
   for (const m of listModules(house)) {
     if (!m.to.includes(who)) continue;
     const on = m.rides === 'always' || (m.rides === 'intimate' && wake.intimate) || (m.rides === 'fight' && wake.fight);
-    const text = String(m.text || '').trim();
-    if (!on || !text) continue;
+    const text = String(m.text || '');
+    if (!on || !text.trim()) continue;
     if (m.rides === 'intimate') heated = true;
     (m.rides === 'always' ? always : woken).push(text);
     names.push(m.name);
   }
   if (tells) {
-    always.push(sound.always);
+    always.push(sound.always, SOUND_SCOPE);
     /* how an intimate scene sounds rides with whatever rule of his or the app's woke for it — never only with the app's own (Cozy Tavern M510-3) */
     if (heated) woken.push(sound.intimate);
     if (wake.fight) woken.push(sound.fight);
