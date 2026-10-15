@@ -8421,6 +8421,102 @@ await test('a “no” quoted with a word of its own counts by the page’s own 
   await putAway(b);
 });
 
+heading('what his words and the notes explain is the writer’s, never everyone’s in the story (2.6.6)');
+
+/* his report: Jovan uses one of his two powers a day to save Yuki, and Kenjaku asks "How many of those do you have left?" */
+await test('what his words explain stays the writer’s — said with every request that carries his words: a new page, another take, a rewrite, a part rewritten, Go on; never asked of what each person “knows” because of a change', async () => {
+  await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', late: '', partner: '' } });
+  const b = await makeBook([['Jovan watched from the roof.']]);
+  const all = (r) => r.body.messages.map((m) => String(m.content || '')).join('\n');
+  const ASK = 'Jovan uses one of his two powers a day to save Yuki.';
+  await script([{ text: 'He dropped from the roof.' }, { text: 'Rain on the roof.' }, { text: 'He fell like a stone.' }, { text: 'He fell again.' }, { text: 'He fell once more.' }, { text: 'Jovan ⟦jumped⟧ from the roof.' }, { text: 'Jovan ⟦leapt⟧ from the roof.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: ASK });
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '' });
+  const p2 = b.ch().passages[1].id;
+  await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: p2 });
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: p2, note: 'He spends his second power of the day on her.' });
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: p2, note: '' });
+  const p1 = b.ch().passages[0].id;
+  await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: p1, start: 6, end: 13, note: 'with his power' });
+  await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: p1, start: 6, end: 13, note: '' });
+  const r = await requests();
+  const asks = r.map(askOf);
+  const said = asks.map((a) => a.includes(prompts.YOURS_ONLY));
+  assert.deepEqual(said, [true, false, true, true, false, true, false], 'his words: a new page, another take of it, a rewrite with his note, a part with his note — none where he gave no words');
+  assert.ok(asks[0].indexOf(ASK) < asks[0].indexOf(prompts.YOURS_ONLY), 'right after what he asked');
+  assert.ok(prompts.YOURS_ONLY.includes('how a power works, its rules and limits, how many') && prompts.YOURS_ONLY.includes('nobody says, guesses or acts on more') && prompts.YOURS_ONLY.includes('unless I say someone learns more'));
+  for (const x of r) {
+    const t = all(x);
+    assert.ok(!/knows,? and feels because of it|knows and feels because/.test(t), 'nothing asks what each person knows because of the change');
+  }
+  assert.ok(asks[3].includes('what each person who meets it does, says and feels'), asks[3]);
+  /* the novel craft says it the same way */
+  const sys = r[0].body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+  assert.ok(sys.includes('A Rewrite Carries Its Change') && sys.includes('knowing only what they see of it'), 'the craft’s rewrite law');
+  assert.ok(sys.includes(prompts.NOTES_KNOW), 'the notes, in the system message: who knows what in the story');
+  /* Go on of a page stopped partway that he gave words to */
+  await reset();
+  await script([{ hang_after: 'Jovan raised his hand and' }, { text: 'his hand and the light came.' }]);
+  const run = writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: ASK });
+  await sleep(900);
+  writer.stop(b.novelId);
+  await run;
+  const p = b.ch().passages.at(-1);
+  assert.equal((await writer.goOn({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id })).ok, true);
+  const on = (await requests()).map(askOf).at(-1);
+  assert.ok(on.includes('What I asked for in it: ' + ASK) && on.includes(prompts.YOURS_ONLY), on);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the notes are the teller’s wherever they ride — the setup’s words, his notes, the writer’s notebook, a scene; the narrator keeps his character’s thoughts; the partner writes a passage the same way', async () => {
+  const b = await makeBook([['Mina waited at the gate. Joon was beside her.']]);
+  const all = (x) => x.body.messages.map((m) => String(m.content || '')).join('\n');
+  const count = (t, w) => t.split(w).length - 1;
+  for (const as of ['user', 'assistant']) {
+    await setHouse({}, { notesAs: as });
+    await reset();
+    await script([{ text: 'A page.' }]);
+    await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Mina opens the gate.' });
+    const x = (await requests())[0];
+    const notes = x.body.messages.find((m) => m.role === as && String(m.content).includes('Mina waited at the gate.'));
+    assert.ok(notes && notes.content.includes(prompts.NOTES_KNOW), `the notes as ${as} say it`);
+    assert.equal(count(all(x), prompts.NOTES_KNOW), 1, 'said once');
+  }
+  /* a scene: in the system message, and his character's thoughts are the narrator's alone */
+  await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', narrator: 'THE NARRATOR', late: '', partner: '' } });
+  await reset();
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Joon' });
+  await script([{ text: 'The gate creaks.' }]);
+  await talk.playSay({ playId: id, text: 'I use my last charm. (Two a day, and this is my second.)' });
+  const play = (await requests())[0];
+  const psys = play.body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+  assert.ok(psys.includes('What I write of Joon’s thoughts, and anything my lines explain') && psys.includes('everyone else knows only what Joon lets them see and hear'), psys.slice(0, 200));
+  assert.equal(count(all(play), prompts.NOTES_KNOW), 1, 'the notes, for the narrator alone');
+  /* the partner: told for a passage it writes; the notes as it talks them over are not fenced off from it */
+  await reset();
+  await script([{ text: 'Fine as it is.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'How is it?' });
+  const part = (await requests())[0];
+  assert.ok(all(part).includes('A passage you write is the book: in it, people know only what they have lived, seen or been told'), 'its passages');
+  assert.equal(count(all(part), prompts.NOTES_KNOW), 0, 'it talks the book over knowing all of it');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the checker and the judge look for someone knowing what they never lived, saw or were told — what his words to the writer explain included', async () => {
+  await setHouse({}, { checksFrom: 0 });
+  const b = await makeBook([['Jovan raised a hand and the blade stopped in the air. “Stranger. How many of those do you have left?” Kenjaku asked.']]);
+  await script([{ text: JSON.stringify({ edits: [], grades: [{ passage: '1.1', checks: ALL_YES(), faults: [] }] }) }]);
+  await checker.runCheck(b.novelId);
+  const [x] = (await requests()).filter((q) => String(q.body.messages.at(-1).content).includes('Check these passages from'));
+  const t = x.body.messages.map((m) => String(m.content || '')).join('\n');
+  assert.ok(t.includes('But someone knowing what they never lived, saw or were told — a secret, how another’s power works or its limits, what my words to the writer explain — beyond what anyone there would plainly make of it, is a slip.'), 'the checker');
+  assert.ok(t.includes('who knows what (nobody knows what they never lived, saw or were told)'), 'the judge’s True to the book');
+  await setHouse();
+  await putAway(b);
+});
+
 /* last of all: it lets go of every record this page holds, as a page does when a copy comes back */
 await test('a copy brought back while the page was away: what it kept waiting is let go, never saved over the copy', async () => {
   const b = await makeBook([['Mara kept the light.']]);
