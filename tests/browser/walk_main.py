@@ -149,8 +149,12 @@ async def scenario_main(b):
     await pg.click('#sideFoot button:has-text("Three choices")')
     await pg.wait_for_timeout(200)
     check('Three choices turns on', await pg.get_attribute('#sideFoot button:has-text("Three choices")', 'aria-pressed') == 'true')
+    # the newest part was told before they were on: said, with the way to ask again — never an empty row
+    none = await pg.locator('#sideBody .nochoices').all_inner_texts()
+    check('a part that came with no choices says so, and how to ask again', none == ['No choices came with this part — Another answer, on it, tells it again with them.'], none)
     await pg.click('#sideFoot button:has-text("Send")')
     await pg.wait_for_selector('#sideBody .choices .choice', timeout=8000)
+    check('…and the line goes once the choices come', await pg.locator('#sideBody .nochoices').count() == 0)
     ways = await pg.locator('#sideBody .choices .choice').all_inner_texts()
     words = await pg.inner_text('#sideBody .turn.ai >> nth=-1')
     check('the narrator offers three ways, as buttons, never in its words', ways == ['Mara asks the stranger his name.', 'Mara turns back up the steps.', 'Mara holds out the letter.'] and 'choices' not in words and 'asks the stranger' not in words, (ways, words[-160:]))

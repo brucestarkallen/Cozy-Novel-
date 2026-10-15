@@ -2170,24 +2170,45 @@ async function auditNotes(novelId, conn) {
   let only = null;
   let others = [];
   let nextFrom = 0;
+  /* A ROUND OF GROUPS IS ONE CHECK, MADE AS SOON AS IT CAN BE (Cozy Tavern
+   * M752-017: the automatic audit starts as soon as it can). Notes too long
+   * for its model are checked a group at a time, one group straight after
+   * another — never a group now and the rest readings later — each card once
+   * in the round (the cards it has checked are kept by name, so a card put
+   * right or folded away moves no other out of its turn), and what the round
+   * puts right, what it leaves and its Undo are gathered as one check. A
+   * group that fails is passed by and waits, as any failure does; the round
+   * goes on at the next check. */
+  const gen0 = (novel.memory || {}).reread || 0;
+  const seen0 = (a0.roundLeft || 0) > 0 && (a0.roundGen || 0) === gen0 && Array.isArray(a0.roundSeen) ? new Set(a0.roundSeen) : null;
   /* a check whose answer outgrew its room checks fewer cards at once from then on (Cozy Tavern M719) */
   const cap = Number.isFinite(a0.groupMax) && a0.groupMax > 0 ? a0.groupMax : Infinity;
   if ((estimateTokens(notesText(novel, { forHelper: true })) > budget || every.length > cap) && budget >= 800) {
     const start = Math.min(Math.max(0, a0.from || 0), Math.max(0, every.length - 1));
+    /* the round goes on with the cards it has not checked yet; when none is left, a new round begins */
+    const fresh = !seen0 || every.every((x) => seen0.has(x.card.id));
     only = new Set();
+    let last = -1;
     for (let i = 0; i < every.length && only.size < cap; i++) {
       const x = every[(start + i) % every.length];
+      if (!fresh && seen0.has(x.card.id)) continue;
       only.add(x.card.id);
       if (estimateTokens(notesText(novel, { forHelper: true, only })) > budget && only.size > 1) { only.delete(x.card.id); break; }
+      last = i;
     }
-    nextFrom = (start + only.size) % every.length;
+    nextFrom = (start + last + 1) % every.length;
     others = every.filter((x) => !only.has(x.card.id)).map((x) => x.card.name);
   }
   /* a group the check could not make is passed by: the next check goes on to the next group, and this one comes round again (Cozy Tavern M675-7) */
   const fromAfter = only ? nextFrom : (a0.from || 0);
+  const roundOn = Boolean(only) && Boolean(seen0) && every.some((x) => !seen0.has(x.card.id));
+  const roundId = roundOn && a0.roundId ? a0.roundId : newId('rd');
+  const seenAfter = only ? [...(roundOn ? seen0 : []), ...only] : [];
+  const roundLeft = only ? every.filter((x) => !seenAfter.includes(x.card.id)).length : 0;
+  const roundKeep = only ? { roundId, roundAll: seenAfter.length + roundLeft, roundLeft, roundSeen: seenAfter, roundGen: gen0, roundFixed: roundOn ? a0.roundFixed || 0 : 0, roundChanges: roundOn ? a0.roundChanges || [] : [] } : {};
   const tooSmall = (why) => {
     /* never checked against no book: said, and not asked again until it is due */
-    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: why, fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
+    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: why, fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...roundKeep, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
   };
   if (budget < 800) { tooSmall(tooSmallWhy(conn, novel, 'the notes')); return; }
   const fixed = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true, only })) + estimateTokens(others.join(', ')) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 2000;
@@ -2232,7 +2253,7 @@ async function auditNotes(novelId, conn) {
     if (n < 2) throw failed({ error: got.error });
     stuck.delete('audit:' + novelId);
     /* its model would not check the notes: said so, and not asked again until it is due */
-    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: cutWords(got.error || 'its model would not check them', 300), fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
+    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: cutWords(got.error || 'its model would not check them', 300), fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...roundKeep, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
     return;
   }
   stuck.delete('audit:' + novelId);
@@ -2265,7 +2286,12 @@ async function auditNotes(novelId, conn) {
   if (folded.cards.length || Object.keys(kept).length) {
     if (folded.cards.length) store.change('novel', novelId, novelSteps.applyCards(folded.cards));
     for (const [key, k] of Object.entries(kept)) store.change('novel', novelId, novelSteps.setKept(key, k.after));
-    store.change('novel', novelId, novelSteps.setMemory({ undo: { at: Date.now(), label, keep: false, cards: folded.cards, kept, changed: changed.slice(0, 200) }, lit: { at: Date.now(), label, changed: changed.slice(0, 200) } }));
+    /* a group of a round: one Undo, and one lighting, for every group of it so far (nothing read in between) */
+    const u0 = (latest.memory || {}).undo;
+    const joined = Boolean(only) && Boolean(u0) && u0.round === roundId && Array.isArray(u0.cards);
+    const cardsAll = joined ? [...u0.cards, ...folded.cards] : folded.cards;
+    const changedAll = (joined ? [...(u0.changed || []), ...changed] : changed).slice(0, 200);
+    store.change('novel', novelId, novelSteps.setMemory({ undo: { at: Date.now(), label, keep: false, cards: cardsAll, kept, changed: changedAll, ...(only ? { round: roundId } : {}) }, lit: { at: Date.now(), label, changed: changedAll } }));
   }
   /* what it found, for him to read: whether anything is left for him, in its
    * words — never "clear" while a change it gave did not hold (Cozy Tavern
@@ -2273,11 +2299,14 @@ async function auditNotes(novelId, conn) {
   const verdict = cleanText(got.obj && got.obj.verdict, 800);
   const refused = folded.refused.slice(0, 40);
   const clear = truthOf(got.obj && got.obj.clear) !== false && !folded.refused.length;
-  /* checked a group at a time: what the earlier groups of this round left open stays said until the round comes back to the start */
-  const round = only && (a0.from || 0) !== 0 && a0.round ? a0.round : [];
+  /* checked a group at a time: what the earlier groups of this round left open stays said through the round */
+  const round = roundOn && a0.round ? a0.round : [];
   const nextRound = only ? [...round, ...(clear ? [] : [{ at: Date.now(), verdict, refused }])].slice(-6) : [];
-  store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, fixed: folded.cards.length + Object.keys(kept).length, changes: changed.slice(0, 200), verdict, clear, partial, refused, refusedAll: folded.refused.length,
-    ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round } : {}), ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
+  const fixedNow = folded.cards.length + Object.keys(kept).length;
+  store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, fixed: fixedNow, changes: changed.slice(0, 200), verdict, clear, partial, refused, refusedAll: folded.refused.length,
+    ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round, ...roundKeep, roundFixed: roundKeep.roundFixed + fixedNow, roundChanges: [...roundKeep.roundChanges, ...changed].slice(0, 200) } : {}), ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) },
+    /* the next group of the round, as soon as the helper is free */
+    auditAsked: roundLeft > 0 }));
   await store.flush('novel', novelId);
 }
 

@@ -243,9 +243,12 @@ export function plainName(name) {
 export function namesAndFigures(text) {
   const t = String(text || '');
   const out = [];
-  for (const m of t.matchAll(/\d+(?:[.,:]\d+)*(?:st|nd|rd|th)?|\p{Lu}[\p{L}\p{M}]*(?:['’-]\p{L}[\p{L}\p{M}]*)*/gu)) {
+  /* a number standing alone; or a word whole — a name with a figure in it ("C3PO", "R2-D2", "Card7") is one name, never a name and a figure */
+  for (const m of t.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,:]\d+)*(?:st|nd|rd|th)?(?![\p{L}\p{N}])|[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:['’-][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*/gu)) {
     const tok = m[0];
-    if (/^\d/.test(tok)) { if (!/(?:st|nd|rd|th)$/.test(tok)) out.push(tok); continue; }
+    if (/^\d+(?:[.,:]\d+)*(?:st|nd|rd|th)?$/.test(tok)) { if (!/(?:st|nd|rd|th)$/.test(tok)) out.push(tok); continue; }
+    /* a word that is not a name: no capital to open it */
+    if (!/^\p{Lu}/u.test(tok)) continue;
     if (tok.length < 2) continue;
     let k = m.index - 1;
     while (k >= 0 && /\s/.test(t[k])) k--;

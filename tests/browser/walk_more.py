@@ -1089,6 +1089,16 @@ async def scenario_notes(b):
     await pg.click('#sidePane .lightcard.aside button:has-text("Read it again")'); await pg.wait_for_timeout(500)
     n = await novel()
     check('Read it again takes it off the list', not (n.get('memory') or {}).get('aside'), (n.get('memory') or {}).get('aside'))
+    # notes too long for its model: checked a group at a time, one group straight after another — the round said as it goes, and as one check once done
+    going = "{ at: Date.now(), reads: 0, v: 2, checked: true, fixed: 1, changes: [{ name: 'Card18', how: 'changed', why: 'the book says so' }], verdict: 'These hold.', clear: true, some: { checked: 12, all: 30 }, roundId: 'rd-x', roundAll: 30, roundLeft: 12, roundSeen: [], roundFixed: 1, roundChanges: [{ name: 'Card0', how: 'changed', why: 'the book says so' }], round: [], earlier: [] }"
+    await pg.evaluate(f"import('/js/store.js').then((s) => s.change('novel', '{nid}', (n) => {{ n.memory.auditAsked = false; n.memory.audit = {going}; }}, {{ now: true }}))")
+    await pg.wait_for_timeout(600)
+    report = await pg.inner_text('#sidePane .checkbox')
+    check('a round of the check made a group at a time says how far it has come, never “you can carry on” before every card is checked', '18 of the 30 cards so far: 1 card put right, the rest hold true to the book.' in report and 'one group straight after another — 18 of the 30 cards so far' in report and 'You can carry on' not in report, report)
+    await pg.evaluate(f"import('/js/store.js').then((s) => s.change('novel', '{nid}', (n) => {{ n.memory.audit = {{ ...{going}, fixed: 1, roundLeft: 0, roundFixed: 2, roundChanges: [{{ name: 'Card0', how: 'changed', why: 'the book says so' }}, {{ name: 'Card18', how: 'changed', why: 'the book says so' }}] }}; }}, {{ now: true }}))")
+    await pg.wait_for_timeout(600)
+    report = await pg.inner_text('#sidePane .checkbox')
+    check('a round done is said as one check of every card: what each group put right together, and he can carry on', '2 cards put right, the rest hold true to the book. You can carry on.' in report and 'Card0' in report and 'Card18' in report and 'all 30 cards were checked a group at a time' in report, report)
     errs = [l for l in logs if 'PAGEERROR' in l or l.startswith('error')]
     check('no errors on the page', not errs, errs[:3])
 

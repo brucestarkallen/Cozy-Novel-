@@ -476,20 +476,23 @@ function checkReport(n, { asked, off, cards }) {
   }
   if (!a.checked) { box.append(h('b', 'Not checked against the book yet.'), ` ${next} Check the notes against the book does it now.`); return box; }
   if (a.failed) { box.append(h('b', `The last check could not be made (${timeAgo(a.at)}).`), ` It could not check them: ${a.failed}. ${next}`); return box; }
-  const changes = a.changes || [];
+  /* notes too long for its model, checked a group at a time one straight after another: a round done is one check of every card, said as one (Cozy Tavern M752-017) */
+  const roundDone = Boolean(a.some) && a.roundLeft === 0 && (a.roundAll || 0) > 0;
+  const roundGoing = Boolean(a.some) && (a.roundLeft || 0) > 0;
+  const changes = (roundDone ? a.roundChanges : a.changes) || [];
   /* counted from what it changed, never from the list kept to show */
-  const fixed = Number.isFinite(a.fixed) ? a.fixed : changes.length;
+  const fixed = roundDone && Number.isFinite(a.roundFixed) ? a.roundFixed : Number.isFinite(a.fixed) ? a.fixed : changes.length;
   const refused = a.refused || [];
   const earlier = (a.earlier || []).filter((x) => x && (x.verdict || (x.refused || []).length));
   /* "you can carry on" only for the whole notes, checked and clear (a group checked says how many) */
-  const whose = a.some ? `${a.some.checked} of the ${a.some.all} cards` : '';
+  const whose = roundDone ? '' : roundGoing ? `${a.roundAll - a.roundLeft} of the ${a.roundAll} cards so far` : a.some ? `${a.some.checked} of the ${a.some.all} cards` : '';
   /* a verdict is of the book as it was checked: once newer pages are read into the notes it says so, never "you can carry on" over them (Cozy Tavern M694) */
   const since = a.reads || 0;
   const hold = since ? 'held true to the book then' : 'hold true to the book';
   const tail = since ? ` ${plural(since, 'reading')} of newer pages since, not checked yet — ${next.charAt(0).toLowerCase()}${next.slice(1)}` : ' You can carry on.';
-  const head = a.clear === false
+  const head = a.clear === false || (roundDone && earlier.length)
     ? `Checked ${timeAgo(a.at)}${whose ? ` (${whose})` : ''} — something is worth a look:`
-    : a.some ? `Checked ${timeAgo(a.at)} — ${whose}${fixed ? `: ${plural(fixed, 'card')} put right, the rest ${hold}` : `, and they ${hold}`}.`
+    : whose ? `Checked ${timeAgo(a.at)} — ${whose}${fixed ? `: ${plural(fixed, 'card')} put right, the rest ${hold}` : `, and they ${hold}`}.`
     : fixed ? `Checked ${timeAgo(a.at)} — ${plural(fixed, 'card')} put right, the rest ${hold}.${tail}`
     : `Checked ${timeAgo(a.at)} — every card ${since ? 'held true to the book then' : 'holds true to the book'}.${tail}`;
   box.append(h('b', head));
@@ -518,7 +521,9 @@ function checkReport(n, { asked, off, cards }) {
     for (const x of earlier) ul.append(h('li', `${timeAgo(x.at)}: ${x.verdict || 'something was worth a look'}${(x.refused || []).length ? ` (left as it is: ${x.refused.slice(0, 4).map((r) => r.name).join(', ')}${x.refused.length > 4 ? '…' : ''})` : ''}`));
     box.append(ul);
   }
-  if (a.some) box.append(h('p.notekey', `The notes are longer than its model holds, so ${a.some.checked} of the ${a.some.all} cards were checked this time — the rest in turn, at the next checks.`));
+  if (roundDone) box.append(h('p.notekey', `The notes are longer than its model holds, so all ${a.roundAll} cards were checked a group at a time, one group straight after another.`));
+  else if (roundGoing) box.append(h('p.notekey', `The notes are longer than its model holds, so they are checked a group at a time, one group straight after another — ${a.roundAll - a.roundLeft} of the ${a.roundAll} cards so far.`));
+  else if (a.some) box.append(h('p.notekey', `The notes are longer than its model holds, so ${a.some.checked} of the ${a.some.all} cards were checked this time — the rest in turn, at the next checks.`));
   if (a.partial) box.append(h('p.notekey', 'The book is longer than its model holds, so its oldest chapters were checked by their summaries — a card was changed only where the words it saw say otherwise.'));
   box.append(h('p.notekey', next));
   return box;
@@ -1245,6 +1250,10 @@ function drawOnePlay(p) {
         if (tell) { tb.value = ''; typed.tell = ''; }
         playMove(p, c, tell);
       } }, c))));
+  } else if ((store.peek('house', 'house') || {}).sceneChoices && lv && !lv.streaming && !working && sceneWords(String(lv.text || '')).trim()) {
+    /* Three choices on, and none came with the newest part (told before they were on, or left out): said, with the way to ask
+     * again — never an empty row (Cozy Tavern m752-018/019) */
+    box.append(h('p.hint.nochoices', 'No choices came with this part — Another answer, on it, tells it again with them.'));
   }
   ui.rightBody.append(box);
   const ta = h('textarea', { rows: 1, placeholder: `What does ${p.who} say or do?`, 'aria-label': `What ${p.who} says or does` });
@@ -1268,6 +1277,8 @@ function drawOnePlay(p) {
     store.change('house', 'house', (x) => { if (on) x.sceneChoices = true; else delete x.sceneChoices; }, { now: true });
     choicesBtn.setAttribute('aria-pressed', String(on));
     toast(on ? 'After each part, the narrator offers three ways it could go.' : 'No more choices offered.');
+    /* the line under the newest part follows the switch */
+    drawSide();
   } }, 'Three choices');
   const send = h('button.btn.primary.small', { onclick: async () => {
     if (talk.talkBusy('play', p.id)) { talk.stopTalk('play', p.id); return; }

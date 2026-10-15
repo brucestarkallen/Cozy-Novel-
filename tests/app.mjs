@@ -7682,7 +7682,7 @@ await test('an owner’s possessive is not a thing’s name — “Bruce’s Bat
   assert.ok(fold.refused.some((r) => r.why === 'what it holds is not on the Batwing yet'), JSON.stringify(fold.refused));
 });
 
-heading('the newest of Cozy Tavern (M752-008 to -015)');
+heading('the newest of Cozy Tavern (M752-008 to -017)');
 
 await test('marks nobody reads are no words — emphasis, a zero-width space, a dash however typed, an ellipsis as dots — for his search, the partner’s quotes and the judge’s evidence; and the judge’s words with a comma left out are still the page’s', async () => {
   const words = 'She *knew* it was over — and the lamp​ went out… Tom said, quietly, that it was done.';
@@ -7782,6 +7782,10 @@ await test('the notes’ check puts a card right only with names and figures the
   assert.equal(fold({ name: 'Mara', ties: 'Close to Ilse; owes Kessa a debt.' }).notes.people[0].ties, undefined, 'how she stands, the same');
   /* a reading, from the passage it read, is not held to this */
   assert.equal(archivist.foldNotes(notes, { people: [{ name: 'Mara', about: 'The keeper, aged 34.' }] }, { chapterId: 'c1', grounds }).notes.people[0].about, 'The keeper, aged 34.');
+  /* a name with a figure in it is one name — given by the book, it stands; one the book never gives is still left out */
+  const droid = namesjs.foldedText('Mara kept the light with C3PO beside her.');
+  assert.equal(archivist.foldNotes(notes, { people: [{ name: 'Mara', about: 'The keeper, with C3PO.' }] }, { audit: true, grounds: droid }).notes.people[0].about, 'The keeper, with C3PO.');
+  assert.equal(archivist.foldNotes(notes, { people: [{ name: 'Mara', about: 'The keeper, with R2-D2.' }] }, { audit: true, grounds: droid }).notes.people[0].about, 'The keeper.');
   /* the check itself, against a book on the phone */
   await setHouse();
   const b = await makeBook([['Mara kept the light at Crane Point. She was forty that winter.']], { manual: true });
@@ -7792,6 +7796,46 @@ await test('the notes’ check puts a card right only with names and figures the
   await archivist.run(b.novelId);
   assert.equal(b.novel().notes.people[0].about, 'The keeper.');
   assert.deepEqual(b.novel().memory.audit.refused.map((r) => r.why), ['a name or a figure the book never gives (“34”) — left as it was']);
+  await putAway(b);
+});
+
+await test('notes longer than the helper’s model holds are checked a group at a time, one group straight after another until every card is checked — one check: what it put right counted together, one Undo for all of it, nothing more asked once the round is done', async () => {
+  const b = await makeBook([['Mara met Card7 at the gate.']], { manual: true });
+  const filler = Array.from({ length: 40 }, (_, i) => `Fact ${i} about this one, long and particular, kept for good.`).join(' ');
+  const people = Array.from({ length: 30 }, (_, i) => ({ id: `pe-${i}`, name: `Card${i}`, aka: [], about: `Card${i} is a person. ${filler}`, now: '' }));
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people, places: [], lore: [], threads: [] }), { now: true });
+  markAllSeen(b);
+  await setHouse({ context: 32000 });
+  archivist.askAudit(b.novelId);
+  /* the first group puts Card0 right */
+  await script([{ text: JSON.stringify({ people: [{ name: 'Card0', about: 'Card0 is a person who mends nets.', why: 'the book says so' }], clear: true, verdict: 'These hold.' }) }]);
+  await archivist.run(b.novelId);
+  let a = b.novel().memory.audit;
+  assert.ok(a.some && a.some.checked < 30 && a.roundLeft === 30 - a.some.checked, JSON.stringify({ some: a.some, left: a.roundLeft }));
+  assert.equal(b.novel().memory.auditAsked, true, 'the next group is due at once — never readings later');
+  let checked = a.some.checked;
+  const second = a.from;
+  /* the next group, by itself: it puts the first card of its own group right */
+  await script([{ text: JSON.stringify({ people: [{ name: `Card${second}`, about: `Card${second} is a person who mends nets.`, why: 'the book says so' }], clear: true, verdict: 'These hold.' }) }]);
+  await archivist.run(b.novelId);
+  checked += b.novel().memory.audit.some.checked;
+  /* and on to the end of the round */
+  for (let i = 0; i < 10 && b.novel().memory.auditAsked; i++) {
+    await script([{ text: JSON.stringify({ clear: true, verdict: 'These hold.' }) }]);
+    await archivist.run(b.novelId);
+    checked += b.novel().memory.audit.some.checked;
+  }
+  a = b.novel().memory.audit;
+  assert.equal(b.novel().memory.auditAsked, false, 'the round done, nothing more is asked');
+  assert.equal(checked, 30, 'every card checked once in the round');
+  assert.deepEqual([a.roundLeft, a.roundAll, a.roundFixed], [0, 30, 2], JSON.stringify({ left: a.roundLeft, all: a.roundAll, fixed: a.roundFixed }));
+  assert.deepEqual(a.roundChanges.map((c) => c.name), ['Card0', `Card${second}`]);
+  /* one Undo puts back what every group of it changed */
+  const about = (n) => b.novel().notes.people.find((c) => c.name === `Card${n}`).about;
+  assert.deepEqual([about(0), about(second)], ['Card0 is a person who mends nets.', `Card${second} is a person who mends nets.`]);
+  assert.ok(archivist.undoLast(b.novelId));
+  assert.ok(about(0).startsWith('Card0 is a person. Fact 0') && about(second).startsWith(`Card${second} is a person. Fact 0`), [about(0), about(second)].join(' | ').slice(0, 200));
+  await setHouse();
   await putAway(b);
 });
 
