@@ -230,9 +230,11 @@ function drawSoon() { if (!drawFrame) drawFrame = requestAnimationFrame(() => { 
 const writingHere = (v) => v.streaming && v.tab === store.CLIENT;
 function shownSig(c) {
   if (!c) return '';
+  /* (and the grade the selected passage's line says: a grade that comes is drawn) */
+  const sel = S.selected ? (c.passages || []).find((p) => p.id === S.selected) : null;
   return JSON.stringify([c.name || '', (c.passages || []).map((p) => ((p.versions || []).some(writingHere)
     ? { ...p, versions: p.versions.map((v) => (writingHere(v) ? { ...v, text: 0, thinking: 0, beat: 0 } : v)) }
-    : p))]);
+    : p)), sel ? gradeSaid(sel, c) : '']);
 }
 
 export function drawPage({ keepScroll = true } = {}) {
@@ -303,7 +305,14 @@ function drawnKey(p, { tint, nums, working }) {
   const live = S.live.get(p.id);
   const v = sel ? picked(p) || {} : null;
   return JSON.stringify([p, live ? [live.text, live.thinking] : 0, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id),
-    sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : ''] : 0]);
+    sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : '', gradeSaid(p)] : 0]);
+}
+/* the judge's grade of the version on show, in the passage's line (with the judge on) */
+function gradeSaid(p, c = chapter()) {
+  if (!c || !checker.judgeOf(store.peek('house', 'house') || {})) return '';
+  const e = checker.entryFor(c, p);
+  const g = e && e.grade;
+  return g && Number.isFinite(g.overall) && g.of ? `graded ${g.overall} of ${g.of}` : '';
 }
 
 function defaultSelected(list) {
@@ -401,10 +410,12 @@ function controls(p) {
   const bits = [];
   const num = passageNumbers(c).get(p.id);
   if (num) bits.push(`Passage ${num}`);
+  const graded = gradeSaid(p);
+  if (graded) bits.push(graded);
   if (v.how === 'mine' || v.how === 'imported') bits.push(v.how === 'imported' ? 'brought in' : 'your words');
   else if (v.how === 'edit') bits.push('edited by you');
   else if (v.how === 'partner') bits.push(v.why ? `changed by your partner: “${v.why.slice(0, 80)}”` : 'changed by your partner');
-  else if (v.how === 'suggested') bits.push('with the checker’s suggestions');
+  else if (v.how === 'suggested') bits.push('the checker’s fixes put in');
   if (v.words || v.text) bits.push(plural(v.words || countWords(v.text), 'word'));
   /* the request that wrote it, counted in full: the provider's own count, or the app's (about) */
   if (Number.isFinite(v.tokensIn)) bits.push(`${v.tokensCounted ? '' : 'about '}${v.tokensIn.toLocaleString()} tokens sent`);

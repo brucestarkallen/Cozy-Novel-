@@ -19,7 +19,7 @@ import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, fres
 import { chapterLabel, novelSteps } from './novel/shape.js';
 import { plural, numberWords } from './util.js';
 import { anyTalking, repairStaleTurns as talkRepair } from './novel/talk.js';
-import { startChecking, busyAny as checkingAny } from './novel/checker.js';
+import { startChecking, busyAny as checkingAny, keepGrades } from './novel/checker.js';
 import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
 import { mendBook } from './novel/mend.js';
@@ -209,6 +209,8 @@ function openMissing(novelId, novel) {
 async function repairNow(novelId) {
   try {
     await writer.repairStale(novelId);
+    /* a grade a fix lost before 2.6.3, put back from the version it was made from */
+    keepGrades(novelId);
     if (store.peek('talk', novelId)) await talkRepair('talk', novelId);
     for (const id of (store.peek('novel', novelId) || {}).plays || []) if (store.peek('play', id)) await talkRepair('play', id);
   } catch (e) { console.warn(e); }

@@ -104,9 +104,13 @@ function drawSheet() {
   const busyNow = st.state === 'checking' || st.state === 'waiting';
   /* waiting out a failure, or stopped: tried again now, by his hand */
   if (checker.stalled(novelId)) row.append(h('button.btn.primary.small', { title: 'The checker tries again at once — even after its connection was turned away. It stops again only if the trouble is still there.', onclick: () => { if (checker.tryNow(novelId)) toast('The checker tries again now.'); } }, 'Try again now'));
-  if (here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s older passages too.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
-  if (all.passages > here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small.quiet', { title: 'The checker reads every passage of the book not checked yet, a chapter at a time.', onclick: async () => {
-    if (!(await confirmIt('Check the whole book?', `${plural(all.passages, 'passage')} that haven’t been checked — about ${all.words.toLocaleString()} words — go to the checker, a chapter at a time.`, 'Check the whole book'))) return;
+  /* (and the passages checked but never graded, with the judge on: graded — their suggestions kept as they are) */
+  const hereN = here.passages + here.ungraded;
+  const allN = all.passages + all.ungraded;
+  if (hereN && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s older passages too, and grades any checked but not graded yet.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
+  if (allN > hereN && !busyNow && st.state !== 'off') row.append(h('button.btn.small.quiet', { title: 'The checker reads every passage of the book not checked yet, and grades any not graded yet, a chapter at a time.', onclick: async () => {
+    const said = [all.passages ? `${plural(all.passages, 'passage')} that haven’t been checked — about ${all.words.toLocaleString()} words —` : '', all.ungraded ? `${all.passages ? 'and ' : ''}${plural(all.ungraded, 'passage')} checked but not graded` : ''].filter(Boolean).join(' ');
+    if (!(await confirmIt('Check the whole book?', `${said} go to the checker, a chapter at a time.`, 'Check the whole book'))) return;
     checker.checkBook(novelId);
   } }, 'Check the whole book'));
   if (row.childNodes.length) s.body.append(row);
@@ -121,7 +125,7 @@ function drawSheet() {
   }
   if (!list.length) {
     /* (older writing: the line above says so, and the buttons are there) */
-    if (st.state === 'clean' && !all.passages) s.body.append(h('p.say', 'Each passage is read once it is finished — for grammar, wording that sounds machine-made (stock wording is counted too), your words to avoid, and slips against the book.'));
+    if (st.state === 'clean' && !allN) s.body.append(h('p.say', 'Each passage is read once it is finished — for grammar and clarity, wording that sounds machine-made (stock wording is counted too), your words to avoid, and slips against the book — and graded, with the judge on.'));
     s.body.scrollTop = scroll;
     return;
   }

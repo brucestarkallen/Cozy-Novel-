@@ -3172,7 +3172,8 @@ await test('writing from before the checker began, or brought in from a file, is
   const st = checker.stateOf(b.novelId);
   assert.equal(st.state, 'clean');
   assert.match(st.words, /3 older passages are checked only when you ask/);
-  assert.deepEqual(checker.unchecked(b.novelId, b.ids[0]), { passages: 2, words: 9 });
+  /* (2.6.3: it says too how many are checked but not graded — none here, the new one graded) */
+  assert.deepEqual(checker.unchecked(b.novelId, b.ids[0]), { passages: 2, words: 9, ungraded: 0 });
   await reset();
   checker.checkChapter(b.novelId, b.ids[0]);
   await checker.runCheck(b.novelId);
@@ -6807,7 +6808,8 @@ await test('a new page that stopped partway is said to wait for its Go on — ne
   assert.equal(st.state, 'clean');
   assert.match(st.words, /A passage that stopped partway is checked once Go on finishes it\./);
   assert.doesNotMatch(st.words, /older passage/);
-  assert.deepEqual(checker.unchecked(b.novelId), { passages: 0, words: 0 });
+  /* (2.6.3: it says too how many are checked but not graded — none: the judge is off) */
+  assert.deepEqual(checker.unchecked(b.novelId), { passages: 0, words: 0, ungraded: 0 });
   await setHouse();
   await putAway(b);
 });
@@ -8051,6 +8053,158 @@ await test('a book added from a copy keeps what the helper read and paid for —
   assert.equal(archivist.pendingWork(copy.novel.id), false, 'nothing to read again');
   await putAway(b);
   await putAway({ novelId: copy.novel.id });
+});
+
+heading('the checker: a grade kept through its fixes, and graded when he asks (2.6.3)');
+
+await test('a grade stays with the words its fixes made — applied by his hand or by themselves: the score, the average and the card still there', async () => {
+  await setHouse({}, { checksFrom: 0 });
+  const b = await makeBook([['Mara climbed the the stair.', 'Tom came up the the path.']]);
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' },
+    { passage: '1.2', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' },
+  ], grades: [{ passage: '1.1', checks: ALL_YES(), faults: [] }, { ...failing(3, 'Make it move.', 'Tom came up'), passage: '1.2' }] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.deepEqual(checker.gradesOf(b.novelId).rows.map((r) => r.overall), [10, 7]);
+  /* by his hand: the fix to the passage under the mark, and Apply all for the rest */
+  const s = checker.suggestions(b.novelId);
+  const fix2 = s.find((x) => x.number === 2 && x.item.kind === 'grammar');
+  assert.equal(checker.applyOne(b.novelId, fix2.chapterId, fix2.passageId, fix2.item.id).ok, true);
+  checker.applyAll(b.novelId);
+  assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['Mara climbed the stair.', 'Tom came up the path.']);
+  assert.deepEqual(checker.gradesOf(b.novelId).rows.map((r) => r.overall), [10, 7], 'the grades stay with the fixed words');
+  assert.deepEqual(checker.suggestions(b.novelId).map((x) => [x.number, x.item.kind, x.item.grade && x.item.grade.overall]), [[2, 'grade', 7]], 'the card and the grade agree');
+  assert.equal(checker.stateOf(b.novelId).state, 'found');
+  await putAway(b);
+  /* by themselves */
+  await setHouse({}, { checksFrom: 0, autoFix: { on: true, from: Date.now() - 1000 } });
+  await reset();
+  const c = await makeBook([['Mara climbed the the stair.']]);
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' }], grades: [{ passage: '1.1', checks: ALL_YES(), faults: [] }] }) }]);
+  await checker.runCheck(c.novelId);
+  assert.equal(picked(c.ch().passages[0]).how, 'suggested');
+  assert.deepEqual(checker.gradesOf(c.novelId).rows.map((r) => r.overall), [10], 'in by itself, the grade kept');
+  await setHouse();
+  await putAway(c);
+});
+
+await test('a grade a fix lost before 2.6.3 is put back from the version the fix was made from — on opening the book and before each look, no model asked', async () => {
+  await setHouse({}, { checksFrom: 0 });
+  const b = await makeBook([['Mara climbed the the stair and and waited.']]);
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' },
+    { passage: '1.1', kind: 'grammar', find: 'and and', replace: 'and', why: 'doubled' },
+  ], grades: [{ ...failing(2, 'Closer.', 'Mara climbed'), passage: '1.1' }] }) }]);
+  await checker.runCheck(b.novelId);
+  /* two fixes, one at a time: a chain of fixed versions */
+  for (let i = 0; i < 2; i++) { const s = checker.suggestions(b.novelId).find((x) => x.item.kind === 'grammar'); checker.applyOne(b.novelId, s.chapterId, s.passageId, s.item.id); }
+  const p = () => b.ch().passages[0];
+  const v = picked(p());
+  assert.equal(v.text, 'Mara climbed the stair and waited.');
+  /* as 2.6.2 and before kept it: the fixed version's checking with no grade */
+  const e = b.ch().checks[p().id][v.id];
+  const { grade: _gone, ...lost } = e;
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p().id, v.id, lost), { now: true });
+  assert.equal(checker.gradesOf(b.novelId).rows.length, 0, 'lost, as he saw it');
+  await reset();
+  assert.equal(checker.keepGrades(b.novelId), 1);
+  assert.deepEqual(checker.gradesOf(b.novelId).rows.map((r) => r.overall), [8], 'put back from two versions before');
+  assert.equal((await requests()).length, 0, 'no model asked');
+  assert.equal(checker.keepGrades(b.novelId), 0, 'once');
+  /* before each look too */
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p().id, v.id, lost), { now: true });
+  await checker.runCheck(b.novelId);
+  assert.deepEqual(checker.gradesOf(b.novelId).rows.map((r) => r.overall), [8]);
+  assert.equal((await requests()).length, 0);
+  /* never from a checking that no longer reads as its version does */
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p().id, v.id, lost), { now: true });
+  store.change('chapter', b.ids[0], (c) => { for (const x of c.passages[0].versions) if (x.id !== v.id && c.checks[c.passages[0].id][x.id]) c.checks[c.passages[0].id][x.id].sig = 'other words'; }, { now: true });
+  assert.equal(checker.keepGrades(b.novelId), 0);
+  assert.equal(checker.gradesOf(b.novelId).rows.length, 0);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('checked with the judge off, or graded before the ten checks: said, never asked by itself — Check this chapter asks for the grade alone, what it found kept; a model that will not grade it is not asked again', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['Mara climbed the the stair.', 'Tom came up the path.']]);
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' }] }) }]);
+  await checker.runCheck(b.novelId);
+  const before = checker.suggestions(b.novelId).map((x) => x.item.id);
+  assert.equal(before.length, 1);
+  /* the judge switched on: nothing is sent by itself — the bubble says so, and the button is there */
+  await setHouse({}, { checksFrom: 0 });
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await requests()).length, 0, 'never asked by itself');
+  assert.deepEqual(checker.unchecked(b.novelId, b.ids[0]), { passages: 0, words: 0, ungraded: 2 });
+  /* (with nothing left to look at, the green line says it) */
+  const leave = checker.suggestions(b.novelId)[0];
+  checker.leaveOne(leave.chapterId, leave.passageId, leave.item.id);
+  assert.match(checker.stateOf(b.novelId).words, /2 passages are checked but not graded yet — Check this chapter, or Check the whole book, grades them\./);
+  /* Check this chapter: the grades alone */
+  await putAway(b);
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  await reset();
+  const c = await makeBook([['Mara climbed the the stair.', 'Tom came up the path.']]);
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' }] }) }]);
+  await checker.runCheck(c.novelId);
+  const ids = checker.suggestions(c.novelId).map((x) => x.item.id);
+  await setHouse({}, { checksFrom: 0 });
+  await reset();
+  checker.checkChapter(c.novelId, c.ids[0]);
+  await script([{ text: JSON.stringify({ grades: [{ passage: '1.1', checks: ALL_YES(), faults: [] }, { ...failing(3, 'Make it move.', 'Tom came up'), passage: '1.2' }] }) }]);
+  await checker.runCheck(c.novelId);
+  const asks = await checkAsk();
+  assert.equal(asks.length, 1, 'one checking');
+  assert.ok(asks[0].includes('Answer every check of every passage') && !asks[0].includes('Suggest only what is worth changing'), 'the grades alone');
+  assert.deepEqual(checker.gradesOf(c.novelId).rows.map((r) => r.overall), [10, 7]);
+  const now = checker.suggestions(c.novelId);
+  assert.deepEqual(now.map((x) => [x.number, x.item.kind]), [[1, 'grammar'], [2, 'grade']], 'what it found kept, and the card for the one under the mark');
+  assert.equal(now[0].item.id, ids[0], 'the same suggestion');
+  assert.deepEqual(checker.unchecked(c.novelId), { passages: 0, words: 0, ungraded: 0 });
+  await putAway(c);
+  /* in one chapter, an older passage never checked and one checked but not graded: each its own checking */
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  await reset();
+  const m = await makeBook([['Mara climbed the stair.', { text: 'Old words from before.', at: 0 }]]);
+  await setHouse({}, { checksFrom: Date.now() - 60000, judge: { on: false } });
+  await script([CK_NONE]);
+  await checker.runCheck(m.novelId);
+  await setHouse({}, { checksFrom: Date.now() - 60000 });
+  assert.deepEqual(checker.unchecked(m.novelId), { passages: 1, words: 4, ungraded: 1 });
+  await reset();
+  checker.checkChapter(m.novelId, m.ids[0]);
+  await checker.runCheck(m.novelId);
+  const two = await checkAsk();
+  assert.equal(two.length, 2, 'two checkings');
+  const whole = two.find((x) => x.includes('Suggest only what is worth changing'));
+  const alone = two.find((x) => !x.includes('Suggest only what is worth changing'));
+  assert.ok(whole && checkedPart(whole).includes('[1.2] Old words') && !checkedPart(whole).includes('[1.1]'), 'the one never checked, checked whole');
+  assert.ok(alone && checkedPart(alone).includes('[1.1] Mara climbed') && !checkedPart(alone).includes('[1.2]'), 'the other, its grade alone');
+  assert.equal(checker.gradesOf(m.novelId).rows.length, 2);
+  await putAway(m);
+  /* a grade from before the ten checks (one number on another scale) is graded again the same way */
+  await reset();
+  const d = await makeBook([['Mara kept the light.']]);
+  await script([{ text: JSON.stringify({ edits: [], grades: [{ passage: '1.1', checks: ALL_YES(), faults: [] }] }) }]);
+  await checker.runCheck(d.novelId);
+  const dp = d.ch().passages[0];
+  const de = d.ch().checks[dp.id][picked(dp).id];
+  store.change('chapter', d.ids[0], shape.chapterSteps.setCheck(dp.id, picked(dp).id, { ...de, grade: { overall: 7, prose: 7 } }), { now: true });
+  assert.equal(checker.unchecked(d.novelId).ungraded, 1);
+  /* a model that answers without a grade: kept as checked, not asked again */
+  checker.checkChapter(d.novelId, d.ids[0]);
+  await reset();
+  await script([{ text: '{"grades": []}' }]);
+  await checker.runCheck(d.novelId);
+  assert.equal((await checkAsk()).length, 1);
+  assert.deepEqual([checker.unchecked(d.novelId).ungraded, checker.waiting(d.novelId)], [0, 0], 'never asked in a loop');
+  await reset();
+  await checker.runCheck(d.novelId);
+  assert.equal((await requests()).length, 0);
+  await setHouse();
+  await putAway(d);
 });
 
 /* last of all: it lets go of every record this page holds, as a page does when a copy comes back */

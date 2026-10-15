@@ -44,7 +44,8 @@ def answer_for(body):
                 edits.append({"passage": num, "kind": "grammar", "find": "letters anymore", "replace": "letters any more", "why": "two words in British English"})
             if "The choice was made by her" in text:
                 edits.append({"passage": num, "kind": "clarity", "find": "The choice was made by her", "replace": "She chose", "why": "the plain active carries it better"})
-        if "Then judge each passage" not in last_user:
+        # (asked for its grades alone: graded the same way)
+        if "Then judge each passage" not in last_user and "Answer every check of every passage" not in last_user:
             return json.dumps({"edits": edits})
         # the judge: every check passed — but a passage that ends on what it all meant fails "ending",
         # and one that says what a look meant fails "shown" too
