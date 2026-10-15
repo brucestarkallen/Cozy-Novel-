@@ -12,7 +12,7 @@ import * as store from '../store.js';
 import * as archivist from '../novel/archivist.js';
 import { h, openSheet, field, toast, confirmIt, download, group } from './dom.js';
 import { novelSteps, COVERS, soundOf } from '../novel/shape.js';
-import { autoOn } from '../novel/prompts.js';
+import { autoOn, bookHasMacro, bookNames } from '../novel/prompts.js';
 import { connFor, stopIn } from '../novel/writer.js';
 import { stopTalk } from '../novel/talk.js';
 import { toMarkdown, toText, toPrintable, toEpub, fileName } from '../novel/files.js';
@@ -147,14 +147,27 @@ export function openBook(novelId, { onGone, onClose } = {}) {
   const plans = h('textarea', { placeholder: 'What you mean to happen later — the writer reads it as plans, never as things that already happened.' });
   plans.value = n.plans || '';
   plans.addEventListener('input', later(() => save('plans', plans.value)));
+  /* words brought from SillyTavern say {{char}} and {{user}}: who {{char}} is, asked once — every model reads the names, never the marks */
+  const charName = h('input', { type: 'text', value: n.meta.char || '', placeholder: 'e.g. Rias' });
+  charName.addEventListener('input', later(() => save('meta', { char: charName.value.trim() })));
+  const charSay = h('em');
+  const charField = h('label.field', h('span', 'Who {{char}} is in your words'), charName, charSay);
+  const drawChar = () => {
+    const now = store.peek('novel', novelId) || n;
+    charField.hidden = !bookHasMacro(now) && !String((now.meta && now.meta.char) || '').trim();
+    const names = bookNames(store.peek('house', 'house') || {}, now);
+    charSay.textContent = `Your words here say {{char}} or {{user}}: every model reads {{user}} as ${names.user === 'me' ? 'you (your name, in Settings → Your instructions)' : names.user}, and {{char}} as the name you give here${String((now.meta && now.meta.char) || '').trim() ? '' : ' (until then, “the other main character”)'}.`;
+  };
+  drawChar();
   s.body.append(
     about.el,
     reads.el,
     h('div.field', h('span', 'Sound'), sound, soundSay),
     field('Where it’s headed', plans),
+    charField,
     h('p.say', `${plural(n.meta.words || 0, 'word')} in ${plural((n.order || []).length, 'chapter')}. Everything here saves as you type.`));
   /* what the helper keeps arrives while the sheet is open */
-  off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); });
+  off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); drawChar(); });
 
   /* what the first Cozy Novel held that has no place of its own here, word for word */
   const kept = (n.migrated && Array.isArray(n.migrated.kept)) ? n.migrated.kept : [];

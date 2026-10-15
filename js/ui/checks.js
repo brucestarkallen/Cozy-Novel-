@@ -102,6 +102,8 @@ function drawSheet() {
   const here = checker.unchecked(novelId, C.chapterId);
   const all = checker.unchecked(novelId);
   const busyNow = st.state === 'checking' || st.state === 'waiting';
+  /* waiting out a failure, or stopped: tried again now, by his hand */
+  if (checker.stalled(novelId)) row.append(h('button.btn.primary.small', { title: 'The checker tries again at once — even after its connection was turned away. It stops again only if the trouble is still there.', onclick: () => { if (checker.tryNow(novelId)) toast('The checker tries again now.'); } }, 'Try again now'));
   if (here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s older passages too.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
   if (all.passages > here.passages && !busyNow && st.state !== 'off') row.append(h('button.btn.small.quiet', { title: 'The checker reads every passage of the book not checked yet, a chapter at a time.', onclick: async () => {
     if (!(await confirmIt('Check the whole book?', `${plural(all.passages, 'passage')} that haven’t been checked — about ${all.words.toLocaleString()} words — go to the checker, a chapter at a time.`, 'Check the whole book'))) return;

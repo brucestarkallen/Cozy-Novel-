@@ -370,6 +370,8 @@ function drawNotes() {
   const m = n.memory || {};
   const u = m.undo;
   const again = archivist.rereading(novelId);
+  /* waiting out a failure, or stopped: tried again now, by his hand */
+  if (archivist.stalled(novelId)) row.append(h('button.btn.primary.small', { title: 'The helper tries again at once — even after its connection was turned away. It stops again only if the trouble is still there.', onclick: () => { if (archivist.tryNow(novelId)) toast('The helper tries again now.'); drawSide(); } }, 'Try again now'));
   if (again) row.append(h('button.btn.small', { title: 'Stops reading the whole book again and puts back the notes, the summaries’ marks and what it keeps of the book as they were before — anything you edited since stays as you left it.', onclick: () => { if (archivist.undoLast(novelId)) toast('Stopped — the notes are back as they were.'); drawSide(); } }, 'Stop, and put the notes back'));
   else if (u && ((Array.isArray(u.cards) ? u.cards.length : u.notes) || (u.kept && Object.keys(u.kept).length))) row.append(h('button.btn.small', { title: 'Puts back only what the helper’s last reading changed — a card you edited since stays as you left it.', onclick: () => { if (archivist.undoLast(novelId)) toast('What that reading changed is put back — anything you edited since stays as you left it.'); drawSide(); } }, 'Undo the last reading'));
   /* the auditor: the whole notes held against the book as it stands */
@@ -481,11 +483,15 @@ function checkReport(n, { asked, off, cards }) {
   const earlier = (a.earlier || []).filter((x) => x && (x.verdict || (x.refused || []).length));
   /* "you can carry on" only for the whole notes, checked and clear (a group checked says how many) */
   const whose = a.some ? `${a.some.checked} of the ${a.some.all} cards` : '';
+  /* a verdict is of the book as it was checked: once newer pages are read into the notes it says so, never "you can carry on" over them (Cozy Tavern M694) */
+  const since = a.reads || 0;
+  const hold = since ? 'held true to the book then' : 'hold true to the book';
+  const tail = since ? ` ${plural(since, 'reading')} of newer pages since, not checked yet — ${next.charAt(0).toLowerCase()}${next.slice(1)}` : ' You can carry on.';
   const head = a.clear === false
     ? `Checked ${timeAgo(a.at)}${whose ? ` (${whose})` : ''} — something is worth a look:`
-    : a.some ? `Checked ${timeAgo(a.at)} — ${whose}${fixed ? `: ${plural(fixed, 'card')} put right, the rest hold true to the book` : ', and they hold true to the book'}.`
-    : fixed ? `Checked ${timeAgo(a.at)} — ${plural(fixed, 'card')} put right, the rest hold true to the book. You can carry on.`
-    : `Checked ${timeAgo(a.at)} — every card holds true to the book. You can carry on.`;
+    : a.some ? `Checked ${timeAgo(a.at)} — ${whose}${fixed ? `: ${plural(fixed, 'card')} put right, the rest ${hold}` : `, and they ${hold}`}.`
+    : fixed ? `Checked ${timeAgo(a.at)} — ${plural(fixed, 'card')} put right, the rest ${hold}.${tail}`
+    : `Checked ${timeAgo(a.at)} — every card ${since ? 'held true to the book then' : 'holds true to the book'}.${tail}`;
   box.append(h('b', head));
   if (a.verdict) box.append(h('p.verdict', a.verdict));
   if (changes.length) {
@@ -534,7 +540,8 @@ function readingsSection() {
   if (!rows.length) box.append(h('p.notekey', 'None kept yet — each reading from now on is.'));
   /* the newest few; the rest one tap away */
   const all = P.readingsAll === P.novelId;
-  for (const r of rows.slice(0, all ? 60 : 8)) {
+  /* Show all is all of them (it drew sixty, the rest out of reach and unsaid — Cozy Tavern M134) */
+  for (const r of all ? rows : rows.slice(0, 8)) {
     const what = r.changed.length ? r.changed.slice(0, 6).map((c) => `${c.how === 'new' ? 'new' : c.how === 'gone' ? 'took out' : 'updated'} ${c.name}`).join(', ') + (r.changed.length > 6 ? '…' : '') : 'changed nothing';
     const state = r.live ? 'in the notes now' : r.shown ? 'the version on show — not read into the notes yet' : 'an earlier version — its notes come back when you pick it';
     box.append(h('div.card.reading' + (r.live ? '.fresh' : ''),
@@ -544,7 +551,7 @@ function readingsSection() {
         h('button.btn.small.quiet', { title: 'Takes out only what this reading changed; a card changed since stays as it is.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid)) toast('What that reading changed is put back — anything changed since stays as it is.'); drawSide(); } }, 'Put back'),
         h('button.btn.small.quiet', { title: 'Puts it back, then the helper reads that passage afresh.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid, { readAgain: true })) toast('Put back — the helper reads that passage again in a moment.'); drawSide(); } }, 'Read again')) : null));
   }
-  if (!all && rows.length > 8) box.append(h('button.btn.quiet.small', { onclick: () => { P.readingsAll = P.novelId; drawSide(); } }, `Show all ${rows.length}`));
+  if (!all && rows.length > 8) box.append(h('button.btn.quiet.small', { title: `Shows every one of the ${rows.length} kept.`, onclick: () => { P.readingsAll = P.novelId; drawSide(); } }, `Show all ${rows.length}`));
   sec.append(head, box);
   return sec;
 }
@@ -911,10 +918,10 @@ function drawTurn(kind, id, turn) {
     /* the answer as it came, its blocks and all (Cozy Tavern's "What it said, whole") */
     !mine && kind === 'talk' && String(v.text || '').trim() !== wordsOf(v.text).trim() ? { label: 'What it said, whole', hint: 'The answer as it came — its changes block and all.', run: () => showWhole(v.text) } : null,
     !mine && v.sent ? { label: 'What was sent', hint: 'Everything this answer was asked with, as it went out.', run: () => showSent(P.novelId, v.sent) } : null,
-    !mine && kind === 'play' && (String(v.tookOff || '').trim() || String(v.tookOffTop || '').trim()) ? { label: 'Put back what was taken off', hint: 'What the narrator added around its telling — a heading above it, a note to you or a block of tracking after it — back where it was, as a new version of this answer.', disabled: talk.talkBusy('play', id), run: () => { if (talk.putBackTelling({ playId: id, turnId: turn.id })) toast('Put back — the answer without it is one arrow away.'); } } : null,
+    !mine && kind === 'play' && (String(v.tookOff || '').trim() || String(v.tookOffTop || '').trim()) ? { label: 'Put back what was taken off', hint: 'What the narrator added around its telling — a heading or its plan above it, a note to you, its check of its work or a block of tracking after it — back where it was, as a new version of this answer.', disabled: talk.talkBusy('play', id), run: () => { if (talk.putBackTelling({ playId: id, turnId: turn.id })) toast('Put back — the answer without it is one arrow away.'); } } : null,
     { label: 'Copy', hint: mine ? 'Your words, to paste anywhere.' : 'Its words, to paste anywhere.', run: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') },
     '-',
-    { label: 'Remove', hint: mine ? `This message and the ${kind === 'play' ? 'telling' : 'answer'} to it go from the ${kind === 'play' ? 'scene' : 'conversation'}, with Undo${kind === 'talk' ? '; changes it made stay in the book' : ''}.` : 'This answer goes from the conversation, with Undo; changes it made stay in the book.', danger: true, run: () => removeTurn(kind, id, turn) },
+    { label: 'Remove', hint: mine ? `This message and the ${kind === 'play' ? 'telling' : 'answer'} to it go from the ${kind === 'play' ? 'scene' : 'conversation'}, with Undo${kind === 'talk' ? '; changes it made stay in the book' : ''}.` : kind === 'play' ? 'This telling goes from the scene, with Undo.' : 'This answer goes from the conversation, with Undo; changes it made stay in the book.', danger: true, run: () => removeTurn(kind, id, turn) },
   ]) }, icon('more', 16)));
   el.append(row);
   return el;
@@ -1299,7 +1306,7 @@ async function playMove(p, text, tell) {
 async function toProse(p0, fromStart) {
   const p = talk.mendScene(p0.id) ? store.peek('play', p0.id) : p0;
   const tr = talk.transcriptOf(p, { fromStart });
-  if (!tr.count) { toast('Nothing new to write yet.'); return; }
+  if (!tr.count) { toast(tr.waiting ? 'Nothing to write in yet — the narrator has not told your last move.' : 'Nothing new to write yet.'); return; }
   /* his hand first: a page the app is writing by itself stops and is taken away whole (the same door as the desk's) */
   await writer.yieldAuto(P.novelId);
   const n = store.peek('novel', P.novelId);
@@ -1312,6 +1319,8 @@ async function toProse(p0, fromStart) {
     /* the scene goes on from the prose now in the book: what was turned rides as the book, not again as talk */
     store.change('play', p.id, turnSteps.set({ turned: tr.lastId, updated: Date.now(), ...(out.passageId ? { after: out.passageId, chapterId } : {}) }), { now: true });
     archivist.nudge(P.novelId);
+    /* his move the narrator has not told yet stays in the scene: said */
+    if (tr.waiting) toast(`Written in up to the narrator’s last telling — your last ${tr.waiting === 1 ? 'move stays' : 'moves stay'} in the scene, for the narrator to tell.`, 6000);
   } else if (out && !out.stopped && out.error) toast('The scene was not written: ' + out.error, 7000);
 }
 

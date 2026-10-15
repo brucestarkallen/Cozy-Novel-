@@ -14,16 +14,30 @@ let hooks = {};
 let rows = [];
 let showArchived = false;
 let query = '';
+/* the list of books: never read yet, on its way, read ('ok'), or not read
+ * ('failed') — an empty shelf is welcomed only when the phone said so;
+ * books that could not be read are never shown as no books */
+let listState = 'idle';
+let asked = 0;
+let away = false;            /* the list failed because the phone did not answer at all */
 
 export function initShelf(elements, appHooks) {
   ui = elements;
   hooks = appHooks;
   ui.search.addEventListener('input', debounce(() => { query = ui.search.value.trim().toLowerCase(); draw(); }, 150));
   store.onShelf(debounce(() => { if (!ui.root.hidden) refresh(); }, 250));
+  /* the phone answers again: the books it could not list come by themselves */
+  store.onStatus((s) => { if (!s.offline && listState === 'failed' && !ui.root.hidden) refresh(); });
 }
 
 export async function refresh() {
-  try { rows = await store.listNovels(); } catch (_) { /* the banner says the phone is not answering */ }
+  const mine = ++asked;
+  if (listState !== 'ok') { listState = 'loading'; draw(); }
+  let got = null;
+  try { got = await store.listNovels(); } catch (_) { /* the banner says when the phone is not answering */ }
+  /* only the newest asking draws: an older list arriving late is not the shelf */
+  if (mine !== asked) return;
+  if (got) { rows = got; listState = 'ok'; } else if (listState !== 'ok') { listState = 'failed'; away = store.status().offline; }
   draw();
 }
 
@@ -35,13 +49,25 @@ function draw() {
   ui.books.textContent = '';
   const live = rows.filter((r) => !(r.meta && r.meta.archived));
   ui.search.hidden = rows.length < 7;
+  if (!rows.length && listState !== 'ok') {
+    ui.foot.textContent = '';
+    if (listState === 'failed') {
+      ui.books.append(h('div.empty-shelf.unread',
+        h('h2', 'Your books could not be read just now.'),
+        h('p', away
+          ? 'The phone is not answering, so the list of them did not come — nothing is lost. They come back here by themselves when it answers again.'
+          : 'The phone could not send the list of them just now — nothing is lost. Try again in a moment.'),
+        h('div.btnrow', h('button.btn.primary', { onclick: () => refresh(), title: 'Ask the phone for your books again.' }, 'Try again'))));
+    } else ui.books.append(h('p.say.shelfwait', 'Reading your books…'));
+    return;
+  }
   if (!rows.length) {
     ui.books.append(h('div.empty-shelf',
       h('h2', 'Every story starts somewhere.'),
       h('p', 'Give it a title and begin. You can write every word yourself, or say what happens and let your writer write it — then keep it, try another take, or rewrite it.'),
-      h('div.btnrow', h('button.btn.primary', { onclick: newBook }, 'Begin a book'), h('button.btn', { onclick: importBook }, 'Bring in a book'))));
+      h('div.btnrow', h('button.btn.primary', { onclick: newBook, title: 'A new book: only a working title is asked.' }, 'Begin a book'), h('button.btn', { onclick: importBook, title: 'A book from a .txt or .md file — its chapter headings become chapters — or a copy from Backups.' }, 'Bring in a book'))));
   } else if (!showArchived) {
-    ui.books.append(h('button.book.new', { onclick: newBook, 'aria-label': 'Begin a new book' }, h('div.cover', h('div.plus', '+'), h('div', { style: { font: '500 18px/1.2 var(--display)' } }, 'A new book'))));
+    ui.books.append(h('button.book.new', { onclick: newBook, 'aria-label': 'Begin a new book', title: 'A new book: only a working title is asked.' }, h('div.cover', h('div.plus', '+'), h('div', { style: { font: '500 18px/1.2 var(--display)' } }, 'A new book'))));
   }
   list.forEach((r, i) => {
     const m = r.meta || {};
@@ -57,8 +83,8 @@ function draw() {
   else if (query && !list.length) ui.books.append(h('p.say', `No book’s title has “${ui.search.value.trim()}” in it.`));
   ui.foot.textContent = '';
   const archivedCount = rows.length - live.length;
-  if (rows.length) ui.foot.append(h('button.btn.quiet.small', { onclick: importBook }, 'Bring in a book'));
-  if (archivedCount || showArchived) ui.foot.append(h('button.btn.quiet.small', { onclick: () => { showArchived = !showArchived; draw(); } }, showArchived ? 'Back to the shelf' : `Archived (${archivedCount})`));
+  if (rows.length) ui.foot.append(h('button.btn.quiet.small', { onclick: importBook, title: 'A book from a .txt or .md file — its chapter headings become chapters — or a copy from Backups.' }, 'Bring in a book'));
+  if (archivedCount || showArchived) ui.foot.append(h('button.btn.quiet.small', { onclick: () => { showArchived = !showArchived; draw(); }, title: showArchived ? 'The books on the shelf.' : 'The books you archived — each one can go back on the shelf.' }, showArchived ? 'Back to the shelf' : `Archived (${archivedCount})`));
 }
 
 /* the book's own sheet — its title, cover, files, archive and removal live

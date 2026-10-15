@@ -109,17 +109,20 @@ export function ridingFor(house, novel, purpose, wake = {}) {
   if (!who) return { always, woken, names };
   const sound = SOUND[soundOf(novel)];
   const tells = who === 'writer' || who === 'narrator';
+  let heated = false;
   for (const m of listModules(house)) {
     if (!m.to.includes(who)) continue;
     const on = m.rides === 'always' || (m.rides === 'intimate' && wake.intimate) || (m.rides === 'fight' && wake.fight);
     const text = String(m.text || '').trim();
     if (!on || !text) continue;
-    const piece = m.id === 'intimate' && tells ? `${text}\n\n${sound.intimate}` : text;
-    (m.rides === 'always' ? always : woken).push(piece);
+    if (m.rides === 'intimate') heated = true;
+    (m.rides === 'always' ? always : woken).push(text);
     names.push(m.name);
   }
   if (tells) {
     always.push(sound.always);
+    /* how an intimate scene sounds rides with whatever rule of his or the app's woke for it — never only with the app's own (Cozy Tavern M510-3) */
+    if (heated) woken.push(sound.intimate);
     if (wake.fight) woken.push(sound.fight);
   }
   return { always, woken, names };

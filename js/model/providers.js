@@ -253,6 +253,8 @@ export function learnedFacts(conn, now = Date.now()) {
     completionField: L.completionField === true,
     /* this model would not take a structured prefill: its pages get the prefill as written (Tavern M580) */
     structuredDown: Number.isFinite(L.structuredDownAt),
+    /* a provider that went silent past the worker's leash: how long it is waited now */
+    quietMs: Number.isFinite(L.quietMs) && L.quietMs > 0 ? L.quietMs : 0,
   };
 }
 

@@ -24,12 +24,14 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, asideWords, standingNotes, macroNames, withMacros } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook } from './prompts.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
 
 export const SAFETY = 1500;
+/* the least an answer is given before a request is refused as too big, when he set no Longest reply (Cozy Tavern M752) */
+export const ANSWER_FLOOR = 4096;
 
 /* How much of the room the answer may need — for budgeting only; what is SENT
  * as the reply's length is his setting alone (providers.js). Never more than
@@ -274,7 +276,7 @@ export function narratorWords(instr) {
  * the request ready up to there); a rule waking or going back to sleep
  * changes the system message before it, so that one request is not kept
  * ready — the next one is. */
-export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null, moment = '', tools = true }) {
+export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null, moment = '', tools = true, notesKept = true }) {
   const instr = (house && house.instructions) || {};
   const notesAs = notesAsOf(house);
   const chapter = chapters[target.chapterId] || chapters[(novel.order || [])[novel.order.length - 1]] || { id: '', passages: [] };
@@ -283,7 +285,7 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   let own = '';
   let frame = '';
   if (purpose === 'write') { own = instr.system; frame = writerFrame(house, novel, { notesAs }); }
-  else if (purpose === 'partner') { own = instr.partner; frame = partnerFrame(house, novel, { notesAs, tools }); }
+  else if (purpose === 'partner') { own = instr.partner; frame = partnerFrame(house, novel, { notesAs, tools, notesKept }); }
   else if (purpose === 'play') { own = narratorWords(instr); frame = playFrame(house, novel, play || {}, label, { notesAs }); }
   /* while the whole book is read again, the notes as they stood before it */
   const shown = standingNotes(novel);
@@ -298,7 +300,9 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const atPoint = pointed ? notesAtPoint(novel, chapters, chapter.id, { mark: target.mark, before: target.before, through: target.through }) : null;
   const notesNow = atPoint && atPoint.later ? { ...shown, notes: atPoint.notes, kept: atPoint.kept } : shown;
   const runsOn = atPoint && atPoint.later && !atPoint.clean ? notesRunOn(novel, chapters) : '';
-  const about = aboutTheBook(notesNow, { plans: true });
+  /* the book's own words with {{user}} and {{char}} filled, never sent raw */
+  const named = namedBook(notesNow, house);
+  const about = aboutTheBook(named, { plans: true });
   /* the modules (modules.js): the ones that always ride, and the ones his words woke */
   const ride = ridingFor(house, novel, purpose, wakesOn(moment));
   /* his words and the modules with the names in them — never {{user}} or {{char}} (Tavern M361) */
@@ -324,7 +328,16 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
    * smaller than this, call.js). Past what it holds, nothing is sent and the
    * reason says which of them takes the room. */
   const instructions = estimateTokens(head) + estimateTokens(woken);
-  const least = instructions + afterCost + 200 + reserve;
+  /* where the answer's room comes from: his Longest reply, or the room a
+   * thinking model needs to think and write (when that is more) */
+  const setReply = Number.isFinite(conn && conn.maxTokens) && conn.maxTokens > 0 ? conn.maxTokens : 0;
+  const floor = thinksOn(conn || {}) ? thinkingFloor(conn || {}) : 0;
+  /* refused only below an answer's floor when he set no Longest reply and no
+   * thinking needs more (Cozy Tavern M752 ANSWER_FLOOR): the larger room is
+   * for fitting the book, never a reason to send nothing while thousands of
+   * tokens stay free for the answer */
+  const needed = setReply || (floor && floor >= reserve) ? reserve : Math.min(reserve, ANSWER_FLOOR);
+  const least = instructions + afterCost + 200 + needed;
   /* THE NOTES NEVER CROWD OUT THE CHAPTER (Cozy Tavern M664, for the writer,
    * the partner and the narrator too): past a third of what is left beside
    * his words, the talk and the answer, the cards the chapter and his request
@@ -333,21 +346,18 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const notesShare = Math.max(1500, Math.floor((total - reserve - instructions - afterCost) / 3));
   /* whole: every card the chapter, his request or his own last words name (Cozy Tavern's M74: a card he asks about is never shown by its first line) */
   const shortIds = new Set();
-  const kept = notesText(notesNow, { fit: notesShare, focus: [chapter.id ? chapterText(chapter) : '', request, moment].filter(Boolean).join('\n'), shortIds });
+  const kept = notesText(named, { fit: notesShare, focus: [chapter.id ? chapterText(chapter) : '', request, moment].filter(Boolean).join('\n'), shortIds });
   const notes = kept || (atPoint && atPoint.also.length) ? [rebuilt ? '' : notesBehind(novel, chapters, chapter, target, purpose, atPoint ? atPoint.also : []), kept ? runsOn : '', kept].filter(Boolean).join('\n\n') : '';
   const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
   /* a room this app only guessed after a "too long" is never a reason to
    * refuse: the book fits it, and the page goes */
   const facts = learnedFacts(conn);
   const guessed = Boolean(facts && facts.contextGuess && facts.context === total);
-  /* where the answer's room comes from: his Longest reply, or the room a
-   * thinking model needs to think and write (when that is more) */
-  const setReply = Number.isFinite(conn && conn.maxTokens) && conn.maxTokens > 0 ? conn.maxTokens : 0;
-  const floor = thinksOn(conn || {}) ? thinkingFloor(conn || {}) : 0;
-  const over = least > total && !guessed ? {
-    room: total, purpose, instructions: instructions + 200, talk: afterCost, answer: reserve, modules: ride.names.length > 0,
-    reply: floor && floor >= reserve && floor > setReply ? 'thinking' : setReply ? 'his' : '',
-  } : null;
+  const overOf = (extra = {}) => ({
+    room: total, purpose, instructions: instructions + 200, talk: afterCost, answer: needed, modules: ride.names.length > 0,
+    reply: floor && floor >= reserve && floor > setReply ? 'thinking' : setReply ? 'his' : '', ...extra,
+  });
+  const over = least > total && !guessed ? overOf() : null;
   const fixed = instructions + estimateTokens(about) + estimateTokens(opening) + estimateTokens(notesPart) + currentCost(current) + afterCost + 200;
   let room = total - reserve - SAFETY - fixed;
   let cur = current;
@@ -387,20 +397,26 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     }
   }
   messages.push(...after);
+  const tokens = estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0);
+  /* the book is fitted to the room the answer would like; the request is
+   * refused only when, with the least of the book that goes — What it's
+   * about, the notes, the chapter open in part — not even the answer's floor
+   * is left (Cozy Tavern M752) */
+  const tooBig = over || (!guessed && total - tokens < needed ? overOf({ book: Math.max(0, tokens - (instructions + 200) - afterCost), about: estimateTokens(about) }) : null);
   return {
     system,
     systemParts,
     messages,
-    stats: { tokens: estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0), room: total, whole: fit.whole + (chapter.id ? 1 : 0), short: fit.short, omitted: fit.book.omitted, modules: ride.names, over, least,
+    stats: { tokens, room: total, whole: fit.whole + (chapter.id ? 1 : 0), short: fit.short, omitted: fit.book.omitted, modules: ride.names, over: tooBig, least,
       /* the chapters it was given whole — the one open (unless told in part) and the earlier ones that fit (talk.js: never a passage written anew in one it only had in short) */
       wholeIds: [...fit.book.whole.map((w) => w.id), ...(chapter.id && cur === current ? [chapter.id] : [])],
       /* the cards shown by their first line (talk.js: never written whole from it) */
       shortCards: [...shortIds],
       /* what goes whatever the book's earlier chapters, the answer's room, the chapter open (talk.js) */
       fixed, reserve, current: currentCost(current) },
-    /* a model whose room cannot hold what has to go with any of the book is
-     * never sent this: the reason, in plain words (call.js) */
-    refuse: over ? tooSmallWords(over) : '',
+    /* a model whose room cannot hold what has to go with the least of the
+     * book is never sent this: the reason, in plain words (call.js) */
+    refuse: tooBig ? tooSmallWords(tooBig) : '',
   };
 }
 
@@ -420,6 +436,8 @@ export function tooSmallWords(over) {
   const mine = over.instructions + (talkBig ? 0 : over.talk);
   const parts = [`your instructions${over.modules ? ' with the modules' : ''} for ${who} (about ${n(mine)})`];
   if (talkBig) parts.push(over.purpose === 'partner' ? `the talk so far (about ${n(over.talk)})` : over.purpose === 'play' ? `the scene so far (about ${n(over.talk)})` : `what it is given to work from (about ${n(over.talk)})`);
+  /* the least of the book that has to go, when that is what tips it */
+  if (over.book) parts.push(`what of the book has to go with them at the least (about ${n(over.book)})`);
   parts.push(`the room for its answer (about ${n(over.answer)}${over.reply === 'his' ? ', your Longest reply' : over.reply === 'thinking' ? ', with its thinking' : ''})`);
   const list = parts.length === 2 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
   const ways = [];
@@ -428,8 +446,10 @@ export function tooSmallWords(over) {
   if (replyTips) ways.push('lower Longest reply on its connection (Settings → Connections)');
   ways.push(`give ${over.purpose === 'play' ? 'the writer, who tells your scenes,' : who} a model with more room (Settings → Who does what → ${ROW[over.purpose] || 'The writer'})`);
   if (over.modules) ways.push(`switch off a module ${who} reads (Settings → Your instructions → Modules)`);
+  /* his own long What it's about is most of that least */
+  if (over.book && over.about > over.book * 0.5) ways.push('make What it’s about shorter (⋯ → About this book)');
   if (talkBig && over.purpose === 'partner') ways.push('send a shorter message, or Start over');
   if (talkBig && over.purpose === 'play') ways.push('make your move shorter');
   const said = ways.length === 1 ? ways[0] : `${ways.slice(0, -1).join(', ')}, or ${ways[ways.length - 1]}`;
-  return `this model holds about ${n(room)} tokens, but ${list} need about ${n(mine + (talkBig ? over.talk : 0) + over.answer)} before any of the book — ${said}`;
+  return `this model holds about ${n(room)} tokens, but ${list} need about ${n(mine + (talkBig ? over.talk : 0) + (over.book || 0) + over.answer)}${over.book ? '' : ' before any of the book'} — ${said}`;
 }

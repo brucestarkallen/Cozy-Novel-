@@ -18,7 +18,7 @@ import * as store from '../store.js';
 import { chapterSteps, novelSteps, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, keptTail } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords } from '../util.js';
 import { parseLenient } from './jsonutil.js';
-import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE } from './prompts.js';
+import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
 import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays } from './textshape.js';
@@ -327,8 +327,9 @@ function loose(str) {
     let ch = str[i];
     /* emphasis marks are the page's dressing, not its words (Cozy Tavern's
      * M752: a quote with other marks is the original's own text) — "She
-     * knew" is found where the page has "She *knew*" */
-    if (ch === '*' || ch === '_') continue;
+     * knew" is found where the page has "She *knew*" — and so are the
+     * characters nobody sees: a zero-width space, a soft hyphen (M752-009) */
+    if (ch === '*' || ch === '_' || /[\u00ad\u200b-\u200d\u2060\ufeff]/.test(ch)) continue;
     if (/\s/.test(ch)) ch = ' ';
     else if (SINGLE_QUOTES.has(ch)) ch = "'";
     else if (DOUBLE_QUOTES.has(ch)) ch = '"';
@@ -364,6 +365,48 @@ export function locate(text, find) {
   while (end > start && /\s/.test(text[end - 1])) end--;
   return { start, end };
 }
+
+/* WHERE A QUOTE THAT IS NOT THERE PARTS FROM THE PAGE (Cozy Tavern
+ * M752-009): the longest start of it that stands in one place, and what the
+ * page says from there — told back with the miss, so the quote is put right
+ * from the page, never guessed again. '' when not even its first few words
+ * stand anywhere. */
+export function departure(text, find) {
+  const page = String(text || '');
+  const T = loose(page);
+  const words = loose(String(find || '').trim()).s.trim().split(' ').filter(Boolean);
+  for (let n = words.length - 1; n >= 3; n--) {
+    const head = words.slice(0, n).join(' ');
+    const i = T.s.indexOf(head);
+    if (i < 0 || T.s.indexOf(head, i + 1) >= 0) continue;
+    const upto = T.ends[i + head.length - 1];
+    const agreed = page.slice(T.starts[i], upto).replace(/\s+/g, ' ').trim().split(' ');
+    const rest = page.slice(upto).replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    if (!rest.length) return ` — the page agrees up to “${agreed.length > 6 ? '…' : ''}${agreed.slice(-6).join(' ')}”, and ends there`;
+    return ` — the page agrees up to “${agreed.length > 6 ? '…' : ''}${agreed.slice(-6).join(' ')}”, and from there reads “${rest.slice(0, 10).join(' ')}${rest.length > 10 ? '…' : ''}”`;
+  }
+  return '';
+}
+const whyNotFound = (spot, text, find) => (spot.why === 'those words are not there' ? spot.why + departure(text, find) : spot.why);
+
+/* the book's own words as the partner read them: {{user}} and {{char}} in
+ * them are read as names (prompts.js namedBook), so words it quotes with the
+ * names in are found where the marks stand — a mark its quote takes in is
+ * written as the name, whole; every other mark stays as he wrote it.
+ * {start, end, pre, post}: pre and post go either side of the new words */
+function locateNamed(text, find, names) {
+  const spot = locate(text, find);
+  if (!spot.why || !names) return spot;
+  const m = macroMap(text, names);
+  if (m.text === text) return spot;
+  const s = locate(m.text, find);
+  if (s.why) return s;
+  const a = m.toRaw(s.start, false);
+  const b = m.toRaw(s.end, true);
+  return { start: a.at, end: b.at, pre: a.keep, post: b.keep };
+}
+/* the words with the new ones in the place found */
+const putIn = (text, spot, words) => text.slice(0, spot.start) + (spot.pre || '') + words + (spot.post || '') + text.slice(spot.end);
 
 /* ------------------------------------------------------------ cards */
 
@@ -761,7 +804,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const w = newWords(op);
       if (w === null) return refuse('it gave no new words for them');
       const spot = locate(old, op.find);
-      if (spot.why) return refuse(spot.why);
+      if (spot.why) return refuse(whyNotFound(spot, old, op.find));
       next = old.slice(0, spot.start) + w + old.slice(spot.end);
     } else if (op.text !== undefined) {
       next = String(op.text);
@@ -784,7 +827,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const w = newWords(op);
       if (w === null) return refuse('it gave no new words for them');
       const spot = locate(old, op.find);
-      if (spot.why) return refuse(spot.why);
+      if (spot.why) return refuse(whyNotFound(spot, old, op.find));
       next = old.slice(0, spot.start) + w + old.slice(spot.end);
     } else if (op.text !== undefined) {
       next = text(op.text);
@@ -842,7 +885,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const words = newWords(op);
       if (words === null) return refuse('it gave no new words for them');
       const spot = locate(old, op.find);
-      if (spot.why) return refuse(spot.why);
+      if (spot.why) return refuse(whyNotFound(spot, old, op.find));
       next = old.slice(0, spot.start) + words + old.slice(spot.end);
     }
     if (next === old) return refuse('it would change nothing');
@@ -889,11 +932,13 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
      * Tavern's M223: sight without reach) */
     const keyOf = { brief: 'about', style: 'style' }[field];
     const k = keyOf && novel.kept && novel.kept[keyOf];
-    if (op.find !== undefined && keyOf && k && String(k.text || '').trim() && locate(old, op.find).why && !locate(String(k.text), op.find).why) {
+    /* read with the names in */
+    const names = meta ? null : bookNames(store.peek('house', 'house') || {}, novel);
+    if (op.find !== undefined && keyOf && k && String(k.text || '').trim() && locateNamed(old, op.find, names).why && !locateNamed(String(k.text), op.find, names).why) {
       const words = newWords(op);
       if (words === null) return refuse('it gave no new words for them');
-      const spot = locate(String(k.text), op.find);
-      const after = { text: String(k.text).slice(0, spot.start) + words + String(k.text).slice(spot.end), at, by: 'you' };
+      const spot = locateNamed(String(k.text), op.find, names);
+      const after = { text: putIn(String(k.text), spot, words), at, by: 'you' };
       put('novel', novelId, novelSteps.setKept(keyOf, after), { now: true });
       return { ...base, status: 'made', undo: { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [{ key: keyOf, before: clone(k), after: clone(after) }] }, before: k.text, after: after.text };
     }
@@ -901,14 +946,14 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     if (op.find !== undefined) {
       const words = newWords(op);
       if (words === null) return refuse('it gave no new words for them');
-      const spot = locate(old, op.find);
-      if (spot.why) return refuse(spot.why);
-      next = old.slice(0, spot.start) + words + old.slice(spot.end);
+      const spot = locateNamed(old, op.find, names);
+      if (spot.why) return refuse(whyNotFound(spot, old, op.find));
+      next = putIn(old, spot, words);
     } else if (op.add !== undefined) {
       /* the same paragraph never twice (an answer asked again, a round re-sent: M79/M603) */
       const add = text(op.add);
       if (!add || !hasWords(add)) return refuse('it gave no words');
-      if (!locate(old, add).why || old.includes(add)) return refuse('those words are there already');
+      if (!locateNamed(old, add, names).why || old.includes(add)) return refuse('those words are there already');
       next = [old.replace(/\s+$/, ''), add].filter(Boolean).join('\n\n');
     } else if (op.text !== undefined) {
       next = text(op.text);
@@ -1264,6 +1309,8 @@ export function wordsNow(novelId, change) {
 /* what came of its changes, in his words, for the partner to read next time */
 export function outcomeWords(changes) {
   const bits = (changes || []).filter((c) => !c.superseded).map((c) => {
+    /* made with his own words in place of the ones it gave (Edit by hand): said, so it never takes its words as the ones that stand (Cozy Tavern M736) */
+    if (c.status === 'made' && c.edited) return `${c.label} — made, in my own words instead of yours (the book as it reads now has them)`;
     if (c.status === 'made') return `${c.label} — made${c.said && c.op && c.op.passage !== undefined ? ` (${c.said})` : ''}`;
     if (c.status === 'undone') return `${c.label} — I undid it`;
     if (c.status === 'waiting') return `${c.label} — waiting for me to apply it`;

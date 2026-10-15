@@ -37,7 +37,7 @@ async def page(b, logs, w=412, hgt=915, mobile=True):
     return pg
 async def new_book(pg, title='The Lantern Keeper', brief='A lighthouse keeper on a stormy coast finds a letter in a bottle.'):
     await pg.goto(f'http://127.0.0.1:{PORT}/')
-    await pg.wait_for_selector('#shelf:not([hidden]) #books > *', timeout=8000)
+    await pg.wait_for_selector('#shelf:not([hidden]) #books > *:not(.shelfwait)', timeout=8000)
     if await pg.locator('button:has-text("Begin a book")').count():
         await pg.click('button:has-text("Begin a book")')
     else:

@@ -49,6 +49,8 @@ export function learn(conn, fact) {
     maxOut: fact.maxOut || (was && was.maxOut) || null,
     completionField: fact.completionField === true || Boolean(was && was.completionField),
     structuredDownAt: fact.structuredDownAt || (was && was.structuredDownAt) || null,
+    /* how long its provider can stay silent while its model thinks unseen (Cozy Tavern M748) */
+    quietMs: fact.quietMs || (was && was.quietMs) || null,
   };
   conn.learned = next;
   for (const fn of learners) { try { fn(conn.id, next); } catch (_) { /* a listener's trouble is not the call's */ } }
@@ -441,7 +443,20 @@ export const BACKOFF_MS = [3000, 8000, 20000];
  * too (opts.leash). (Tests may shorten it.) */
 export const LEASH_QUIET_MS = 3 * 60 * 1000;
 export const LEASH_ALL_MS = 15 * 60 * 1000;
+/* the longest a silent provider is waited, however often it was silent before */
+const QUIET_MOST_MS = 15 * 60 * 1000;
 const leashOf = (ms, name) => (Number(globalThis[name]) > 0 ? Number(globalThis[name]) : ms);
+/* A WORKER GIVES WAY TO HIS PAGE (Cozy Tavern M530). A provider that takes
+ * one request at a time on a connection refuses a page sent while the
+ * helper or the checker is asking on the same one ("slow down", "busy") —
+ * a refusal the app's own worker caused. Then the worker's call is let go
+ * (it asks again a little later, as after any passing fault) and the page is
+ * sent once more; a page refused with nothing of the app's own in the way
+ * is refused, as ever. The workers' calls in flight, by connection: */
+const workersOn = new Map();
+const connKey = (c) => `${(c && c.id) || ''}|${(c && c.url) || ''}|${(c && c.model) || ''}`;
+export const GAVE_WAY = 'it made way for your page on the same connection';
+export function workersBusy(conn) { return (workersOn.get(connKey(conn)) || new Set()).size; }
 /* how long a provider asked to be left alone: seconds, or a date (Cozy Tavern M28) — 0 when it did not say */
 export function retryAfterMs(v, now = Date.now()) {
   if (v === undefined || v === null || v === '') return 0;
@@ -492,6 +507,7 @@ export async function ask(conn, opts = {}) {
   let flags = { noPrefill: Boolean(opts.noPrefill), noUsage: false, maxCap: 0, noStructured: Boolean(opts.noStructured) };
   let lessons = 0;
   let keyMended = false;
+  let madeWay = false;
   let transientTries = 0;
   let lastError = 'the call did not go through';
   let lastStatus = 0;
@@ -588,18 +604,25 @@ export async function ask(conn, opts = {}) {
       const thought = rest.slice(0, close).trim();
       text = keep + rest.slice(close + 8).replace(/^\s+/, '');
       if (thought) thinking = [thinking, thought].filter((x) => String(x).trim()).join('\n\n');
+      /* every word it wrote stood before the mark: said so, never blamed on the model (Cozy Tavern M591) */
+      if (thought && !text.trim()) movedAll = true;
     };
+    let movedAll = false;
     let out;
     /* a helper's or the checker's call on its leash */
     let leashed = '';
     const leash = opts.worker || opts.leash ? new AbortController() : null;
     let heardAt = Date.now();
-    const quietMs = leashOf(LEASH_QUIET_MS, '__cozyLeashQuietMs');
+    /* a provider that went silent past the leash before — a model thinking unseen — is given twice the time from then on, to a quarter of an hour (Cozy Tavern M748) */
+    const quietMs = Math.max(leashOf(LEASH_QUIET_MS, '__cozyLeashQuietMs'), ((learnedFacts(conn) || {}).quietMs) || 0);
     const allMs = leashOf(LEASH_ALL_MS, '__cozyLeashAllMs');
     const leashTimer = leash ? setInterval(() => {
       if (leash.signal.aborted) return;
       if (Date.now() - heardAt > quietMs) { leashed = 'quiet'; leash.abort(); } else if (Date.now() - progressAt > allMs) { leashed = 'long'; leash.abort(); }
     }, Math.max(50, Math.min(5000, Math.floor(quietMs / 4)))) : null;
+    /* a worker's call, while it is on the line: his page may ask it to give way */
+    const giveWay = opts.worker && leash ? () => { if (!leash.signal.aborted) { leashed = 'gaveway'; leash.abort(); } } : null;
+    if (giveWay) { const k = connKey(conn); if (!workersOn.has(k)) workersOn.set(k, new Set()); workersOn.get(k).add(giveWay); }
     try {
       const res = await fetch('/api/call', {
         method: 'POST',
@@ -618,7 +641,8 @@ export async function ask(conn, opts = {}) {
       if (leashed && !(opts.signal && opts.signal.aborted)) {
         /* let go on its leash: a passing fault, its words (if any) kept as cut */
         const mins = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m === 1 ? 'a minute' : `${m} minutes`; };
-        out = { finish: 'error', error: leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer made no progress for ${mins(allMs)}`, status: 0, transport: true, leashed, midStream: Boolean(text), text, thinking };
+        out = { finish: 'error', error: leashed === 'gaveway' ? GAVE_WAY : leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer made no progress for ${mins(allMs)}`, status: 0, transport: true, leashed, midStream: Boolean(text), text, thinking };
+        if (leashed === 'quiet') learn(conn, { quietMs: Math.min(quietMs * 2, QUIET_MOST_MS) });
       } else if ((e && e.name === 'AbortError') || (opts.signal && opts.signal.aborted)) {
         sent.ms = Date.now() - sent.at;
         if (opts.onSent) opts.onSent(sent);
@@ -633,6 +657,7 @@ export async function ask(conn, opts = {}) {
       }
     } finally {
       if (leashTimer) clearInterval(leashTimer);
+      if (giveWay) { const set = workersOn.get(connKey(conn)); if (set) { set.delete(giveWay); if (!set.size) workersOn.delete(connKey(conn)); } }
     }
     sent.ms = Date.now() - sent.at;
     sent.usage = out.usage || null;
@@ -796,6 +821,16 @@ export async function ask(conn, opts = {}) {
         if (body.stream_options && !flags.noUsage && !tooLong) { flags = { ...flags, noUsage: true, usageTried: true }; lessons++; continue; }
       }
       if (!keyMended && await repairHermesKey(conn, lastStatus)) { keyMended = true; continue; }
+      /* refused as too many, or busy, while one of the app's own workers asks on
+       * the same connection: the worker gives way and the page goes once more
+       * — the refusal was the app's doing, never the page's (Cozy Tavern M530) */
+      if (!opts.worker && !madeWay && (lastStatus === 429 || lastStatus === 503) && workersBusy(conn) && !(opts.signal && opts.signal.aborted)) {
+        for (const y of [...(workersOn.get(connKey(conn)) || [])]) y();
+        madeWay = true;
+        notes.push('The provider was busy with the helper’s or the checker’s request on this connection: that one waits, and this was sent again.');
+        await sleep(1500, opts.signal);
+        continue;
+      }
       /* only a helper waits out a passing fault; a page never asks again by itself */
       const transient = lastStatus === 0 || lastStatus === 408 || lastStatus === 429 || lastStatus >= 500;
       /* the wait its provider asked for is kept, however long (Cozy Tavern M28): a
@@ -850,6 +885,7 @@ export async function ask(conn, opts = {}) {
       if (decoder.closed() && text.trim() && !/[.!?…"”'’*)\]~—–-]\s*$/.test(text)) closedMid = true;
     }
     if (stalled && !text.trim() && !emptySaid) emptySaid = 'the structured answer stopped making progress — it kept sending, but no words came — so it was let go';
+    if (movedAll && !text.trim() && !emptySaid) emptySaid = 'every word it wrote stood before a closing thinking mark (“</think>”), so all of it was read as its thinking — it is kept under What it thought, to copy, or write it again';
     /* his thinking seed that left no page (Tavern M590, M596): said, never asked again by itself */
     if (!decoder && !text.trim() && thinking.trim() && req.prefill && req.prefill.applied && req.prefill.seed && out.finish === 'stop' && !out.quiet && /^(?:stop|end_turn|stop_sequence|eos)?$/i.test(String(out.reason || ''))) {
       emptySaid = 'the model thought on from your thinking prefill (the <think> words) and stopped there, with no page after it — nothing was cut here, so write it again when you like';
@@ -883,6 +919,15 @@ export async function ask(conn, opts = {}) {
     return { ok: true, text, thinking, cut: Boolean(cutBy), cutBy,
       finish: out.finish, reason, usage: out.usage || null, notes, sent, sources: out.sources || [], ...extra };
   }
+}
+
+/* THE ANSWER'S OWN WORDS, as the call kept them — a thought it never opened
+ * set apart (a stray "</think>"), what the decoder made of a structured
+ * answer — never the raw stream beside them when the call finished: the
+ * stream copy stands in only for a call that kept nothing (stopped, broken) */
+export function finalWords(out, streamed = '') {
+  if (out && out.ok && typeof out.text === 'string') return out.text;
+  return String((out && out.text) || streamed || '');
 }
 
 /* a stop the provider made for its own reasons, in the words houses use */

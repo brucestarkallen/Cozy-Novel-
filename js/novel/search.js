@@ -14,6 +14,11 @@ import { numberWords, plural } from '../util.js';
 
 const QUOTES = { '’': "'", '‘': "'", 'ʼ': "'", '“': '"', '”': '"', '„': '"', '«': '"', '»': '"' };
 const SPACE = new Set([9, 10, 11, 12, 13, 32, 160, 0x2028, 0x2029]);
+/* marks that are no words on the page (Cozy Tavern M752-009): emphasis drawn
+ * as italics or bold, and characters nobody sees — a zero-width space, a soft
+ * hyphen, a joiner */
+const UNSEEN = new Set([42, 95, 0xad, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff]);
+const DASHES = new Set(['-', '—', '–', '‐', '‑', '‒', '―', '−']);
 
 /* a text as it is matched, with where each of its letters came from —
  * kept for each text once, so typing in the box stays instant */
@@ -27,12 +32,21 @@ export function fold(text) {
   let space = false;
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
+    if (UNSEEN.has(code)) continue;
     if (SPACE.has(code) || (code > 127 && /\s/.test(s[i]))) {
-      if (!space && out) { out += ' '; map.push(i); }
+      /* the space beside a dash is the dash's: "door — she" is "door—she" */
+      if (!space && out && out[out.length - 1] !== '-') { out += ' '; map.push(i); }
       space = true;
       continue;
     }
     space = false;
+    /* any dash, and a run of them ("--"), is one; an ellipsis is its dots, and a run of dots one */
+    if (DASHES.has(s[i]) || s[i] === '…' || s[i] === '.') {
+      const ch = s[i] === '…' ? '.' : s[i] === '.' ? '.' : '-';
+      if (ch === '-' && out[out.length - 1] === ' ') { out = out.slice(0, -1); map.pop(); }
+      if (out[out.length - 1] !== ch) { out += ch; map.push(i); }
+      continue;
+    }
     if (code < 128) {
       out += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : s[i];
       map.push(i);
@@ -52,12 +66,29 @@ export function fold(text) {
   return done;
 }
 
-/* where the words stand in a text: [{start, end}] in its own letters */
-export function findIn(text, query, { max = 200 } = {}) {
-  const q = fold(query).s.trim();
+/* the same, with every mark of punctuation let go: the same words in the same
+ * order (Cozy Tavern M752-011 — a quote that dropped a comma is still the
+ * page's own words) */
+function foldWords(text) {
+  const f = fold(text);
+  let out = '';
+  const map = [];
+  for (let k = 0; k < f.s.length; k++) {
+    const ch = f.s[k];
+    if (/[\p{L}\p{N}]/u.test(ch)) { out += ch; map.push(f.map[k]); continue; }
+    if (out && out[out.length - 1] !== ' ') { out += ' '; map.push(f.map[k]); }
+  }
+  map.push(f.map[f.map.length - 1]);
+  return { s: out, map };
+}
+
+/* where the words stand in a text: [{start, end}] in its own letters
+ * (words: punctuation let go, for reading a quote as evidence) */
+export function findIn(text, query, { max = 200, words = false } = {}) {
+  const q = (words ? foldWords(query) : fold(query)).s.trim();
   if (!q) return [];
   const src = String(text || '');
-  const T = fold(src);
+  const T = words ? foldWords(src) : fold(src);
   const out = [];
   for (let at = T.s.indexOf(q); at >= 0 && out.length < max; at = T.s.indexOf(q, at + q.length)) {
     const start = T.map[at];

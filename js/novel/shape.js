@@ -25,7 +25,7 @@
  */
 
 import { newId, countWords, hashText, numberWords, nameKey } from '../util.js';
-import { samePersonName, plainName, isDescriptorName, nameInText, nearName } from './names.js';
+import { samePersonName, plainName, sameThingName, isDescriptorName, nameInText, nearName } from './names.js';
 
 export const COVERS = ['ember', 'moss', 'dusk', 'rose', 'ink', 'sea', 'wine', 'gold'];
 /* how much a Write writes. A size is asked as a range (around x to y words):
@@ -766,7 +766,9 @@ export function matchCard(cards, name, aka = [], { kind = '', near = true, slip:
   const forms = [name, ...(aka || [])].filter(named);
   const namesOf = (c) => [c.name, ...(c.aka || [])].filter(named);
   /* a short or fuller form only where it is asked for: the helper's rows — never a change he made through the partner, which names its card exactly */
-  const close = near && forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => (kind === 'people' ? samePersonName(n, f) : plainName(n) === plainName(f)))))) : null;
+  /* (a place or a thing: its owner's possessive set aside — "Bruce's Batwing" is the Batwing) */
+  const sameAs = (n, f) => (kind === 'people' ? samePersonName(n, f) : kind === 'places' || kind === 'lore' ? sameThingName(n, f) : plainName(n) === plainName(f));
+  const close = near && forms.length ? one(list.filter((c) => namesOf(c).some((n) => forms.some((f) => sameAs(n, f))))) : null;
   if (close) return close;
   /* a thread in other words, for a reading's row: the one that says it in
    * the very same words when several answer; if they are all copies of one
@@ -811,6 +813,6 @@ export function cardStands(kind, card, folded) {
 }
 /* The cards that carry a card's name — the one it was folded into */
 export function carriersOf(kind, card, cards) {
-  return (cards || []).filter((o) => o.id !== card.id && [o.name, ...(o.aka || [])].some((n) => (kind === 'people' ? samePersonName(n, card.name) : plainName(n) === plainName(card.name))));
+  return (cards || []).filter((o) => o.id !== card.id && [o.name, ...(o.aka || [])].some((n) => (kind === 'people' ? samePersonName(n, card.name) : kind === 'places' || kind === 'lore' ? sameThingName(n, card.name) : plainName(n) === plainName(card.name))));
 }
 export function carriedBy(kind, card, cards) { return carriersOf(kind, card, cards).length > 0; }

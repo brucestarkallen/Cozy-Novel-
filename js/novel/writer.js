@@ -11,13 +11,13 @@
  */
 
 import * as store from '../store.js';
-import { ask, emptyWhy, stripControlLeak } from '../model/call.js';
+import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropHeading, straysIn } from './textshape.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn } from './textshape.js';
 import { renameIn } from './names.js';
 
 /* -------------------------------------------------------------- roles */
@@ -38,14 +38,15 @@ export function connName(c) { return c ? (c.name || c.model || 'a connection') :
  * helper unless he set it or turned it off (Cozy Tavern M321: which one is
  * in use is said, never guessed). */
 export const PART_WORDS = { writer: 'the writer', partner: 'the partner', helper: 'the helper', checker: 'the checker' };
+/* the connection that does a part now (the checker: its own, or the helper's; none when switched off) */
+export function holderOf(house, part) {
+  const roles = (house && house.roles) || {};
+  if (part !== 'checker') return connFor(house, part);
+  return roles.checker === 'off' ? null : (roles.checker && connById(house, roles.checker)) || connFor(house, 'helper');
+}
 export function partsOf(house, id) {
   if (!id) return [];
-  const roles = (house && house.roles) || {};
-  const out = [];
-  for (const role of ['writer', 'partner', 'helper']) { const c = connFor(house, role); if (c && c.id === id) out.push(role); }
-  const check = roles.checker === 'off' ? null : (roles.checker && connById(house, roles.checker)) || connFor(house, 'helper');
-  if (check && check.id === id) out.push('checker');
-  return out;
+  return ['writer', 'partner', 'helper', 'checker'].filter((role) => { const c = holderOf(house, role); return Boolean(c && c.id === id); });
 }
 /* the parts that go with the writer, set to "The same as the writer" (the checker through the helper) */
 export function followersOf(house) {
@@ -335,7 +336,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     /* words that are never the story: a provider's leaked control token, or
      * his next request typed out by a model that ran past its end (Tavern
      * M117, M469) — the answer is what came before */
-    const leak = stripControlLeak(out.text || text, { asked: build.request || '' });
+    const leak = stripControlLeak(finalWords(out, text), { asked: build.request || '' });
     const notes = [...(out.notes || [])];
     /* the chapter open told in part to fit its model's room: he is told too, not only the writer */
     if (told && build.target && build.target.chapterId && Array.isArray(told.wholeIds) && !told.wholeIds.includes(build.target.chapterId)) notes.push('This chapter was longer than the writer’s room, so it was sent its opening and the words right before this point, with the middle left out.');
@@ -349,11 +350,16 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     let tookOff = '';
     let topOff = '';
     if (how !== 'selection') {
-      /* a heading above a new page — never one carried on (Cozy Tavern M116) */
+      /* a plan or a heading above a new page — never one carried on (Cozy Tavern M116, M322–M326) */
       if (mode !== 'append') {
         const ch = store.peek('chapter', chapterId);
-        const head = dropHeading(answer, { names: [ch && ch.name].filter(Boolean) });
-        if (head.removed) { answer = head.text; topOff = head.removed; notes.push('A heading the writer put above the page was taken off — the passage’s menu puts it back.'); }
+        const top = dropTop(answer, { names: [ch && ch.name].filter(Boolean) });
+        if (top.removed) {
+          answer = top.text;
+          topOff = top.removed;
+          const what = top.plan && top.heading ? 'The writer’s plan and a heading above the page were' : top.plan ? 'The writer’s plan for the page, written above it, was' : 'A heading the writer put above the page was';
+          notes.push(`${what} taken off — the passage’s menu puts ${top.plan && top.heading ? 'them' : 'it'} back.`);
+        }
       }
       answer = joinSoftWraps(answer);
       /* carried on: the story the passage already holds counts toward what must stay — the new part still has to bring some */
@@ -402,7 +408,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       await store.flush('chapter', chapterId);
       const kept = String(thought || '').trim() ? thought : undefined;
       if (out.stopped) return { ok: false, stopped: true, thought: kept };
-      const error = leak.leaked && String(out.text || text).trim() ? 'the answer held nothing before the provider’s own markers' : out.ok ? emptyWhy(out, thought) : out.error;
+      const error = leak.leaked && finalWords(out, text).trim() ? 'the answer held nothing before the provider’s own markers' : out.ok ? emptyWhy(out, thought) : out.error;
       /* a passing fault (no answer, busy, down) — said apart, so what the app writes by itself tries again another time */
       const st = Number(out.status) || 0;
       const passing = !out.ok && !out.permanent && (st === 0 || st === 408 || st === 429 || st >= 500);
@@ -612,7 +618,7 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
   const label = chapterLabel(book.novel, chapter, { withName: false });
   let request;
   if (take.how === 'play') {
-    request = playToProseRequest({ chapterLabel: label, who: take.ask.who || 'their character', transcript: take.ask.transcript, length });
+    request = playToProseRequest({ chapterLabel: label, who: take.ask.who || 'their character', transcript: take.ask.transcript, length, between });
   } else {
     const empty = !list.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
     /* how it turns out, as the chip says now */
@@ -737,8 +743,13 @@ export async function playToProse({ novelId, chapterId, play, transcript, mine =
   const who = play.who || 'their character';
   /* his own moves in it are kept beside it: what wakes a rule, now and for another take */
   const passage = newPassage('ai', '', { how: 'play', ask: { play: play.id, who, transcript, length, ...(String(mine || '').trim() ? { mine } : {}) }, streaming: true });
-  store.change('chapter', chapterId, chapterSteps.addPassage(passage), { now: true });
-  const request = playToProseRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), who, transcript, length });
+  /* where the scene was set — the narrator was shown the chapter to there, and what came after it as after —
+   * never past passages written since (Cozy Tavern M548: a result kept where its anchor stands) */
+  const list = chapter.passages || [];
+  const at = play.after && list.some((x) => x.id === play.after) ? play.after : null;
+  const between = Boolean(at) && list.slice(list.findIndex((x) => x.id === at) + 1).some(hasWords);
+  store.change('chapter', chapterId, chapterSteps.addPassage(passage, between ? at : null), { now: true });
+  const request = playToProseRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), who, transcript, length, between });
   return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'play', length,
     build: { target: { chapterId, before: passage.id }, request, moment: hisWordsIn(passage) } });
 }

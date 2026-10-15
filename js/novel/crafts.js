@@ -414,7 +414,7 @@ ${HIGH_INTENSITY_NOVEL}`,
  * wake them too (the _MORE patterns); the plain English that only sounds like
  * it is set aside first (IDIOMS). */
 const INTIMACY_RE = /\b(cocks?|pussy|cunt|dick|tits|nipples?|clit|cums?|cumming|blowjob|handjob|fucks?\s+(?:her|him|me|them)|fucking\s+(?:her|him|me|them)|straddl(?:e|es|ing)|undress(?:es|ing|ed)?|strips?\s+(?:her|him)\s+naked|(?:her|him|me|myself)\s+naked|naked\s+(?:body|skin|chest|breasts)|thrusts?\s+(?:into|inside)|grind(?:s|ing)?\s+(?:on|against)|make\s+love|have\s+sex|sex\s+with|mount(?:s|ing)?\s+(?:her|him)|between\s+(?:her|his)\s+(?:legs|thighs))\b/i;
-const COMBAT_RE = /\b(?:attack(?:s|ed|ing)?\b(?!\s+(?:of|on)\s+(?:nerves|panic))|punch(?:es|ed|ing)?\s+(?:him|her|them|it|at|back|through)|kick(?:s|ed|ing)?\s+(?:him|her|them|at)|strik(?:e|es|ing)\s+(?:him|her|them|at|first|back)|stab(?:s|bed|bing)?|slash(?:es|ed|ing)?|lung(?:e|es|ed|ing)|tackl(?:e|es|ed|ing)|headbutt(?:s|ed|ing)?|uppercut|draw(?:s|ing)?\s+(?:my|his|her|the)\s+(?:sword|blade|zanpakuto|katana|knife|dagger|gun|pistol|weapon)|swing(?:s|ing)?\s+(?:my|his|her|the)\s+(?:sword|blade|zanpakuto|katana|staff|fist|axe|hammer)|(?:shoot|shoots|shot|fire|fires|fired)\s+(?:at\s+)?(?:him|her|them)|hit(?:s|ting)?\s+(?:him|her|them)\b|fight(?:s|ing)?\s+(?:him|her|them|back)|bankai|shikai|parr(?:y|ies|ied|ying)\b|dodg(?:e|es|ed|ing)\b|grappl(?:e|es|ed|ing)\b|counter-?attack(?:s|ed|ing)?\b|duel(?:s|ed|ing|led|ling)?\s+(?:him|her|them|with)\b|spar(?:s|red|ring)?\s+(?:with|against)\b|block(?:s|ed|ing)?\s+(?:his|her|their|the)\s+(?:blade|sword|strike|blow|punch|kick|swing|attack|slash|thrust)|(?:we|i|they)\s+fight\b(?!\s+(?:for|over|about|to\s+keep))|(?:chok|strangl|throttl)(?:e|es|ed|ing)\s+(?:him|her|them)|slam(?:s|med|ming)?\s+(?:him|her|them)\s+(?:into|against|down))/i;
+const COMBAT_RE = /\b(?:attack(?:s|ed|ing)?\b(?!\s+(?:of|on)\s+(?:nerves|panic))|punch(?:es|ed|ing)?\s+(?:him|her|them|it|at|back|through)|kick(?:s|ed|ing)?\s+(?:him|her|them|at)|strik(?:e|es|ing)\s+(?:him|her|them|at|first|back)|stab(?:s|bed|bing)?\b|slash(?:es|ed|ing)?\b|lung(?:e|es|ed|ing)\b|tackl(?:e|es|ed|ing)\b|headbutt(?:s|ed|ing)?\b|uppercut\b|draw(?:s|ing)?\s+(?:my|his|her|the)\s+(?:sword|blade|zanpakuto|katana|knife|dagger|gun|pistol|weapon)|swing(?:s|ing)?\s+(?:my|his|her|the)\s+(?:sword|blade|zanpakuto|katana|staff|fist|axe|hammer)|(?:shoot|shoots|shot|fire|fires|fired)\s+(?:at\s+)?(?:him|her|them)|hit(?:s|ting)?\s+(?:him|her|them)\b|fight(?:s|ing)?\s+(?:him|her|them|back)|bankai|shikai|parr(?:y|ies|ied|ying)\b|dodg(?:e|es|ed|ing)\b|grappl(?:e|es|ed|ing)\b|counter-?attack(?:s|ed|ing)?\b|duel(?:s|ed|ing|led|ling)?\s+(?:him|her|them|with)\b|spar(?:s|red|ring)?\s+(?:with|against)\b|block(?:s|ed|ing)?\s+(?:his|her|their|the)\s+(?:blade|sword|strike|blow|punch|kick|swing|attack|slash|thrust)|(?:we|i|they)\s+fight\b(?!\s+(?:for|over|about|to\s+keep))|(?:chok|strangl|throttl)(?:e|es|ed|ing)\s+(?:him|her|them)|slam(?:s|med|ming)?\s+(?:him|her|them)\s+(?:into|against|down))/i;
 const INTIMACY_MORE_RE = /\b(?:straddled\s+(?:him|her|me)|fucked\s+(?:her|him|me|them|you)|fucks?\s+you|fucking\s+you|(?:made|making|makes)\s+love|(?:had|having)\s+sex|stripped\s+(?:her|him|me)\s+naked|undressed\s+(?:her|him|me)|(?:sleep|sleeps|sleeping|slept)\s+together)\b/i;
 /* a fight named in a premise: fights/fought/battled/duelled someone — never
  * "fought back tears", "fights the urge", "a fight for the farm" — a fight,
@@ -448,9 +448,47 @@ const IDIOMS = [
   /\bundress(?:es|ed|ing)?\b(?=\s*(?:$|[.,;:!?)\u2014]|(?:and|for|to|in|before|after|then|herself|himself|themselves|myself|yourself)\b))/gi,
   /\bgrappl(?:e|es|ed|ing)\s+with\s+(?:the|a|his|her|their)?\s*(?:idea|question|problem|news|loss|grief|guilt|fear|truth|decision|thought|thoughts|feelings?|emotions?)\b/gi,
   /\bDick\b/g,
+  /* (Cozy Tavern M616/M650: verbs that only begin like a fight's) */
+  /\bdodg(?:e|es|ed|ing)\s+(?:the\s+|a\s+)?(?:puddles?|traffic|cars?|crowds?|rain|raindrops|potholes?|branches|reporters|creditors|journalists|cameras|paparazzi)\b/gi,
+  /\bslash(?:es|ed|ing)?\s+(?:the\s+|their\s+|its\s+|our\s+)?(?:prices?|costs?|budgets?|rates?|taxes|spending|wages|fees|jobs|salaries|interest)\b/gi,
+  /\blung(?:e|es|ed|ing)\s+(?:for|at|toward|towards)\s+(?:the|a|his|her|their|my)\s+(?:ringing\s+)?(?:phone|door|doorknob|handle|light|switch|lamp|bag|keys|remote|bottle|glass|cup|book|ball|rope|railing|ladder|bus|train|car|exit)\b/gi,
 ];
+/* a fight told in a phrase, not a verb of its own (Cozy Tavern M650): a throat
+ * slit, a bullet put in someone, knocked out cold, a wrist or neck snapped,
+ * a trigger pulled, something brought down on a head, someone killed, a
+ * windpipe crushed, taken down, blows traded, a power unleashed on someone */
+const FIGHT_PHRASE_RE = /\b(?:slit(?:s|ting)?\s+[^.;!?]{0,40}?throats?|put(?:s|ting)?\s+a\s+bullet\s+(?:in|into|through)|knock(?:s|ed|ing)?\s+(?:him|her|them)\s+(?:out|down|unconscious|senseless|cold|flat)|snap(?:s|ped|ping)?\s+[^.;!?]{0,40}?\b(?:wrists?|necks?|arms?|spines?|jaws?|fingers?)\b|pull(?:s|ed|ing)?\s+the\s+trigger|(?:bring(?:s|ing)?|brought)\s+[^.;!?]{0,40}?\s+down\s+(?:on|onto|upon)\s+[^.;!?]{0,40}?\b(?:head|skull|neck|back)\b|kill(?:s|ed|ing)?\s+(?:him|her|them|the\s+(?:guard|guards|man|men|woman|soldier|soldiers|bandit|bandits|assassin|enemy|beast|monster|creature|demon|king|captain|knight|thief|intruder))\b|crush(?:es|ed|ing)?\s+[^.;!?]{0,40}?\b(?:windpipe|throat|skull|larynx|ribs?)\b|tak(?:e|es|ing)\s+(?:him|her|them)\s+down\b|took\s+(?:him|her|them)\s+down\b|go(?:es)?\s+for\s+(?:the|his|her|their)\s+(?:knees|throat|eyes|neck|legs)\b|trad(?:e|es|ed|ing)\s+blows|unleash(?:es|ed|ing)?\s+[^.;!?]{1,40}?\s+(?:on|upon|against)\b)/i;
+/* NOT THE ACT: a match with a "not" right before it — "they kiss but don't
+ * have sex", "he refuses to fight", "Jovan never hits her" — or with only
+ * words like "to", "want to", "even", "going to be able to" between ("she
+ * doesn't even want to hit him", "she would never, ever hit him") (Cozy
+ * Tavern M490-3) — is set aside; a full stop, a question, a dash between
+ * ends the "not". "Didn't hesitate to attack", "didn't mean to hit her",
+ * "could not believe he would attack", "it was not long before he
+ * attacked", "they plan not to, then attack", "he won't. Hit him!" are the
+ * act. */
+const NEGATION = /(?:\b(?:not|never|no\s+longer|without|instead\s+of|rather\s+than|refuses?\s+to|refused\s+to|refusing\s+to|cannot)\b|n['’]t\b)/gi;
+const BRIDGE = new Set(['to', 'be', 'ever', 'even', 'once', 'really', 'actually', 'yet', 'again', 'want', 'wants', 'wanted', 'try', 'tries', 'tried', 'going', 'gonna', 'dare', 'dares', 'let', 'lets', 'him', 'her', 'them', 'me', 'us', 'you', 'will', 'would', 'could', 'can', 'should', 'must', 'have', 'has', 'had', 'do', 'does', 'did', 'so', 'much', 'as', 'get', 'gets', 'any', 'more', 'able', 'intend', 'intends', 'plan', 'plans', 'allowed', 'supposed', 'need', 'needs']);
+function negated(before) {
+  /* the few words just before it (a word cut at the edge of what is looked at is left out) */
+  const from = Math.max(0, before.length - 120);
+  let words = before.slice(from).split(/\s+/);
+  if (from > 0) words = words.slice(1);
+  const near = words.filter(Boolean).slice(-6).join(' ');
+  for (const n of near.matchAll(NEGATION)) {
+    /* only plain linking words between (a comma among them is no break) */
+    const rest = near.slice(n.index + n[0].length).split(/\s+/).map((w) => w.replace(/^,+|,+$/g, '')).filter(Boolean);
+    if (rest.every((w) => BRIDGE.has(w.toLowerCase()))) return true;
+  }
+  return false;
+}
+function acted(re, t) {
+  const g = new RegExp(re.source, 'gi');
+  for (const m of t.matchAll(g)) if (!negated(t.slice(Math.max(0, m.index - 160), m.index))) return true;
+  return false;
+}
 export function wakesOn(text) {
   let t = String(text || '');
   for (const re of IDIOMS) t = t.replace(re, ' ');
-  return { intimate: INTIMACY_RE.test(t) || INTIMACY_MORE_RE.test(t), fight: COMBAT_RE.test(t) || FIGHT_MORE_RE.test(t) };
+  return { intimate: acted(INTIMACY_RE, t) || acted(INTIMACY_MORE_RE, t), fight: acted(COMBAT_RE, t) || acted(FIGHT_MORE_RE, t) || acted(FIGHT_PHRASE_RE, t) };
 }

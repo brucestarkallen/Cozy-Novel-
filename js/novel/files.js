@@ -200,19 +200,37 @@ export function fileName(novel, ext) { return `${slug(novel.meta.title)}.${ext}`
 
 /* -------------------------------------------------------------- in */
 
-/* "Chapter 3", "CHAPTER III.", "Chapter Three: The Letter", "Prologue" */
+/* "Chapter 3", "CHAPTER III.", "Chapter Three: The Letter", "Ch. 1",
+ * "Chapter 1, The Letter", "Chapter 1 (The Letter)", "Chapter 1 The Letter",
+ * "**Chapter 1**", "Prologue", "Part One" (Cozy Tavern M540/M546: a heading
+ * reader that knows one written form makes every other form a line of the
+ * chapter before) */
 const NUMBERISH = '(?:\\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[a-z]+teen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ][a-z]+)?)';
-const CHAPTER_LINE = new RegExp(`^(?:chapter|chap\\.)\\s+(${NUMBERISH})\\.?(?:\\s*[:.—–-]\\s*(.+))?$`, 'i');
+/* (the short forms need their dot or a space: "Ch. 1", "Ch 1", "Ch.1" — never "Chill." or "Child" read as "Ch" and a numeral) */
+const CHAPTER_LINE = new RegExp(`^(?:chapter(?:\\s+|(?=\\d))|chap\\.\\s*|ch(?:\\.\\s*|\\s+))(${NUMBERISH})\\.?(?:\\s*[:.,—–-]\\s*(.+)|\\s+\\((.+)\\)|\\s+(\\S.*))?$`, 'i');
 const SPECIAL_LINE = /^(prologue|epilogue|interlude|afterword|foreword)\.?(?:\s*[:.—–-]\s*(.+))?$/i;
+const PART_LINE = new RegExp(`^(?:part|book)\\s+(${NUMBERISH})\\.?(?:\\s*[:.,—–-]\\s*(.+))?$`, 'i');
 const MD_HEADING = /^(#{1,3})\s+(.+?)\s*#*$/;
+/* a heading set in bold or italics is its words */
+const unwrapped = (t) => String(t || '').trim().replace(/^(\*\*|__|\*|_)(.+)\1$/, '$2').trim();
+/* a chapter heading — its name after a space only when it begins with a capital ("Chapter 1 The Letter", never "Chapter 1 was long") */
+function chapterLine(t) {
+  const c = CHAPTER_LINE.exec(unwrapped(t));
+  if (!c) return null;
+  if (c[4] && !/^\p{Lu}/u.test(c[4])) return null;
+  return { name: (c[2] || c[3] || c[4] || '').trim() };
+}
+const isHeading = (t) => Boolean(chapterLine(t)) || SPECIAL_LINE.test(unwrapped(t)) || PART_LINE.test(unwrapped(t));
 
 /* a heading's own words: what names the chapter ('' when it only numbers it) */
 function headingName(words) {
-  const t = String(words || '').trim();
-  const c = CHAPTER_LINE.exec(t);
-  if (c) return (c[2] || '').trim();
+  const t = unwrapped(words);
+  const c = chapterLine(t);
+  if (c) return c.name;
   const sp = SPECIAL_LINE.exec(t);
   if (sp) return (sp[2] || '').trim() || sp[1].replace(/^./, (x) => x.toUpperCase()).replace(/^(.)(.*)$/, (m, a, b) => a + b.toLowerCase());
+  const pt = PART_LINE.exec(t);
+  if (pt) return (pt[2] || '').trim() || t;
   return t;
 }
 
@@ -233,11 +251,11 @@ export function fromText(name, raw) {
     const line = lines[i];
     const t = line.trim();
     const md = t.length <= 160 ? MD_HEADING.exec(t) : null;
-    const plain = !md && t.length <= 120 && blank(i - 1) && blank(i + 1) && (CHAPTER_LINE.test(t) || SPECIAL_LINE.test(t));
+    const plain = !md && t.length <= 120 && blank(i - 1) && blank(i + 1) && isHeading(t);
     if (md || plain) {
       const words = md ? md[2] : t;
       /* a single "# Title" at the very top is the book's title — unless it is itself a chapter heading */
-      if (md && md[1] === '#' && !chunks.length && !preface.join('').trim() && !CHAPTER_LINE.test(words) && !SPECIAL_LINE.test(words)) {
+      if (md && md[1] === '#' && !chunks.length && !preface.join('').trim() && !isHeading(words)) {
         title = words.trim();
         /* and an italic line right under it, its subtitle (as a copy made here has it) */
         let j = i + 1;
@@ -246,12 +264,14 @@ export function fromText(name, raw) {
         if (sub) { subtitle = sub[1].trim(); i = j; }
         continue;
       }
-      cur = { name: headingName(words), lines: [] };
+      cur = { name: headingName(words), lines: [], part: PART_LINE.test(unwrapped(words)) };
       chunks.push(cur);
       continue;
     }
     (cur ? cur.lines : preface).push(line);
   }
+  /* a part heading with nothing of its own before the next heading is only a heading — the book has chapters, not parts */
+  for (let k = chunks.length - 2; k >= 0; k--) if (chunks[k].part && !chunks[k].lines.join('').trim()) chunks.splice(k, 1);
   if (preface.join('').trim()) chunks.unshift({ name: '', lines: preface });
   if (!chunks.length) chunks.push({ name: '', lines });
   const { novel } = newNovel({ title });
@@ -288,7 +308,12 @@ export function fromText(name, raw) {
   return { novel, chapters };
 }
 
-/* The books in a copy of the library, as new books beside the ones here. */
+/* The books in a copy of the library, as new books beside the ones here.
+ * WHAT WAS PAID FOR COMES WITH THEM (Cozy Tavern M752-015): a book and its
+ * chapters and scenes take new names here, and everything kept under the old
+ * ones — what the helper read (by chapter), what it set aside, where he was
+ * in the book, the partner's and the scenes' changes with their Undo — is
+ * named again by the new ones, so nothing is read and paid for twice. */
 export function booksFromLibrary(snap) {
   const recs = Array.isArray(snap && snap.records) ? snap.records : [];
   const novels = recs.filter((r) => r.kind === 'novel');
@@ -296,35 +321,40 @@ export function booksFromLibrary(snap) {
   for (const nr of novels) {
     const old = nr.data;
     const nid = newId('n');
-    const map = new Map();
-    const novel = JSON.parse(JSON.stringify(old));
+    const map = new Map([[old.id, nid]]);
+    const chapterIds = (old.order || []).filter((cid) => recs.some((x) => x.kind === 'chapter' && x.id === cid));
+    for (const cid of chapterIds) map.set(cid, newId('ch'));
+    for (const pid of old.plays || []) if (recs.some((x) => x.kind === 'play' && x.id === pid)) map.set(pid, newId('pl'));
+    /* every old name, as a whole name, wherever it stands — a key or a value */
+    const renamed = (x) => {
+      if (x === undefined || x === null) return x;
+      let j = JSON.stringify(x);
+      for (const [a, b] of map) j = j.replace(new RegExp(`(?<![A-Za-z0-9_-])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-])`, 'g'), b);
+      return JSON.parse(j);
+    };
+    const novel = renamed(old);
     novel.id = nid;
     novel.meta = { ...(novel.meta || {}), title: `${(novel.meta && novel.meta.title) || 'Untitled'}`, opened: Date.now() };
-    novel.memory = { ...(novel.memory || {}), seen: {} };
     const chapters = {};
-    novel.order = (old.order || []).map((cid) => {
-      const r = recs.find((x) => x.kind === 'chapter' && x.id === cid);
-      if (!r) return null;
-      const c = JSON.parse(JSON.stringify(r.data));
-      const id = newId('ch');
-      map.set(cid, id);
+    novel.order = chapterIds.map((cid) => {
+      const c = renamed(recs.find((x) => x.kind === 'chapter' && x.id === cid).data);
+      const id = map.get(cid);
       c.id = id; c.novelId = nid;
       chapters[id] = c;
       return id;
-    }).filter(Boolean);
+    });
     const talk = recs.find((x) => x.kind === 'talk' && x.id === old.id);
     const plays = [];
     novel.plays = (old.plays || []).map((pid) => {
-      const r = recs.find((x) => x.kind === 'play' && x.id === pid);
-      if (!r) return null;
-      const p = JSON.parse(JSON.stringify(r.data));
-      const id = newId('pl');
-      p.id = id; p.novelId = nid; p.chapterId = map.get(p.chapterId) || novel.order[novel.order.length - 1] || '';
+      if (!map.has(pid)) return null;
+      const p = renamed(recs.find((x) => x.kind === 'play' && x.id === pid).data);
+      const id = map.get(pid);
+      p.id = id; p.novelId = nid; p.chapterId = novel.order.includes(p.chapterId) ? p.chapterId : novel.order[novel.order.length - 1] || '';
       plays.push(p);
       return id;
     }).filter(Boolean);
     if (!novel.order.length) { const c = newChapter(nid); chapters[c.id] = c; novel.order = [c.id]; }
-    out.push({ novel, chapters, talk: talk ? { ...JSON.parse(JSON.stringify(talk.data)), id: nid, novelId: nid } : null, plays });
+    out.push({ novel, chapters, talk: talk ? { ...renamed(talk.data), id: nid, novelId: nid } : null, plays });
   }
   return out;
 }
@@ -433,8 +463,13 @@ export function fromLegacy({ records = [], blobs = [] } = {}) {
     for (const kind of Object.keys(novel.notes)) for (const card of novel.notes[kind] || []) card.updated = { ...mark };
     if (plans.length) novel.plans = plans.join('\n');
     /* its partner talk */
-    const talkTurns = mine.filter((r) => r.type === 'discussion').sort((a, b) => when(a.createdAt, 0) - when(b.createdAt, 0))
-      .map((r) => { const t = newTurn(r.role === 'author' ? 'you' : 'ai', textOf(r)); t.id = vid(r.id); return t; })
+    /* in the order they were said; one with no time stays where the file has
+     * it — after the one before it — never first (Cozy Tavern M297) */
+    let lastAt = 0;
+    const talkTurns = mine.filter((r) => r.type === 'discussion')
+      .map((r, i) => { const at = when(r.createdAt, NaN); if (Number.isFinite(at)) lastAt = at; return { r, i, at: Number.isFinite(at) ? at : lastAt }; })
+      .sort((a, b) => a.at - b.at || a.i - b.i)
+      .map(({ r }) => { const t = newTurn(r.role === 'author' ? 'you' : 'ai', textOf(r)); t.id = vid(r.id); return t; })
       .filter((t) => String(t.versions[0].text || '').trim());
     const talk = talkTurns.length ? { id: nid, novelId: nid, turns: talkTurns, updated: Date.now() } : null;
     /* its explored scenes */

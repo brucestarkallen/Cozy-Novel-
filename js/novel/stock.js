@@ -236,3 +236,34 @@ export function stockRate(text) {
   const hits = stockIn(text).length;
   return { hits, words, per1000: words ? Math.round((hits / words) * 10000) / 10 : 0 };
 }
+
+/* THE MODEL COPYING ITS OWN LAST PAGES (Cozy Tavern M512-1, M519-1): a
+ * stretch of six words or more of a page's narration that stands word for
+ * word in the pages right before it — "the wind came round to the west and"
+ * written again a page later. Measured, so the checker is told where, never
+ * left to notice: {start, end, words}, the longest stretches first, at most
+ * `max`. Speech is never one (a catchphrase, a refrain is a character's),
+ * nor a stretch of little words with one of its own ("and then he said that it"). */
+const LITTLE = new Set('a an the and or but so then of to in on at by for with from as is was were be been had has have he she it they we i you his her its their our my your him them us me that this there here not no up down out into onto over under back again just only'.split(' '));
+export function repeatsIn(text, before, { min = 6, max = 5 } = {}) {
+  const t = String(text || '');
+  const prior = String(before || '');
+  if (!t.trim() || !prior.trim()) return [];
+  const wordsOf = (s) => [...narrationOf(s).matchAll(/[\p{L}\p{N}’']+/gu)].map((m) => ({ w: m[0].toLowerCase().replace(/’/g, "'"), start: m.index, end: m.index + m[0].length }));
+  const seen = new Set();
+  const pw = wordsOf(prior).map((x) => x.w);
+  for (let i = 0; i + min <= pw.length; i++) seen.add(pw.slice(i, i + min).join(' '));
+  const tw = wordsOf(t);
+  const hits = [];
+  for (let i = 0; i + min <= tw.length; i++) {
+    const gram = tw.slice(i, i + min);
+    /* two words of its own at least: "and then he said that it" is how anyone talks */
+    if (!seen.has(gram.map((x) => x.w).join(' ')) || gram.filter((x) => !LITTLE.has(x.w)).length < 2) continue;
+    /* one stretch across overlapping six-word runs */
+    const last = hits[hits.length - 1];
+    if (last && i <= last.to) last.to = i + min - 1;
+    else hits.push({ from: i, to: i + min - 1 });
+  }
+  return hits.map((h) => ({ start: tw[h.from].start, end: tw[h.to].end, words: t.slice(tw[h.from].start, tw[h.to].end) }))
+    .sort((a, b) => (b.end - b.start) - (a.end - a.start)).slice(0, max).sort((a, b) => a.start - b.start);
+}

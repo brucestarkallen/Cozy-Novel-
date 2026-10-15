@@ -13,7 +13,7 @@
  */
 
 import * as store from '../store.js';
-import { ask, emptyWhy, stripControlLeak } from '../model/call.js';
+import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf } from '../model/providers.js';
 import { estimateTokens } from '../util.js';
 import { assemble, requiredLength, SAFETY, partnerReply, PARTNER_FLOOR } from './context.js';
@@ -22,7 +22,7 @@ import { connFor, connName, recount } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, NOTE_KINDS, matchCard } from './shape.js';
 import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN } from './prompts.js';
-import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropHeading } from './textshape.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop } from './textshape.js';
 import { numberedText } from './context.js';
 import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf } from './changes.js';
 import { searchBook } from './search.js';
@@ -142,9 +142,9 @@ export function shapeTelling(words, { cut = false, notes = null } = {}) {
   const story = at >= 0 ? w.slice(0, at) : w;
   const rest = at >= 0 ? w.slice(at) : '';
   const say = (said) => { if (notes && !notes.includes(said)) notes.push(said); };
-  /* a heading above the telling ("## The Scene") is not the telling (Cozy Tavern M116) */
-  const head = dropHeading(story);
-  if (head.removed) say('A heading above the telling was taken off — Put back what was taken off brings it back.');
+  /* a plan or a heading above the telling ("## The Scene") is not the telling (Cozy Tavern M116, M322–M326) */
+  const head = dropTop(story);
+  if (head.removed) say(`${head.plan && head.heading ? 'The narrator’s plan and a heading above the telling were' : head.plan ? 'The narrator’s plan, written above the telling, was' : 'A heading above the telling was'} taken off — Put back what was taken off brings ${head.plan && head.heading ? 'them' : 'it'} back.`);
   const unglued = dropGluedStrays(head.text);
   if (unglued.changed) say('A stray character of another script, stuck to the front of a word, was taken off.');
   const fin = finishTail(joinSoftWraps(unglued.text));
@@ -304,7 +304,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           numbers = numbersOf(novel);
           const rec = store.peek(kind, id);
           const args = buildArgs(rec, c);
-          const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length });
+          const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length, notesKept: archivist.keepingNotes(novelId) });
           let extra = extraOf();
           let a = made(extra);
           if (readSome()) {
@@ -348,7 +348,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     const askReading = async () => {
       for (;;) {
         const o = await askNow();
-        const said = String(o.text || text);
+        const said = finalWords(o, text);
         const all = kind === 'talk' && o.ok && !o.cut ? readAsks(said) : [];
         const asked = all.slice(0, READ_AT_ONCE);
         const notSent = all.slice(READ_AT_ONCE).map(askLabel);
@@ -380,10 +380,10 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     out = await askReading();
     const leakNotes = [];
     if (leftOut > 0) leakNotes.push(leftOutWords(leftOut, kind === 'play' ? 'the narrator' : 'your partner'));
-    const firstWords = cleanAnswer(kind, id, turnId, String(out.text || text), leakNotes);
+    const firstWords = cleanAnswer(kind, id, turnId, finalWords(out, text), leakNotes);
     if (!firstWords.trim()) {
       const why = out.stopped ? 'stopped before any words came'
-        : String(out.text || text).trim() ? 'the answer held nothing before the provider’s own markers'
+        : finalWords(out, text).trim() ? 'the answer held nothing before the provider’s own markers'
           : out.ok ? emptyWhy(out, thinking) : out.error;
       /* what it thought is never thrown away: kept beside his message, with why no words came (Cozy Tavern's M301) */
       const thought = allThought(out.thinking || thinking);
@@ -437,7 +437,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         thinking = '';
         live({ kind, id, turnId, versionId, text: replacing ? '' : done, thinking: thoughtBefore, note: missed.length ? 'Putting right what could not be made…' : 'Asking it for the change it described…' });
         out = await askReading();
-        const next = cleanAnswer(kind, id, turnId, String(out.text || text), leakNotes).replace(/\s+$/, '');
+        const next = cleanAnswer(kind, id, turnId, finalWords(out, text), leakNotes).replace(/\s+$/, '');
         const whole = replacing;
         replacing = false;
         if (!next.trim()) break;
@@ -1110,7 +1110,14 @@ export function transcriptOf(play, { fromStart = false } = {}) {
    * to the narrator — what wakes a rule when it is written into prose
    * (writer.js), as they did while he played it (hisLast) */
   const mine = String(play.from || '').trim() ? [String(play.from).trim()] : [];
-  for (const t of turns.slice(start)) {
+  /* only what the narrator has told: his moves after its last telling are
+   * attempts no one has answered yet — they stay in the scene, for the
+   * narrator, never written into the book as done (Cozy Tavern M110) */
+  const rest = turns.slice(start);
+  let told = -1;
+  rest.forEach((t, i) => { if (t.by !== 'you' && sceneWords(String((picked(t) || {}).text || '')).trim()) told = i; });
+  const upto = told >= 0 ? rest.slice(0, told + 1) : [];
+  for (const t of upto) {
     const v = picked(t);
     /* what happened in it: his character's lines and the narrator's telling —
      * never his lines to the narrator, nor the ways it offered */
@@ -1120,5 +1127,6 @@ export function transcriptOf(play, { fromStart = false } = {}) {
     if (!text) continue;
     lines.push(t.by === 'you' ? `${who}: ${text}` : `Narrator: ${text}`);
   }
-  return { text: lines.join('\n\n'), mine: mine.join('\n'), lastId: turns.length ? turns[turns.length - 1].id : null, count: lines.length };
+  const waiting = rest.slice(told + 1).filter((t) => t.by === 'you' && String((picked(t) || {}).text || '').trim()).length;
+  return { text: lines.join('\n\n'), mine: mine.join('\n'), lastId: upto.length ? upto[upto.length - 1].id : (start > 0 ? turns[start - 1].id : null), count: lines.length, waiting };
 }

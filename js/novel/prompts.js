@@ -135,6 +135,70 @@ export function withMacros(text, names) {
   return out.replace(/\{\{\s*user\s*\}\}|<USER>/gi, () => n.user || 'me').replace(/\{\{\s*char\s*\}\}|<BOT>/gi, () => n.char || 'the writer');
 }
 
+/* {{user}} and {{char}} in the book's own words — a plot essential brought
+ * from SillyTavern says "{{char}} is {{user}}'s older sister" — are never
+ * sent raw (Cozy Tavern M435): {{user}} is his name, {{char}} the name he
+ * gives it in About this book (the other main character, until he does). The
+ * book's words, what is kept of it and the cards' words, as every model reads
+ * them; a card's name is left as it is kept, so an answer finds its card. */
+const MACRO = /\{\{\s*(?:user|char)\s*\}\}|<(?:USER|BOT)>/i;
+export function bookHasMacro(novel) {
+  const n = novel || {};
+  return MACRO.test(JSON.stringify([n.brief, n.style, n.plans, n.kept, n.notes]));
+}
+export function bookNames(house, novel) {
+  return { user: nameOf(house) || 'me', char: String((novel && novel.meta && novel.meta.char) || '').trim() || 'the other main character' };
+}
+/* the words as every model reads them, and where a place in them stands in
+ * his own: {text, toRaw(i, isEnd) → {at, keep}}. A place inside a name takes
+ * in its whole mark, and `keep` is the part of the name outside the place —
+ * written beside the new words, so a quote that begins at "ias" of "Rias"
+ * never leaves "Ria" out */
+export function macroMap(text, names) {
+  const raw = String(text == null ? '' : text);
+  const n = names || {};
+  const re = /\{\{\s*(user|char)\s*\}\}|<(USER|BOT)>/gi;
+  const segs = [];
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(raw))) {
+    out += raw.slice(last, m.index);
+    const name = /^user$/i.test(m[1] || m[2]) ? (n.user || 'me') : (n.char || 'the writer');
+    segs.push({ rs: m.index, re: m.index + m[0].length, fs: out.length, fe: out.length + name.length, name });
+    out += name;
+    last = m.index + m[0].length;
+  }
+  out += raw.slice(last);
+  const toRaw = (i, isEnd) => {
+    let shift = 0;
+    for (const s of segs) {
+      if (i <= s.fs) break;
+      if (i < s.fe) return isEnd ? { at: s.re, keep: s.name.slice(i - s.fs) } : { at: s.rs, keep: s.name.slice(0, i - s.fs) };
+      shift += (s.fe - s.fs) - (s.re - s.rs);
+    }
+    return { at: i - shift, keep: '' };
+  };
+  return { text: out, toRaw };
+}
+export function namedBook(novel, house) {
+  if (!novel || !bookHasMacro(novel)) return novel;
+  const names = bookNames(house, novel);
+  const fill = (t) => (typeof t === 'string' ? withMacros(t, names) : t);
+  const card = (c) => {
+    if (!c || typeof c !== 'object') return c;
+    const o = { ...c };
+    for (const f of ['about', 'now', 'ties', 'since']) o[f] = fill(o[f]);
+    return o;
+  };
+  return {
+    ...novel,
+    brief: fill(novel.brief), style: fill(novel.style), plans: fill(novel.plans),
+    ...(novel.kept ? { kept: Object.fromEntries(Object.entries(novel.kept).map(([k, v]) => [k, v && typeof v === 'object' ? { ...v, text: fill(v.text) } : v])) } : {}),
+    ...(novel.notes ? { notes: Object.fromEntries(Object.entries(novel.notes).map(([k, list]) => [k, Array.isArray(list) ? list.map(card) : list])) } : {}),
+  };
+}
+
 function fence(text) { return `"""\n${String(text || '').trim()}\n"""`; }
 
 function titled(novel) { return `“${(novel.meta && novel.meta.title) || 'Untitled'}”`; }
@@ -418,7 +482,7 @@ export function writeRequest({ chapterLabel, direction, length, empty, firstOfBo
     lines.push(`Write the passage that comes next in ${chapterLabel}, between the text before it and the text that follows it.`);
     if (d) lines.push(`What happens: ${d}`);
   } else {
-    lines.push(`Carry on with ${chapterLabel} from where it stops. Your first lines follow straight on from its last ones — the same moment, everyone where it left them, nothing it already told told again — so the book reads as one.`);
+    lines.push(`Carry on with ${chapterLabel} from where it stops. Your first lines follow straight on from its last ones — the same moment, everyone where it left them, nothing it already told told again — so the book reads as one${d ? '; when what happens next starts somewhere or somewhen else, mark the jump (a scene break, or a line that carries the reader there) rather than bridging to it' : ''}.`);
     lines.push(d ? `What happens next: ${d}` : 'Let the story go where it naturally goes next.');
   }
   /* between two passages, what follows settles it */
@@ -487,14 +551,15 @@ export function goOnRequest({ chapterLabel, between = false, tail = '', directio
   ].filter(Boolean).join('\n\n');
 }
 
-export function playToProseRequest({ chapterLabel, who, transcript, length }) {
+export function playToProseRequest({ chapterLabel, who, transcript, length, between = false }) {
   const w = String(who || '').trim() || 'my character';
+  /* between: the scene was set before passages written since, and goes in where it was set (Cozy Tavern M548) */
   return [
-    `We played a scene picking up where ${chapterLabel} leaves off: I took ${w}’s part, and you told everything else. Here’s how it went — my lines are the ones marked “${w}:”, yours are marked “Narrator:”.`,
+    `We played a scene picking up ${between ? `at the point in ${chapterLabel} where it was set` : `where ${chapterLabel} leaves off`}: I took ${w}’s part, and you told everything else. Here’s how it went — my lines are the ones marked “${w}:”, yours are marked “Narrator:”.`,
     fence(transcript),
-    `Now write it into the book as the next part of ${chapterLabel} — real prose in the book's own voice, not a transcript. Keep what happened and what was said; smooth it, give it room, let it read like the rest of the novel.${length === 'paragraphs' ? ' Keep it short.' : ''}`,
-    `It has to read as one book with what comes before: its first lines carry straight on from where ${chapterLabel} stops now — nothing it already told told again. Tell it from the point of view and in the tense the book is told in, whoever I played: if the book sees through someone else’s eyes, it stays behind theirs, and ${w}’s thoughts come only as the book would give them. Where the book moves between people’s points of view, change only at a scene break (* * *), and make plain whose eyes we’re behind from its first line.`,
-    STORY_ONLY,
+    `Now write it into the book as ${between ? `the part of ${chapterLabel} that comes there` : `the next part of ${chapterLabel}`} — real prose in the book's own voice, not a transcript. Keep what happened and what was said; smooth it, give it room, let it read like the rest of the novel.${length === 'paragraphs' ? ' Keep it short.' : ''}`,
+    `It has to read as one book with what comes before: its first lines carry straight on from ${between ? 'the passage before it' : `where ${chapterLabel} stops now`} — nothing it already told told again.${between ? ' What comes after it is already written, so bring it to where that picks up.' : ''} Tell it from the point of view and in the tense the book is told in, whoever I played: if the book sees through someone else’s eyes, it stays behind theirs, and ${w}’s thoughts come only as the book would give them. Where the book moves between people’s points of view, change only at a scene break (* * *), and make plain whose eyes we’re behind from its first line.`,
+    between ? STORY_ONLY_BETWEEN : STORY_ONLY,
   ].join('\n\n');
 }
 
@@ -548,9 +613,12 @@ ${CHANGES_OPEN}[
 - To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - Only quote what you can see; never make up a passage or a fact. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block.`;
 
-export function partnerFrame(house, novel, { notesAs = 'system', tools = true } = {}) {
+/* the notes' upkeep, as it is now (Cozy Tavern M567: a worker is never told the app does what it is not doing) */
+const NOTES_KEEP = 'The notes keep themselves — every new page is read into them, and every few readings each card is checked against the book and cards that repeat each other are folded into one — so leave their upkeep to that: change a card when I ask, or when one is plainly wrong about the book, and never offer to tidy them.';
+const NOTES_UNKEPT = 'Nothing reads the new pages into the notes just now, so they may lag behind the book: where a card is out of date with it, say so and offer the change — and make it when I ask.';
+export function partnerFrame(house, novel, { notesAs = 'system', tools = true, notesKept = true } = {}) {
   return [
-    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner: you know the book inside out (it’s all below) and the craft as well as anyone. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. The notes keep themselves — every new page is read into them, and every few readings each card is checked against the book and cards that repeat each other are folded into one — so leave their upkeep to that: change a card when I ask, or when one is plainly wrong about the book, and never offer to tidy them. You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
+    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner: you know the book inside out (it’s all below) and the craft as well as anyone. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
     /* Ideas reads nothing more and changes nothing: it is never told it could (Cozy Tavern's M241) */
     tools ? partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now') : '',
     notesAs === 'system' ? hereIs('partner') : '',
@@ -702,6 +770,12 @@ export function checkerFrame(house, novel) {
 }
 
 /* stock wording counted in the passages (stock.js), one line: [1.2] “…”, “…”; [1.3] “…” */
+/* stretches a passage copies word for word from the pages right before it (Cozy Tavern M512-1) */
+function repeatsLine(repeats) {
+  const rows = Object.entries(repeats || {}).filter(([, list]) => list && list.length);
+  if (!rows.length) return '';
+  return `\nWords copied from the pages right before, word for word — each to be said another way, unless the book repeats it on purpose (a refrain, a callback): ${rows.map(([n, list]) => `[${n}] ${list.map((w) => `“${w}”`).join(', ')}`).join('; ')}.`;
+}
 function stockLine(stock) {
   const rows = Object.entries(stock || {}).filter(([, list]) => list && list.length);
   if (!rows.length) return '';
@@ -717,7 +791,7 @@ function stockLine(stock) {
 /* The notes are kept to the newest page of the book: what someone is doing or
  * feeling "right now" there is never the moment of a passage from earlier in
  * it (Cozy Tavern G3) */
-const NOTES_FOR_A_READER = 'The book’s notes, for what is true in it (where they and the book’s own words disagree, the book’s words are right). They are kept to the newest page of the book: each “Right now” is where someone stands at the end of the book so far (a “Last seen” where they were last told to be), never at these passages — a passage from earlier in the book is not wrong for coming before it:';
+const NOTES_FOR_A_READER = 'The book’s notes, for what is true in it (where they and the book’s other passages disagree, those passages are right — the passages being read here are never their own proof). They are kept to the newest page of the book: each “Right now” is where someone stands at the end of the book so far (a “Last seen” where they were last told to be), never at these passages — a passage from earlier in the book is not wrong for coming before it:';
 
 /* what I asked the writer for in these passages, each by its number — doing
  * it is never a fault; whole (a very long ask, its opening, said so: never cut
@@ -747,7 +821,7 @@ function straysLine(strays) {
   return `\nA stray character of another script stands in these passages, among words in the Latin alphabet — take it out and mend the words around it (a garbled repeat kept once), unless someone in the scene speaks or writes that language: ${rows.map(([n, list]) => `[${n}] ${list.map((w) => `“…${w}…”`).join(', ')}`).join('; ')}.`;
 }
 
-export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, strays = {}, his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', gradesOnly = false }) {
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, strays = {}, repeats = {}, his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', gradesOnly = false }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });
   if (notes) parts.push(`${NOTES_FOR_A_READER}\n${behind ? `${behind}\n` : ''}${notes}`);
@@ -770,10 +844,10 @@ Answer with one JSON object and nothing else: {"grades": [{"passage": "2.3", "ch
   }
   parts.push(`Suggest only what is worth changing, each a small fix in place:
 - "grammar": spelling, grammar, punctuation, a word missing or doubled.
-- "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${straysLine(strays)}${avoid.length ? `
+- "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${repeatsLine(repeats)}${straysLine(strays)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
 - "seam": this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
-- "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix.
+- "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. A slip needs a written fact it goes against: something new the notes or the earlier chapters do not hold yet — a sister, a scar, a past — is the story growing, never a slip. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix.
 
 Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake${his && his.trim() ? ', and nothing I ask the writer for (above) is one' : ''}. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
 
@@ -854,7 +928,7 @@ const NOTE_RULES = `Include only entries that are new or changed, and in each on
 - Someone, somewhere or something new: write down how they're described the first time they appear — looks, features, voice, what they wear or carry. It can't be found again later.
 - A person's "about" is who they are for good: change it only for something lasting, never a passing mood, and keep everything already in it. On a card marked (my words), never repeat mine: give in "about" only what the book has added since — all of it, whole — and it is kept beside my words.
 - A place's, a thing's or a thread's "about" says where it stands now: a thing that matters to what can happen next (a vehicle, a weapon, a key, a letter) with whose it is and where it is, written again when it moves; a place as it is now.
-- "now" leads with where they are and what they're doing. Feelings carry over — a shock, a slight, a warmth set earlier still colours them until the story changes it. A plan is never "now": it's a thread. A flashback, a dream, a memory, a letter or a story someone tells is not now — it moves no one's "now"; a jump in time moves the "now" of everyone it carries along: write theirs again.
+- "now" leads with where they are and what they're doing. Feelings carry over — a shock, a slight, a warmth set earlier still colours them until the story changes it. A plan is never "now": it's a thread. A flashback, a dream, a memory, a letter or a story someone tells is not now — it moves no one's "now", and someone only talked about, thought of or written to is not there; a jump in time moves the "now" of everyone it carries along: write theirs again.
 - What someone says, believes, fears or plans is theirs — kept as said or believed, by whom, never as what happened, until the book shows it.
 - Numbers, ages, amounts and distances exactly as the book gives them.
 - "ties": add the newest turn and keep the older ones short; say why each tie moved.
@@ -865,9 +939,10 @@ const NOTE_RULES = `Include only entries that are new or changed, and in each on
 - Use "gone" only for an entry that no longer belongs in the book at all (it was only ever in text that's been taken out). Mark a thread "open": false once the story resolves it — by what happens after it was set up, never by the words that set it up (an oath sworn, a plan made, a promise given is open) and never just because time passed.
 - Write only what the book actually says — never invent, never guess.`;
 
-export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null }) {
+export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null, plain = false }) {
   const parts = [];
-  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n'), shortIds });
+  /* plain: the cards it names could not all ride whole beside it — they ride as the rest do (archivist.js readChanges) */
+  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: plain ? '' : [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n'), shortIds });
   parts.push(`The notes as they stand:\n${notes ? notes : '(none yet — this is the start)'}`);
   const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(about);
@@ -923,7 +998,7 @@ export function auditRequest({ novel, bookText: text, his = [], partial = false,
   parts.push(`${AUDIT_ASK}, the way an editor checks a continuity bible:
 - A fact, a line someone said, a name, an event or a secret no passage says any more (it came from words since rewritten or taken out): correct the card to what the book says now, or take the card out with "gone" when nothing of it is in the book.
 - A detail that differs from the book — a name, a look, an age, who said what, who knows what: put it right.
-- Where each person is "now", as of the end of the book.${endShort ? ' (The end of the book is given here only in short, so where someone is now can’t be told from it: give a "now" only for someone who has none.)' : ''}
+- Where each person is "now", as of the end of the book — a flashback, a dream, a memory, a letter, or being only talked about or thought of, puts no one anywhere; and what someone says, believes, fears or plans is theirs, never what happened, until the book shows it.${endShort ? ' (The end of the book is given here only in short, so where someone is now can’t be told from it: give a "now" only for someone who has none.)' : ''}
 - A thread the book has resolved — by what happens after it was set up, never by the words that set it up: "open": false. One it opened that the notes miss: add it.
 - Whose and who: whose thing it is, who did a deed, who said a line — held against the passages in their order.
 - Someone or something that matters and is missing: add it, described as the book first describes them.
@@ -931,7 +1006,7 @@ ${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it�
 ` : ''}- Cards that say the same thing: each fact belongs on one card — the person it is about, or the thing, place or thread itself. Where several cards repeat it (a limit, a rule, a name kept back, a secret), keep it on the card it belongs to and take it off the others, giving each of them whole without it. Two cards for one person, place or thing become one: give the one to keep whole, with whatever the other held that it lacks (for a person, the other's names among the others they go by), and put the other in "gone". Nothing true is lost in the folding.
 - A name a person is noted as going by that isn't theirs (it is someone else's, or a slip): give their "aka" whole without it. Leave "aka" out wherever their names are right.${his.length ? `
 - ${his.join(', ')} — ${one ? 'this card is' : 'these cards are'} mine, written or changed by me: never change what I wrote about ${one ? 'it' : 'them'}, never take ${one ? 'it' : 'them'} out; only "now" and "ties" may move, and what the book has told since my words (shown as "Since then") may be put right — give that in "about", never repeating mine. Where another card repeats what ${one ? 'it says' : 'one of mine says'}, the other card gives way.` : ''}${partial ? `
-- Some chapters are given here in short, or left out to save room: a detail a chapter in short leaves out may still be in the book. Change or take out only what the words here contradict — never what they merely leave unsaid.` : ''}
+- Some chapters are given here in short, or left out to save room: a detail a chapter in short leaves out may still be in the book. Change or take out only what the words here contradict — never what they merely leave unsaid. A chapter in short is a telling of it, not its words: against one, change a card only for what it plainly says happened — never for who said a line, a look, or a small detail it may have got wrong.` : ''}
 
 Answer with one JSON object and nothing else — only the cards that need a change, each field you give whole, each with "why": what was wrong, in a few plain words:
 

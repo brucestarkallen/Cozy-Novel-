@@ -43,7 +43,8 @@ export function joinSoftWraps(text) {
     let j = i;
     while (j + 1 < lines.length && lines[j + 1].trim()) j++;
     const block = lines.slice(i, j + 1);
-    const short = block.length >= 3 && block.slice(0, -1).every((l) => l.trim().length <= 60);
+    /* (a line of verse or a list is short; a wrap's lines are a sentence's width — "…than Dev liked —\n  and the thought…" is joined, Cozy Tavern M476) */
+    const short = block.length >= 3 && block.slice(0, -1).every((l) => l.trim().length <= 40);
     const indented = block.length >= 2 && block.every((l) => /^[ \t]+\S/.test(l));
     if (short || indented || GREETING.test(block[0])) for (let k = i + 1; k <= j; k++) own.add(k);
     i = j + 1;
@@ -91,6 +92,11 @@ const TAIL_META = [
   /^(?:ooc|out\s+of\s+character|author'?s?\s+note|author’s\s+note|a\/n|note\s+to\s+(?:the\s+)?(?:writer|reader|user))\s*[:\-—–]/i,
   /^(?:to\s+be\s+continued|end\s+of\s+(?:the\s+)?(?:page|scene|chapter|response|part|passage)|awaiting\s+your\s+(?:response|input|reply))\s*[.!?…]*$/i,
   /^word\s+count\s*[:\-—–]?\s*\d/i,
+  /* its check of its own work after the page (Cozy Tavern M322–M326): "Let me check: ✓ … Ship it." — never a
+   * narrator's own "Let me check whether the door is locked", a game's "Check — and mate", or "Ship it to the coast" */
+  /^(?:let\s+me\s+(?:check|verify|double[-\s]?check|review)\s*[:\-—–]|(?:self[-\s]?|final\s+|quality\s+)?check(?:list)?\s*:|verification\s*:)/i,
+  /^let\s+me\s+(?:check|verify|double[-\s]?check|review)\b[^"“”\n]{0,40}?\b(?:scene|page|passage|chapter|draft|rules?|checklist|beats?|prose|pov|tense|word\s+count)\b/i,
+  /^ship\s+it[.!…]*$/i,
 ];
 const TAIL_WRAPS = /^[\s>*_~#(\[]+|[\s*_~)\].]+$/g;
 function tailIsNote(para) {
@@ -102,6 +108,8 @@ function tailIsNote(para) {
   const bare = b.replace(/([?!])\1$/, '$1');
   const isNote = (x) => TAIL_META.some((re) => re.test(x)) || /^let\s+me\s+know[.!…]*$/i.test(x);
   if (isNote(bare)) return true;
+  /* a checklist of its own: two ticks or more */
+  if ((raw.match(/[✓✔☑]/g) || []).length >= 2) return true;
   /* a paragraph of a few sentences, every one of them a note ("Want more? Let me know!") */
   const sentences = bare.split(/(?<=[.!?…])\s+/).map((x) => x.replace(TAIL_WRAPS, '').trim()).filter(Boolean);
   if (sentences.length > 1 && sentences.length <= 4 && sentences.every((x) => isNote(x.replace(/([?!])\1$/, '$1')) || isNote(x + (/[?!.]$/.test(x) ? '' : '?')))) return true;
@@ -189,6 +197,72 @@ export function dropHeading(text, { names = [], minLeft = 200 } = {}) {
   const rest = given.slice(m.index + m[0].length).replace(/^\s+/, '');
   if (rest.replace(/\s+/g, ' ').trim().length < minLeft) return none;
   return { text: rest, removed: line };
+}
+
+/* A PLAN OR A DRAFT ABOVE THE PAGE IS NOT THE STORY (Cozy Tavern M322–M326,
+ * M339). A model writing with its thinking off may plan the page on the page
+ * — "Plan:", "Beats:", "Outline:", "Draft 1:", a checklist — and only then
+ * write it; kept, the plan is read as story by the helper and sent back to
+ * the writer as the chapter, teaching it to plan on the page again. Only a
+ * block at the very top that opens with such a label: when it wrote drafts or
+ * a "Final:", everything up to the last of those labels; else up to a line
+ * that only parts it from the story (---, * * *) in the first half of the
+ * page; else its own lines of points and labels. Kept with the version (Put
+ * back). A story may open on a line of that shape — "My plan: wait for
+ * dark.", a narrator's own list — so a label with "my" or "the" before it is
+ * the story's, and so is a label with nothing after it but the story (no
+ * points, no line parting them, no drafts): kept as it came. */
+const PLAN_WORD = '(?:plan(?:ning)?|outline|beats?|beat\\s+sheet|approach|(?:first\\s+|rough\\s+)?draft(?:\\s*#?\\d+)?|self[-\\s]?check|checklist|thinking|reasoning|analysis|notes?\\s+(?:for|on)\\s+(?:this|the)\\s+(?:scene|passage|chapter|page))';
+const PLAN_HEAD = new RegExp(`^[\\s>*_#]*(?:scene\\s+|page\\s+|chapter\\s+)?${PLAN_WORD}\\s*(?:\\([^)\\n]{0,40}\\)\\s*)?[*_]*\\s*:`, 'i');
+const PLAN_POINT = /^\s*(?:[-*•–+]\s+\S|\d{1,2}[.)]\s+\S|\[[ xX✓]\]\s*\S|[✓✔☑✗✘]\s*\S|[A-Z][A-Za-z'’ ]{0,30}:\s+\S)/;
+const PLAN_LAST = /^[\s>*_#]*(?:final(?:\s+(?:version|draft|page|text|passage))?|revised(?:\s+(?:version|draft))?|(?:draft|version|take)\s*#?\d+|the\s+(?:page|passage|scene)(?:\s+itself)?)\s*[*_]*\s*:[*_\s]*$/i;
+export function dropPlan(text, { minLeft = 200 } = {}) {
+  const given = String(text == null ? '' : text);
+  const none = { text: given, removed: '' };
+  const lines = given.split('\n');
+  let i = 0;
+  while (i < lines.length && !lines[i].trim()) i++;
+  if (i >= lines.length || !PLAN_HEAD.test(lines[i])) return none;
+  const starts = [];
+  for (let k = 0, pos = 0; k < lines.length; k++) { starts.push(pos); pos += lines[k].length + 1; }
+  let end = -1;
+  /* drafts, or a "Final:": the page is what follows the last of them */
+  for (let k = lines.length - 1; k > i; k--) if (PLAN_LAST.test(lines[k])) { end = k + 1; break; }
+  /* a line that only parts the plan from the story, in the first half of the page — what stands above it
+   * shaped like a plan (a label alone on its line, points, or a line or two), never a story's first scene
+   * that happens to open on "Thinking: …" */
+  if (end < 0) {
+    for (let k = i + 1; k < lines.length && starts[k] < given.length / 2; k++) {
+      if (!isBreakLine(lines[k])) continue;
+      const block = lines.slice(i, k);
+      if (/:[*_\s]*$/.test(lines[i]) || block.slice(1).some((l) => PLAN_POINT.test(l)) || block.join('\n').trim().length <= 400) end = k + 1;
+      break;
+    }
+  }
+  /* its own lines: points and labels, and the blank lines between */
+  if (end < 0) {
+    end = i + 1;
+    let points = 0;
+    for (let k = i + 1; k < lines.length; k++) {
+      if (!lines[k].trim()) continue;
+      if (!PLAN_POINT.test(lines[k]) && !PLAN_HEAD.test(lines[k])) break;
+      end = k + 1;
+      points++;
+    }
+    /* a label with no points under it ("Plan: wait for dark.", "The plan:") and the story straight after:
+     * no plan can be told from the story — kept as it came (Cozy Tavern M324) */
+    if (!points) return none;
+  }
+  const rest = lines.slice(end).join('\n').replace(/^\s+/, '');
+  if (rest.replace(/\s+/g, ' ').trim().length < minLeft) return none;
+  return { text: rest, removed: lines.slice(i, end).join('\n').trim() };
+}
+/* what stands above the story — a plan, then a heading — taken off together:
+ * {text, removed, plan, heading} */
+export function dropTop(text, { names = [], minLeft = 200 } = {}) {
+  const plan = dropPlan(text, { minLeft });
+  const head = dropHeading(plan.text, { names, minLeft });
+  return { text: head.text, removed: [plan.removed, head.removed].filter(Boolean).join('\n\n'), plan: Boolean(plan.removed), heading: Boolean(head.removed) };
 }
 
 /* THE MARKS A MODEL LEFT OPEN ARE CLOSED (Cozy Tavern M458, M476, M490 —

@@ -8,11 +8,11 @@ import { PRESETS, LEVELS, spokenAs, describePrefill, learnedFacts, contextOf, al
 import { listModels, tryConnection, testPrefill, learnIdentity } from '../model/call.js';
 import { costOf, addRow } from '../model/usage.js';
 import { STRUCTURED_PRESETS, fillPreset, presetWords, bannedPattern, MIN_AFTER_DEFAULT } from '../model/structured.js';
-import { connFor, connName, partsOf, partsWords } from '../novel/writer.js';
+import { connFor, connName, partsOf, partsWords, holderOf } from '../novel/writer.js';
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from '../novel/prompts.js';
 import { voiceOf, presetsOf, presetInUse, presetSteps, cleanVoice, cleanName, voiceLine, startingVoice, FORMAT as PRESET_FORMAT } from '../novel/presets.js';
 import { listModules, moduleOf, builtinOf, moduleSteps, rideLine, READERS, READER_WORDS, RIDES, RIDES_WORDS } from '../novel/modules.js';
-import { newId, debounce, timeAgo, plural } from '../util.js';
+import { newId, debounce, timeAgo, plural, numberTyped, markTyped } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
 import { applyLook, DEFAULT_LOOK } from './look.js';
@@ -178,15 +178,21 @@ function connectionForm(c) {
     inp.addEventListener('input', typing(() => { set({ [key]: inp.value.trim() }); if (after) after(inp.value.trim()); }, 400));
     return inp;
   };
+  /* a number as he types it — "8,000" and "200.000" are thousands, "128k" too
+   * (util.js numberTyped); one that is not a number is said under the box,
+   * never kept as another number (Cozy Tavern M234, M390) */
   const num = (key, placeholder, { whole = false } = {}) => {
     const inp = h('input', { type: 'text', inputmode: whole ? 'numeric' : 'decimal', placeholder, value: Number.isFinite(c[key]) ? String(c[key]) : '', autocomplete: 'off' });
+    const said = h('small.badnum', { hidden: true }, whole ? 'A whole number, like 8000 — this one is not kept.' : 'A number, like 0.7 — this one is not kept.');
     inp.addEventListener('input', typing(() => {
-      const s = inp.value.trim().replace(',', '.');
-      if (s === '') { set({ [key]: undefined }); return; }
-      const n = Number(s);
-      if (Number.isFinite(n)) set({ [key]: whole ? Math.round(n) : n });
+      const s = inp.value.trim();
+      if (s === '') { said.hidden = true; inp.removeAttribute('aria-invalid'); set({ [key]: undefined }); return; }
+      const n = numberTyped(s, { whole });
+      const ok = Number.isFinite(n);
+      said.hidden = ok;
+      if (ok) { inp.removeAttribute('aria-invalid'); set({ [key]: n }); } else inp.setAttribute('aria-invalid', 'true');
     }, 400));
-    return inp;
+    return h('span.numbox', inp, said);
   };
   const tick = (key, label, on, onChange) => {
     const inp = h('input', { type: 'checkbox', checked: on });
@@ -327,8 +333,15 @@ function connectionForm(c) {
     toast(out.ok ? `“${connName(c)}” answered — the connection works.` : 'No answer came back — the address, key or model may be off.');
   } }, 'Test');
   box.append(h('div.btnrow', testBtn,
-    h('button.btn.danger.small', { onclick: async () => {
-      if (!(await confirmIt(`Let go of “${connName(c)}”?`, 'The key on this phone goes with it. Your books are not touched.', 'Let go', { danger: true }))) return;
+    h('button.btn.danger.small', { title: 'Removes this connection and its key; the parts it does go to the writer, said before and after.', onclick: async () => {
+      /* the parts it does, and who does them after it — said before he says yes, and once it is gone (Cozy Tavern M301: never resolved silently) */
+      const parts = partsOf(house(), c.id);
+      const rest = (house().connections || []).filter((x) => x.id !== c.id);
+      const heir = parts.includes('writer') ? rest[0] : connFor(house(), 'writer');
+      const after = !parts.length ? '' : heir
+        ? ` It is ${partsWords(parts)} now — ${parts.length > 1 ? 'they go' : 'that goes'} to “${connName(heir)}”${parts.includes('writer') ? ', the first connection you made' : ', the writer'}.`
+        : ` It is ${partsWords(parts)} now — with no other connection, nothing will write until you add one.`;
+      if (!(await confirmIt(`Let go of “${connName(c)}”?`, `The key on this phone goes with it. Your books are not touched.${after}`, 'Let go', { danger: true }))) return;
       changeHouse((hs) => {
         hs.connections = (hs.connections || []).filter((x) => x.id !== c.id);
         for (const k of Object.keys(hs.roles || {})) if (hs.roles[k] === c.id) delete hs.roles[k];
@@ -336,6 +349,12 @@ function connectionForm(c) {
       }, { now: true });
       editingId = null;
       draw('connections');
+      /* who does each part now, from the house as it is */
+      const now = house();
+      const by = new Map();
+      for (const p of parts) { const k = holderOf(now, p); const name = k ? connName(k) : ''; by.set(name, [...(by.get(name) || []), p]); }
+      const said = [...by.entries()].map(([name, ps]) => (name ? `${partsWords(ps)} ${ps.length > 1 ? 'are' : 'is'} “${name}” now` : `nothing does ${partsWords(ps)} now — add a connection`)).join('; ');
+      toast(said ? `“${connName(c)}” is gone — ${said.charAt(0).toLowerCase() + said.slice(1)}.` : `“${connName(c)}” is gone.`, 6000);
     } }, 'Let go')),
     quiet('Test sends exactly what a page sends for the thinking and says whether thinking came back (asking again at the top level when it did not), then times one answer — how soon its first words came and how fast it writes. Let go removes this connection and its key.'),
     result);
@@ -512,11 +531,20 @@ function judgeField(hs) {
   const on = h('input', { type: 'checkbox', checked: j.on !== false });
   on.addEventListener('change', () => changeHouse((x) => { x.judge = { ...(x.judge || {}), on: on.checked }; }, { now: true }));
   const mark = h('input', { type: 'text', inputmode: 'decimal', value: Number.isFinite(Number(j.target)) && j.target ? String(j.target) : '', placeholder: '9', style: { maxWidth: '90px' } });
-  mark.addEventListener('input', typing(() => { const n = Number(mark.value.trim().replace(',', '.')); changeHouse((x) => { x.judge = { ...(x.judge || {}) }; if (mark.value.trim() && Number.isFinite(n) && n >= 1 && n <= 10) x.judge.target = n; else delete x.judge.target; }); }, 400));
+  /* "8", "8,5", "8/10", "8 of 10", "80%" — one that is not a mark out of ten is said, and the mark he had stays (util.js markTyped) */
+  const markSaid = h('small.badnum', { hidden: true }, 'A mark from 1 to 10, like 8 or 8.5 — this one is not kept.');
+  mark.addEventListener('input', typing(() => {
+    const raw = mark.value.trim();
+    const n = markTyped(raw);
+    const ok = !raw || (Number.isFinite(n) && n >= 1 && n <= 10);
+    markSaid.hidden = ok;
+    if (ok) mark.removeAttribute('aria-invalid'); else { mark.setAttribute('aria-invalid', 'true'); return; }
+    changeHouse((x) => { x.judge = { ...(x.judge || {}) }; if (raw) x.judge.target = n; else delete x.judge.target; });
+  }, 400));
   return h('div.field',
     h('label.toggle', on, h('span', 'The judge grades each passage')),
     h('em', 'In the checker’s own reading, ten checks a passage passes or fails — Opening, True to the book, Shown, Pacing, Specific, Fresh, Sentences, People, Moves, Ending — each one it fails named with the words that fail it; its grade is the number passed. A passage under your mark comes behind the bubble with fixes that lift it and Write it again toward your mark — nothing changes until you say, unless you switch on the two below. Two versions of one passage by two writers are read head to head. Its grades show which writer writes best.'),
-    field('Your mark', mark, 'Under this, a passage is offered to be lifted (empty: 9 — one check failed at most).'));
+    field('Your mark', h('span.numbox', mark, markSaid), 'Under this, a passage is offered to be lifted (empty: 9 — one check failed at most).'));
 }
 
 /* Every call to a model — the writer, the helper, the checker, the partner,
@@ -1064,10 +1092,11 @@ async function fillCopies(box) {
   if (status !== 200 || !data) { box.append(h('p.say', 'The copies could not be read just now — the phone did not answer.')); return; }
   if (!data.copies.length) { box.append(h('p.say', 'None yet — the first is made today.')); return; }
   const list = h('ul.list');
-  for (const c of data.copies.slice(0, 20)) {
+  /* every copy the phone keeps (fourteen days' and fourteen kept before a copy was brought back) — never a few of them, the rest out of reach */
+  for (const c of data.copies) {
     const before = c.name.includes('before-');
     list.append(h('li', h('div.grow', before ? 'Kept just before a copy was brought back' : `The day’s copy`, h('small', `${new Date(c.at).toLocaleString()} · ${Math.max(1, Math.round(c.size / 1024)).toLocaleString()} KB`)),
-      h('button.btn.small', { onclick: async () => {
+      h('button.btn.small', { title: 'Everything goes back to how it was then — everything as it is now is kept as a copy first.', onclick: async () => {
         if (!(await confirmIt('Bring this copy back?', 'Everything goes back to how it was then. Everything as it is now is kept as a copy first, so nothing is lost.', 'Bring it back'))) return;
         if (!(await allOnPhone())) return;
         const r = await store.api('POST', `/api/copies/${c.name}/restore`, { body: {} });

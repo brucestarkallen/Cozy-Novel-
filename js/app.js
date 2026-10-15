@@ -24,7 +24,7 @@ import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
 import { mendBook } from './novel/mend.js';
 
-const A = { novelId: null, chapterId: null, booting: true, updateWaiting: false, fromShelf: false, reading: null };
+const A = { novelId: null, chapterId: null, booting: true, updateWaiting: false, fromShelf: false, reading: null, route: 0, then: null };
 
 /* ------------------------------------------------------------- boot */
 
@@ -115,8 +115,11 @@ async function boot() {
  * #/n/<novel>        a book, at the chapter last open
  * #/n/<novel>/<ch>   a book, at that chapter */
 async function route() {
+  /* each move owns the screen: a book still opening when he has moved on
+   * (Back on a slow phone) stands down, never drawn over where he is now */
+  const token = ++A.route;
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  if (parts[0] === 'n' && parts[1]) return showNovel(parts[1], parts[2] || null);
+  if (parts[0] === 'n' && parts[1]) return showNovel(parts[1], parts[2] || null, token);
   return showShelf();
 }
 
@@ -126,6 +129,8 @@ async function showShelf() {
   closeLeft(); closeRight();
   exitReading();
   A.novelId = null; A.chapterId = null;
+  /* what was to be done in a book he did not stay to see is not done in the next one */
+  A.then = null;
   if (A.offBook) { A.offBook(); A.offBook = null; }
   document.body.classList.add('shelfview');
   $('#desk').hidden = true;
@@ -134,12 +139,15 @@ async function showShelf() {
   await refreshShelf();
 }
 
-async function showNovel(novelId, chapterId) {
+async function showNovel(novelId, chapterId, token = A.route) {
+  const moved = () => token !== A.route;
   let novel;
-  try { novel = await store.open('novel', novelId); } catch (_) { banner(true); return; }
+  try { novel = await store.open('novel', novelId); } catch (_) { if (!moved()) banner(true); return; }
+  if (moved()) return;
   if (!novel) { toast('That book is not on the shelf any more.'); go('#/'); return; }
   /* every chapter of the book, so the writer can read the whole of it */
   await Promise.all((novel.order || []).map((id) => store.open('chapter', id).catch(() => null)));
+  if (moved()) return;
   if (!chapterId || !novel.order.includes(chapterId)) {
     chapterId = (novel.prefs && novel.order.includes(novel.prefs.at) ? novel.prefs.at : null) || novel.order[novel.order.length - 1];
   }
@@ -161,7 +169,9 @@ async function showNovel(novelId, chapterId) {
   store.change('novel', novelId, novelSteps.opened(Date.now()), { delay: 3000, checkpoint: true });
   if (!novel.prefs || novel.prefs.at !== chapterId) store.change('novel', novelId, novelSteps.setPref('at', chapterId), { delay: 3000, checkpoint: true });
   if (!store.peek('chapter', chapterId)) await store.open('chapter', chapterId);
+  if (moved()) return;
   await openChapter(novelId, chapterId);
+  if (moved()) return;
   openPanes(novelId, chapterId);
   showChecks(novelId, chapterId);
   drawBar();
@@ -177,13 +187,13 @@ async function showNovel(novelId, chapterId) {
   archivist.firstCheck(novelId);
   /* the helper looks over what it has not read yet */
   archivist.nudge(novelId, 2500);
-  /* opened to show something in it (a search found it in another book) */
-  if (A.then) { const fn = A.then; A.then = null; try { fn(); } catch (e) { console.error(e); } }
+  /* opened to show something in it (a search found it in another book) — only in the book it was for */
+  if (A.then && A.then.novelId === novelId) { const fn = A.then.run; A.then = null; try { fn(); } catch (e) { console.error(e); } }
 }
 
 /* another book, at a chapter, then one thing to do there — no step in the history */
 async function goBook(novelId, chapterId = null, then = null) {
-  A.then = then;
+  A.then = then ? { novelId, run: then } : null;
   dropOverlays();
   await afterBacks();
   const hash = `#/n/${novelId}${chapterId ? `/${chapterId}` : ''}`;

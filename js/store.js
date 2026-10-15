@@ -374,7 +374,12 @@ function setOffline(on, err) {
 /* ------------------------------------------------------- the shelf list */
 
 export async function listNovels() {
-  const { status: code, data } = await api('GET', '/api/novels');
+  let res;
+  /* the phone reads each book once for the shelf (then remembers it): a big
+   * shelf's first reading on a slow phone is given its time, and no answer
+   * at all is said on the banner, as any other is */
+  try { res = await api('GET', '/api/novels', { wait: 60000 }); } catch (e) { setOffline(true, e); throw e; }
+  const { status: code, data } = res;
   if (code !== 200 || !data) throw new Error('the shelf could not be read');
   setOffline(false);
   return data.novels || [];

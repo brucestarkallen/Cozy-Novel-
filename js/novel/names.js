@@ -105,14 +105,26 @@ export function samePersonName(a, b) {
   if (fa === fb) return true;
   const wa = A.words;
   const wb = B.words;
-  if (wa.length === 1 && wb.length > 1 && (wb[0] === wa[0] || wb[wb.length - 1] === wa[0])) return true;
-  if (wb.length === 1 && wa.length > 1 && (wa[0] === wb[0] || wa[wa.length - 1] === wb[0])) return true;
+  /* one name, and a longer one that adds a name's words to it — a surname, a
+   * given name, a title — never role words: "Red" is not the "Red Guard
+   * captain" (Cozy Tavern M490-3, M471-2) */
+  if (wa.length === 1 && wb.length > 1 && (wb[0] === wa[0] || wb[wb.length - 1] === wa[0]) && namesOnly(b)) return true;
+  if (wb.length === 1 && wa.length > 1 && (wa[0] === wb[0] || wa[wa.length - 1] === wb[0]) && namesOnly(a)) return true;
   if (wa.length >= 2 && wa.length === wb.length && [...wa].sort().join(' ') === [...wb].sort().join(' ')) return true;
+  /* a name cut short on purpose — "Rukia K.", "Kaelen St." — is the whole one; two
+   * names that only share a start are two people: Mei Lin and Mei Ling, John
+   * Smith and John Smithson */
   if (wa.length >= 2 && wb.length >= 2) {
-    const [shortOne, longOne] = fa.length <= fb.length ? [fa, fb] : [fb, fa];
-    if (longOne.startsWith(shortOne) && longOne.length > shortOne.length) return true;
+    const [shortOne, longOne, shortRaw] = fa.length <= fb.length ? [fa, fb, a] : [fb, fa, b];
+    if (longOne.startsWith(shortOne) && longOne.length > shortOne.length && /[.…]$/.test(String(shortRaw || '').trim())) return true;
   }
   return false;
+}
+/* every word of a name as written is a name's — a capital, or a script with
+ * no capitals — or one of the little words names carry (da, van, bin) */
+const NAME_PARTICLES = new Set(['da', 'de', 'del', 'della', 'di', 'du', 'van', 'von', 'der', 'den', 'ter', 'le', 'la', 'bin', 'ibn', 'al', 'el', 'no', 'y']);
+function namesOnly(raw) {
+  return String(raw || '').trim().split(/\s+/).filter(Boolean).every((w) => /^[^\p{L}]*[\p{Lu}\p{Lt}\p{Lo}\p{N}]/u.test(w) || NAME_PARTICLES.has(w.toLowerCase()));
 }
 
 /* A SLIP OF THE PEN IS FORGIVEN ONLY WHERE IT CAN BE ONE (Cozy Tavern M646).
@@ -222,6 +234,47 @@ export function namesNear(a, b) {
  * Residence" is Wells Residence) */
 export function plainName(name) {
   return foldName(name).replace(/^(?:the|a|an)\s+/, '');
+}
+
+/* The names and the figures in a telling (Cozy Tavern M752-012: what a record
+ * put right may say only as the book gives it): every number, and every word
+ * with a capital that does not open a sentence or a quotation — "Mara's"
+ * as Mara; a number with an ordinal's ending ("3rd") is let be. */
+export function namesAndFigures(text) {
+  const t = String(text || '');
+  const out = [];
+  for (const m of t.matchAll(/\d+(?:[.,:]\d+)*(?:st|nd|rd|th)?|\p{Lu}[\p{L}\p{M}]*(?:['’-]\p{L}[\p{L}\p{M}]*)*/gu)) {
+    const tok = m[0];
+    if (/^\d/.test(tok)) { if (!/(?:st|nd|rd|th)$/.test(tok)) out.push(tok); continue; }
+    if (tok.length < 2) continue;
+    let k = m.index - 1;
+    while (k >= 0 && /\s/.test(t[k])) k--;
+    if (k < 0 || /[.!?…:"“‘(\[]/.test(t[k])) continue;
+    out.push(tok.replace(/['’]s$/i, ''));
+  }
+  return out;
+}
+
+/* AN OWNER'S POSSESSIVE IS NOT A THING'S NAME (Cozy Tavern M605): "Bruce's
+ * Batwing" is the Batwing — set aside when only one of two names has it, and
+ * only before a name of its own (a capital: "Batwing", "Hollow Crown"); a
+ * thing told by what it is ("Claire's letter", "the letter") may be another
+ * of its kind, and stays near, never the same (Cozy Tavern M522). Two owners
+ * must be the same owner ("Gordon's case file" and "Barbara's case file"
+ * stay two). For a place or a thing only: a thread's owner is what it is
+ * about ("Tom's promise"). */
+function ownerSplit(name) {
+  const m = /^\s*(?:the\s+)?(\S.*?)(?:['’]s|(?<=s)['’])\s+(\S.*)$/i.exec(String(name || ''));
+  return m && /^\p{Lu}/u.test(m[2]) ? { owner: foldName(m[1]), rest: plainName(m[2]) } : null;
+}
+export function sameThingName(a, b) {
+  if (plainName(a) === plainName(b)) return true;
+  const x = ownerSplit(a);
+  const y = ownerSplit(b);
+  if (x && y) return false;
+  if (x) return Boolean(x.rest) && x.rest === plainName(b);
+  if (y) return Boolean(y.rest) && y.rest === plainName(a);
+  return false;
 }
 
 /* ------------------------------------------------------- the hard tokens */

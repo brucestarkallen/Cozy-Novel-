@@ -97,6 +97,36 @@ export function cutWords(text, max) {
   return (sp > max / 2 ? room.slice(0, sp) : room).trimEnd() + '…';
 }
 
+/* A NUMBER AS PEOPLE TYPE IT (Cozy Tavern M234, M390). In a box for a whole
+ * number, groups of three are one number whatever parts them — "8,000",
+ * "200.000", "1 048 576", "1'000" — and "128k" is 128,000; a decimal there
+ * ("8.5") is not a whole number and is not rounded into one. In a box for a
+ * decimal, a comma is the point ("0,3"), and "1,234.56" / "1.234,56" read as
+ * written. NaN when it is not a number. */
+export function numberTyped(raw, { whole = false } = {}) {
+  const s = String(raw ?? '').trim().replace(/[\s\u00a0\u202f]+/g, ' ');
+  if (!s) return NaN;
+  if (whole) {
+    const k = /^(\d+(?:[.,]\d+)?)\s?k$/i.exec(s);
+    if (k) return Math.round(Number(k[1].replace(',', '.')) * 1000);
+    if (/^\d{1,3}(?:[.,' ’_]\d{3})+$/.test(s)) return Number(s.replace(/[.,' ’_]/g, ''));
+    return /^-?\d+$/.test(s) ? Number(s) : NaN;
+  }
+  let t = s.replace(/ /g, '');
+  if (/^-?\d{1,3}(?:\.\d{3})+,\d+$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
+  else if (/^-?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
+  else if (/^-?\d*,\d+$/.test(t)) t = t.replace(',', '.');
+  return /^-?(?:\d+\.?\d*|\.\d+)$/.test(t) ? Number(t) : NaN;
+}
+/* a mark out of ten as people write it: "8", "8.5", "8,5", "8/10", "8 of 10", "80%" */
+export function markTyped(raw) {
+  const s = String(raw ?? '').trim();
+  const pct = /^(\d+(?:[.,]\d+)?)\s*%$/.exec(s);
+  if (pct) return Number(pct[1].replace(',', '.')) / 10;
+  const m = /^(\d+(?:[.,]\d+)?)\s*(?:\/\s*10|(?:out\s+)?of\s+10)?$/i.exec(s);
+  return m ? Number(m[1].replace(',', '.')) : NaN;
+}
+
 /* A yes or a no as a model writes it (Cozy Tavern's M654/M659): true and
  * false, and the same in words — "true", "yes", "1", "false", "no", "0" —
  * read as such; anything else is no answer (undefined). */

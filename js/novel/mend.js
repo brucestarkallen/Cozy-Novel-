@@ -1,9 +1,10 @@
 /* Cozy Novel — js/novel/mend.js — PAGES KEPT BEFORE A REPAIR, MENDED ONCE.
  *
- * A page is made whole as it arrives (writer.js, talk.js): a heading above
- * it, a note to him or a block of tracking after it taken off and kept with
- * the version, a soft wrap joined, a stray of another script glued to a word
- * taken off, a quotation left open closed. Pages kept before each of those
+ * A page is made whole as it arrives (writer.js, talk.js): a plan or a
+ * heading above it, a note to him, a check of its own work or a block of
+ * tracking after it taken off and kept with the version, a soft wrap joined,
+ * a stray of another script glued to a word taken off, a quotation left open
+ * closed. Pages kept before each of those
  * repairs still carry the fault — read by the helper as story, sent back to
  * the writer as the chapter (teaching it to write the same again), printed
  * in the book sent out (Cozy Tavern M477, M488, M524).
@@ -18,21 +19,23 @@
  * cut short keeps its unfinished end as it is (Go on finishes it). */
 
 import * as store from '../store.js';
-import { howOf, chapterSteps, novelSteps, turnSteps } from './shape.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropHeading } from './textshape.js';
+import { howOf, chapterSteps, novelSteps, turnSteps, chapterText } from './shape.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop } from './textshape.js';
 import { shapeTelling } from './talk.js';
 import { resign } from './archivist.js';
 import { locate } from './changes.js';
+import { liftOfFaults } from './checker.js';
 import { hashText, countWords } from '../util.js';
 
-export const MEND_V = 1;
+/* 2: a plan or a draft above the page, and its check of its own work after it, come off too; a lift echoed from an old example is said again */
+export const MEND_V = 2;
 const HIS = ['mine', 'edit', 'imported'];
 
 /* one version's words made whole as a new page's are: {text, tookOff, tookOffTop} */
 export function mendPage(v, { names = [] } = {}) {
   const given = String((v && v.text) || '');
   const cut = Boolean(v && v.cut);
-  const head = dropHeading(given, { names });
+  const head = dropTop(given, { names });
   let text = joinSoftWraps(head.text);
   let tail = '';
   /* the unfinished end of a page cut short is story still to be carried on — never a note */
@@ -84,6 +87,30 @@ export async function mendBook(novelId) {
         resign(novelId, c.id, p.id, v.id, was, m.text);
         n++;
       }
+    }
+  }
+  /* a lift the judge of 2.4 echoed from its own example — "Slow the moment
+   * Yuki falls…" — in a book with no Yuki is not this book's: it would be
+   * sent to the writer as the note for writing a page again. Said again from
+   * the checks the page failed (Cozy Tavern M95-3: an example from an older
+   * prompt echoed into what was kept) */
+  const ECHO = /\bYuki\b/;
+  if (!ECHO.test(JSON.stringify([novel.brief, novel.style, novel.plans, novel.notes])) && !chapters.some((c) => ECHO.test(chapterText(c)))) {
+    for (const c of chapters) {
+      const echoed = Object.values(c.checks || {}).some((byV) => Object.values(byV || {}).some((e) => e && (ECHO.test((e.grade && e.grade.lift) || '') || (e.items || []).some((x) => ECHO.test(x.lift || '')))));
+      if (!echoed) continue;
+      store.change('chapter', c.id, (ch) => {
+        for (const byV of Object.values(ch.checks || {})) {
+          for (const e of Object.values(byV || {})) {
+            if (!e) continue;
+            if (e.grade && ECHO.test(e.grade.lift || '')) e.grade.lift = liftOfFaults(e.grade.faults);
+            for (const x of e.items || []) {
+              if (ECHO.test(x.lift || '')) x.lift = liftOfFaults((x.grade || e.grade || {}).faults);
+              if (x.grade && ECHO.test(x.grade.lift || '')) x.grade.lift = x.lift;
+            }
+          }
+        }
+      }, { checkpoint: true });
     }
   }
   /* then the scenes' tellings, read in first (a scene not here now: the book is mended again the next time it opens — the pages are already whole) */

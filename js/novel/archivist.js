@@ -27,8 +27,8 @@ import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writ
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp } from './shape.js';
-import { foldedText, tokensMissing, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear } from './names.js';
-import { helperFrame, notesRequest, summaryRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS } from './prompts.js';
+import { foldedText, foldName, tokensMissing, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
+import { helperFrame, notesRequest, summaryRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 
@@ -56,6 +56,8 @@ setNotesWait(async (novelId, ms, signal) => {
   const until = Date.now() + ms;
   while (readingNow.has(novelId) && Date.now() < until && !(signal && signal.aborted)) await new Promise((r) => setTimeout(r, 150));
 });
+/* whether the notes are being kept for this book: a helper chosen, and its connection not turned away */
+export function keepingNotes(novelId) { return Boolean(connFor(store.peek('house', 'house') || {}, 'helper')) && !blocked.has(novelId); }
 export function lightOf(novelId) {
   /* no helper chosen is said whatever was last seen */
   if (!connFor(store.peek('house', 'house') || {}, 'helper')) return { state: 'off', words: 'No helper is chosen, so the notes are not being kept. Choose one in Settings → Connections (it can be the same as the writer).' };
@@ -117,6 +119,23 @@ export function nudge(novelId, ms = 4000) {
   timers.set(novelId, setTimeout(() => { timers.delete(novelId); run(novelId); }, Math.max(ms, wait)));
   /* the light turns amber the moment there is something new to read */
   tellLight(novelId);
+}
+
+/* WAITING, OR STOPPED: TRIED AGAIN NOW BY HIS HAND (Cozy Tavern M752-010,
+ * "Manual yellow check"): a helper waiting out a failure, or stopped for a
+ * connection that was turned away, is given a fresh try the moment he asks —
+ * the wait it would keep by itself, and what it gave up on, are his to
+ * overrule. It stops again only if the trouble is still there. */
+export function stalled(novelId) {
+  const f = failures.get(novelId);
+  return blocked.has(novelId) || Boolean(f && f.until > Date.now());
+}
+export function tryNow(novelId) {
+  if (!store.peek('novel', novelId)) return false;
+  failures.delete(novelId);
+  blocked.delete(novelId);
+  nudge(novelId, 200);
+  return true;
 }
 
 /* tried again by itself, later each time — and never sooner than its
@@ -605,6 +624,19 @@ function newSentences(have, add) {
   return String(add || '').trim().split(/(?<=[.!?…])\s+/).map((x) => x.trim()).filter((x) => { const k = key(x); return k && !h.includes(k); });
 }
 /* a field kept with what an answer adds to it — never its older lines lost */
+/* HOW SOMEONE STANDS WITH THE OTHERS GROWS AT ITS END — the newest turn is
+ * added last — so a telling past its room keeps its newest turns and lets its
+ * oldest go, said by the "…" it opens with (Cozy Tavern M565: a cut that kept
+ * the oldest lines lost where the story stands now) */
+const TIES_MAX = 12000;
+export function keepNewest(text, max = TIES_MAX) {
+  const x = String(text || '').trim();
+  if (x.length <= max) return x;
+  const tail = x.slice(x.length - max);
+  /* from the first sentence that begins whole in what is kept */
+  const m = /[.!?…]["”’)\]]*\s+(?=\S)/.exec(tail);
+  return `… ${m && m.index < max / 4 ? tail.slice(m.index + m[0].length) : tail.replace(/^\S*\s+/, '')}`;
+}
 function addedTo(old, add) {
   const o = String(old || '').trim();
   if (!o) return String(add || '').trim();
@@ -646,7 +678,7 @@ function pastFirstLine(text) {
  *    never a slip of the pen for another's (Robert is not Roberta)
  *  keepOpen — threads the newest passage's reading opened: the check never
  *    closes one (a loose end closes only with what comes after it, M681) */
-export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null } = {}) {
+export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null, grounds = null } = {}) {
   const out = clone(notes || {});
   for (const k of NOTE_KINDS) if (!Array.isArray(out[k])) out[k] = [];
   const touched = new Map();       /* card id -> {kind, before} */
@@ -654,11 +686,17 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
   const aside = [];
   const refused = [];
   const written = new Set();       /* the cards this answer gives */
+  const givenBy = new Map();       /* card id -> the fields a row of this answer gave it */
   const landed = new Set();        /* the cards it changed */
   const why = (id, row) => { const w = cleanText(row && row.why, 400); if (w) whys[id] = w; };
   const touch = (kind, card) => { if (!touched.has(card.id)) touched.set(card.id, { kind, before: clone(card) }); };
   const uniq = (list, main) => list.filter((a, i) => list.findIndex((b) => nameKey(b) === nameKey(a)) === i && nameKey(a) !== nameKey(main));
-  const refuse = (kind, name, w) => { if (!refused.some((x) => x.kind === kind && nameKey(x.name) === nameKey(name))) refused.push({ kind, name, why: w }); };
+  /* one line for a card: a second reason for it is said on the same line, never dropped */
+  const refuse = (kind, name, w) => {
+    const was = refused.find((x) => x.kind === kind && nameKey(x.name) === nameKey(name));
+    if (!was) refused.push({ kind, name, why: w });
+    else if (w && !String(was.why || '').split('; ').includes(w)) was.why = `${was.why}; ${w}`;
+  };
   const stays = (id) => nowStays === true || (nowStays instanceof Set && nowStays.has(id));
   const shownShort = (id) => Boolean(short && short.has(id));
   /* how it was shown: 1 by its first line, 2 by its name only (a Map tells; a Set means its first line) */
@@ -674,6 +712,39 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     const fn = foldedText(neu);
     return peopleNames.some((n) => nameInText(fo, n, { words: false }) && !nameInText(fn, n, { words: false }));
   };
+  /* A RECORD PUT RIGHT FROM THE BOOK (Cozy Tavern M752-012): the check may
+   * say a fact in its own words, but a name or a figure it writes that the
+   * card did not already hold must be one the book gives (`grounds`: its
+   * passages and his About this book) — never one it made up. The first such
+   * word, or '' */
+  const unfounded = (card, value) => {
+    if (!audit || !grounds || !String(value || '').trim()) return '';
+    const held = card ? foldedText([card.name, ...(card.aka || []), card.about, card.now, card.ties, card.since].filter(Boolean).join(' \n ')) : null;
+    const has = (w) => Boolean(w) && (grounds.loose.includes(` ${w} `) || Boolean(held && held.loose.includes(` ${w} `)));
+    /* "Chapter 3", "passage 2.4": where in the book, never a figure of the story */
+    const told = String(value).replace(/\b(?:chapters?|passages?|parts?)\s+(?:\d+(?:\.\d+)?|[A-Za-z]+(?:-[A-Za-z]+)?)\b/gi, ' ');
+    for (const tok of namesAndFigures(told)) {
+      const f = foldName(tok);
+      if (has(f)) continue;
+      if (/^\d+$/.test(tok) && Number(tok) < 1000 && has(foldName(numberWords(Number(tok))))) continue;
+      return tok;
+    }
+    return '';
+  };
+  /* a new card's name: each word of it with a capital, or a number, as the book gives it */
+  const unfoundedName = (name) => {
+    if (!audit || !grounds || nameInText(grounds, name, { words: false })) return '';
+    for (const w of String(name || '').split(/\s+/)) {
+      const tok = w.replace(/['’]s$/i, '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+      if (!tok || !/^[\p{Lu}\d]/u.test(tok)) continue;
+      const f = foldName(tok);
+      if (grounds.loose.includes(` ${f} `)) continue;
+      if (/^\d+$/.test(tok) && Number(tok) < 1000 && grounds.loose.includes(` ${foldName(numberWords(Number(tok)))} `)) continue;
+      return tok;
+    }
+    return '';
+  };
+  const groundWhy = (tok) => `a name or a figure the book never gives (“${tok}”) — left as it was`;
   /* where a "now" is as of: the chapter, and the passage when it is known (nowWrittenLater) */
   const stampNow = (card) => {
     const where = nowAt || chapterId;
@@ -687,11 +758,25 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     const was = matchCard(asked[kind], name, aka, { kind }).card;
     return was && !((notes && notes[kind]) || []).some((c) => c.id === was.id) ? was : null;
   };
+  /* a description given as a person, standing beside the one name it is in
+   * the words read — "the courier, Hachigorō", "Hachigorō the courier" — is
+   * that person's card, never a second one beside it; the description goes
+   * among the names it goes by (Cozy Tavern M482, M509-2, M509-5). Only by
+   * what the words read say: "the courier and Hachigorō" are two, and so are
+   * "Hachigorō, the courier's son" */
+  const besideName = (descr) => {
+    const f = typeof named === 'string' ? foldedText(named) : named;
+    const d = foldName(descr);
+    if (!f || !f.loose || !d) return null;
+    const hits = out.people.filter((c) => !isDescriptorName(c.name) && foldName(c.name).split(' ').filter((w) => w.length >= 3)
+      .some((w) => f.loose.includes(` ${d} ${w} `) || new RegExp(` ${w} ${d} (?!s )`).test(f.loose)));
+    return hits.length === 1 ? hits[0] : null;
+  };
   const makeCard = (kind, name, aka, row, about, open) => {
     const fresh = { id: newId(kind.slice(0, 2)), name, about, updated: { chapterId, at } };
     if (kind === 'people') {
       fresh.aka = aka;
-      fresh.ties = cleanText(row.ties);
+      fresh.ties = keepNewest(cleanText(row.ties, Infinity));
       fresh.now = cleanText(row.now);
       if (fresh.now) stampNow(fresh);
     } else if (aka.length) fresh.aka = uniq(aka, name);
@@ -749,7 +834,7 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       foldRow('lore', { name: as, aka: names, about: keepAbout, why: row.why });
       return;
     }
-    const card = m.card;
+    const card = m.card || (kind === 'people' && !audit && named && isDescriptorName(name) ? besideName(name) : null);
     if (!card) {
       /* one he took out while this was read is not made again from what was read before (Cozy Tavern M752) */
       const gone = takenOutSince(kind, name, aka);
@@ -765,12 +850,23 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       }
       /* a thread is never closed by the reading that opens it: a loose end closes only with what comes after it (Cozy Tavern M681) */
       if (kind === 'threads' && open === false && !audit) { refuse(kind, name, 'a thread new to the notes, already closed'); return; }
+      /* the check adds only who and what the book gives */
+      /* (a person's name is a name word for word; a thread's or a thing's title is read as a telling: "Whether Mara forgives Tom") */
+      const bad = (kind === 'people' ? unfoundedName(name) : unfounded(null, name)) || unfounded(null, about) || (kind === 'people' ? unfounded(null, cleanText(row.now)) || unfounded(null, cleanText(row.ties)) : '');
+      if (bad) { refuse(kind, name, groundWhy(bad)); return; }
       makeCard(kind, name, aka, row, about, open);
       return;
     }
     written.add(card.id);
     const was = JSON.stringify(card);
     const before = clone(card);
+    /* TWO ROWS OF ONE ANSWER FOR ONE CARD — by its name and by a name it goes
+     * by — never the later winning silently (Cozy Tavern M752: two writes to
+     * one field): who they are keeps the fuller telling, where they are now
+     * and how they stand keep the first; the clash is said */
+    const given = givenBy.get(card.id) || new Set();
+    givenBy.set(card.id, given);
+    const clash = (f, v) => given.has(f) && Boolean(String(v || '').trim()) && String(card[f] || '').trim() !== String(v || '').trim();
     const then = asked ? askedCard(kind, card.id) : null;
     /* a field changed since it was asked — by his hand, or his partner's — is never written over by it (Cozy Tavern M299) */
     const movedSince = (f) => Boolean(asked) && (then ? JSON.stringify(then[f] ?? null) !== JSON.stringify(card[f] ?? null) : filled(card[f]));
@@ -786,7 +882,12 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     /* who someone is: his words stand, and what the book adds rides beside
      * them; the helper keeps the rest — added to, never thinned by a reading
      * (a person's; a place, a thing or a thread says where it stands now) */
-    if (about && !movedSince('about')) {
+    const aboutTwice = clash('about', about) && thins(card.about, about);
+    if (aboutTwice) refuse(kind, card.name, 'who they are given twice in one answer — the fuller telling kept');
+    if (about) given.add('about');
+    const aboutBad = about && !aboutTwice && !movedSince('about') ? unfounded(before, about) : '';
+    if (aboutBad) refuse(kind, card.name, groundWhy(aboutBad));
+    if (about && !movedSince('about') && !aboutTwice && !aboutBad) {
       if (hisField(card, 'about')) {
         const add = newSentences(card.about, about).join(' ');
         const old = String(card.since || '').trim();
@@ -799,21 +900,38 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       else if (audit ? !unseen || !thins(card.about, about) : kind !== 'people' || !thins(card.about, about)) card.about = about;
     }
     if (kind === 'people') {
-      const nowText = cleanText(row.now);
+      /* "Unknown." for someone the words read name is where they are — nobody
+       * knows — never nothing (the inn they left stays otherwise: Cozy Tavern
+       * M509-13); for someone they never name it is a filler, and goes */
+      const unknownNow = /^\s*(?:unknown|whereabouts\s+unknown|not\s+known)\s*[.!]?\s*$/i.test(String(row.now == null ? '' : row.now)) && Boolean(named) && nameInText(named, card.name, { words: false });
+      const nowText = cleanText(row.now) || (unknownNow ? 'Whereabouts unknown.' : '');
+      const nowTwice = clash('now', nowText);
+      if (nowTwice) refuse(kind, card.name, 'where they are now given twice in one answer — the first kept');
+      if (nowText) given.add('now');
       /* where someone is "now" is as of the end of the book: a part read out
        * of turn (the book already read past it) never moves one a later part
        * wrote — it only fills one never written (Cozy Tavern M453) */
-      if (nowText && !movedSince('now') && !(stays(card.id) && String(card.now || '').trim())) {
+      const nowBad = nowText && !nowTwice && !movedSince('now') ? unfounded(before, nowText) : '';
+      if (nowBad) refuse(kind, card.name, groundWhy(nowBad));
+      if (nowText && !nowTwice && !nowBad && !movedSince('now') && !(stays(card.id) && String(card.now || '').trim())) {
         card.now = nowText;
         stampNow(card);
       }
       /* how they stand with the others moves with the story; his lines, and
        * lines it was never shown (a card by its first line), are added to —
        * never lost to a thinner telling */
-      const ties = cleanText(row.ties);
-      if (ties && !movedSince('ties')) {
+      const ties = keepNewest(cleanText(row.ties, Infinity));
+      /* a reading adds to them, so a second telling only adds; the check's replaces — the fuller stands */
+      const tiesTwice = audit && clash('ties', ties) && thins(card.ties, ties);
+      if (tiesTwice) refuse(kind, card.name, 'how they stand given twice in one answer — the fuller telling kept');
+      if (ties) given.add('ties');
+      const tiesBad = ties && !tiesTwice && !movedSince('ties') ? unfounded(before, ties) : '';
+      if (tiesBad) refuse(kind, card.name, groundWhy(tiesBad));
+      if (ties && !tiesTwice && !tiesBad && !movedSince('ties')) {
         const old = String(card.ties || '').trim();
-        card.ties = !audit && (shownShort(card.id) || hisField(card, 'ties') || thins(old, ties) || dropsSomeone(old, ties)) ? addedTo(old, ties) : ties;
+        const next = !audit && (shownShort(card.id) || hisField(card, 'ties') || thins(old, ties) || dropsSomeone(old, ties)) ? addedTo(old, ties) : ties;
+        /* his own lines are never the ones let go */
+        card.ties = hisField(card, 'ties') ? next : keepNewest(next);
       }
     }
     /* the other names it goes by: a reading adds to them; the notes' check
@@ -885,6 +1003,14 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
   return { notes: out, cards, changed, whys, aside, refused };
 }
 
+/* What a record put right may draw on (foldNotes' `grounds`): the book's
+ * passages as they stand, and his About this book — what it's about, how it
+ * reads, and what is kept of them */
+export function groundsOf(novel) {
+  const chapters = chaptersOf(novel);
+  const kept = Object.values((novel && novel.kept) || {}).map((k) => (k && typeof k === 'object' ? k.text : '')).filter(Boolean);
+  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), novel.brief || '', novel.style || '', ...kept].join('\n\n'));
+}
 /* The book's words as they stand, folded once, for asking whether a card's
  * name still stands in it (foldNotes' `stands`) */
 export function bookFolded(novel) {
@@ -953,7 +1079,7 @@ export async function askJson(conn, system, request, { want } = {}) {
   if (!obj && !String(second.text || '').trim() && second.thinking) obj = parseLastObject(second.thinking, want);
   if (obj) return { ok: true, obj };
   if (second.leashed) return { ok: false, error: second.error, status: 0, leashed: second.leashed };
-  return { ok: false, error: unreadWhy(second), unreadable: true };
+  return { ok: false, error: unreadWhy(second), unreadable: true, ...(second.cut ? { cut: true } : {}) };
 }
 /* why an answer could not be used, in plain words: the provider's reason for
  * an empty one (Cozy Tavern's M545), or how it began */
@@ -1062,6 +1188,12 @@ export async function run(novelId) {
         nudge(novelId, 30000);
         return;
       }
+      /* it made way for his page on its connection: it reads on once the page has gone */
+      if (e && e.gaveWay) {
+        setLight(novelId, 'waiting', 'The helper made way for your page on its connection — it reads on in a moment.');
+        nudge(novelId, 20000);
+        return;
+      }
       /* a reading its model would not answer: read again at once, one passage at a time */
       if (e && e.soon) {
         setLight(novelId, 'reading', `The helper reads one passage at a time now (${why}).`);
@@ -1114,6 +1246,8 @@ function failed(got) {
   const e = new Error(got.error || 'the helper got no answer');
   e.permanent = Boolean(got.permanent);
   if (got.retryAfterMs) e.retryAfterMs = got.retryAfterMs;
+  /* it made way for his page on the same connection: it reads again a little later, never narrowed or counted */
+  if (got.leashed === 'gaveway') e.gaveWay = true;
   return e;
 }
 
@@ -1270,11 +1404,23 @@ async function readChanges(novelId, conn) {
      * themselves fitted to its room — M664 — with room for the cards the
      * passages name to ride whole) */
     const notesFit = notesRoomOf(conn);
-    const notesNow = notesText(novel, { forHelper: true, fit: notesFit });
+    /* a long change is read in parts; the first part carries what was taken out */
+    const changes = target ? target.changes : [];
+    const removed = target ? target.removed : [];
+    const firstChanged = changes.length ? chapter.passages.findIndex((p) => p.id === changes[0].pid) : -1;
+    const before = chapter && firstChanged > 0 ? chapterText({ passages: chapter.passages.slice(0, firstChanged) }) : '';
+    /* the notes measured as they are sent: every card all of what is read now names, whole — no reading of a part of it carries more (Cozy Tavern M714: a request measured without what it carries) */
+    const focusAll = [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed.map((r) => String((r && r.text) || '')), ...removedChapters.map((r) => String((r && r.text) || ''))].join('\n');
     /* what rides beside the passages, all of it counted: the frame, the notes, his words, and what the helper keeps of the book (Cozy Tavern M714) */
     const keptNow = keptByHelper(novel).reduce((t, k) => t + estimateTokens(String(((novel.kept || {})[k] || {}).text || '')) + 120, 0);
-    const fixed = estimateTokens(helperFrame(house, novel)) + estimateTokens(notesNow) + (/\(To fit, the cards [^)]*\)$/.test(notesNow) ? Math.floor(notesFit * 0.25) : 0) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + keptNow + 900;
-    const room = readingRoom(conn, fixed);
+    const fixedWith = (notes) => estimateTokens(helperFrame(house, novel)) + estimateTokens(notes) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + keptNow + 900;
+    let room = readingRoom(conn, fixedWith(notesText(novel, { forHelper: true, fit: notesFit, focus: focusAll })));
+    /* the cards it names cannot all ride whole beside it: past the notes' share they ride by their first line, as the others do — a reading is never refused for them (the fold never writes whole a card it saw by its first line) */
+    let plain = false;
+    if (room < 600) {
+      const plainRoom = readingRoom(conn, fixedWith(notesText(novel, { forHelper: true, fit: notesFit })));
+      if (plainRoom >= 600) { plain = true; room = plainRoom; }
+    }
     if (room < 600) {
       const e = new Error(tooSmallWhy(conn, novel, 'its notes'));
       e.permanent = true;
@@ -1284,11 +1430,6 @@ async function readChanges(novelId, conn) {
     }
     const batchWords = Math.max(200, Math.min(9000, Math.floor((room * 0.6) / 1.4)));
     const beforeChars = Math.max(0, Math.min(60000, Math.floor(room * 0.3 * 3.2)));
-    /* a long change is read in parts; the first part carries what was taken out */
-    const changes = target ? target.changes : [];
-    const removed = target ? target.removed : [];
-    const firstChanged = changes.length ? chapter.passages.findIndex((p) => p.id === changes[0].pid) : -1;
-    const before = chapter && firstChanged > 0 ? chapterText({ passages: chapter.passages.slice(0, firstChanged) }) : '';
     /* a part written into the middle of a chapter: the chapter goes on after it, already read */
     const lastChanged = changes.length ? Math.max(...changes.map((c) => chapter.passages.findIndex((p) => p.id === c.pid))) : -1;
     const goesOn = lastChanged >= 0 && chapter.passages.slice(lastChanged + 1).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
@@ -1382,13 +1523,13 @@ async function readChanges(novelId, conn) {
       const askedNotes = clone(now.notes || {});
       const askedWords = wordsNow(now);
       const request = notesRequest({
-        novel: now,
+        novel: namedBook(now, house),
         chapterLabel: label,
         before: B.before,
         changes: B.items,
         removed: B.removed.map((r) => r.text).filter((t) => String(t || '').trim()),
         removedChapters: B.chapters.map((r) => r.text),
-        at, of: (now.order || []).length, later: laterRead, goesOn, notesFit, shortIds,
+        at, of: (now.order || []).length, later: laterRead, goesOn, notesFit, shortIds, plain,
       });
       let got;
       const gen = ((now.memory || {}).reread || 0);
@@ -1408,6 +1549,7 @@ async function readChanges(novelId, conn) {
         /* let go on its leash (nothing heard, or no progress, for minutes): never the passage's fault, never set
          * aside for it — but a long ask is what a slow model chokes on, so it is asked one passage at a time
          * (Cozy Tavern's M675-7) */
+        if (got.leashed === 'gaveway') throw giveUp(failed(got));
         if (got.leashed) {
           if (B.items.length + B.removed.length + B.chapters.length > 1) { narrow.add(novelId); throw giveUp(failed(got)); }
           /* alone, and making no progress for minutes (Cozy Tavern M748): what it asks is too much for its model — set aside after a second run, like words it will not read, never asked for ever */
@@ -1704,7 +1846,7 @@ async function summarise(novelId, conn) {
     for (let k = 0; k < parts.length; k++) {
       const lastPart = k === parts.length - 1;
       /* a summary with words in it, or none (an empty one is asked again — M681) */
-      const got = await askJson(conn, frame, summaryRequest({ novel: now, chapterLabel: label, text: parts[k], needsName: lastPart && !c.name && c.nameBy !== 'you', words,
+      const got = await askJson(conn, frame, summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[k], needsName: lastPart && !c.name && c.nameBy !== 'you', words,
         part: parts.length > 1 ? k + 1 : 0, parts: parts.length, soFar: summary, known, his: lastPart ? his : '' }), { want: (o) => Boolean(cleanText(o.summary)) });
       if (!got.ok) {
         if (got.leashed) throw failed(got);
@@ -1885,7 +2027,7 @@ async function keepTheBook(novelId, conn) {
   const fit = fitBook({ novel, chapters, chapterId: null, current: null, room });
   const started = Date.now();
   const asked = wordsNow(novel);
-  const got = await askJson(conn, frame, keepRequest({ novel, keeps, bookText: bookText(fit.book), notesFit }), { want: (o) => keeps.some((k) => typeof o[k] === 'string' && o[k].trim()) });
+  const got = await askJson(conn, frame, keepRequest({ novel: namedBook(novel, house), keeps, bookText: bookText(fit.book), notesFit }), { want: (o) => keeps.some((k) => typeof o[k] === 'string' && o[k].trim()) });
   await mustHold('helper', novelId);
   if (!got.ok) {
     const fault = await whoseFault(conn, got);
@@ -2028,10 +2170,12 @@ async function auditNotes(novelId, conn) {
   let only = null;
   let others = [];
   let nextFrom = 0;
-  if (estimateTokens(notesText(novel, { forHelper: true })) > budget && budget >= 800) {
+  /* a check whose answer outgrew its room checks fewer cards at once from then on (Cozy Tavern M719) */
+  const cap = Number.isFinite(a0.groupMax) && a0.groupMax > 0 ? a0.groupMax : Infinity;
+  if ((estimateTokens(notesText(novel, { forHelper: true })) > budget || every.length > cap) && budget >= 800) {
     const start = Math.min(Math.max(0, a0.from || 0), Math.max(0, every.length - 1));
     only = new Set();
-    for (let i = 0; i < every.length; i++) {
+    for (let i = 0; i < every.length && only.size < cap; i++) {
       const x = every[(start + i) % every.length];
       only.add(x.card.id);
       if (estimateTokens(notesText(novel, { forHelper: true, only })) > budget && only.size > 1) { only.delete(x.card.id); break; }
@@ -2043,7 +2187,7 @@ async function auditNotes(novelId, conn) {
   const fromAfter = only ? nextFrom : (a0.from || 0);
   const tooSmall = (why) => {
     /* never checked against no book: said, and not asked again until it is due */
-    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: why, fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter }, auditAsked: false }));
+    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: why, fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
   };
   if (budget < 800) { tooSmall(tooSmallWhy(conn, novel, 'the notes')); return; }
   const fixed = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true, only })) + estimateTokens(others.join(', ')) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 2000;
@@ -2065,7 +2209,7 @@ async function auditNotes(novelId, conn) {
   const askedNotes = clone(novel.notes || {});
   const askedWords = wordsNow(novel);
   const sigs = shownSigs(novel, chapters);
-  const got = await askJson(conn, frame, auditRequest({ novel, bookText: bookText(fit.book), his, partial, only, others, endShort }), { want: auditShape });
+  const got = await askJson(conn, frame, auditRequest({ novel: namedBook(novel, house), bookText: bookText(fit.book), his, partial, only, others, endShort }), { want: auditShape });
   /* the whole book began to be read again while it checked: the notes it checked are not there any more */
   const now = store.peek('novel', novelId);
   if (!now || ((now.memory || {}).reread || 0) !== gen || rebuildingNow(now)) return;
@@ -2075,12 +2219,20 @@ async function auditNotes(novelId, conn) {
     if (got.leashed) throw failed(got);
     const fault = await whoseFault(conn, got);
     if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
+    /* its answer outgrew the room, asked again with more: half as many cards at once, asked again now — never the same whole for ever (Cozy Tavern M719) */
+    const size = only ? only.size : every.length;
+    if (got.cut && size > 1) {
+      stuck.delete('audit:' + novelId);
+      store.change('novel', novelId, novelSteps.setMemory({ audit: { ...a0, groupMax: Math.max(1, Math.floor(size / 2)) }, auditAsked: true }));
+      nudge(novelId, 1500);
+      return;
+    }
     const n = (stuck.get('audit:' + novelId) || 0) + 1;
     stuck.set('audit:' + novelId, n);
     if (n < 2) throw failed({ error: got.error });
     stuck.delete('audit:' + novelId);
     /* its model would not check the notes: said so, and not asked again until it is due */
-    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: cutWords(got.error || 'its model would not check them', 300), fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter }, auditAsked: false }));
+    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: cutWords(got.error || 'its model would not check them', 300), fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
     return;
   }
   stuck.delete('audit:' + novelId);
@@ -2101,6 +2253,7 @@ async function auditNotes(novelId, conn) {
   const folded = foldNotes(latest.notes, got.obj, {
     chapterId: '', at: Date.now(), audit: true, limit: only,
     stands: hasGone(got.obj) ? bookFolded(latest) : null,
+    grounds: groundsOf(namedBook(latest, store.peek('house', 'house') || {})),
     asked: askedNotes, keepOpen: openedByNewest(latest, live), unseen,
     /* where people are "now" is the end of the book's: when it read the end only in short, it only fills one never written */
     nowStays: endShort, nowAt: endId, nowPid: endPid,
@@ -2124,7 +2277,7 @@ async function auditNotes(novelId, conn) {
   const round = only && (a0.from || 0) !== 0 && a0.round ? a0.round : [];
   const nextRound = only ? [...round, ...(clear ? [] : [{ at: Date.now(), verdict, refused }])].slice(-6) : [];
   store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, fixed: folded.cards.length + Object.keys(kept).length, changes: changed.slice(0, 200), verdict, clear, partial, refused, refusedAll: folded.refused.length,
-    ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round } : {}) }, auditAsked: false }));
+    ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round } : {}), ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
   await store.flush('novel', novelId);
 }
 
