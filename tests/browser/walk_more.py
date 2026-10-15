@@ -227,20 +227,21 @@ async def scenario_look(b):
     await pg.wait_for_selector('#shelf:not([hidden])', timeout=8000)
     await pg.click('#shelfSettings')
     await pg.click('.sheet .group button.ghead:has-text("How it looks")')
-    await pg.click('.sheet button.swatch:has-text("Candlelight")')
+    await pg.click('.sheet button.swatch[data-world="tokyo"]')
     await pg.wait_for_timeout(200)
-    check('a room is chosen at once', await pg.evaluate("document.documentElement.dataset.theme") == 'candle', '')
+    check('a world is chosen at once', await pg.evaluate("document.documentElement.dataset.world") == 'tokyo', '')
     await pg.wait_for_timeout(900)
     other = await b.new_context(viewport={'width': 1280, 'height': 800})
     pg2 = await other.new_page()
     await pg2.goto(f'http://127.0.0.1:{PORT}/')
     await pg2.wait_for_selector('#shelf:not([hidden])', timeout=8000)
     await pg2.wait_for_timeout(500)
-    check('another browser opens in the same room', await pg2.evaluate("document.documentElement.dataset.theme") == 'candle', await pg2.evaluate("document.documentElement.dataset.theme"))
-    await pg.click('.sheet button.swatch:has-text("Daylight")')
+    check('another browser opens in the same world', await pg2.evaluate("document.documentElement.dataset.world") == 'tokyo', await pg2.evaluate("document.documentElement.dataset.world"))
+    await pg.click('.sheet button.mode-choice[data-mode="light"]')
     await pg.wait_for_timeout(2500)
-    check('and follows a change made in the first, by itself', await pg2.evaluate("document.documentElement.dataset.theme") == 'day', await pg2.evaluate("document.documentElement.dataset.theme"))
-    await pg.click('.sheet button.swatch:has-text("The study at night")')
+    check('and follows a change of light made in the first, by itself', await pg2.evaluate("document.documentElement.dataset.world === 'tokyo' && document.documentElement.dataset.mode === 'light'"), await pg2.evaluate("({...document.documentElement.dataset})"))
+    await pg.click('.sheet button.swatch[data-world="academy"]')
+    await pg.click('.sheet button.mode-choice[data-mode="dark"]')
     await pg.wait_for_timeout(900)
     await other.close()
     await pg.close()
@@ -1755,7 +1756,14 @@ async def scenario_rest(b):
     check('his mark emptied keeps nothing — the starting mark again', t3 is False and not bad, (t3, bad))
     await close_sheet(pg)
     # the shelf when the phone sends no list: never shown as no books
-    await pg.route('**/api/novels', lambda r: r.abort())
+    retry_requests = []
+    async def list_after_retry(route):
+        if route.request.headers.get('x-test-shelf-retry') == 'clicked':
+            retry_requests.append(route.request.url)
+            await route.continue_()
+        else:
+            await route.abort()
+    await pg.route('**/api/novels', list_after_retry)
     await pg.goto(f'http://127.0.0.1:{PORT}/')
     await pg.wait_for_selector('#shelf:not([hidden]) #books > *:not(.shelfwait)', timeout=8000)
     try:
@@ -1764,10 +1772,40 @@ async def scenario_rest(b):
         pass
     shelf = await pg.inner_text('#books')
     check('books the phone did not list are never shown as no books — it says so, with Try again', 'could not be read just now' in shelf and 'Every story starts somewhere' not in shelf and await pg.locator('#books button:has-text("Try again")').count() == 1, shelf[:200])
-    await pg.unroute('**/api/novels')
-    await pg.click('#books button:has-text("Try again")')
-    await pg.wait_for_selector('#books button.cover', timeout=8000)
-    check('Try again brings the books', 'The Rest' in await pg.inner_text('#books'), await pg.inner_text('#books'))
+    # Keep startup catch-up requests failing through the click. Mark only a
+    # list request made during the real retry click, so automatic recovery
+    # cannot remove the button first or satisfy this manual-retry assertion.
+    await pg.evaluate("""() => {
+      const original = window.fetch;
+      let duringRetry = false;
+      const clicked = (event) => {
+        if (!event.target.closest('#books .unread button')) return;
+        duringRetry = true;
+        setTimeout(() => { duringRetry = false; }, 0);
+      };
+      document.addEventListener('click', clicked, true);
+      window.fetch = (input, init = {}) => {
+        const path = new URL(input instanceof Request ? input.url : input, location.href).pathname;
+        if (duringRetry && path === '/api/novels') {
+          const headers = new Headers(init.headers);
+          headers.set('X-Test-Shelf-Retry', 'clicked');
+          return original(input, { ...init, headers });
+        }
+        return original(input, init);
+      };
+      window.__restoreShelfRetry = () => {
+        window.fetch = original;
+        document.removeEventListener('click', clicked, true);
+        delete window.__restoreShelfRetry;
+      };
+    }""")
+    try:
+        await pg.click('#books button:has-text("Try again")')
+        await pg.wait_for_selector('#books button.cover', timeout=8000)
+        check('Try again brings the books', len(retry_requests) == 1 and 'The Rest' in await pg.inner_text('#books'), (len(retry_requests), await pg.inner_text('#books')))
+    finally:
+        await pg.evaluate('window.__restoreShelfRetry?.()')
+        await pg.unroute('**/api/novels', list_after_retry)
     # again, and this time the phone answers something else first: the books come by themselves
     await pg.route('**/api/novels', lambda r: r.abort())
     await pg.goto(f'http://127.0.0.1:{PORT}/')
@@ -1935,19 +1973,23 @@ async def scenario_auto(b):
     await pg.close()
 
 QUIET_NOW = "import('/js/app.js').then((m) => m.quietNow())"
-CONTRAST = r"""(() => {
+CONTRAST = r"""(async () => {
+  const {applyLook} = await import('/js/ui/look.js');
   const L = (rgb) => { const [r, g, b] = rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map((c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
   const ratio = (a, b) => { const x = L(a), y = L(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const color = (v) => { const p = document.createElement('i'); p.style.color = `var(${v})`; document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; };
-  const was = document.documentElement.dataset.theme;
+  const was = {...document.documentElement.dataset};
+  const style = document.documentElement.getAttribute('style');
   const out = {};
-  for (const t of ['study', 'candle', 'rain', 'day', 'ink']) {
-    document.documentElement.dataset.theme = t;
+  for (const theme of ['academy', 'tokyo']) for (const mode of ['dark', 'light']) {
+    applyLook({theme, mode});
     const btn = getComputedStyle(document.querySelector('#writeBtn'));
     const stops = btn.backgroundImage.match(/rgba?\([^)]+\)/g) || [];
-    out[t] = Math.round(100 * Math.min(...stops.map((s) => ratio(btn.color, s)), ratio(color('--accent'), color('--chrome-solid')), ratio(color('--accent-on-paper'), color('--paper')))) / 100;
+    out[`${theme}-${mode}`] = Math.round(100 * Math.min(...stops.map((s) => ratio(btn.color, s)), ratio(color('--accent'), color('--chrome-solid')), ratio(color('--accent-on-paper'), color('--paper')))) / 100;
   }
-  document.documentElement.dataset.theme = was;
+  applyLook({...was, theme: was.world || was.theme});
+  if (style === null) document.documentElement.removeAttribute('style');
+  else document.documentElement.setAttribute('style', style);
   return out;
 })()"""
 

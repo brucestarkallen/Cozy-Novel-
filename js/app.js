@@ -13,7 +13,7 @@ import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow 
 import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords } from './ui/panes.js';
 import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
-import { applyLook, DEFAULT_LOOK } from './ui/look.js';
+import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './ui/look.js';
 import { bringOldBooks } from './legacy.js';
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingIsOld, freshStarting, narratorCarryDue, carryNarrator, lateSplitDue, splitLate } from './novel/prompts.js';
 import { chapterLabel, novelSteps } from './novel/shape.js';
@@ -258,6 +258,14 @@ export async function goChapter(chapterId) {
 function bindChrome() {
   initShelf({ root: $('#shelf'), books: $('#books'), search: $('#search'), foot: $('#shelfFoot') }, { openNovel });
   $('#shelfSettings').addEventListener('click', () => openSettings());
+  const changeRoom = (patch) => {
+    store.change('house', 'house', (h) => { h.look = mergeLook(h.look, patch); }, { now: true });
+    applyLook(store.peek('house', 'house')?.look);
+  };
+  $('#worldAcademy').addEventListener('click', () => changeRoom({ theme: 'academy' }));
+  $('#worldTokyo').addEventListener('click', () => changeRoom({ theme: 'tokyo' }));
+  $('#modeToggle').addEventListener('click', () => changeRoom({ mode: resolveLook(store.peek('house', 'house')?.look).mode === 'dark' ? 'light' : 'dark' }));
+  $('#motionToggle').addEventListener('click', () => changeRoom({ motion: resolveLook(store.peek('house', 'house')?.look).motion === 'on' ? 'off' : 'on' }));
   initDesk({
     wrap: $('#pageWrap'), passages: $('#passages'), end: $('#pageEnd'), chapnum: $('#chapnum'), chapname: $('#chapname'),
     direction: $('#direction'), writeBtn: $('#writeBtn'), mineBtn: $('#mineBtn'), ideasBtn: $('#ideasBtn'), lengthBtn: $('#lengthBtn'), outcomeBtn: $('#outcomeBtn'), writerBtn: $('#writerBtn'),
@@ -337,6 +345,7 @@ function moreMenu(anchor) {
     { label: 'Full screen', hint: 'The page and the box, nothing above them.', run: fullPage },
     { label: 'Reading mode', hint: 'Only the page, for reading.', run: readingMode },
     '-',
+    { label: 'Your writing room', hint: 'Academy of Ink or Tokyo Afterglow, day or night, with gentle animation.', run: () => openSettings('look') },
     { label: 'Settings', hint: 'Connections, who does what, your instructions and presets, how it looks, backups.', run: () => openSettings() },
   ]);
 }

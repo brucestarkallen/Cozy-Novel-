@@ -34,8 +34,8 @@
 
   /* the study at night (default) */
   --bg: #120e0b;
-  --room-img: url(../assets/room/mobile.webp);
-  --shelf-img: url(../assets/room/cat.webp);
+  --room-img: none;
+  --shelf-img: none;
   --room-veil: linear-gradient(180deg, rgba(14,10,8,.55) 0%, rgba(14,10,8,.25) 30%, rgba(14,10,8,.65) 100%);
   --chrome: rgba(24, 18, 14, .72);
   --chrome-solid: #1b1511;
@@ -63,7 +63,6 @@
   --accent-on-paper: #8a5410;
   --shadow: 0 18px 60px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.25);
 }
-@media (min-width: 900px) { :root { --room-img: url(../assets/room/desktop.webp); --shelf-img: url(../assets/room/desktop.webp); } }
 
 [data-theme="candle"] {
   --paper: #1f1813; --paper-2: #251d17; --paper-edge: rgba(0,0,0,.5);

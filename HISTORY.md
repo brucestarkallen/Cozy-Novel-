@@ -296,3 +296,11 @@ Checked with all five suites — server 63/63, app 365/365, thinking 348/348 (0 
 - Settings has direct section navigation and clearer connection controls, with Test beside the model. Testing or copying a connection uses the latest typed values. A module reset first keeps pending edits so confirmation and Undo use all of the user’s words. Book exports, whole-library backups and closing settings keep edits made just before the action.
 - Informational notices no longer block buttons behind them; their Undo actions remain clickable. Focused browser walks cover these save timing cases, checker interaction, phone layouts and keyboard use.
 - A correction to the helper’s book description stays while replacement words are requested, even when the request follows the last keystroke immediately. Undo notices are reachable by keyboard inside open dialogs.
+
+## 2.8.0, two worlds for the unwritten
+
+- The photographic room is replaced by two original illustrations drawn with SVG paths and CSS: Academy of Ink, a magical conservatory library, and Tokyo Afterglow, an apartment overlooking a neon city. The academy is the default.
+- Each world has day and night palettes across the library, writing page, Suggestions, Settings, Notes, Partner, Scenes and dialogs. A shelf toolbar switches worlds, light and animation; More → Your writing room opens the same choices from a book.
+- Clouds, candlelight, floating ink, rain, neon and steam move slowly. A pause control, reduced-motion support, a hidden-room switch and pausing in background tabs keep the room comfortable on a phone. Only the selected illustration is mounted.
+- World, daylight and animation choices merge independently when two browsers save together, so pausing the room does not undo another window's theme choice.
+- Older appearance settings retain their page font, size, spacing and width; daylight remains light. Theme changes and animation preferences are saved on the device and follow every open window.

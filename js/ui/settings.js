@@ -16,7 +16,7 @@ import { cleanOwn, ownLine, ownSteps, OWN_ROLES, OWN_PLACES, OWN_TO } from '../n
 import { newId, debounce, timeAgo, plural, numberTyped, markTyped } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
-import { applyLook, DEFAULT_LOOK } from './look.js';
+import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './look.js';
 import { draftNow } from './desk.js';
 
 let sheet = null;
@@ -67,6 +67,7 @@ function draw(focus = '') {
   }
   arrangeSettings();
   sheet.body.scrollTop = scroll;
+  if (focus === 'look') sheet.body.querySelector('.settings-jump[aria-controls="settings-look"]')?.click();
 }
 
 /* A short way back to every part of a long settings sheet. The section's
@@ -1157,25 +1158,33 @@ function openModule(id, { fresh = false } = {}) {
 /* ------------------------------------------------------------ the look */
 
 const THEMES = [
-  ['study', 'The study at night', 'linear-gradient(135deg,#2a1f17,#f4ead6 70%)'],
-  ['candle', 'Candlelight', 'linear-gradient(135deg,#1f1813,#e2a54b)'],
-  ['rain', 'Rain on the window', 'linear-gradient(135deg,#141b25,#8fb9e3)'],
-  ['day', 'Daylight', 'linear-gradient(135deg,#fffdf8,#c98a36)'],
-  ['ink', 'Ink (pure dark)', 'linear-gradient(135deg,#000,#d4a35a)'],
+  ['academy', 'Academy of Ink', 'Candlelight, quiet magic, and unwritten worlds.', '<path d="M38 94V45Q38 23 63 8Q88 23 88 45V94M49 94V47Q49 32 63 23Q77 32 77 47V94M63 23V94M38 60H88M20 94H110M24 94V70H33V94M94 94V65H104V94M133 91V40L143 23L153 40V91M127 40H160M167 91V58L177 42L187 58V91M167 70H187"/><path d="M113 14v12m-6-6h12M22 29v8m-4-4h8M174 17v10m-5-5h10"/>'],
+  ['tokyo', 'Tokyo Afterglow', 'Neon rain. A warm apartment above the city.', '<path d="M19 12H187V94H19ZM119 12V94M19 72H187M29 72V39H51V72M57 72V25H80V72M86 72V45H108M131 72V47H150V72M159 72V32H177V72M33 46H47M33 53H47M63 33H74M63 41H74M63 49H74M164 40H173M164 48H173M164 56H173M23 94H190"/><path d="M42 13l-6 13m67-10l-8 18m54-20l-7 17M69 72l-5 15m104-22l-7 16"/>'],
 ];
 
 function lookGroup(hs) {
   const look = hs.look || {};
   const g = group('How it looks', { key: 'set.look' });
   const setLook = (patch) => {
-    changeHouse((x) => { x.look = { ...(x.look || {}), ...patch }; });
-    applyLook({ ...look, ...patch });
-    Object.assign(look, patch);
+    changeHouse((x) => { x.look = mergeLook(x.look, patch); });
+    const latest = house().look || {};
+    applyLook(latest);
+    Object.assign(look, latest);
   };
-  const sw = h('div.swatches');
-  for (const [id, label, grad] of THEMES) {
-    const b = h('button.swatch', { 'aria-pressed': String((look.theme || 'study') === id), onclick: () => { setLook({ theme: id }); for (const x of sw.children) x.setAttribute('aria-pressed', String(x === b)); } }, h('i', { style: { background: grad } }), label);
+  const chosen = resolveLook(look);
+  const sw = h('div.swatches.world-swatches', { role: 'group', 'aria-label': 'Choose your world' });
+  for (const [id, label, description, paths] of THEMES) {
+    const b = h('button.swatch', { 'data-world': id, title: description, 'aria-pressed': String(chosen.world === id), onclick: () => { setLook({ theme: id }); for (const x of sw.children) x.setAttribute('aria-pressed', String(x === b)); } },
+      h('span.world-preview', { 'aria-hidden': 'true', html: `<svg viewBox="0 0 210 105" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>` }), h('b', label), h('small', description));
     sw.append(b);
+  }
+  const modes = h('div.mode-choices.segmented', { role: 'group', 'aria-label': 'Light or dark mode' });
+  for (const [mode, label] of [['dark', 'Night'], ['light', 'Day']]) {
+    const b = h('button.mode-choice', { 'data-mode': mode, title: mode === 'dark' ? 'A softly lit room after dark.' : 'Let the morning into the room.', 'aria-pressed': String(chosen.mode === mode), onclick: () => {
+      setLook({ mode });
+      for (const x of modes.children) x.setAttribute('aria-pressed', String(x === b));
+    } }, label);
+    modes.append(b);
   }
   const toggle = (key, label, on) => {
     const inp = h('input', { type: 'checkbox', checked: on });
@@ -1188,7 +1197,10 @@ function lookGroup(hs) {
     s.addEventListener('change', () => setLook({ [key]: s.value }));
     return s;
   };
-  g.body.append(sw,
+  g.body.append(h('p.say', 'Choose a world to write in. Make it morning, or stay a little after dark.'), sw,
+    h('div.world-mode-row', h('span', 'The light in your room'), modes),
+    toggle('motion', 'Ambient animation', look.motion !== 'off'),
+    h('p.say.motion-hint', 'Slow ink, candlelight and rain. Your device’s reduced-motion setting is always respected.'),
     toggle('room', 'The room behind the page', look.room !== 'off'),
     toggle('tint', 'Tint the dialogue', look.tint !== 'off'),
     toggle('indent', 'Indented paragraphs, like a printed book', look.indent === 'on'),
@@ -1199,7 +1211,7 @@ function lookGroup(hs) {
       field('Page width', sel('width', [['600', 'Narrow'], ['680', 'Book'], ['780', 'Wide']], look.width || '680'))),
     h('div.btnrow', h('button.btn.quiet.small', { title: 'The theme, the type, the spacing and the width as they began — with Undo.', onclick: () => {
       const was = JSON.parse(JSON.stringify(house().look || {}));
-      const put = (v) => { changeHouse((x) => { x.look = { ...v }; }, { now: true }); applyLook({ ...DEFAULT_LOOK, ...v }); for (const k of Object.keys(look)) delete look[k]; Object.assign(look, v); draw(); };
+      const put = (v) => { changeHouse((x) => { x.look = { ...v }; }, { now: true }); applyLook(v); for (const k of Object.keys(look)) delete look[k]; Object.assign(look, v); draw(); };
       put({ ...DEFAULT_LOOK });
       undoToast('It looks the way it began.', () => put(was));
     } }, 'Back to the default look')));

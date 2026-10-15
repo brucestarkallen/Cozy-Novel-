@@ -98,10 +98,11 @@ async def scenario_book(browser):
     await pg.locator('.booksheet.on .body').evaluate('(e)=>e.scrollTop=e.scrollHeight')
     await pg.screenshot(path=str(SHOTS / 'book-bottom-phone.png'))
     await pg.locator('.booksheet.on .body').evaluate('(e)=>e.scrollTop=0')
-    for theme in ('study', 'candle', 'rain', 'day', 'ink'):
-        await pg.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
-        check(f'book details fit the phone in {theme}', await pg.locator('.booksheet.on .body').evaluate('(e)=>e.scrollWidth<=e.clientWidth'))
-    await pg.evaluate("document.documentElement.dataset.theme='study'")
+    for theme in ('academy', 'tokyo'):
+        for mode in ('dark', 'light'):
+            await pg.evaluate("async (look)=>(await import('/js/ui/look.js')).applyLook(look)", {'theme': theme, 'mode': mode})
+            check(f'book details fit the phone in {theme} {mode}', await pg.locator('.booksheet.on .body').evaluate('(e)=>e.scrollWidth<=e.clientWidth'))
+    await pg.evaluate("import('/js/ui/look.js').then(m=>m.applyLook(m.DEFAULT_LOOK))")
     for width in (320, 360, 390):
         await pg.set_viewport_size({'width': width, 'height': 844})
         close = pg.locator('.sheet.on .head button[aria-label=Close]')
@@ -200,10 +201,11 @@ async def scenario_sent(browser):
     await pg.evaluate("document.querySelector('#toast')?.remove()")
     await pg.locator('.sentsheet.on .body').evaluate('(e)=>e.scrollTop=0')
     await pg.screenshot(path=str(SHOTS / 'sent-after-phone.png'))
-    for theme in ('study', 'candle', 'rain', 'day', 'ink'):
-        await pg.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
-        check(f'Sent fits the phone in {theme}', await pg.locator('.sentsheet.on .body').evaluate('(e)=>e.scrollWidth<=e.clientWidth'))
-    await pg.evaluate("document.documentElement.dataset.theme='study'")
+    for theme in ('academy', 'tokyo'):
+        for mode in ('dark', 'light'):
+            await pg.evaluate("async (look)=>(await import('/js/ui/look.js')).applyLook(look)", {'theme': theme, 'mode': mode})
+            check(f'Sent fits the phone in {theme} {mode}', await pg.locator('.sentsheet.on .body').evaluate('(e)=>e.scrollWidth<=e.clientWidth'))
+    await pg.evaluate("import('/js/ui/look.js').then(m=>m.applyLook(m.DEFAULT_LOOK))")
     for width in (320, 360, 390):
         await pg.set_viewport_size({'width': width, 'height': 844})
         close = pg.locator('.sheet.on .head button[aria-label=Close]')

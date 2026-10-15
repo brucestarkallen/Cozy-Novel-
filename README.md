@@ -2,6 +2,8 @@
 
 A quiet little room for writing a novel with a model beside you — on your phone, in Termux, in any browser.
 
+Choose your writing world: **Academy of Ink**, a magical library with arched windows and drifting ink, or **Tokyo Afterglow**, a warm apartment above a rainy neon city. Both are drawn from shapes and lines, with day and night modes. Switch worlds from the shelf, or **More → Your writing room** while writing. Ambient animation can be paused and respects reduced-motion preferences; the room can also be hidden for an uninterrupted page.
+
 You write the book chapter by chapter. Say what happens next and press **Write**, and your writer writes it onto the page; or write the words yourself and press **Add as my words**. Nothing is ever thrown away: another take, a rewrite or your own edit is a new *version* of the passage, and the earlier one is one arrow away.
 
 While you write, a quiet **helper** keeps the book's notes — the people (who they are, how they stand with each other, where they are now), the places, the things worth remembering, the threads still open — and a summary of every chapter, so a book far longer than your model can read still fits. A **partner** talks the book over with you like a seasoned novelist, and when you ask it makes the change itself, each with its Undo. In **Scenes** you step into the story as one of its people while the narrator plays everyone else, then turn what happened into prose.
@@ -147,9 +149,10 @@ python3 tests/browser/walk_main.py  # the whole app in a real browser (needs pla
 python3 tests/browser/walk_more.py
 python3 tests/browser/walk_accessibility.py  # dialogs, keyboard, search and file picking
 python3 tests/browser/walk_cozy.py           # shelf, resume, phone layouts and motion
-python3 tests/browser/walk_checks.py         # checker review, focus and all five themes
+python3 tests/browser/walk_checks.py         # checker review, focus and both worlds in day/night
 python3 tests/browser/walk_settings.py       # pending edits, connection tests and module resets
 python3 tests/browser/walk_dialogs.py        # book exports, saved fields and sent words
+python3 tests/browser/walk_worlds.py         # illustrated worlds, light/dark, animation and saved preferences
 ```
 
 All of them use synthetic books in a temporary folder and stand-in models; nothing paid is ever called.

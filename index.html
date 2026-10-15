@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en" data-theme="study">
+<html lang="en" data-theme="academy" data-world="academy" data-mode="dark" data-motion="on">
 <head>
 <meta charset="utf-8">
 <meta name="cozynovel-commit" content="">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Cozy Novel</title>
-<meta name="theme-color" content="#1b1511">
+<meta name="theme-color" content="#131e21">
 <meta name="description" content="A cozy room to write your novel in.">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
@@ -16,6 +16,9 @@
 <link rel="stylesheet" href="css/settings.css">
 <link rel="stylesheet" href="css/panes.css">
 <link rel="stylesheet" href="css/dialogs.css">
+<link rel="stylesheet" href="css/worlds.css">
+<link rel="stylesheet" href="css/academy.css">
+<link rel="stylesheet" href="css/tokyo.css">
 </head>
 <body class="shelfview">
 <div class="room" aria-hidden="true"></div>
@@ -33,6 +36,16 @@
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 9v.03A1.7 1.7 0 0 0 21 10.06H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>
     </button>
   </header>
+  <div class="world-toolbar" role="group" aria-label="Your writing room">
+    <div class="world-choices" role="group" aria-label="Choose your world">
+      <button id="worldAcademy" aria-pressed="true" title="Academy of Ink — a candlelit library for worlds waiting to be written"><span aria-hidden="true">✦</span> Academy of Ink</button>
+      <button id="worldTokyo" aria-pressed="false" title="Tokyo Afterglow — a quiet apartment above a city that never sleeps"><span aria-hidden="true">◈</span> Tokyo Afterglow</button>
+    </div>
+    <div class="world-light-controls">
+      <button id="modeToggle" aria-label="Switch to light mode" title="Let the morning into your writing room"><svg class="mode-moon" aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z"/></svg><svg class="mode-sun" aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg><span class="mode-word">Night</span></button>
+      <button id="motionToggle" aria-label="Ambient animation" aria-pressed="true" title="Pause the room’s ambient animation"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path class="motion-waves" d="M3 8c3-4 6 4 9 0s6 4 9 0M3 16c3-4 6 4 9 0s6 4 9 0"/><path class="motion-pause" d="M9 6v12m6-12v12"/></svg></button>
+    </div>
+  </div>
   <section class="shelf-intro" id="shelfIntro" aria-labelledby="shelfGreeting">
     <div class="shelf-welcome">
       <p class="eyebrow" id="shelfEyebrow">YOUR WRITING ROOM</p>

@@ -1,0 +1,159 @@
+/* Hand-drawn Tokyo apartment. These colors belong to the scenery alone. */
+.world-scene[data-world="tokyo"] {
+  --tokyo-wall-top: #171424;
+  --tokyo-wall-bottom: #272034;
+  --tokyo-ceiling: #14121f;
+  --tokyo-floor: #201b2a;
+  --tokyo-room-line: #4a3b55;
+  --tokyo-sky-top: #17132c;
+  --tokyo-sky-mid: #3b2464;
+  --tokyo-horizon: #795298;
+  --tokyo-mist: #b982de;
+  --tokyo-cloud: #b5abd4;
+  --tokyo-moon: #d3bfe0;
+  --tokyo-building-far: #3e2d5c;
+  --tokyo-building-mid: #2b2044;
+  --tokyo-building-front: #21192f;
+  --tokyo-city-line: #8b66a6;
+  --tokyo-window-dim: #87639e;
+  --tokyo-window-lit: #d38cf4;
+  --tokyo-window-warm: #e3b2bc;
+  --tokyo-tower-deck: #64386f;
+  --tokyo-sign: #4b2566;
+  --tokyo-near-haze: #9157ac;
+  --tokyo-rain: #c6c2e0;
+  --tokyo-frame-shadow: #11131e;
+  --tokyo-frame: #1b1b29;
+  --tokyo-frame-light: #5b4e6b;
+  --tokyo-hardware: #b29ba1;
+  --tokyo-sill: #3b3046;
+  --tokyo-fabric: #352a49;
+  --tokyo-fabric-fold: #221d32;
+  --tokyo-fabric-line: #746080;
+  --tokyo-wood-top: #504051;
+  --tokyo-wood-bottom: #2d2434;
+  --tokyo-wood-grain: #96747c;
+  --tokyo-print: #30283e;
+  --tokyo-print-moon: #b9a1b9;
+  --tokyo-print-hill: #66516d;
+  --tokyo-print-fore: #473d58;
+  --tokyo-book-purple: #685179;
+  --tokyo-book-blue: #4c6675;
+  --tokyo-book-rose: #8e5e76;
+  --tokyo-book-cream: #a79589;
+  --tokyo-book-line: #b0a0ab;
+  --tokyo-pot: #735868;
+  --tokyo-pot-line: #a37e87;
+  --tokyo-pot-dark: #312b38;
+  --tokyo-leaf: #3e5960;
+  --tokyo-leaf-line: #7a9b92;
+  --tokyo-stem: #71877d;
+  --tokyo-cabinet-dark: #181720;
+  --tokyo-record-line: #6d596d;
+  --tokyo-speaker: #302a3b;
+  --tokyo-turntable: #51414f;
+  --tokyo-record: #191a25;
+  --tokyo-lamp-metal: #5b4e61;
+  --tokyo-lamp-light: #ffd0a2;
+  --tokyo-journal: #d5bfae;
+  --tokyo-journal-line: #937776;
+  --tokyo-pen: #29303b;
+  --tokyo-cup-shadow: #1f1b28;
+  --tokyo-ceramic: #b48b9a;
+  --tokyo-cup-rim: #dfbbc2;
+  --tokyo-tea: #60414b;
+  --tokyo-steam: #d8bfd3;
+  --tokyo-chair: #4d3656;
+}
+:root[data-mode="light"] .world-scene[data-world="tokyo"] {
+  --tokyo-wall-top: #d2c5d8;
+  --tokyo-wall-bottom: #bdaec9;
+  --tokyo-ceiling: #e2d8e5;
+  --tokyo-floor: #baa8bb;
+  --tokyo-room-line: #a391ad;
+  --tokyo-sky-top: #b7b6d8;
+  --tokyo-sky-mid: #d1bedc;
+  --tokyo-horizon: #e9cbd6;
+  --tokyo-mist: #f8deeb;
+  --tokyo-cloud: #f7eff8;
+  --tokyo-moon: #f9e8e9;
+  --tokyo-building-far: #aaa3c5;
+  --tokyo-building-mid: #8a83aa;
+  --tokyo-building-front: #716888;
+  --tokyo-city-line: #c1b0d1;
+  --tokyo-window-dim: #b0a1bd;
+  --tokyo-window-lit: #debbd2;
+  --tokyo-window-warm: #e5c8b6;
+  --tokyo-tower-deck: #af879f;
+  --tokyo-sign: #7a5a89;
+  --tokyo-near-haze: #e4bfd7;
+  --tokyo-rain: #f8f2ff;
+  --tokyo-frame-shadow: #8d7c99;
+  --tokyo-frame: #a18da9;
+  --tokyo-frame-light: #d9c8df;
+  --tokyo-hardware: #a47f83;
+  --tokyo-sill: #b39bad;
+  --tokyo-fabric: #b2a1c4;
+  --tokyo-fabric-fold: #c7b8d4;
+  --tokyo-fabric-line: #8e7d9d;
+  --tokyo-wood-top: #c09aa9;
+  --tokyo-wood-bottom: #997889;
+  --tokyo-wood-grain: #e1bec5;
+  --tokyo-print: #dacadd;
+  --tokyo-print-moon: #f4e1cb;
+  --tokyo-print-hill: #a991b5;
+  --tokyo-print-fore: #8d81a3;
+  --tokyo-book-purple: #9478ab;
+  --tokyo-book-blue: #789aa5;
+  --tokyo-book-rose: #be8b9e;
+  --tokyo-book-cream: #e0cfba;
+  --tokyo-book-line: #e4ced8;
+  --tokyo-pot: #c28f9d;
+  --tokyo-pot-line: #e4bbc4;
+  --tokyo-pot-dark: #7c6778;
+  --tokyo-leaf: #71999a;
+  --tokyo-leaf-line: #b3cebe;
+  --tokyo-stem: #547d76;
+  --tokyo-cabinet-dark: #79677e;
+  --tokyo-record-line: #c4abc0;
+  --tokyo-speaker: #9a859c;
+  --tokyo-turntable: #c3a2b0;
+  --tokyo-record: #574d65;
+  --tokyo-lamp-metal: #9d809c;
+  --tokyo-lamp-light: #ffe5bd;
+  --tokyo-journal: #f3e2d0;
+  --tokyo-journal-line: #b79b9b;
+  --tokyo-pen: #5a5677;
+  --tokyo-cup-shadow: #997f96;
+  --tokyo-ceramic: #e4b2c0;
+  --tokyo-cup-rim: #ffe0e3;
+  --tokyo-tea: #9c7078;
+  --tokyo-steam: #fff4f7;
+  --tokyo-chair: #a88bb1;
+}
+.tokyo-art { display: block; width: 100%; height: 100%; }
+.tokyo-art .tokyo-rain,
+.tokyo-art .tokyo-clouds,
+.tokyo-art .tokyo-neon,
+.tokyo-art .tokyo-steam,
+.tokyo-art .tokyo-train { animation-play-state: paused; }
+:root[data-world="tokyo"] .tokyo-art .tokyo-rain { animation: tokyo-rainfall 9s linear infinite; }
+:root[data-world="tokyo"] .tokyo-art .tokyo-clouds { animation: tokyo-cloud-drift 38s ease-in-out infinite alternate; }
+:root[data-world="tokyo"] .tokyo-art .tokyo-neon { animation: tokyo-neon-breathe 11s ease-in-out infinite alternate; }
+:root[data-world="tokyo"] .tokyo-art .tokyo-steam { animation: tokyo-tea-steam 6s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+:root[data-world="tokyo"] .tokyo-art .tokyo-train { animation: tokyo-last-train 46s linear infinite; }
+@keyframes tokyo-rainfall { from { transform: translate(39.504px,-185.848px); } to { transform: translate(0,0); } }
+@keyframes tokyo-cloud-drift { from { transform: translate(-22px,-8px); opacity: .7; } to { transform: translate(22px,8px); opacity: 1; } }
+@keyframes tokyo-neon-breathe { from { opacity: .72; } to { opacity: 1; } }
+@keyframes tokyo-tea-steam { 0%,100% { transform: translate(0,0) scaleX(.95); opacity: .34; } 50% { transform: translate(3px,-8px) scaleX(1.12); opacity: .66; } }
+@keyframes tokyo-last-train { from { transform: translateX(-480px); opacity: 0; } 12%,75% { opacity: .6; } to { transform: translateX(1000px); opacity: 0; } }
+:root[data-motion="off"] .tokyo-art *,
+.world-scene[data-world="tokyo"][hidden] .tokyo-art * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .tokyo-art * { animation: none !important; } }
+
+/* Keep the desk and the tower in the portrait view rather than cropping to an empty pane. */
+@media (max-width: 680px) {
+  .tokyo-art { width: calc(100% + 66vh); max-width: none; transform: translateX(-66vh); }
+}
+:root[data-mode="light"] .tokyo-art .tokyo-city-glow { opacity: .35; }
+:root[data-mode="light"] .tokyo-art .tokyo-interior-neon { opacity: .22; }
