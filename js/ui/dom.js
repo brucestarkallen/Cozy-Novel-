@@ -3,6 +3,13 @@
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+/* Setting textContent to the words already there still replaces its text
+ * node. Keep labels still when background saves have nothing new to say. */
+export function setText(el, value) {
+  const text = String(value ?? '');
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
 /* h('button.btn.primary', {onclick, title}, 'Write') */
 export function h(tag, attrs = {}, ...kids) {
   const [name, ...classes] = String(tag).split('.');

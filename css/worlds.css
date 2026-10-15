@@ -150,6 +150,12 @@
 .room, body.shelfview .room { background: var(--bg) !important; overflow: hidden; }
 .world-scene { position: absolute; inset: 0; overflow: hidden; pointer-events: none; contain: layout paint; }
 .world-art { display: block; width: 100%; height: 100%; }
+/* Local cached motion surfaces preserve the SVG's drawing order and clipping.
+ * The outer bounds stay still; only the small HTML child is animated. */
+.world-motion-surface, .world-motion, .world-motion > svg { overflow: visible; }
+.world-motion { width: 100%; height: 100%; }
+.world-motion > svg { display: block; }
+
 .room::after {
   background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 79%, transparent) 0%, color-mix(in srgb, var(--bg) 57%, transparent) 34%, color-mix(in srgb, var(--bg) 9%, transparent) 79%, transparent 100%),
     linear-gradient(0deg, color-mix(in srgb, var(--bg) 94%, transparent) 0%, color-mix(in srgb, var(--bg) 18%, transparent) 45%, transparent 78%);

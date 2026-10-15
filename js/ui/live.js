@@ -68,42 +68,70 @@ export function piecesOf(line) {
   out.push(rest);
   return out;
 }
-const drawnLines = new WeakMap();   /* box -> { blocks, data: [{ t, ln }], nodes: Text[], lines: Element[] } */
+const drawnLines = new WeakMap();
 export function streamLines(box, text, { blocks = false } = {}) {
-  const parts = String(text || '').split('\n');
-  const want = [];
-  parts.forEach((p, ln) => {
-    const pcs = piecesOf(p);
-    pcs.forEach((t, k) => want.push({ t: !blocks && ln < parts.length - 1 && k === pcs.length - 1 ? t + '\n' : t, ln }));
-  });
+  const raw = String(text || '');
   let was = drawnLines.get(box);
   if (!was || was.blocks !== blocks || box.childNodes.length !== (blocks ? was.lines.length : was.nodes.length)) {
     box.textContent = '';
-    was = { blocks, data: [], nodes: [], lines: [] };
+    was = { blocks, text: '', data: [], nodes: [], lines: [] };
+  } else if (raw === was.text) return false;
+  /* A growing answer only splits its unfinished piece. Completed paragraphs
+   * and long-line pieces need no parsing or DOM work as the answer grows. */
+  let k = 0, start = 0, line = 0;
+  if (was.data.length && raw.startsWith(was.text)) {
+    k = was.data.length - 1;
+    start = was.data[k].at;
+    line = was.data[k].ln;
   }
-  let k = 0;
-  const n = Math.min(want.length, was.data.length);
-  while (k < n && want[k].t === was.data[k].t && want[k].ln === was.data[k].ln) k++;
-  if (k === want.length && k === was.data.length) return false;
-  for (let i = was.nodes.length - 1; i >= k; i--) was.nodes[i].remove();
-  const data = was.data.slice(0, k);
-  const nodes = was.nodes.slice(0, k);
-  /* the lines kept: those with a piece still drawn */
-  const keepLines = k ? data[k - 1].ln + 1 : 0;
-  for (let i = was.lines.length - 1; i >= keepLines; i--) was.lines[i].remove();
-  const lines = was.lines.slice(0, keepLines);
+  const parts = raw.slice(start).split('\n');
+  const want = [];
+  let at = start;
+  parts.forEach((p, ln) => {
+    const pcs = piecesOf(p);
+    pcs.forEach((t, i) => {
+      want.push({ t: !blocks && ln < parts.length - 1 && i === pcs.length - 1 ? t + '\n' : t, ln: line + ln, at });
+      at += t.length;
+    });
+    at++;
+  });
+  let j = 0;
+  while (j < want.length && k < was.data.length && want[j].t === was.data[k].t && want[j].ln === was.data[k].ln) { j++; k++; }
+  if (j === want.length && k === was.data.length) { was.text = raw; drawnLines.set(box, was); return false; }
   const doc = box.ownerDocument;
-  for (let i = k; i < want.length; i++) {
-    const node = doc.createTextNode(want[i].t);
-    if (blocks) {
-      let line = lines[want[i].ln];
-      if (!line) { line = doc.createElement('div'); line.className = 'ln'; box.append(line); lines[want[i].ln] = line; }
-      line.append(node);
-    } else box.append(node);
-    data.push(want[i]);
-    nodes.push(node);
+  for (let i = j; i < want.length; i++, k++) {
+    const item = want[i];
+    let node = was.nodes[k];
+    if (node && was.data[k].ln === item.ln) {
+      /* Keep even the newest text node: replacing it on every token made
+       * live text blink and discarded browser selection/anchoring. */
+      if (node.data !== item.t) {
+        if (item.t.startsWith(node.data)) node.appendData(item.t.slice(node.data.length));
+        else node.data = item.t;
+      }
+    } else {
+      if (node) node.remove();
+      node = doc.createTextNode(item.t);
+      if (blocks) {
+        let row = was.lines[item.ln];
+        if (!row) { row = doc.createElement('div'); row.className = 'ln'; box.append(row); was.lines[item.ln] = row; }
+        row.append(node);
+      } else box.append(node);
+    }
+    const parent = blocks ? was.lines[item.ln] : box;
+    const prior = k && (!blocks || was.data[k - 1].ln === item.ln) ? was.nodes[k - 1] : null;
+    const next = prior ? prior.nextSibling : parent.firstChild;
+    if (node !== next) parent.insertBefore(node, next);
+    was.nodes[k] = node;
+    was.data[k] = item;
   }
-  drawnLines.set(box, { blocks, data, nodes, lines });
+  for (let i = was.nodes.length - 1; i >= k; i--) was.nodes[i].remove();
+  was.nodes.length = was.data.length = k;
+  const keepLines = k ? was.data[k - 1].ln + 1 : 0;
+  for (let i = was.lines.length - 1; i >= keepLines; i--) was.lines[i].remove();
+  was.lines.length = blocks ? keepLines : 0;
+  was.text = raw;
+  drawnLines.set(box, was);
   return true;
 }
 

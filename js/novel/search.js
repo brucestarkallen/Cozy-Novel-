@@ -28,10 +28,12 @@ const joinedWord = (a, b) => WORD_CHAR.test(a) && WORD_CHAR.test(b) && !UNSPACED
 /* a text as it is matched, with where each of its letters came from —
  * kept for each text once, so typing in the box stays instant */
 const folded = new Map();
+const FOLD_BUDGET = 16 * 1024 * 1024;
+let foldedBytes = 0;
 export function fold(text) {
   const s = String(text || '');
   const seen = folded.get(s);
-  if (seen) return seen;
+  if (seen) { folded.delete(s); folded.set(s, seen); return seen.value; }
   let out = '';
   const map = [];
   let space = false;
@@ -66,8 +68,17 @@ export function fold(text) {
   }
   map.push(s.length);
   const done = { s: out, map };
-  if (folded.size > 4000) folded.clear();
-  folded.set(s, done);
+  /* Index arrays cost much more than prose. A count-only cache could retain
+   * thousands of enormous passages, then discard everything at once. Keep
+   * a bounded working set and let the oldest entries go individually. */
+  const bytes = (s.length + out.length) * 2 + map.length * 8 + 128;
+  if (bytes <= FOLD_BUDGET) {
+    while (folded.size && (foldedBytes + bytes > FOLD_BUDGET || folded.size >= 4000)) {
+      const key = folded.keys().next().value;
+      foldedBytes -= folded.get(key).bytes; folded.delete(key);
+    }
+    folded.set(s, { value: done, bytes }); foldedBytes += bytes;
+  }
   return done;
 }
 
@@ -126,26 +137,18 @@ const BOOK_WORDS = [['brief', 'What it’s about'], ['style', 'How it reads'], [
  * conversation with the partner, and the scenes. Each place:
  * {where, label, snippet, text, start, end, novelId, chapterId?, passageId?,
  *  kind?, cardId?, field?, playId?, turnId?} */
-export function searchBook({ novel, chapters = {}, talk = null, plays = [], query, limit = 300 }) {
-  const out = [];
-  if (!novel || !fold(query).s.trim()) return out;
-  const add = (base, text) => {
-    for (const hit of findIn(text, query)) {
-      if (out.length >= limit) return;
-      out.push({ ...base, novelId: novel.id, text, start: hit.start, end: hit.end, snippet: snippet(text, hit.start, hit.end) });
-    }
-  };
+function* sourcesOf({ novel, chapters = {}, talk = null, plays = [] }) {
   for (const id of novel.order || []) {
     const c = chapters[id];
     if (!c) continue;
     const num = chapterNumber(novel, id);
     const chapter = `Chapter ${numberWords(num)}`;
-    if (c.name) add({ where: 'chapter', label: `${chapter}’s name`, group: chapter, chapterId: id }, c.name);
+    if (c.name) yield [{ where: 'chapter', label: `${chapter}’s name`, group: chapter, chapterId: id }, c.name];
     const nums = passageNumbers(c);
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       const v = picked(p);
-      if (v && v.text) add({ where: 'passage', label: `Passage ${nums.get(p.id)}`, group: `${chapter}${c.name ? ` — ${c.name}` : ''}`, chapterId: id, passageId: p.id }, v.text);
+      if (v && v.text) yield [{ where: 'passage', label: `Passage ${nums.get(p.id)}`, group: `${chapter}${c.name ? ` — ${c.name}` : ''}`, chapterId: id, passageId: p.id }, v.text];
     }
   }
   const notes = novel.notes || {};
@@ -153,12 +156,12 @@ export function searchBook({ novel, chapters = {}, talk = null, plays = [], quer
     for (const card of notes[kind] || []) {
       const label = `${card.name || 'A card'}`;
       const base = { where: 'note', label, group: `Notes — ${KIND_WORD[kind]}`, kind, cardId: card.id };
-      add(base, card.name || '');
-      for (const a of card.aka || []) add(base, a);
-      for (const f of ['about', 'ties', 'now']) if (card[f]) add(base, card[f]);
+      yield [base, card.name || ''];
+      for (const a of card.aka || []) yield [base, a];
+      for (const f of ['about', 'ties', 'now']) if (card[f]) yield [base, card[f]];
     }
   }
-  for (const [field, words] of BOOK_WORDS) if (novel[field]) add({ where: 'book', label: words, group: 'About this book', field }, novel[field]);
+  for (const [field, words] of BOOK_WORDS) if (novel[field]) yield [{ where: 'book', label: words, group: 'About this book', field }, novel[field]];
   /* the words a turn shows: the partner's without its blocks, the narrator's without its offers */
   /* every conversation with the partner: the open one, and the others (a tap opens that one) */
   const talks = talk ? [{ convId: null, name: '', turns: talk.turns || [] }, ...(talk.convs || []).map((c) => ({ convId: c.id, name: c.name || '', turns: c.turns || [] }))] : [];
@@ -166,7 +169,7 @@ export function searchBook({ novel, chapters = {}, talk = null, plays = [], quer
     for (const t of c.turns) {
       const v = picked(t);
       const shown = v && (t.by === 'you' ? v.text : wordsOf(v.text));
-      if (shown) add({ where: 'talk', label: t.by === 'you' ? 'You' : 'Your partner', group: c.convId ? `Partner — ${c.name}` : 'Partner', turnId: t.id, ...(c.convId ? { convId: c.convId } : {}) }, shown);
+      if (shown) yield [{ where: 'talk', label: t.by === 'you' ? 'You' : 'Your partner', group: c.convId ? `Partner — ${c.name}` : 'Partner', turnId: t.id, ...(c.convId ? { convId: c.convId } : {}) }, shown];
     }
   }
   for (const p of plays || []) {
@@ -174,11 +177,52 @@ export function searchBook({ novel, chapters = {}, talk = null, plays = [], quer
       const v = picked(t);
       const who = p.who || 'Someone';
       const shown = v && (t.by === 'you' ? v.text : sceneWords(v.text));
-      if (shown) add({ where: 'play', label: t.by === 'you' ? who : 'The narrator', group: `Scene — you play ${who}`, playId: p.id, turnId: t.id }, shown);
-      if (v && v.tell) add({ where: 'play', label: 'To the narrator', group: `Scene — you play ${who}`, playId: p.id, turnId: t.id }, v.tell);
+      if (shown) yield [{ where: 'play', label: t.by === 'you' ? who : 'The narrator', group: `Scene — you play ${who}`, playId: p.id, turnId: t.id }, shown];
+      if (v && v.tell) yield [{ where: 'play', label: 'To the narrator', group: `Scene — you play ${who}`, playId: p.id, turnId: t.id }, v.tell];
     }
   }
+}
+
+function collect(out, base, text, novelId, query, limit) {
+  for (const hit of findIn(text, query, { max: Math.min(200, limit - out.length) })) {
+    out.push({ ...base, novelId, text, start: hit.start, end: hit.end, snippet: snippet(text, hit.start, hit.end) });
+  }
+}
+
+export function searchBook(options) {
+  const { novel, query, limit = 300 } = options;
+  const out = [];
+  if (!novel || limit <= 0 || !fold(query).s.trim()) return out;
+  for (const [base, text] of sourcesOf(options)) {
+    collect(out, base, text, novel.id, query, limit);
+    if (out.length >= limit) break;
+  }
   return out;
+}
+
+/* Search is also used synchronously by the partner. The screen gives input
+ * and painting their turns between short batches, and a closed sheet or
+ * newer query stops before reading the next source. */
+export function yieldSearch() {
+  return globalThis.scheduler?.yield ? globalThis.scheduler.yield() : new Promise(resolve => setTimeout(resolve, 0));
+}
+export async function searchBookAsync(options, current = () => true) {
+  const { novel, query, limit = 300 } = options;
+  const out = [];
+  if (!current()) return null;
+  if (!novel || limit <= 0 || !fold(query).s.trim()) return out;
+  let start = performance.now(), count = 0;
+  for (const [base, text] of sourcesOf(options)) {
+    if (!current()) return null;
+    collect(out, base, text, novel.id, query, limit);
+    if (out.length >= limit) break;
+    if (++count >= 16 || performance.now() - start >= 4) {
+      await yieldSearch();
+      if (!current()) return null;
+      start = performance.now(); count = 0;
+    }
+  }
+  return current() ? out : null;
 }
 
 /* The order every book is searched in: this one first, then the shelf's

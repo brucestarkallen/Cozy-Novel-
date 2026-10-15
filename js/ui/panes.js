@@ -6,7 +6,7 @@ import * as store from '../store.js';
 import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
 import * as talk from '../novel/talk.js';
-import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGrow, copyText, field, onBack } from './dom.js';
+import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGrow, copyText, field, onBack, setText } from './dom.js';
 import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, NOTE_KINDS, turnSteps, hisStamp } from '../novel/shape.js';
 import { numberWords, plural, timeAgo, nameKey, openOf } from '../util.js';
 import { showSent } from './sent.js';
@@ -35,11 +35,16 @@ export function initPanes(elements, appHooks) {
   hooks = appHooks;
   ui.scrim.addEventListener('click', () => { closeLeft(); closeRight(); });
   for (const b of ui.tabs.querySelectorAll('button')) b.addEventListener('click', () => { P.side = b.dataset.tab; drawSide(); });
-  archivist.onLight((novelId) => { if (novelId === P.novelId) { drawLight(); if (P.side === 'notes') drawSide(); } });
+  archivist.onLight((novelId) => { if (novelId === P.novelId) { drawLight(); if (P.side === 'notes') drawSideSoon(); } });
   SF = follower(ui.rightBody, { tail: sideTail });
   talk.onTalkLive(onTalkLive);
   /* a reply asked for: the pane follows it in, until his hand moves it up */
-  talk.onTalkJob((key, job) => { if (job) SF.start(); if (P.side === 'partner' || P.side === 'play') drawSide(); });
+  talk.onTalkJob((key, job) => {
+    const [kind, id] = key.split('/');
+    if (!showing(kind, id)) return;
+    if (job) SF.start();
+    drawSide();
+  });
   document.addEventListener('focusin', (e) => { paneFocus = ui.left.contains(e.target) || ui.right.contains(e.target) ? e.target : null; });
   document.addEventListener('focusout', (e) => {
     /* Ordinary blur lets go. A column becoming hidden at the breakpoint
@@ -59,10 +64,10 @@ export function openPanes(novelId, chapterId) {
   for (const off of P.offs) off();
   P.offs = [];
   P.watched = new Set();
-  if (P.novelId !== novelId) { P.playId = null; notesView = 'cards'; notesTimeline?.destroy(); notesTimeline = null; }
+  if (P.novelId !== novelId) { P.playId = null; notesView = 'cards'; notesTimeline?.destroy(); notesTimeline = null; paneCache.clear(); renderedPane = null; }
   P.novelId = novelId;
   P.chapterId = chapterId;
-  P.offs.push(store.subscribe('novel', novelId, () => { drawChapters(); if (P.side === 'notes') drawSide(); drawLight(); }));
+  P.offs.push(store.subscribe('novel', novelId, () => { drawChaptersSoon(); if (P.side === 'notes' || partnerChangesVisible()) drawSideSoon(); drawLight(); }));
   dockWide();
   drawChapters();
   drawSide();
@@ -103,6 +108,7 @@ function dockWide() {
   }
   mirrorDock();
   if ((carryLeft || carryRight) && focused !== document.activeElement) focused.focus({ preventScroll: true });
+  if (sideVisible()) drawSideSoon();
 }
 
 /* the desk knows which columns stand beside the page, so the box he types in
@@ -216,7 +222,7 @@ function drawChapters() {
   for (const id of n.order || []) {
     if (P.watched.has(id)) continue;
     P.watched.add(id);
-    P.offs.push(store.subscribe('chapter', id, () => drawChaptersSoon()));
+    P.offs.push(store.subscribe('chapter', id, () => { drawChaptersSoon(); if (P.side === 'notes' || partnerChangesVisible()) drawSideSoon(); }));
   }
   /* Save acknowledgements and helper summaries arrive while he is using
    * this list. Keep its buttons, focus and open menu anchors in place. */
@@ -244,22 +250,22 @@ function drawChapters() {
     li.classList.toggle('on', id === P.chapterId);
     const go = li.querySelector('.go');
     if (id === P.chapterId) go.setAttribute('aria-current', 'page'); else go.removeAttribute('aria-current');
-    li.querySelector('.n').textContent = `Chapter ${numberWords(i + 1)}`;
+    setText(li.querySelector('.n'), `Chapter ${numberWords(i + 1)}`);
     const name = li.querySelector('.nm');
-    name.textContent = c?.name || (words ? openingOf(c) : 'Not begun');
+    setText(name, c?.name || (words ? openingOf(c) : 'Not begun'));
     name.style.fontStyle = c?.name ? '' : 'italic';
     name.style.opacity = c?.name ? '' : '.75';
-    li.querySelector('.w').textContent = plural(words, 'word');
+    setText(li.querySelector('.w'), plural(words, 'word'));
     const summary = li.querySelector('.sum');
-    summary.textContent = c?.summary?.text || '';
+    setText(summary, c?.summary?.text || '');
     summary.hidden = !summary.textContent;
     if (list.children[i] !== li) list.insertBefore(li, list.children[i] || null);
   });
   for (const li of rows.values()) li.remove();
   if (active?.isConnected && list.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true });
   const words = n.order.reduce((a, id) => a + chapterWords(store.peek('chapter', id) || { passages: [] }), 0);
-  ui.leftBody.querySelector('.chapter-total').textContent = `${plural(n.order.length, 'chapter')} · ${plural(words, 'word')} in all`;
-  ui.leftTitle.textContent = 'Chapters';
+  setText(ui.leftBody.querySelector('.chapter-total'), `${plural(n.order.length, 'chapter')} · ${plural(words, 'word')} in all`);
+  setText(ui.leftTitle, 'Chapters');
 }
 
 /* an unnamed chapter is known by its first words */
@@ -452,6 +458,11 @@ export function restoreTyped(key, novelId = P.novelId) {
     if (target) { target.focus({ preventScroll: true }); if (selection) target.setSelectionRange(...selection); }
   }
 }
+function refreshComposer(key, novelId = P.novelId) {
+  const ta = ui.rightFoot.querySelector('textarea'), tb = ui.rightFoot.querySelector('textarea.tellbox');
+  const saved = composerOf(key, novelId);
+  if (ta && (ta.value !== (saved.value || '') || (tb && (tb.value !== (saved.tell || '') || tb.hidden === Boolean(saved.tellOpen))))) restoreTyped(key, novelId);
+}
 /* The sent draft stays on disk until the operation settles. A new sentence
  * typed meanwhile gets its own save and cannot be cleared by this answer. */
 function beginComposerSend(key, { value = true, tell = false } = {}) {
@@ -495,17 +506,59 @@ function endComposerSend(sent, out) {
 /* each drawing of the side pane counts: one overtaken while it waited for a
  * record stops there, so nothing is drawn twice (Cozy Tavern's M245-1) */
 let sideGen = 0;
+const paneCache = new Map();
+let renderedPane = null;
+function sideVisible() {
+  return ui && !document.getElementById('desk')?.hidden && ['open', 'dock', 'full'].some(c => ui.right.classList.contains(c));
+}
+function partnerChangesVisible() { return sideVisible() && P.side === 'partner' && ui.rightBody.querySelector('.changes'); }
+/* Returning to a tab should not typeset the same long conversation again.
+ * Keep only the latest view of each of the three tabs, and only for this
+ * book. A Timeline owns subscriptions, so it is recreated when left. */
+function switchPane(key) {
+  if (renderedPane?.key === key) return;
+  P.liveTurn = null;
+  if (renderedPane && renderedPane.cacheable) {
+    const body = document.createDocumentFragment(), foot = document.createDocumentFragment();
+    body.append(...ui.rightBody.childNodes); foot.append(...ui.rightFoot.childNodes);
+    paneCache.set(renderedPane.side, { ...renderedPane, body, foot, footHidden: ui.rightFoot.hidden,
+      draftFor: ui.rightFoot.dataset.for, draftBook: ui.rightFoot.dataset.book, notesSignature, drawn: P.drawn });
+  }
+  notesTimeline?.destroy(); notesTimeline = null;
+  const cached = paneCache.get(P.side);
+  paneCache.delete(P.side);
+  ui.rightBody.replaceChildren(); ui.rightFoot.replaceChildren();
+  ui.rightFoot.hidden = true; notesSignature = ''; P.drawn = '';
+  if (cached?.key === key) {
+    ui.rightBody.append(cached.body); ui.rightFoot.append(cached.foot);
+    ui.rightFoot.hidden = cached.footHidden;
+    ui.rightFoot.dataset.for = cached.draftFor || ''; ui.rightFoot.dataset.book = cached.draftBook || '';
+    notesSignature = cached.notesSignature; P.drawn = cached.drawn;
+  }
+  renderedPane = { key, side: P.side, cacheable: P.side !== 'notes' || notesView === 'cards' };
+}
+/* Leave unchanged elements connected: removing and immediately putting them
+ * back still loses selection, focus and the browser's scrolling anchor. */
+function keepChildren(parent, children) {
+  const wanted = new Set(children);
+  for (const child of [...parent.children]) if (!wanted.has(child)) child.remove();
+  children.forEach((child, i) => { if (parent.children[i] !== child) parent.insertBefore(child, parent.children[i] || null); });
+}
 function drawSide() {
-  if (!ui) return;
+  if (!ui || !sideVisible()) return;
   sideGen++;
   /* full screen belongs to a scene: anything else beside the page goes back to its column */
   if (fullKind() === 'scene' && !(P.side === 'play' && P.playId)) leaveFull();
   if (fullKind() === 'partner' && P.side !== 'partner') leaveFull();
   keepTyped();
-  /* the notes drawn again (the helper read something) stay where he had scrolled them */
-  const scroll = ui.right.dataset.tab === P.side && P.side === 'notes' ? ui.rightBody.scrollTop : 0;
+  const nextPane = sideView() + (P.side === 'notes' ? '/' + notesView : '');
   /* and a conversation drawn again keeps his place too, unless he is with its newest words */
   sideKeep = { view: P.shownView, top: ui.rightBody.scrollTop };
+  /* Reset a different notebook view before changing its contents. Unchanged
+   * cards stay connected, so the browser keeps the reading anchor itself.
+   * Writing scrollTop after appending every card forces all their layout
+   * inside the click handler, before the drawer can begin to move. */
+  if (P.side === 'notes' && renderedPane?.key !== nextPane && sideKeep.top) ui.rightBody.scrollTop = 0;
   P.shownView = sideView();
   for (const b of ui.tabs.querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.tab === P.side));
   ui.right.dataset.tab = P.side;
@@ -514,12 +567,14 @@ function drawSide() {
     notesTimeline.update(P.chapterId);
     return;
   }
-  notesTimeline?.destroy();
-  notesTimeline = null;
-  ui.rightBody.textContent = '';
-  ui.rightFoot.textContent = '';
-  ui.rightFoot.hidden = true;
-  if (P.side === 'notes') { drawNotes(); ui.rightBody.scrollTop = scroll; }
+  switchPane(nextPane);
+  if (P.side === 'play' && !P.playId) {
+    ui.rightBody.textContent = '';
+    ui.rightFoot.textContent = '';
+    ui.rightFoot.hidden = true;
+    notesSignature = '';
+  }
+  if (P.side === 'notes') drawNotes();
   else if (P.side === 'partner') drawPartner();
   else drawPlay();
 }
@@ -528,6 +583,7 @@ function drawSide() {
 
 const KIND_TITLE = { people: 'People', places: 'Places', lore: 'Things worth remembering', threads: 'Threads' };
 let notesView = 'cards', notesTimeline = null;
+let notesSignature = '';
 
 /* Both views belong to the same notebook. The timeline links back to these
  * cards and to the existing reading action, never to another set of notes. */
@@ -550,12 +606,23 @@ function drawNotes() {
   if (!n) return;
   const novelId = P.novelId;
   const l = archivist.lightOf(novelId);
+  const m = n.memory || {};
+  const readings = notesView === 'cards' ? archivist.readingsList(novelId) : [];
+  const aside = archivist.asideNow(n);
+  const whereabouts = (n.notes?.people || []).filter(c => c.now).map(c => nowLabelOf(n, c, 'Now'));
+  const signature = JSON.stringify([novelId, notesView, n.order, n.notes, whereabouts, m.lit, m.undo && [m.undo.at, m.undo.label, m.undo.cards?.length, m.undo.notes, m.undo.kept, m.undo.changed], aside, m.audit, m.auditAsked, l, archivist.rereading(novelId), archivist.stalled(novelId), readings, P.readingsAll]);
+  if (signature === notesSignature && ui.rightBody.querySelector('.notesec')) return;
+  notesSignature = signature;
+  const children = [];
   const totalCards = NOTE_KINDS.reduce((a, k) => a + ((n.notes && n.notes[k]) || []).length, 0);
-  ui.rightBody.append(h('div.pane-intro', h('p.pane-kicker', 'Beside the story'), h('div.pane-title-row', h('h2', 'Your notebook'), h('span.pane-count', plural(totalCards, 'card')))));
-  ui.rightBody.append(notesViews());
+  let intro = ui.rightBody.querySelector('.pane-intro');
+  if (!intro) intro = h('div.pane-intro', h('p.pane-kicker', 'Beside the story'), h('div.pane-title-row', h('h2', 'Your notebook'), h('span.pane-count')));
+  const count = plural(totalCards, 'card');
+  if (intro.querySelector('.pane-count').textContent !== count) intro.querySelector('.pane-count').textContent = count;
+  children.push(intro, ui.rightBody.querySelector('.notes-views') || notesViews());
   if (notesView === 'timeline') {
     notesTimeline = makeTimeline({ novelId, chapterId: P.chapterId,
-      current: () => P.novelId === novelId && P.side === 'notes' && notesView === 'timeline' && location.hash.split('/')[2] === novelId,
+      current: () => sideVisible() && P.novelId === novelId && P.side === 'notes' && notesView === 'timeline' && location.hash.split('/')[2] === novelId,
       openCard: (kind, id) => {
         const now = store.peek('novel', novelId);
         if (now?.notes?.[kind]?.some((card) => card.id === id)) editCard(kind, id);
@@ -571,7 +638,7 @@ function drawNotes() {
         button?.click();
       },
     });
-    ui.rightBody.append(notesTimeline.el);
+    keepChildren(ui.rightBody, [...children, notesTimeline.el]);
     notesTimeline.update();
     return;
   }
@@ -579,7 +646,6 @@ function drawNotes() {
     h('div.note-status-heading', h('span.note-status-light', { 'aria-hidden': 'true' }), h('h3', l.state === 'off' ? 'No helper chosen' : l.state === 'reading' ? 'Reading your story' : l.state === 'trouble' ? 'The helper needs a hand' : l.state === 'waiting' ? 'Waiting to read' : 'Keeping the story close')),
     h('p.note-status-copy', l.state === 'off' ? 'Choose one in Settings → Connections to keep your notes up to date. Your own cards are always yours to edit.' : l.words));
   const row = h('div.row');
-  const m = n.memory || {};
   const u = m.undo;
   const again = archivist.rereading(novelId);
   /* waiting out a failure, or stopped: tried again now, by his hand */
@@ -605,11 +671,10 @@ function drawNotes() {
     drawSide();
   } }, again ? 'Reading the whole book again…' : 'Read the whole book again'));
   card.append(row);
-  ui.rightBody.append(card);
+  children.push(card);
   /* the last check, for him to read: whether everything holds and he can carry on, and why for each change */
-  ui.rightBody.append(checkReport(n, { asked, off, cards }));
+  children.push(checkReport(n, { asked, off, cards }));
   /* what its model would not read, set aside — each with Read it again, labelled where it stands now */
-  const aside = archivist.asideNow(n);
   if (aside.length) {
     const box = h('div.lightcard.aside', h('b', aside.length === 1 ? 'Not in the notes: one part its model would not read' : `Not in the notes: ${aside.length} parts its model would not read`));
     const rows = h('div');
@@ -627,7 +692,7 @@ function drawNotes() {
     drawRows(false);
     box.append(rows);
     if (aside.length > 1) box.append(h('div.btnrow', h('button.btn.quiet.small', { title: 'Every part here read afresh by the helper — set aside again only where its model still will not read it. What was taken out is let go.', onclick: () => { const k = archivist.readAllAside(novelId); if (k) toast(`The helper reads ${k === 1 ? 'it' : `all ${k}`} again in a moment.`); drawSide(); } }, 'Read them all again')));
-    ui.rightBody.append(box);
+    children.push(box);
   }
   /* what the light on a card means — every card is sent, lit or not */
   const lit = m.lit || (u && u.changed && u.changed.length ? { at: u.at, label: u.label, changed: u.changed } : null);
@@ -642,15 +707,26 @@ function drawNotes() {
     const cards = (n.notes && n.notes[kind]) || [];
     const key = 'notes.' + kind;
     const open = kept('cozynovel.fold.' + key) !== 'closed';
-    const sec = h('section.notesec' + (open ? '.open' : ''));
-    const head = h('button.sechead', { 'aria-expanded': String(open), onclick: () => { const now = sec.classList.toggle('open'); head.setAttribute('aria-expanded', String(now)); keep('cozynovel.fold.' + key, now ? 'open' : 'closed'); } },
-      h('span.chev', icon('chev', 14)), h('h3', KIND_TITLE[kind]), h('span.count', String(cards.length)));
-    const box = h('div.cards');
+    let sec = ui.rightBody.querySelector(`.notesec[data-kind="${kind}"]`);
+    if (!sec) {
+      sec = h('section.notesec' + (open ? '.open' : ''), { 'data-kind': kind });
+      const head = h('button.sechead', { 'aria-expanded': String(open), onclick: () => { const now = sec.classList.toggle('open'); head.setAttribute('aria-expanded', String(now)); keep('cozynovel.fold.' + key, now ? 'open' : 'closed'); } },
+        h('span.chev', icon('chev', 14)), h('h3', KIND_TITLE[kind]), h('span.count'));
+      sec.append(head, h('div.cards'));
+    }
+    const count = sec.querySelector('.count');
+    if (count.textContent !== String(cards.length)) count.textContent = String(cards.length);
+    const box = sec.querySelector('.cards'), nextCards = [];
+    const previous = new Map([...box.querySelectorAll('.notecard')].map(el => [el.dataset.id, el]));
     const sorted = kind === 'threads' ? [...cards].sort((a, b) => (a.open === false) - (b.open === false)) : cards;
     for (const c of sorted) {
       const state = how.get(kind + ':' + nameKey(c.name));
       const mine = Boolean(c.updated && c.updated.by === 'you');
-      box.append(h('div.card.notecard' + (state ? '.fresh' : '') + (kind === 'threads' && c.open === false ? '.closed' : ''), {
+      const signature = JSON.stringify([c, state, whyOf.get(kind + ':' + nameKey(c.name)), kind === 'people' && c.now ? nowLabelOf(n, c, 'Now') : '']);
+      const before = previous.get(c.id);
+      if (before?._noteSignature === signature) { nextCards.push(before); continue; }
+      const card = h('div.card.notecard' + (state ? '.fresh' : '') + (kind === 'threads' && c.open === false ? '.closed' : ''), {
+        'data-id': c.id,
         role: 'button', tabindex: 0, 'aria-label': `Edit ${c.name}`, title: `Open ${c.name} to read or edit the card`,
         onclick: () => editCard(kind, c.id),
         onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editCard(kind, c.id); } },
@@ -663,14 +739,17 @@ function drawNotes() {
         c.about ? h('div.ab', c.about) : null,
         c.since && String(c.since).trim() ? h('div.nw.since', { title: 'What the book has told of them since your words — kept beside them, never over them.' }, h('b', 'Since then'), c.since) : null,
         kind === 'people' && c.ties ? h('div.nw.ties', h('b', 'With others'), c.ties) : null,
-        kind === 'people' && c.now ? h('div.nw', h('b', nowLabelOf(n, c, 'Now')), c.now) : null));
+        kind === 'people' && c.now ? h('div.nw', h('b', nowLabelOf(n, c, 'Now')), c.now) : null);
+      card._noteSignature = signature;
+      nextCards.push(card);
     }
-    if (!cards.length) box.append(h('p.notes-empty', kind === 'people' ? 'The people of your story will gather here.' : kind === 'places' ? 'A place for every corner of your world.' : kind === 'threads' ? 'Keep the questions your story has yet to answer.' : 'The small details that make your world its own.'));
-    box.append(h('button.btn.quiet.small.note-add', { title: `Add your own card to ${KIND_TITLE[kind].toLowerCase()}.`, onclick: () => editCard(kind, null) }, icon('plus', 14), 'Add'));
-    sec.append(head, box);
-    ui.rightBody.append(sec);
+    if (!cards.length) nextCards.push(box.querySelector('.notes-empty') || h('p.notes-empty', kind === 'people' ? 'The people of your story will gather here.' : kind === 'places' ? 'A place for every corner of your world.' : kind === 'threads' ? 'Keep the questions your story has yet to answer.' : 'The small details that make your world its own.'));
+    nextCards.push(box.querySelector('.note-add') || h('button.btn.quiet.small.note-add', { title: `Add your own card to ${KIND_TITLE[kind].toLowerCase()}.`, onclick: () => editCard(kind, null) }, icon('plus', 14), 'Add'));
+    keepChildren(box, nextCards);
+    children.push(sec);
   }
-  ui.rightBody.append(key, readingsSection());
+  children.push(key, readingsSection(readings));
+  keepChildren(ui.rightBody, children);
 }
 
 /* The notes' last check against the book, in plain words (his ask: "whether
@@ -749,10 +828,9 @@ function checkReport(n, { asked, off, cards }) {
  * version of every passage it read, newest first: what it read and what it
  * changed, with Put back (only what it changed, wherever the card still
  * reads so) and Read again (put back, and that passage read afresh). */
-function readingsSection() {
+function readingsSection(rows = archivist.readingsList(P.novelId)) {
   const key = 'cozynovel.fold.notes.readings';
   const open = kept(key) === 'open';
-  const rows = archivist.readingsList(P.novelId);
   const sec = h('section.notesec' + (open ? '.open' : ''));
   const head = h('button.sechead', { 'aria-expanded': String(open), onclick: () => { const now = sec.classList.toggle('open'); head.setAttribute('aria-expanded', String(now)); keep(key, now ? 'open' : 'closed'); } },
     h('span.chev', icon('chev', 14)), h('h3', 'Each version’s notes'), h('span.count', String(rows.length)));
@@ -940,25 +1018,41 @@ async function drawPartner() {
   const gen = sideGen;
   const t = await talk.ensureTalk(novelId).catch(() => null);
   await store.open('draft', novelId).catch(() => null);
-  if (gen !== sideGen || P.side !== 'partner' || P.novelId !== novelId) return;
+  if (gen !== sideGen || P.side !== 'partner' || P.novelId !== novelId || !sideVisible()) return;
   const draftKey = `talk:${novelId}:${t?.convId || 'current'}`;
   if (t) talk.repairStaleTurns('talk', novelId);
   /* the book's scenes at hand, so a rename everywhere reaches them */
   talk.loadPlays(novelId).catch(() => {});
   if (!P.offs.talkSub) { P.offs.push(store.subscribe('talk', novelId, () => { if (P.side === 'partner' && !drawnAlready('talk', novelId)) drawPartnerSoon(); })); P.offs.talkSub = true; }
-  ui.rightBody.textContent = '';
-  ui.rightBody.append(conversationRow(novelId, t));
-  const box = h('div.talk');
+  const priorTop = ui.rightBody.querySelector('.conversation-heading');
+  const headingSignature = JSON.stringify([talk.partnerConversations(novelId).open.name, fullKind(), talk.talkBusy('talk', novelId), !t?.turns?.length && !t?.named]);
+  const heading = priorTop?._headingSignature === headingSignature ? priorTop : conversationRow(novelId, t);
+  heading._headingSignature = headingSignature;
+  let box = ui.rightBody.querySelector('.talk');
+  if (box?.dataset.conversation !== draftKey) box = h('div.talk', { 'data-conversation': draftKey });
   const turns = (t && t.turns) || [];
-  if (!turns.length) box.append(h('div.pane-welcome', h('span.pane-welcome-mark', { 'aria-hidden': 'true' }, icon('chat', 28)), h('p.pane-kicker', 'A little room to think'), h('h2', 'Talk the story over'),
+  const extras = [];
+  if (!turns.length) extras.push(box.querySelector('.pane-welcome') || h('div.pane-welcome', h('span.pane-welcome-mark', { 'aria-hidden': 'true' }, icon('chat', 28)), h('p.pane-kicker', 'A little room to think'), h('h2', 'Talk the story over'),
     h('p', 'A scene that feels stuck. A character you want to understand. The next turn in the story. Your partner knows the book and its notes.'),
     h('div.pane-welcome-tip', icon('more', 18), h('span', h('b', 'Need a starting point?'), ' Quick asks, beside Send, has a few.')),
     h('details.pane-guide', h('summary', 'What your partner can help with'), h('p', 'Ask about any passage by its chapter and passage number, a name across the book, a chapter’s name or summary, what the book is about, a card in the notes, or a module’s words. When you ask for a change, it shows here with its Undo. The helper keeps and checks the notes; its reasons are in Notes.'))));
-  for (const turn of turns) box.append(drawTurn('talk', novelId, turn));
-  ui.rightBody.append(box);
-  const ta = h('textarea', { rows: 1, placeholder: 'Ask your partner…', 'aria-label': 'Ask your partner' });
+  updateTurns(box, 'talk', novelId, turns, { extras });
+  keepChildren(ui.rightBody, [heading, box]);
   const working = talk.talkBusy('talk', novelId);
-  const send = h('button.btn.primary.small', { onclick: async () => {
+  if (ui.rightFoot.dataset.for === draftKey && ui.rightFoot.querySelector('textarea')) {
+    refreshComposer(draftKey, novelId);
+    const send = ui.rightFoot.querySelector('[data-composer-send]');
+    const label = working ? 'Stop' : 'Send';
+    if (send.textContent !== label) send.textContent = label;
+    ui.rightFoot.querySelector('[aria-label="Quick asks"]').disabled = working;
+    const start = ui.rightFoot.querySelector('[data-start-over]');
+    start.disabled = working; start.hidden = !turns.length;
+    rememberDrawn('talk', novelId, t);
+    placeSide();
+    return;
+  }
+  const ta = h('textarea', { rows: 1, placeholder: 'Ask your partner…', 'aria-label': 'Ask your partner' });
+  const send = h('button.btn.primary.small', { 'data-composer-send': '', onclick: async () => {
     if (talk.talkBusy('talk', novelId)) { talk.stopTalk('talk', novelId); return; }
     const text = ta.value.trim();
     if (!text) return;
@@ -975,10 +1069,10 @@ async function drawPartner() {
   ui.rightFoot.textContent = '';
   ui.rightFoot.hidden = false;
   const quick = h('button.btn.quiet.small', { 'aria-label': 'Quick asks', title: 'Quick asks — ready-made requests for your partner', disabled: working, onclick: (e) => quickAsks(e.currentTarget, ta, send) }, icon('more', 16), 'Quick asks');
-  ui.rightFoot.append(ta, h('div.crow', turns.length ? h('button.btn.quiet.small', { title: 'This conversation’s talk goes and it begins again — the changes it made stay in the book. With Undo.', disabled: working, onclick: clearTalk }, 'Start over') : null, h('span.grow'), quick, send));
+  ui.rightFoot.append(ta, h('div.crow', h('button.btn.quiet.small', { 'data-start-over': '', hidden: !turns.length, title: 'This conversation’s talk goes and it begins again — the changes it made stay in the book. With Undo.', disabled: working, onclick: clearTalk }, 'Start over'), h('span.grow'), quick, send));
   autoGrow(ta, 0.3);
   restoreTyped(draftKey, novelId);
-  P.drawn = 'talk:' + novelId + turnsSig(t);
+  rememberDrawn('talk', novelId, t);
   placeSide();
 }
 /* Ready-made requests for the partner (Cozy Tavern's housekeeper's quick asks,
@@ -1016,7 +1110,7 @@ function quickAsks(anchor, ta, send) {
   } }))]);
 }
 
-function drawPartnerSoon() { if (!partnerFrame) partnerFrame = requestAnimationFrame(() => { partnerFrame = 0; if (P.side === 'partner') drawPartner(); }); }
+function drawPartnerSoon() { if (!partnerFrame) partnerFrame = requestAnimationFrame(() => { partnerFrame = 0; if (P.side === 'partner') drawSide(); }); }
 
 function giveBack(key, words) {
   if (!String(words || '').trim()) return;
@@ -1094,8 +1188,9 @@ function partnerFull() {
 
 /* which replies' thinking he unfolded, so a redraw keeps them open */
 const thinkOpen = new Set();
-function turnThinkBox(turnId, thinking, live) {
-  return thinkBox(thinking, { live, open: thinkOpen.has(turnId), onToggle: (now) => { if (now) thinkOpen.add(turnId); else thinkOpen.delete(turnId); } });
+const turnKey = (kind, id, turnId) => `${kind}:${id}:${turnId}`;
+function turnThinkBox(key, thinking, live) {
+  return thinkBox(thinking, { live, open: thinkOpen.has(key), onToggle: (now) => { if (now) thinkOpen.add(key); else thinkOpen.delete(key); } });
 }
 /* what a reply shows: the partner's words without its blocks — while a
  * block is coming, or it is reading a chapter, a line says so */
@@ -1113,13 +1208,14 @@ function shownWords(kind, turn, raw, live) {
 }
 function drawTurn(kind, id, turn) {
   const v = picked(turn) || { text: '' };
-  const live = (kind === 'talk' ? partnerLive : playLive).get(turn.id);
+  const key = turnKey(kind, id, turn.id);
+  const live = (kind === 'talk' ? partnerLive : playLive).get(key);
   const text = live ? live.text : v.text;
   const thinking = live ? live.thinking : v.thinking;
   const el = h('div.turn.' + (turn.by === 'you' ? 'you' : 'ai') + (kind === 'play' && turn.by !== 'you' ? '.prose-turn' : '') + (live || v.streaming ? '.streaming' : ''), { 'data-id': turn.id });
   el.append(h('div.turn-speaker', turn.by === 'you' ? 'You' : kind === 'play' ? 'The narrator' : 'Your partner'));
   /* the thinking streams open while it comes, then folds once the words begin */
-  if (turn.by !== 'you' && thinking) el.append(turnThinkBox(turn.id, thinking, Boolean(live && !live.text)));
+  if (turn.by !== 'you' && thinking) el.append(turnThinkBox(key, thinking, Boolean(live && !live.text)));
   /* the narrator's telling is prose — a thought or a sound in italics is drawn in italics */
   if (kind === 'play' && turn.by !== 'you') { const w = h('div.words.tprose'); drawProse(w, shownWords(kind, turn, text, live)); el.append(w); }
   else if (kind === 'talk' && turn.by !== 'you' && partsOf(text).some((x) => x.kind === 'direction')) {
@@ -1203,6 +1299,37 @@ function drawTurn(kind, id, turn) {
   ]) }, icon('more', 16)));
   el.append(row);
   return el;
+}
+
+/* A checkpoint or one changed answer is not a new conversation. Inspect the
+ * selected answer only; its saved request and all older takes are not painted.
+ * Keeping earlier turns connected also keeps text selection and open thinking. */
+function turnSignature(turn, newest, kind, id) {
+  const v = picked(turn) || {};
+  const { ask, usage, ms, conn, model, beat, at, tab, text, thinking, ...visible } = v;
+  const changesContext = kind === 'talk' && v.changes?.length ? v.changes.filter(c => !c.superseded).map(c => [
+    labelNow(id, c), c.status === 'waiting' && !c.copied ? talk.waitingWhy(id, c) : '',
+    c.status === 'waiting' ? wordsNow(id, c) : '',
+  ]) : null;
+  /* Compare long strings directly. JSON-encoding the whole conversation on
+   * every checkpoint allocates another copy of every old paragraph. */
+  return [turn.id, turn.by, turn.pick, (turn.versions || []).map(v => v.id).join('\0'), JSON.stringify(visible), JSON.stringify(changesContext),
+    writingHere(v) ? null : text, writingHere(v) ? null : thinking,
+    newest, turn.by === 'you' && kind === 'talk' && talk.talkBusy(kind, id),
+    Boolean((kind === 'talk' ? partnerLive : playLive).get(turnKey(kind, id, turn.id)))];
+}
+const sameSignature = (a, b) => a?.length === b?.length && a.every((part, i) => part === b[i]);
+function updateTurns(box, kind, id, turns, { turned = null, extras = [] } = {}) {
+  const old = new Map([...box.querySelectorAll(':scope > .turn')].map(el => [el.dataset.id, el]));
+  const children = [];
+  for (const [index, turn] of turns.entries()) {
+    const signature = turnSignature(turn, index === turns.length - 1, kind, id);
+    let el = old.get(turn.id);
+    if (!el || !sameSignature(el._turnSignature, signature)) { el = drawTurn(kind, id, turn); el._turnSignature = signature; }
+    children.push(el);
+    if (turn.id === turned) children.push(box.querySelector('.turned-marker') || h('p.hint.turned-marker', { style: { textAlign: 'center', margin: '0' } }, '— written into the book up to here —'));
+  }
+  keepChildren(box, [...children, ...extras]);
 }
 
 /* The partner's changes under its answer: each with what it changed and
@@ -1345,20 +1472,23 @@ function removeTurn(kind, id, turn) {
 
 /* the view beside the page now, and whether a reply for (kind, id) is in it */
 function sideView() { return `${P.side}/${P.side === 'play' ? P.playId || '' : ''}/${P.novelId}`; }
-function showing(kind, id) { return kind === 'talk' ? P.side === 'partner' && id === P.novelId : P.side === 'play' && P.playId === id; }
+function showing(kind, id) { return sideVisible() && (kind === 'talk' ? P.side === 'partner' && id === P.novelId : P.side === 'play' && P.playId === id); }
 
 /* what the pane shows of a conversation, as one string: a reply this window
  * is writing shows its words from the stream, so its own checkpoints of them
  * leave it the same — it is not drawn again for them */
 const writingHere = (v) => v.streaming && v.tab === store.CLIENT;
 function turnsSig(rec) {
-  if (!rec) return '';
-  /* the conversations put aside show only by name in the list (built when it opens) */
-  return JSON.stringify({ ...rec, convs: (rec.convs || []).map((c) => [c.id, c.name, (c.turns || []).length]), turns: (rec.turns || []).map((t) => ((t.versions || []).some(writingHere)
-    ? { ...t, versions: t.versions.map((v) => (writingHere(v) ? { ...v, text: 0, thinking: 0, beat: 0 } : v)) }
-    : t)) });
+  if (!rec) return [];
+  const kind = rec.who !== undefined ? 'play' : 'talk';
+  const turns = rec.turns || [];
+  /* The saved requests and unselected takes can be much larger than the talk
+   * on screen. Neither is redrawn when a streaming checkpoint arrives. */
+  return [rec.convId, rec.name, rec.named, rec.who, rec.from, rec.chapterId, rec.after, rec.turned,
+    ...turns.flatMap((t, i) => turnSignature(t, i === turns.length - 1, kind, rec.id))];
 }
-function drawnAlready(kind, id) { return P.drawn === kind + ':' + id + turnsSig(store.peek(kind, id)); }
+function rememberDrawn(kind, id, record) { P.drawn = { key: kind + ':' + id, signature: turnsSig(record) }; }
+function drawnAlready(kind, id) { return P.drawn?.key === kind + ':' + id && sameSignature(P.drawn.signature, turnsSig(store.peek(kind, id))); }
 
 /* where the pane stands with the newest words: the end of the reply being
  * written at the bottom of the pane (the very bottom, for the last one) */
@@ -1382,36 +1512,37 @@ function placeSide() {
 /* The words arrive many times a second; the pane paints them at most once a
  * frame (and less often once a paint costs more — live.js), only the line
  * they land on drawn again, and goes down with them only while he follows. */
-const sideLive = new Map();   /* turnId -> the newest event not yet painted */
+const sideLive = new Map();   /* kind/record/turn -> newest event not yet painted */
 const sidePaint = paced(paintSide);
 function onTalkLive(ev) {
   const map = ev.kind === 'talk' ? partnerLive : playLive;
+  const key = turnKey(ev.kind, ev.id, ev.turnId);
   if (ev.done) {
-    map.delete(ev.turnId);
-    sideLive.delete(ev.turnId);
-    if ((ev.kind === 'talk' && P.side === 'partner') || (ev.kind === 'play' && P.side === 'play')) drawSide();
-    if (P.liveTurn === ev.turnId) P.liveTurn = null;
+    map.delete(key);
+    sideLive.delete(key);
+    if (showing(ev.kind, ev.id)) { drawSide(); if (P.liveTurn === ev.turnId) P.liveTurn = null; }
     return;
   }
-  map.set(ev.turnId, { text: ev.text, thinking: ev.thinking, note: ev.note || '' });
-  sideLive.set(ev.turnId, ev);
+  map.set(key, { text: ev.text, thinking: ev.thinking, note: ev.note || '' });
+  sideLive.set(key, ev);
   sidePaint.ask();
 }
 function paintSide() {
   let redraw = false;
   let painted = false;
-  for (const [turnId, ev] of sideLive) {
+  for (const [key, ev] of sideLive) {
     if (!showing(ev.kind, ev.id)) continue;
+    const turnId = ev.turnId;
     const turnEl = ui.rightBody.querySelector(`.turn[data-id="${turnId}"]`);
     /* the reply's own words — never the thinking box's, which sits inside the box */
     const el = turnEl && turnEl.querySelector(':scope > .words');
     if (!el) { redraw = true; continue; }
     P.liveTurn = turnId;
-    const entry = (ev.kind === 'talk' ? partnerLive : playLive).get(turnId) || { text: ev.text, thinking: ev.thinking, note: ev.note || '' };
+    const entry = (ev.kind === 'talk' ? partnerLive : playLive).get(key) || { text: ev.text, thinking: ev.thinking, note: ev.note || '' };
     const box = turnEl.querySelector(':scope > .thinkbox');
     if (ev.thinking) {
       if (box) updateThinkBox(box, ev.thinking, { live: !ev.text });
-      else turnEl.insertBefore(turnThinkBox(turnId, ev.thinking, !ev.text), el);
+      else turnEl.insertBefore(turnThinkBox(key, ev.thinking, !ev.text), el);
     } else if (!ev.text && box) {
       /* a new round (it is reading a chapter): the last round's thinking goes */
       box.remove();
@@ -1434,11 +1565,13 @@ async function drawPlay() {
   const n = store.peek('novel', P.novelId);
   if (!n) return;
   const gen = sideGen;
+  const playId = P.playId;
+  const current = () => gen === sideGen && sideVisible() && P.novelId === n.id && P.side === 'play' && P.playId === playId;
   await store.open('draft', n.id).catch(() => null);
-  if (gen !== sideGen) return;
-  if (P.playId) {
-    const p = store.peek('play', P.playId) ?? await store.open('play', P.playId).catch(() => null);
-    if (gen !== sideGen) return;
+  if (!current()) return;
+  if (playId) {
+    const p = store.peek('play', playId) ?? await store.open('play', playId).catch(() => null);
+    if (!current()) return;
     if (!p) { P.playId = null; return drawPlay(); }
     /* its prose taken out of the book since: "written into the book up to here" lets go */
     if (talk.mendScene(p.id)) return drawOnePlay(store.peek('play', p.id));
@@ -1448,8 +1581,11 @@ async function drawPlay() {
     h('p', 'Be one of its people. You write what they say and do; the narrator brings the world around them to life.'),
     h('details.pane-guide', h('summary', 'From a scene to the page'), h('p', 'When a scene goes somewhere good, Turn it into prose writes what happened into the chapter. Your scenes stay here to return to.'))));
   const plays = [];
-  for (const id of n.plays || []) { const p = store.peek('play', id) ?? await store.open('play', id).catch(() => null); if (p) plays.push(p); }
-  if (gen !== sideGen || P.side !== 'play' || P.playId) return;
+  for (const id of n.plays || []) {
+    const p = store.peek('play', id) ?? await store.open('play', id).catch(() => null);
+    if (!current()) return;
+    if (p) plays.push(p);
+  }
   plays.sort((a, b) => (b.updated || 0) - (a.updated || 0));
   if (plays.length) {
     ui.rightBody.append(h('h3.pane-section-title', 'Return to a scene'));
@@ -1492,12 +1628,14 @@ function drawOnePlay(p) {
   if (!P.offs['play:' + p.id]) { P.offs.push(store.subscribe('play', p.id, () => { if (P.side === 'play' && P.playId === p.id && !drawnAlready('play', p.id)) drawSideSoon(); })); P.offs['play:' + p.id] = true; }
   const c = store.peek('chapter', p.chapterId);
   const full = fullKind() === 'scene';
-  const head = h('div.scenehead',
+  const previousHead = ui.rightBody.querySelector('.scenehead');
+  const headingSignature = JSON.stringify([p.id, p.who, c && chapterLabel(n, c, { withName: false }), full]);
+  const head = previousHead?._headingSignature === headingSignature ? previousHead : h('div.scenehead',
     h('button.icon', { 'aria-label': 'All scenes', onclick: () => { P.playId = null; drawSide(); } }, icon('back', 20)),
     h('div', { style: { flex: '1', minWidth: '0' } }, h('b', { style: { font: '600 18px/1.2 var(--display)' } }, `You play ${p.who}`), h('div', { style: { fontSize: '12.5px', color: 'var(--chrome-soft)' } }, c ? `From ${chapterLabel(n, c, { withName: false })}` : '')),
     h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: () => sceneFull() }, icon(full ? 'shrink' : 'expand', 18)),
     h('button.icon', { 'aria-label': 'More for this scene', onclick: (e) => menu(e.currentTarget, [
-      { label: 'Turn it all into prose (from the start)', hint: 'The whole scene written into the chapter, not just what is new since last time.', run: () => toProse(p, true) },
+      { label: 'Turn it all into prose (from the start)', hint: 'The whole scene written into the chapter, not just what is new since last time.', run: () => toProse(store.peek('play', p.id) || p, true) },
       { label: 'Remove this scene', hint: 'To Recently deleted; prose already written from it stays.', danger: true, run: async () => {
         if (!(await confirmIt('Remove this scene?', 'It goes to Recently deleted (Settings → Backups) for thirty days. Anything already turned into prose stays in the book.', 'Remove it', { danger: true }))) return;
         talk.stopTalk('play', p.id);
@@ -1507,14 +1645,11 @@ function drawOnePlay(p) {
         if (P.novelId === p.novelId && P.playId === p.id) { P.playId = null; drawSide(); }
       } },
     ]) }, icon('more', 18)));
-  ui.rightBody.append(head);
-  const box = h('div.talk');
+  head._headingSignature = headingSignature;
+  let box = ui.rightBody.querySelector('.talk');
+  if (box?.dataset.play !== p.id) box = h('div.talk', { 'data-play': p.id });
   const turns = p.turns || [];
-  const turnedAt = p.turned ? turns.findIndex((t) => t.id === p.turned) : -1;
-  turns.forEach((t, i) => {
-    box.append(drawTurn('play', p.id, t));
-    if (i === turnedAt) box.append(h('p.hint', { style: { textAlign: 'center', margin: '0' } }, '— written into the book up to here —'));
-  });
+  const extras = [];
   const working = talk.talkBusy('play', p.id);
   /* the ways it could go, offered after the narrator's last part: a tap plays one */
   const last = turns[turns.length - 1];
@@ -1522,7 +1657,7 @@ function drawOnePlay(p) {
   const offered = lv && !lv.streaming && !working ? choicesIn(lv.text) : [];
   if (offered.length) {
     /* a way chosen is his move — with his line to the narrator, when its box is open */
-    box.append(h('div.choices', { role: 'group', 'aria-label': 'Three ways it could go' }, h('p.choice-heading', 'Where will you take it?'),
+    extras.push(h('div.choices', { role: 'group', 'aria-label': 'Three ways it could go' }, h('p.choice-heading', 'Where will you take it?'),
       ...offered.map((c) => h('button.choice', { onclick: () => {
         const tb = ui.rightFoot.querySelector('textarea.tellbox');
         const tell = tb && !tb.hidden ? tb.value.trim() : '';
@@ -1532,9 +1667,28 @@ function drawOnePlay(p) {
   } else if ((store.peek('house', 'house') || {}).sceneChoices && lv && !lv.streaming && !working && sceneWords(String(lv.text || '')).trim()) {
     /* Three choices on, and none came with the newest part (told before they were on, or left out): said, with the way to ask
      * again — never an empty row (Cozy Tavern m752-018/019) */
-    box.append(h('p.hint.nochoices', 'No choices came with this part — Another answer, on it, tells it again with them.'));
+    extras.push(box.querySelector('.nochoices') || h('p.hint.nochoices', 'No choices came with this part — Another answer, on it, tells it again with them.'));
   }
-  ui.rightBody.append(box);
+  updateTurns(box, 'play', p.id, turns, { turned: p.turned, extras });
+  keepChildren(ui.rightBody, [head, box]);
+  const converted = p.turned ? turns.findIndex(t => t.id === p.turned) : -1;
+  const fresh = turns.some((t, i) => i > converted && t.by !== 'you' && sceneWords(String(picked(t)?.text || '')).trim());
+  if (ui.rightFoot.dataset.for === 'play:' + p.id && ui.rightFoot.querySelector('textarea')) {
+    refreshComposer('play:' + p.id, p.novelId);
+    const ta = ui.rightFoot.querySelector('textarea');
+    ta.placeholder = `What does ${p.who} say or do?`;
+    ta.setAttribute('aria-label', `What ${p.who} says or does`);
+    ui.rightFoot.querySelector('textarea.tellbox').placeholder = `Tell the narrator — not ${p.who}’s words (bring someone in, the storm gets worse…)`;
+    const send = ui.rightFoot.querySelector('[data-composer-send]');
+    const label = working ? 'Stop' : 'Send';
+    if (send.textContent !== label) send.textContent = label;
+    ui.rightFoot.querySelector('[data-to-prose]').disabled = working || !fresh || (writer.busy(P.novelId) && !writer.autoBusy(P.novelId));
+    ui.rightFoot.querySelector('[data-scene-choices]').setAttribute('aria-pressed', String(Boolean((store.peek('house', 'house') || {}).sceneChoices)));
+    rememberDrawn('play', p.id, p);
+    placeSide();
+    return;
+  }
+  ui.rightFoot.textContent = '';
   const ta = h('textarea', { rows: 1, placeholder: `What does ${p.who} say or do?`, 'aria-label': `What ${p.who} says or does` });
   /* his line to the narrator: how the telling should go, never his character's words */
   const tellBox = h('textarea.tellbox', { rows: 1, placeholder: `Tell the narrator — not ${p.who}’s words (bring someone in, the storm gets worse…)`, 'aria-label': 'Tell the narrator' });
@@ -1551,7 +1705,7 @@ function drawOnePlay(p) {
     if (now) tellBox.focus();
   } }, 'Tell the narrator');
   const house = store.peek('house', 'house') || {};
-  const choicesBtn = h('button.chip.toggle', { 'aria-pressed': String(Boolean(house.sceneChoices)), title: 'After each part, the narrator offers three things you could do next', onclick: () => {
+  const choicesBtn = h('button.chip.toggle', { 'data-scene-choices': '', 'aria-pressed': String(Boolean(house.sceneChoices)), title: 'After each part, the narrator offers three things you could do next', onclick: () => {
     const on = !(store.peek('house', 'house') || {}).sceneChoices;
     store.change('house', 'house', (x) => { if (on) x.sceneChoices = true; else delete x.sceneChoices; }, { now: true });
     choicesBtn.setAttribute('aria-pressed', String(on));
@@ -1559,17 +1713,16 @@ function drawOnePlay(p) {
     /* the line under the newest part follows the switch */
     drawSide();
   } }, 'Three choices');
-  const send = h('button.btn.primary.small', { onclick: async () => {
+  const send = h('button.btn.primary.small', { 'data-composer-send': '', onclick: async () => {
     if (talk.talkBusy('play', p.id)) { talk.stopTalk('play', p.id); return; }
     const text = ta.value.trim();
     const tell = tellBox.hidden ? '' : tellBox.value.trim();
     const sent = beginComposerSend('play:' + p.id, { tell: Boolean(tell) });
     await playMove(p, text, tell, sent);
   } }, working ? 'Stop' : 'Send');
-  const fresh = talk.transcriptOf(p).count;
   ui.rightFoot.hidden = false;
   ui.rightFoot.append(ta, tellBox, h('div.crow.wrap',
-    h('button.btn.small', { disabled: working || !fresh || (writer.busy(P.novelId) && !writer.autoBusy(P.novelId)), onclick: () => toProse(p, false), title: 'Write what happened into the chapter as prose' }, 'Turn it into prose'),
+    h('button.btn.small', { 'data-to-prose': '', disabled: working || !fresh || (writer.busy(P.novelId) && !writer.autoBusy(P.novelId)), onclick: () => toProse(store.peek('play', p.id) || p, false), title: 'Write what happened into the chapter as prose' }, 'Turn it into prose'),
     tellBtn, choicesBtn,
     h('span.grow'), send));
   for (const box2 of [ta, tellBox]) {
@@ -1579,7 +1732,7 @@ function drawOnePlay(p) {
   autoGrow(ta, 0.3);
   autoGrow(tellBox, 0.2);
   restoreTyped('play:' + p.id);
-  P.drawn = 'play:' + p.id + turnsSig(p);
+  rememberDrawn('play', p.id, p);
   placeSide();
 }
 

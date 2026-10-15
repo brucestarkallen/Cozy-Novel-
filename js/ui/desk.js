@@ -87,7 +87,14 @@ export async function openChapter(novelId, chapterId) {
   S.offs = [];
   const changingBook = S.novelId !== novelId;
   /* what he typed for the book he is leaving is kept for that book, now */
-  if (changingBook) saveDraftSoon.now();
+  if (changingBook) {
+    saveDraftSoon.now();
+    /* Branches keep their passage IDs. These live words and queued paints
+     * belong only to the book being left, never to its independent copy. */
+    S.live.clear();
+    pending.clear();
+    livePaint.cancel();
+  }
   S.novelId = novelId;
   S.chapterId = chapterId;
   S.selected = null; S.editing = null; S.rewriting = null; S.sel = null; S.insertAfter = null; S.followId = null;
@@ -96,7 +103,7 @@ export async function openChapter(novelId, chapterId) {
     if (why === 'deleted') { hooks.chapterGone(); return; }
     /* the writer here keeping what it has streamed so far: the page shows
      * those words already, as they come — it is not drawn again for them */
-    if (S.drawn !== null && S.drawn === shownSig(chapter())) return;
+    if (S.drawn !== null && samePage(S.drawn, shownSig(chapter()))) return;
     drawSoon();
   }));
   S.offs.push(store.subscribe('novel', novelId, () => { drawHead(); drawComposer(); }));
@@ -206,8 +213,9 @@ export function drawHead() {
   const c = chapter();
   if (!n || !c) return;
   const num = n.order.indexOf(c.id) + 1;
-  ui.chapnum.textContent = `Chapter ${numberWords(num)}`;
-  if (document.activeElement !== ui.chapname) ui.chapname.textContent = c.name || '';
+  const label = `Chapter ${numberWords(num)}`;
+  if (ui.chapnum.textContent !== label) ui.chapnum.textContent = label;
+  if (document.activeElement !== ui.chapname && ui.chapname.textContent !== (c.name || '')) ui.chapname.textContent = c.name || '';
   hooks.drawBar && hooks.drawBar();
 }
 
@@ -226,17 +234,20 @@ function renameFromHeading() {
 let drawFrame = 0;
 function drawSoon() { if (!drawFrame) drawFrame = requestAnimationFrame(() => { drawFrame = 0; drawPage(); }); }
 
-/* what the page shows of a chapter, as one string: a version this window is
- * writing shows its words from the stream, so the writer's own checkpoints
- * of them (every few seconds, and its heartbeat) leave it the same */
+/* Keep only what is visible. Comparing whole records serialized every old
+ * version, request, and folded thinking on every save, even when the page
+ * had not changed. Strings here are compared directly, never copied. */
 const writingHere = (v) => v.streaming && v.tab === store.CLIENT;
+const sameParts = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+const sameKey = (a, b) => sameParts(a.body, b.body) && sameParts(a.controls, b.controls);
+function samePage(a, b) {
+  return a.name === b.name && a.keys.length === b.keys.length && a.keys.every((k, i) => sameKey(k, b.keys[i]));
+}
 function shownSig(c) {
-  if (!c) return '';
-  /* (and the grade the selected passage's line says: a grade that comes is drawn) */
-  const sel = S.selected ? (c.passages || []).find((p) => p.id === S.selected) : null;
-  return JSON.stringify([c.name || '', (c.passages || []).map((p) => ((p.versions || []).some(writingHere)
-    ? { ...p, versions: p.versions.map((v) => (writingHere(v) ? { ...v, text: 0, thinking: 0, beat: 0 } : v)) }
-    : p)), sel ? gradeSaid(sel, c) : '']);
+  if (!c) return { name: '', keys: [] };
+  const tint = ((store.peek('house', 'house') || {}).look || {}).tint !== 'off';
+  const nums = passageNumbers(c), working = busy();
+  return { name: c.name || '', keys: (c.passages || []).map((p) => drawnKey(p, { tint, nums, working, snapshot: true })) };
 }
 
 export function drawPage({ keepScroll = true } = {}) {
@@ -254,40 +265,36 @@ export function drawPage({ keepScroll = true } = {}) {
     note: rewriting ? rewriting.value : null };
   const list = c.passages || [];
   if (!S.selected || !list.some((p) => p.id === S.selected)) S.selected = defaultSelected(list);
-  /* Only the passages that changed are drawn again (Cozy Tavern draws only
-   * the message that changed): the rest stay on the page exactly as they
-   * are, so a passage finishing, or a tap choosing another, costs one or two
-   * passages however long the chapter — never the whole chapter. A passage
-   * stays only while it is the same record (a newer copy from the phone is
-   * drawn afresh) drawn the same way (drawnKey). */
+  /* Keep the actual passage and paragraph nodes through server saves and
+   * controls changing. Selection, browser anchoring and a fling then survive
+   * an unchanged page arriving in a new record object. */
   const nums = passageNumbers(c);
   const working = busy();
   const was = S.els;
   S.els = new Map();
-  const staying = new Set();
-  const keys = new Map();
-  for (const p of list) {
-    const key = drawnKey(p, { tint, nums, working });
-    keys.set(p.id, key);
-    const old = was.get(p.id);
-    const as = old && drawnAs.get(old);
-    if (as && as.p === p && as.key === key && old.parentNode === ui.passages) staying.add(old);
-  }
-  for (const node of [...ui.passages.childNodes]) if (!staying.has(node)) node.remove();
+  const wanted = new Set(list.map((p) => p.id));
+  for (const [id, el] of was) if (!wanted.has(id)) el.remove();
   let at = ui.passages.firstChild;
   for (const p of list) {
+    const key = drawnKey(p, { tint, nums, working });
     const old = was.get(p.id);
-    const el = old && staying.has(old) ? old : drawPassage(p, { tint });
-    drawnAs.set(el, { p, key: keys.get(p.id) });
+    const as = old && drawnAs.get(old);
+    let el = old;
+    if (!as || as.chapterId !== S.chapterId || old.parentNode !== ui.passages || as.key.body[1] !== p.by || as.key.body[7] !== (S.editing === p.id)) {
+      el = drawPassage(p, { tint });
+      if (old && old.parentNode === ui.passages) { if (at === old) at = old.nextSibling; old.replaceWith(el); }
+    } else if (!sameKey(as.key, key)) updatePassage(el, p, { tint }, as.key, key);
+    drawnAs.set(el, { chapterId: S.chapterId, key });
     S.els.set(p.id, el);
     if (el === at) at = at.nextSibling;
     else ui.passages.insertBefore(el, at);
   }
+  SC.numbered = [...S.els].filter(([pid]) => nums.has(pid)).map(([pid, el]) => ({ el, n: nums.get(pid) }));
   drawEnd();
   drawHead();
   if (kept.edit !== null) {
     const box = ui.passages.querySelector('.editbox');
-    if (box) { box.value = kept.edit; box.dispatchEvent(new Event('input')); if (kept.editFocus) { box.focus({ preventScroll: true }); try { box.setSelectionRange(kept.editSel[0], kept.editSel[1]); } catch (_) { /* fine */ } } }
+    if (box && box !== editing) { box.value = kept.edit; box.dispatchEvent(new Event('input')); if (kept.editFocus) { box.focus({ preventScroll: true }); try { box.setSelectionRange(kept.editSel[0], kept.editSel[1]); } catch (_) { /* fine */ } } }
   }
   if (kept.note !== null) { const inp = ui.passages.querySelector('.rewriterow input'); if (inp) inp.value = kept.note; }
   /* his place is kept — and the page is only moved when drawing it again
@@ -301,13 +308,46 @@ export function drawPage({ keepScroll = true } = {}) {
 /* everything a passage is drawn from: the record, its words still arriving,
  * and how it is shown (chosen, being edited, the rewrite box, its thinking
  * unfolded) — and for the chosen one its controls (busy, its number, when) */
-const drawnAs = new WeakMap();   /* element -> { p, key } */
-function drawnKey(p, { tint, nums, working }) {
+const drawnAs = new WeakMap();   /* element -> its visible fields */
+function drawnKey(p, { tint, nums, working, snapshot = false }) {
   const sel = S.selected === p.id;
+  const v = picked(p) || {};
   const live = S.live.get(p.id);
-  const v = sel ? picked(p) || {} : null;
-  return JSON.stringify([p, live ? [live.text, live.thinking] : 0, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id),
-    sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : '', gradeSaid(p)] : 0]);
+  const checkpoint = snapshot && writingHere(v);
+  const text = checkpoint ? null : (live ? live.text : v.text);
+  const thinking = checkpoint ? null : (live ? live.thinking : v.thinking);
+  const body = [p.id, p.by, v.id, text, thinking, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id), Boolean(v.streaming || live)];
+  const controls = sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : '', gradeSaid(p),
+    p.pick, (p.versions || []).length, ...(p.versions || []).map((x) => x.id), Boolean(v.streaming || live), cutAtEnd(v), Boolean(writer.takeOf(p)),
+    v.how, v.why, checkpoint ? null : v.words, checkpoint ? null : v.text, v.tokensIn, v.tokensCounted, v.ask && v.ask.note,
+    v.cut, v.cutWhy, (v.notes || []).length, ...(v.notes || []), (v.sources || []).length, ...(v.sources || []).flatMap((x) => x ? [x.url, x.title] : [])] : [];
+  return { body, controls };
+}
+
+function updatePassage(el, p, { tint }, before, after) {
+  const v = picked(p) || {};
+  const live = S.live.get(p.id);
+  const text = live ? live.text : v.text;
+  const thinking = live ? live.thinking : v.thinking;
+  el.classList.toggle('selected', S.selected === p.id);
+  el.classList.toggle('streaming', Boolean(v.streaming || live));
+  let box = el.querySelector(':scope > .thinkbox');
+  if (thinking && !box) { box = thinkBox(p.id, thinking, Boolean(live && !live.text)); el.prepend(box); }
+  else if (box && !thinking) box.remove();
+  else if (box) updateThinkBox(box, thinking, { live: Boolean(live && !live.text) });
+  const prose = el.querySelector(':scope > .prose');
+  if (prose && (before.body[3] !== after.body[3] || before.body[5] !== tint || (!text && Boolean(before.body[4]) !== Boolean(after.body[4])))) {
+    growProse(prose, text, { tint });
+    if (!text && (v.streaming || live)) prose.append(h('p', { style: { color: 'var(--ink-faint)', fontStyle: 'italic' } }, thinking ? 'Thinking…' : 'Writing…'));
+  }
+  if (!sameParts(before.controls, after.controls) || before.body[6] !== after.body[6]) {
+    const row = el.querySelector(':scope > .pctl');
+    if (row) row.remove();
+    if (S.selected === p.id && S.editing !== p.id) el.insertBefore(p.by === 'break' ? breakControls(p) : controls(p), el.querySelector(':scope > .rewriterow'));
+  }
+  const rewrite = el.querySelector(':scope > .rewriterow');
+  if (rewrite && S.rewriting !== p.id) rewrite.remove();
+  else if (!rewrite && S.rewriting === p.id && S.editing !== p.id) el.append(rewriteRow(p));
 }
 /* the judge's grade of the version on show, in the passage's line (with the judge on) */
 function gradeSaid(p, c = chapter()) {
@@ -453,6 +493,8 @@ function rewriteRow(p) {
 
 function passageMenu(anchor, p) {
   const c = chapter();
+  p = c && (c.passages || []).find((x) => x.id === p.id);
+  if (!p) return;
   const v = picked(p) || {};
   const i = c.passages.indexOf(p);
   menu(anchor, [
@@ -476,7 +518,8 @@ function passageMenu(anchor, p) {
 }
 
 function pickVersion(p, i) {
-  const v = p.versions[i];
+  p = (chapter()?.passages || []).find((x) => x.id === p.id);
+  const v = p && p.versions[i];
   if (!v) return;
   /* put on show by his own hand: left as he chose it — nothing the checker does by itself starts from it */
   store.change('chapter', S.chapterId, chapterSteps.choose(p.id, v.id));
@@ -641,6 +684,8 @@ function chooseVersions(p) {
 }
 
 function removePassage(p) {
+  p = (chapter()?.passages || []).find((x) => x.id === p.id);
+  if (!p) return;
   const c = chapter();
   const i = c.passages.findIndex((x) => x.id === p.id);
   const after = i > 0 ? c.passages[i - 1].id : '^';
@@ -691,12 +736,24 @@ async function splitHere(p) {
 
 /* ----------------------------------------------------- the end of the page */
 
+let endDrawn = null;
 function drawEnd() {
   const c = chapter();
   const n = novel();
-  ui.end.textContent = '';
   const list = c.passages || [];
   const hasText = list.some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
+  /* a page that did not come, said in the chapter it was asked for — with
+   * what the model thought, kept to read and copy (Cozy Tavern M301) */
+  let err = S.errors.get(c.id);
+  /* a passage added since — his words, a scene turned into prose — and the failure no longer stands (Cozy Tavern's M669) */
+  if (err && err.ids && (c.passages || []).some((p) => !err.ids.has(p.id))) { S.errors.delete(c.id); err = null; }
+  const at = n.order.indexOf(c.id);
+  const next = store.peek('chapter', n.order[at + 1]);
+  const key = [n.id, c.id, Boolean(list.length), hasText, at, n.order.length, n.order[at + 1], next && next.name, busy(), S.making,
+    err, err && err.words, err && err.thought, err && err.stopped, err && err.needsConnection];
+  if (endDrawn && sameParts(endDrawn, key)) return;
+  endDrawn = key;
+  ui.end.textContent = '';
   if (!list.length) {
     const first = n.order.indexOf(c.id) === 0;
     ui.end.append(h('div.firstpage',
@@ -707,11 +764,6 @@ function drawEnd() {
         : 'A fresh chapter. Say what happens and press Write, or write it yourself. With the box left empty, Write carries the story on.'),
       h('button.btn.quiet.small', { onclick: () => ui.direction.focus(), title: 'Move to the box below to write your opening or say what happens.' }, 'Start your opening', h('span', { 'aria-hidden': 'true' }, '↓'))));
   }
-  /* a page that did not come, said in the chapter it was asked for — with
-   * what the model thought, kept to read and copy (Cozy Tavern M301) */
-  let err = S.errors.get(c.id);
-  /* a passage added since — his words, a scene turned into prose — and the failure no longer stands (Cozy Tavern's M669) */
-  if (err && err.ids && (c.passages || []).some((p) => !err.ids.has(p.id))) { S.errors.delete(c.id); err = null; }
   if (err) {
     const card = h('div.endcard.error',
       h('b', err.stopped ? 'Stopped before any words came. ' : 'The page did not come. '), err.stopped ? 'What it thought is below.' : err.words);
@@ -724,12 +776,10 @@ function drawEnd() {
       h('button.btn.small', { onclick: () => { S.errors.delete(c.id); drawEnd(); } }, 'Dismiss')));
     ui.end.append(card);
   }
-  const at = n.order.indexOf(c.id);
   if (hasText && !busy()) {
     if (at === n.order.length - 1) {
       ui.end.append(h('div.nextchapter', h('button.btn', { disabled: S.making, onclick: () => newChapterAfter(c.id) }, `Start Chapter ${numberWords(at + 2)} `, icon('right', 16))));
     } else {
-      const next = store.peek('chapter', n.order[at + 1]);
       const name = next && next.name ? ` — ${next.name.length > 48 ? next.name.slice(0, 48).replace(/\s+\S*$/, '') + '…' : next.name}` : '';
       ui.end.append(h('div.nextchapter', h('button.btn.quiet', { onclick: () => hooks.goChapter(n.order[at + 1]) }, `On to Chapter ${numberWords(at + 2)}${name} `, icon('right', 16))));
     }
@@ -752,23 +802,29 @@ export async function newChapterAfter(afterId) {
 
 /* ---------------------------------------------------------- the composer */
 
+const chipLabels = new WeakMap();
+function drawChip(button, label) {
+  if (chipLabels.get(button) === label) return;
+  chipLabels.set(button, label);
+  button.replaceChildren(h('b', label), icon('down', 14));
+}
+let writeLabel = '';
 function drawComposer() {
   const n = novel();
   if (!n) return;
   const working = busy();
   const len = (n.prefs && n.prefs.length) || 'scene';
-  ui.lengthBtn.textContent = '';
-  ui.lengthBtn.append(h('b', LENGTHS[len] ? LENGTHS[len].label : 'A scene'), icon('down', 14));
-  ui.outcomeBtn.textContent = '';
-  ui.outcomeBtn.append(h('b', OUTCOMES[outcomeOf(n)].label), icon('down', 14));
+  drawChip(ui.lengthBtn, LENGTHS[len] ? LENGTHS[len].label : 'A scene');
+  drawChip(ui.outcomeBtn, OUTCOMES[outcomeOf(n)].label);
   const house = store.peek('house', 'house') || {};
   const w = writer.connFor(house, 'writer');
-  ui.writerBtn.textContent = '';
-  ui.writerBtn.append(h('b', w ? writer.connName(w) : 'Choose a writer'), icon('down', 14));
-  ui.writeBtn.textContent = '';
-  /* one button, saying what it will do: Write, Rewrite (words are selected), or Stop */
-  if (working) { ui.writeBtn.append(icon('stop', 16), 'Stop'); ui.writeBtn.classList.remove('primary'); }
-  else { ui.writeBtn.append(S.sel ? 'Rewrite' : 'Write'); ui.writeBtn.classList.add('primary'); }
+  drawChip(ui.writerBtn, w ? writer.connName(w) : 'Choose a writer');
+  const label = working ? 'Stop' : S.sel ? 'Rewrite' : 'Write';
+  if (label !== writeLabel) {
+    writeLabel = label;
+    ui.writeBtn.replaceChildren(...(working ? [icon('stop', 16), label] : [label]));
+    ui.writeBtn.classList.toggle('primary', !working);
+  }
   ui.mineBtn.disabled = working || Boolean(S.sel);
   /* Ideas: there only while it is on (Settings → Who does what) */
   ui.ideasBtn.hidden = !ideasOn(house);
@@ -1045,7 +1101,7 @@ function flushLive() {
  * under the eye ("Passage N of M", Cozy Tavern's "page N of M") is said in
  * the bar above the page, where no word of the story is, and beside the thumb
  * only while he holds it (Cozy Tavern M675). */
-const SC = { bar: null, thumb: null, tip: null, where: null, drag: null, idle: 0, frame: 0, self: 0, said: '' };
+const SC = { bar: null, thumb: null, tip: null, where: null, drag: null, idle: 0, frame: 0, self: 0, said: '', numbered: [] };
 function initScroller() {
   SC.bar = document.getElementById('scroller');
   if (!SC.bar) return;
@@ -1080,13 +1136,7 @@ function initScroller() {
 }
 function placeScrollerSoon() { if (SC.bar && !SC.frame) SC.frame = requestAnimationFrame(() => { SC.frame = 0; placeScroller(); }); }
 /* the numbered passages on the page, in order, with their numbers */
-function numberedEls() {
-  const c = chapter();
-  const nums = c ? passageNumbers(c) : new Map();
-  const out = [];
-  for (const [pid, el] of S.els) if (nums.has(pid)) out.push({ el, n: nums.get(pid) });
-  return out;
-}
+function numberedEls() { return SC.numbered; }
 /* the passage under the eye: the last one that starts above a quarter of the
  * way down. (Cozy Tavern slides its line to the bottom near the end, M468, so
  * a short last passage is named there; here the page keeps 40–45% of the
@@ -1113,8 +1163,9 @@ function placeScroller() {
   const n = list[i].n;
   const total = list[list.length - 1].n;
   const top = Math.round((max > 0 ? ui.wrap.scrollTop / max : 0) * Math.max(0, SC.bar.clientHeight - SC.thumb.offsetHeight));
-  SC.thumb.style.top = `${top}px`;
-  SC.tip.style.top = `${top}px`;
+  const move = `translateY(${top}px)`;
+  if (SC.thumb.style.transform !== move) SC.thumb.style.transform = move;
+  if (SC.tip.style.transform !== move) SC.tip.style.transform = move;
   /* touched only when they change: this runs every frame while the page streams */
   const say = `Passage ${n} of ${total}`;
   if (SC.said === say) return;

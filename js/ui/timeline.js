@@ -5,7 +5,7 @@
 import * as store from '../store.js';
 import { timelineOf } from '../novel/timeline.js';
 import { picked, passageNumbers } from '../novel/shape.js';
-import { h, icon } from './dom.js';
+import { h, icon, setText } from './dom.js';
 import { plural } from '../util.js';
 
 const KINDS = { relationship: 'Relationships', character: 'People', thread: 'Threads' };
@@ -40,6 +40,8 @@ function currentPassage(chapter) {
 
 export function makeTimeline({ novelId, chapterId: openedChapter, current, openCard, jumpSource, readAgain }) {
   let chapterId = openedChapter, destroyed = false, frame = 0, lastResult = '', shown = PAGE_SIZE, onPage = null;
+  let dirty = true, revision = 0, novelInput = '', projection = null;
+  const chapterInputs = new Map();
   const watches = new Map(), loading = new Set(), failed = new Set();
   const el = h('section.timeline', { 'aria-label': 'Story timeline' });
   const kind = h('select', { 'aria-label': 'Kind of turning point' }, h('option', { value: '' }, 'Every turning point'),
@@ -73,10 +75,12 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
   for (const select of [kind, person, through]) select.addEventListener('change', () => { shown = PAGE_SIZE; draw(); });
 
   function live() { return !destroyed && current(); }
-  function soon() { if (live() && !frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); }
-  const offNovel = store.subscribe('novel', novelId, soon);
+  function soon(changed = true) { if (changed) dirty = true; if (live() && !frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); }
+  const offNovel = store.subscribe('novel', novelId, () => soon());
   const page = document.getElementById('pageWrap');
-  const moved = () => { if (!whole && through.value === 'current' && currentPassage(store.peek('chapter', chapterId)) !== onPage) soon(); };
+  /* Scroll events can outnumber frames. Read page geometry once in the frame,
+   * and skip the story projection when the passage boundary has not moved. */
+  const moved = () => { if (!whole && through.value === 'current') soon(false); };
   page?.addEventListener('scroll', moved, { passive: true });
   window.addEventListener('resize', moved);
 
@@ -84,7 +88,7 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     const chapters = {};
     for (const [id, off] of watches) if (!(novel.order || []).includes(id)) { off(); watches.delete(id); failed.delete(id); }
     for (const id of novel.order || []) {
-      if (!watches.has(id)) watches.set(id, store.subscribe('chapter', id, soon));
+      if (!watches.has(id)) watches.set(id, store.subscribe('chapter', id, () => soon()));
       const chapter = store.peek('chapter', id);
       if (chapter) { chapters[id] = chapter; failed.delete(id); }
       else if (!loading.has(id) && !failed.has(id)) {
@@ -122,11 +126,39 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     return row;
   }
 
+  /* Only a selected passage, its evidence, order or card identity can change
+   * this view. Keep long prose as strings to compare, never re-encode an
+   * entire manuscript for a preference save or a scroll frame. */
+  function updateInputs(novel, chapters) {
+    if (!dirty) return;
+    dirty = false;
+    let changed = false;
+    const nextNovel = JSON.stringify([novel.order, ['people', 'threads'].map(kind => (novel.notes?.[kind] || []).map(({id, name, aka}) => [id, name, aka]))]);
+    if (novelInput !== nextNovel) { novelInput = nextNovel; changed = true; }
+    for (const id of novel.order || []) {
+      const c = chapters[id], before = chapterInputs.get(id);
+      const values = [c?.name, ...(c?.passages || []).flatMap(p => {
+        const v = picked(p);
+        return [p.id, p.by, v?.id, v?.text, v?.streaming, JSON.stringify(v?.continuity)];
+      })];
+      if (!before || values.length !== before.values.length || values.some((v, i) => v !== before.values[i])) changed = true;
+      chapterInputs.set(id, { record: c, values });
+    }
+    for (const id of chapterInputs.keys()) if (!(novel.order || []).includes(id)) chapterInputs.delete(id);
+    if (changed) revision++;
+  }
+  function project(novel, chapters, args) {
+    const key = JSON.stringify([revision, args]);
+    if (projection?.key !== key) projection = { key, result: timelineOf(novel, chapters, args) };
+    return projection.result;
+  }
+
   function draw() {
     if (!live()) return;
     const novel = store.peek('novel', novelId);
     if (!novel) return;
     const chapters = chaptersOf(novel), chapter = chapters[chapterId];
+    updateInputs(novel, chapters);
     const nums = passageNumbers(chapter || { passages: [] });
     const chapterNumber = (novel.order || []).indexOf(chapterId) + 1;
     optionsOf(through, [['current', 'The passage on the page'], ['^', `Before chapter ${chapterNumber}`],
@@ -134,9 +166,9 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     onPage = currentPassage(chapter);
     const scopeArgs = whole ? {} : { chapterId, ...(through.value === 'end' ? {} : { through: through.value === 'current' ? onPage : through.value }) };
     const selectedCard = person.value;
-    let result = timelineOf(novel, chapters, { ...scopeArgs, kind: kind.value || undefined, cardId: selectedCard || undefined });
+    let result = project(novel, chapters, { ...scopeArgs, kind: kind.value || undefined, cardId: selectedCard || undefined });
     optionsOf(person, [['', 'All cards'], ...result.cards.map((card) => [card.id, card.name + (card.kind === 'threads' ? ' · thread' : '')])]);
-    if (person.value !== selectedCard) result = timelineOf(novel, chapters, { ...scopeArgs, kind: kind.value || undefined, cardId: person.value || undefined });
+    if (person.value !== selectedCard) result = project(novel, chapters, { ...scopeArgs, kind: kind.value || undefined, cardId: person.value || undefined });
     const { total, read, missing, complete } = result.coverage;
     const scopeOrder = whole ? novel.order || [] : (novel.order || []).slice(0, chapterNumber - (through.value === '^' ? 1 : 0));
     const unavailable = [...failed].filter((id) => scopeOrder.includes(id)).length;
@@ -147,9 +179,9 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     gaps.hidden = !unavailable && (waiting || complete || !total);
     retry.hidden = !unavailable;
     reread.hidden = Boolean(unavailable);
-    gapCopy.textContent = unavailable ? `${plural(unavailable, 'chapter')} could not be opened. These turns show only the chapters available here.` : `${plural(missing, 'passage')} ${missing === 1 ? 'has' : 'have'} no complete timeline reading yet. Read the whole book again to include older pages.`;
+    setText(gapCopy, unavailable ? `${plural(unavailable, 'chapter')} could not be opened. These turns show only the chapters available here.` : `${plural(missing, 'passage')} ${missing === 1 ? 'has' : 'have'} no complete timeline reading yet. Read the whole book again to include older pages.`);
     /* Rows, quotes, buttons and scroll remain still on routine saves. */
-    const signature = JSON.stringify([result.events, kind.value, person.value, total, read, waiting, unavailable, shown]);
+    const signature = JSON.stringify([projection.key, total, read, waiting, unavailable, shown]);
     if (signature === lastResult) return;
     lastResult = signature;
     if (!result.events.length) {
@@ -158,17 +190,29 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
       results.replaceChildren(h('div.timeline-empty', h('span.timeline-flourish', { 'aria-hidden': 'true' }, '⌁'), h('h3', title), h('p', copy)));
       return;
     }
-    const list = h('ol.timeline-list', { 'aria-label': 'Turning points in story order' });
+    let list = results.querySelector('.timeline-list');
+    if (!list) { list = h('ol.timeline-list', { 'aria-label': 'Turning points in story order' }); results.replaceChildren(list); }
+    const old = new Map([...list.children].map(row => [row.dataset.event, row]));
+    const rows = [];
     let lastChapter = null;
     for (const event of result.events.slice(0, shown)) {
-      const row = eventNode(event);
-      if (event.chapterId !== lastChapter) {
-        row.prepend(h('p.timeline-chapter', `Chapter ${event.chapterNumber}`, chapters[event.chapterId]?.name ? ` · ${chapters[event.chapterId].name}` : ''));
-        lastChapter = event.chapterId;
+      const heading = event.chapterId !== lastChapter ? `Chapter ${event.chapterNumber}${chapters[event.chapterId]?.name ? ` · ${chapters[event.chapterId].name}` : ''}` : '';
+      const signature = JSON.stringify([event, heading]);
+      let row = old.get(event.id);
+      old.delete(event.id);
+      if (!row || row._eventSignature !== signature) {
+        const before = row;
+        row = eventNode(event);
+        row._eventSignature = signature;
+        if (heading) row.prepend(h('p.timeline-chapter', heading));
+        if (before) before.replaceWith(row);
       }
-      list.append(row);
+      lastChapter = event.chapterId;
+      rows.push(row);
     }
-    results.replaceChildren(list);
+    for (const row of old.values()) row.remove();
+    rows.forEach((row, i) => { if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null); });
+    results.querySelector('.timeline-more')?.remove();
     if (result.events.length > shown) {
       const more = (count) => {
         const from = shown;

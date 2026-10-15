@@ -1101,9 +1101,13 @@ function openModule(id, { fresh = false } = {}) {
   words.addEventListener('input', () => { saveWords(); sayNow(); });
 
   const buttons = h('div.btnrow');
+  let buttonsKey = null;
   const drawButtons = () => {
-    buttons.textContent = '';
     const m = now();
+    const key = `${Boolean(base)}:${Boolean(m.changed)}`;
+    if (buttonsKey === key) return;
+    buttonsKey = key;
+    buttons.textContent = '';
     if (base) {
       /* always there, as in Cozy Tavern: greyed while the module is as it came */
       buttons.append(h('button.btn.quiet.small', { disabled: !m.changed, title: m.changed ? 'The app’s words come back, with who reads it and when it rides as they came — with Undo.' : 'Nothing is changed — it is as it came.', onclick: async () => {

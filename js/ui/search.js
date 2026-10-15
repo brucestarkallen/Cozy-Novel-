@@ -4,7 +4,7 @@
  * words; a card of the notes opens; the partner or a scene opens at the turn). */
 
 import * as store from '../store.js';
-import { searchBook, searchSaid, searchOrder } from '../novel/search.js';
+import { searchBookAsync, searchSaid, searchOrder, yieldSearch } from '../novel/search.js';
 import { h, openSheet, toast } from './dom.js';
 import * as talk from '../novel/talk.js';
 import { debounce } from '../util.js';
@@ -68,10 +68,9 @@ export function openSearch() {
     Q.query = input.value;
     const q = input.value.trim();
     const scope = Q.scope;
-    results.textContent = '';
     results.setAttribute('aria-busy', String(Boolean(q)));
-    if (!q) { say.textContent = scope === 'all' ? 'Type to search every book on the shelf.' : 'Type to search the whole book — its passages, chapter names, notes, what it’s about, the partner and the scenes.'; return; }
-    let books = [];
+    if (!q) { results.replaceChildren(); say.textContent = scope === 'all' ? 'Type to search every book on the shelf.' : 'Type to search the whole book — its passages, chapter names, notes, what it’s about, the partner and the scenes.'; return; }
+    let ids = [novelId];
     /* what could not be read is said — never taken for words that are not there (Cozy Tavern A8) */
     let unread = 0;
     let noShelf = false;
@@ -80,30 +79,39 @@ export function openSearch() {
       let rows = [];
       try { rows = await store.listNovels(); } catch (_) { rows = []; noShelf = true; }
       if (!current()) return;
-      for (const id of searchOrder(novelId, rows)) { const b = await bookOf(id, current); if (b) books.push(b); else unread++; if (!current()) return; }
-    } else {
-      const b = await bookOf(novelId, current);
-      if (b) books = [b]; else unread++;
+      ids = searchOrder(novelId, rows);
     }
     if (!current()) return;
-    let total = 0;
+    let total = 0, searched = 0, lost = 0;
     const LIMIT = 400;
-    for (const b of books) {
-      const found = searchBook({ ...b, query: q, limit: LIMIT - total });
+    const next = document.createDocumentFragment();
+    /* Keep the previous result still while the new one is prepared. Read
+     * books in shelf order only until the result limit is full; a common
+     * word must not load and scan the rest of the library unnecessarily. */
+    for (const id of ids) {
+      const b = await bookOf(id, current);
+      if (!current()) return;
+      if (!b) { unread++; continue; }
+      searched++; lost += b.lost || 0;
+      const found = await searchBookAsync({ ...b, query: q, limit: LIMIT - total }, current);
+      if (!current() || !found) return;
       if (!found.length) continue;
       total += found.length;
-      if (scope === 'all') results.append(h('h3.searchbook', (b.novel.meta && b.novel.meta.title) || 'Untitled'));
-      let group = '';
+      if (scope === 'all') next.append(h('h3.searchbook', (b.novel.meta && b.novel.meta.title) || 'Untitled'));
+      let group = '', built = 0;
       for (const f of found) {
-        if (f.group !== group) { group = f.group; results.append(h('div.searchgroup', group)); }
-        results.append(h('button.hit', { onclick: () => go(f, q, s) },
+        if (f.group !== group) { group = f.group; next.append(h('div.searchgroup', group)); }
+        next.append(h('button.hit', { onclick: () => go(f, q, s) },
           h('span.where', f.label),
           h('span.snip', f.snippet.before, h('mark', f.snippet.match), f.snippet.after)));
+        if (++built % 40 === 0) { await yieldSearch(); if (!current()) return; }
       }
       if (total >= LIMIT) break;
     }
+    if (!current()) return;
+    results.replaceChildren(next);
     results.setAttribute('aria-busy', 'false');
-    say.textContent = searchSaid({ q, scope, total, limit: LIMIT, searched: books.length, noShelf, unread, lost: books.reduce((n, b) => n + (b.lost || 0), 0) });
+    say.textContent = searchSaid({ q, scope, total, limit: LIMIT, searched, noShelf, unread, lost });
   };
   later = debounce(run, 140);
   input.addEventListener('input', () => { Q.query = input.value; ticket++; later(); });

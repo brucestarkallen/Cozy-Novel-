@@ -80,6 +80,10 @@ async def scenario(browser):
         }""", nid)
         await pg.click('#toShelf')
         await pg.locator('#shelf:not([hidden])').wait_for()
+        # The shelf opens before its asynchronous list has arrived. Establish
+        # that this book is visible before testing whether rejection keeps it
+        # visible; the cached welcome also has a Bring in a book button.
+        await pg.get_by_role('button', name='Open The Book Already Here', exact=True).wait_for(state='visible')
         before = await saved_records(pg)
         writes = []
         pg.on('request', lambda req: writes.append(req.url)

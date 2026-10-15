@@ -6,7 +6,7 @@ import * as store from './store.js';
 import * as writer from './novel/writer.js';
 import * as archivist from './novel/archivist.js';
 import { onLearn, onKey, onIdentity } from './model/call.js';
-import { h, $, icon, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays } from './ui/dom.js';
+import { h, $, icon, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays, setText } from './ui/dom.js';
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
 import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound } from './ui/desk.js';
@@ -131,6 +131,7 @@ async function showShelf() {
   closeLeft(); closeRight();
   exitReading();
   A.novelId = null; A.chapterId = null;
+  showChecks(null, null);
   /* what was to be done in a book he did not stay to see is not done in the next one */
   A.then = null;
   if (A.offBook) { A.offBook(); A.offBook = null; }
@@ -341,10 +342,11 @@ export function drawBar() {
   const n = store.peek('novel', A.novelId);
   const c = store.peek('chapter', A.chapterId);
   if (!n || !c) return;
-  $('#bookTitle b').textContent = n.meta.title || 'Untitled';
-  $('#bookTitle').title = n.branch?.name ? `${n.meta.title || 'Untitled'} — ${n.branch.name}` : 'Chapters';
+  setText($('#bookTitle b'), n.meta.title || 'Untitled');
+  const title = n.branch?.name ? `${n.meta.title || 'Untitled'} — ${n.branch.name}` : 'Chapters';
+  if ($('#bookTitle').title !== title) $('#bookTitle').title = title;
   const num = n.order.indexOf(c.id) + 1;
-  $('#chapLine').textContent = `${n.branch?.name ? `${n.branch.name} · ` : ''}Chapter ${numberWords(num)}${c.name ? ` — ${c.name}` : ''}`;
+  setText($('#chapLine'), `${n.branch?.name ? `${n.branch.name} · ` : ''}Chapter ${numberWords(num)}${c.name ? ` — ${c.name}` : ''}`);
 }
 
 function writerMenu(anchor) {
@@ -416,6 +418,7 @@ function exitReading(fromBack = false) {
 
 function banner(offline) {
   const b = $('#banner');
+  if (b.hidden === !offline) return;
   if (!offline) { b.hidden = true; return; }
   b.hidden = false;
   b.innerHTML = '';

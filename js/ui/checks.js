@@ -9,8 +9,8 @@
 import * as store from '../store.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, openSheet, confirmIt } from './dom.js';
-import { chapterLabel } from '../novel/shape.js';
-import { GRADE_AXES, JUDGE_CHECKS } from '../novel/prompts.js';
+import { chapterLabel, picked } from '../novel/shape.js';
+import { GRADE_AXES, JUDGE_CHECKS, avoidList } from '../novel/prompts.js';
 import { findIn } from '../novel/search.js';
 import { plural } from '../util.js';
 import * as desk from './desk.js';
@@ -25,7 +25,7 @@ export function initChecks(el, appHooks) {
   bubble = el;
   hooks = appHooks;
   bubble.addEventListener('click', () => openSuggestions());
-  checker.onChecks((novelId) => { if (novelId === C.novelId) drawSoon(); });
+  checker.onChecks((novelId) => { if (novelId === C.novelId) { C.stateDirty = true; drawSoon(); } });
 }
 
 /* the book now open: what it holds, watched */
@@ -66,9 +66,12 @@ export function showChecks(novelId, chapterId) {
     for (const off of C.offs) off();
     C.offs = [];
     C.novelId = novelId;
+    C.inputs = null;
     C.watched = new Set();
-    C.offs.push(store.subscribe('novel', novelId, () => { watchChapters(); drawSoon(); }));
-    C.offs.push(store.subscribe('house', 'house', () => drawSoon()));
+    if (novelId) {
+      C.offs.push(store.subscribe('novel', novelId, () => { watchChapters(); drawSoon(); }));
+      C.offs.push(store.subscribe('house', 'house', () => drawSoon()));
+    }
   }
   C.chapterId = chapterId;
   watchChapters();
@@ -85,20 +88,72 @@ function watchChapters() {
 
 function drawSoon() { if (!C.frame) C.frame = requestAnimationFrame(() => { C.frame = 0; draw(); }); }
 
+/* These are the things the review displays, not the whole book. Notes,
+ * summaries, thinking and saved requests can grow without changing one
+ * suggestion. Keep manuscript strings by reference rather than copying or
+ * hashing the book on every save. Only the small selected check records
+ * and head-to-head results need a snapshot for edits made in place. */
+function reviewInputs() {
+  const n = store.peek('novel', C.novelId);
+  const hs = store.peek('house', 'house') || {};
+  const conn = checker.checkerConn(hs);
+  const out = [C.novelId, C.chapterId, n?.meta?.title, hs.checksFrom,
+    conn?.id, conn?.model, JSON.stringify(checker.judgeOf(hs)), JSON.stringify(avoidList(hs)),
+    JSON.stringify(checker.autoOf(hs))];
+  for (const id of n?.order || []) {
+    const c = store.peek('chapter', id);
+    const duels = Object.values(c?.duels || {});
+    out.push(id, c?.name, c?.checkAll, JSON.stringify(c?.duels || null));
+    for (const p of c?.passages || []) {
+      const v = picked(p);
+      const entry = c.checks?.[p.id]?.[v?.id];
+      out.push(p.id, p.by, p.pick, JSON.stringify(entry || null));
+      for (const version of p.versions || []) {
+        /* A stream has no finished grade yet. If Go on is extending a
+         * checked version, the first added words still invalidate its old
+         * finding; subsequent token checkpoints need no further redraw. */
+        const checkedStream = version.streaming && c.checks?.[p.id]?.[version.id];
+        const words = version.streaming ? (checkedStream ? checker.sigOf(version) === checkedStream.sig : '') : version.text;
+        out.push(version.id, words, Boolean(version.streaming), version.model,
+          version.how, version.rootHow, version.at, version.done, version.rootAt,
+          version.cut, version.carried, version.ask?.direction, version.ask?.note,
+          JSON.stringify(version.liftFailed || null));
+        if (version.streaming) for (const duel of duels) {
+          if (duel.pid !== p.id) continue;
+          for (const side of ['x', 'y']) if (duel[side] === version.id && duel[`${side}Sig`]) out.push(checker.sigOf(version) === duel[`${side}Sig`]);
+        }
+      }
+    }
+  }
+  return out;
+}
+const sameInputs = (a, b) => a && a.length === b.length && a.every((value, i) => value === b[i]);
+
 function draw() {
   if (!bubble || !C.novelId) return;
+  const inputs = reviewInputs();
+  const changed = !sameInputs(C.inputs, inputs);
+  if (!changed && !C.stateDirty) return;
+  C.inputs = inputs;
+  C.stateDirty = false;
   const st = checker.stateOf(C.novelId);
-  bubble.dataset.state = st.state;
-  bubble.textContent = '';
-  if (st.state === 'found') bubble.append(h('b', st.count > 99 ? '99+' : String(st.count)));
-  else if (st.state === 'clean') bubble.append(icon('check', 20));
-  else if (st.state === 'trouble') bubble.append(h('b', '!'));
-  else if (st.state === 'off') bubble.append(h('b', '–'));
-  else bubble.append(h('span.ring'));
+  const face = `${st.state}:${st.state === 'found' ? Math.min(st.count, 100) : ''}`;
+  if (C.face !== face) {
+    C.face = face;
+    bubble.dataset.state = st.state;
+    bubble.textContent = '';
+    if (st.state === 'found') bubble.append(h('b', st.count > 99 ? '99+' : String(st.count)));
+    else if (st.state === 'clean') bubble.append(icon('check', 20));
+    else if (st.state === 'trouble') bubble.append(h('b', '!'));
+    else if (st.state === 'off') bubble.append(h('b', '–'));
+    else bubble.append(h('span.ring'));
+  }
   const say = st.state === 'found' ? `Suggestions: ${plural(st.count, 'suggestion')}` : `Suggestions — ${st.words}`;
-  bubble.setAttribute('aria-label', say);
-  bubble.title = say;
-  if (C.sheet) drawSheet();
+  if (bubble.getAttribute('aria-label') !== say) bubble.setAttribute('aria-label', say);
+  if (bubble.title !== say) bubble.title = say;
+  const state = JSON.stringify([st, Boolean(checker.stalled(C.novelId))]);
+  if (C.sheet && (changed || C.sheetState !== state)) drawSheet(st);
+  C.sheetState = state;
 }
 
 /* ------------------------------------------------------------ the sheet */
@@ -112,13 +167,12 @@ function openSuggestions() {
   drawSheet();
 }
 
-function drawSheet() {
+function drawSheet(st = checker.stateOf(C.novelId)) {
   const s = C.sheet;
   if (!s) return;
   const novelId = C.novelId;
   const novel = store.peek('novel', novelId);
   if (!novel) return;
-  const st = checker.stateOf(novelId);
   const scroll = s.body.scrollTop;
   const folds = new Map([...s.body.querySelectorAll('details[data-fold]')].map((d) => [d.dataset.fold, d.open]));
   const active = s.body.contains(document.activeElement) ? document.activeElement : null;

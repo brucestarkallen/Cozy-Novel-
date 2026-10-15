@@ -124,6 +124,31 @@ export function drawProse(into, text, { tint = false } = {}) {
   keep(into, tint, raw, lines);
 }
 
+/* Reuse the paragraph and its unchanged inline nodes while a sentence
+ * grows. appendData also keeps a selection in the words already written;
+ * replacing a whole paragraph used to make those words blink each token. */
+function sameNode(a, b) {
+  return a.nodeType === b.nodeType && (a.nodeType === 3 || (a.nodeName === b.nodeName && a.className === b.className));
+}
+function amendNode(into, fresh) {
+  if (into.nodeType === 3) {
+    const before = into.data, after = fresh.data;
+    if (before === after) return;
+    if (after.startsWith(before)) { into.appendData(after.slice(before.length)); return; }
+    let a = 0, b = 0;
+    while (a < before.length && a < after.length && before[a] === after[a]) a++;
+    while (b < before.length - a && b < after.length - a && before[before.length - b - 1] === after[after.length - b - 1]) b++;
+    into.replaceData(a, before.length - a - b, after.slice(a, after.length - b));
+    return;
+  }
+  let old = into.firstChild;
+  for (const node of [...fresh.childNodes]) {
+    if (old && sameNode(old, node)) { amendNode(old, node); old = old.nextSibling; }
+    else { into.insertBefore(node, old); if (old) { const next = old.nextSibling; old.remove(); old = next; } }
+  }
+  while (old) { const next = old.nextSibling; old.remove(); old = next; }
+}
+
 /* The same, for a passage still being written: the paragraphs before the
  * first one that changed stay exactly as they are on screen. Words that only
  * grow the text (the usual stream) are not even split again before the last
@@ -151,11 +176,26 @@ export function growProse(into, text, { tint = false } = {}) {
     while (k < n && all[k] === was.lines[k].line) { pos += all[k].length + 1; k++; }
     parts = all.slice(k);
   }
-  for (let i = was.lines.length - 1; i >= k; i--) if (was.lines[i].el) was.lines[i].el.remove();
   const lines = was.lines.slice(0, k);
-  const frag = document.createDocumentFragment();
-  drawLines(frag, parts, pos, tint, lines);
-  into.append(frag);
+  for (const line of parts) {
+    let el = lineEl(line, pos, tint);
+    const before = was.lines[lines.length]?.el;
+    if (el && before && sameNode(before, el)) {
+      amendNode(before, el);
+      const map = maps.get(el);
+      if (map) maps.set(before, map); else maps.delete(before);
+      el = before;
+    } else if (before) {
+      if (el) before.replaceWith(el); else before.remove();
+    } else if (el) {
+      /* A previously blank line may now be text before later paragraphs. */
+      const next = was.lines.slice(lines.length + 1).find((x) => x.el && x.el.parentNode === into)?.el;
+      into.insertBefore(el, next || null);
+    }
+    lines.push({ line, el });
+    pos += line.length + 1;
+  }
+  for (let i = was.lines.length - 1; i >= lines.length; i--) if (was.lines[i].el) was.lines[i].el.remove();
   keep(into, tint, raw, lines);
 }
 

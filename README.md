@@ -165,6 +165,9 @@ narrator** directions stay with their scene across navigation and reloads. A new
 draft is kept while an answer arrives. [The final product audit](FINAL-AUDIT.md)
 covers writing quality, recovery, saving, exports and the full interface.
 
+[The performance audit](PERFORMANCE-AUDIT.md) records the fixes for stuttering
+menus, pane changes and background saves, with repeatable browser measurements.
+
 No build step: `index.html`, `css/`, `js/` and `serve.py` are the whole app. `AGENTS.md` maps the code and the rules it keeps. The checks:
 
 ```sh
@@ -183,6 +186,7 @@ node tests/prefill_words.mjs        # exact template words and literal bracketed
 node tests/store_removal.mjs        # pending saves, failed deletion and whole-book restoration
 node tests/stream_integrity.mjs     # fragmented openings, stopped thinking and exact request snapshots
 node tests/search_integrity.mjs     # genuine quote boundaries without breaking unspaced-script prose
+node tests/search_performance.mjs   # bounded searches, cancellation and Unicode mappings after cache turnover
 node tests/final_workflows.mjs      # conversation conflicts, scene anchors and unavailable chapters
 node tests/automation_integrity.mjs # concurrent helper starts, rewrite retry and stale automatic replies
 node tests/storage_integrity.mjs    # restoration races, journal recovery and imported drafts
@@ -207,6 +211,11 @@ python3 tests/browser/walk_viewpoint.py      # per-book viewpoint/tense, persist
 python3 tests/browser/walk_branches.py       # independent branches, scenes, navigation and folded layouts
 python3 tests/browser/walk_branch_imports.py # damaged-copy refusal from shelf and Settings before any writes
 python3 tests/browser/walk_timeline.py       # Timeline filters, source links, versions and phone layouts
+python3 tests/browser/walk_performance_desk.py   # retained passages, selection, streaming and chapter changes
+python3 tests/browser/walk_performance_panes.py  # retained cards, conversations, drafts and Timeline rows
+python3 tests/browser/walk_performance_worlds.py # compositor animation, resting tabs and unchanged appearance
+python3 tests/browser/walk_update_performance.py # background saves, Suggestions and stable shelf covers
+python3 tests/browser/walk_performance_search.py # pending searches, cancellation, limits and source navigation
 ```
 
 All of them use synthetic books in a temporary folder and stand-in models; nothing paid is ever called.

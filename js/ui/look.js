@@ -18,35 +18,48 @@ export function mergeLook(look = {}, patch = {}) {
   return { ...look, ...(patch.theme ? { mode: resolveLook(look).mode } : {}), ...patch };
 }
 
+/* House saves also arrive while a reply streams. Touch the page only when an
+ * appearance value actually changed: writing the same root attributes forces
+ * selector invalidation, and reading its computed colour then flushes styles. */
 export function applyLook(look = {}) {
   const d = document.documentElement;
   const { world, mode, motion } = resolveLook(look);
-  d.dataset.theme = world;
-  d.dataset.world = world;
-  d.dataset.mode = mode;
-  d.dataset.motion = motion;
-  d.dataset.room = look.room === 'off' ? 'off' : 'on';
-  d.dataset.font = look.font || 'literata';
-  d.dataset.tint = look.tint === 'off' ? 'off' : 'on';
-  d.dataset.indent = look.indent === 'on' ? 'on' : 'off';
-  d.style.setProperty('--prose-size', `${Number(look.size) || 18}px`);
-  d.style.setProperty('--prose-lead', String(Number(look.lead) || 1.72));
-  d.style.setProperty('--page-width', `${Number(look.width) || 680}px`);
+  const coloursChanged = d.dataset.world !== world || d.dataset.mode !== mode;
+  const attribute = (el, key, value) => {
+    if (el && el.getAttribute(key) !== value) el.setAttribute(key, value);
+  };
+  for (const [key, value] of Object.entries({
+    theme: world, world, mode, motion,
+    room: look.room === 'off' ? 'off' : 'on',
+    font: look.font || 'literata',
+    tint: look.tint === 'off' ? 'off' : 'on',
+    indent: look.indent === 'on' ? 'on' : 'off',
+  })) {
+    if (d.dataset[key] !== value) d.dataset[key] = value;
+  }
+  for (const [key, value] of Object.entries({
+    '--prose-size': `${Number(look.size) || 18}px`,
+    '--prose-lead': String(Number(look.lead) || 1.72),
+    '--page-width': `${Number(look.width) || 680}px`,
+  })) {
+    if (d.style.getPropertyValue(key) !== value) d.style.setProperty(key, value);
+  }
   showWorld(world);
   for (const [id, name] of [['worldAcademy', 'academy'], ['worldTokyo', 'tokyo'], ['worldStudy', 'study']]) {
-    document.getElementById(id)?.setAttribute('aria-pressed', String(world === name));
+    attribute(document.getElementById(id), 'aria-pressed', String(world === name));
   }
   const light = document.getElementById('modeToggle');
   if (light) {
-    light.setAttribute('aria-label', `Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`);
-    light.title = mode === 'dark' ? 'Let the morning into your writing room' : 'Settle into your writing room at night';
-    light.querySelector('.mode-word').textContent = mode === 'dark' ? 'Night' : 'Day';
+    attribute(light, 'aria-label', `Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`);
+    attribute(light, 'title', mode === 'dark' ? 'Let the morning into your writing room' : 'Settle into your writing room at night');
+    const label = light.querySelector('.mode-word'), word = mode === 'dark' ? 'Night' : 'Day';
+    if (label && label.textContent !== word) label.textContent = word;
   }
   const movement = document.getElementById('motionToggle');
   if (movement) {
-    movement.setAttribute('aria-pressed', String(motion === 'on'));
-    movement.title = motion === 'on' ? 'Pause the room’s ambient animation' : 'Let the room’s ambient animation move';
+    attribute(movement, 'aria-pressed', String(motion === 'on'));
+    attribute(movement, 'title', motion === 'on' ? 'Pause the room’s ambient animation' : 'Let the room’s ambient animation move');
   }
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', getComputedStyle(d).getPropertyValue('--chrome-solid').trim());
+  if (meta && coloursChanged) attribute(meta, 'content', getComputedStyle(d).getPropertyValue('--chrome-solid').trim());
 }
