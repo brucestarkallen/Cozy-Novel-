@@ -167,7 +167,8 @@ covers writing quality, recovery, saving, exports and the full interface.
 
 [The performance audit](PERFORMANCE-AUDIT.md) records the fixes for stuttering
 menus, pane changes and background saves, with repeatable browser measurements.
-Reading surfaces stay opaque during scrolling and navigation. Each narrator
+The room remains visible around the manuscript, with opaque paper behind its words.
+The home background keeps a stable crop while mobile browser controls move. Each narrator
 answer shows how many input tokens were sent; estimates are marked “About.”
 The new-scene name and starting place also survive keyboard resizing and reloads.
 
@@ -220,6 +221,7 @@ python3 tests/browser/walk_performance_worlds.py # compositor animation, resting
 python3 tests/browser/walk_update_performance.py # background saves, Suggestions and stable shelf covers
 python3 tests/browser/walk_performance_search.py # pending searches, cancellation, limits and source navigation
 python3 tests/browser/walk_surface_stability.py # opaque scrolling, scene setup drafts and narrator input-token counts
+python3 tests/browser/walk_room_backing.py # stationary room pixels, visible gutters and manuscript backing
 ```
 
 All of them use synthetic books in a temporary folder and stand-in models; nothing paid is ever called.

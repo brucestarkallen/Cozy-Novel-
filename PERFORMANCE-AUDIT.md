@@ -1,4 +1,34 @@
-# Performance audit — 2.10.2 follow-up
+# Room visibility follow-up — 2.10.3
+
+The 2.10.2 reading-viewport background covered the room outside the manuscript.
+That was an unwanted visual change. The backing is now an opaque, stationary
+gradient limited to the page width, leaving the illustration visible around it.
+
+Original Study also selected its picture by aspect ratio. At width 853, a
+height change from 1080 to 965 and back reproduced `mobile.webp` →
+`desktop.webp` → `mobile.webp`. Picture selection now uses width alone, so
+height changes retain the image while folding and unfolding still change it.
+
+The room previously stretched between all four fixed viewport edges. It now
+uses `100lvh`, with a `100vh` fallback, anchored at the top. This prevents the
+artwork’s size and crop following mobile browser-control height changes. A
+single composited background layer separates it from shelf scrolling.
+
+The browser walkthrough uses synthetic books and visits the home screen,
+manuscript, menus, Notes, Partner, Scenes, Suggestions and Settings at narrow
+and unfolded widths. `walk_room_backing.py` compares screenshots of the room
+before and after a 700-pixel shelf scroll with ambient motion paused: all room
+pixels match in three themes, both lights and two widths. It also checks that
+the paper remains centered with visible room gutters at 360, 412 and 853 pixels.
+
+This is actual browser rendering evidence, not proof of Android compositor
+behavior. The original complaint was not reproduced in a fixed-size desktop
+viewport. Android’s moving browser controls and minimize/restore GPU behavior
+still require physical-device confirmation; no 120 FPS claim is made.
+
+Checked with 47 suites: 2,138 checks passed, zero failures. The theme/foldable suite passed again after the photograph-selection fix. The visual walkthrough captured and reviewed 33 screen states at 360, 412 and 853 pixels. Synthetic temporary books and local stand-in providers only; no paid calls. Physical Android compositor restoration and 120 Hz behavior remain unverified.
+
+## Previous follow-up — 2.10.2
 
 The follow-up addressed visible flashing through to the room, sluggish scrolling
 and returning from a minimized app. The earlier 2.10.1 measurements below remain

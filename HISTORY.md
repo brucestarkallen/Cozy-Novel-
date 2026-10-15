@@ -396,3 +396,12 @@ Checked with all 45 suites: 2,095 passed, zero final failures (1,094 server/appl
 - Each narrator answer shows its input tokens, using the provider's count when supplied and clearly marking estimates. The selected version owns the count; older answers without one are said to be unrecorded. The scene's saved-request view names the narrator immediately.
 
 Checked across all 46 suites: 2,120 distinct checks passed after affected reruns (1,094 server/application/focused checks and 1,026 Chromium browser checks). The initial run exposed three fixture issues: shelf recovery kept failing newer catch-up requests, search reload raced the sheet’s history cleanup, and the long scroll fixture unintentionally invoked the helper. The corrected shelf scenario, search suite and surface suite passed; the other extended scenarios completed successfully. Temporary books and local stand-in providers only; no paid calls. Physical Android minimize/reopen rendering and 120 Hz smoothness remain unverified.
+
+## 2.10.3, keep the room in view
+
+- Corrects 2.10.2’s over-broad paper background: only the manuscript’s width is backed by opaque paper. The room is visible in the gutters again, including on narrow phones, and narrow custom page widths stay centered.
+- The room is anchored to the large viewport height rather than stretched between changing viewport edges. Browser-control movement can crop the view without resizing the artwork. A single composited room layer separates the static background from shelf scrolling; ambient motion remains available.
+- Browser review covers the shelf, manuscript, menus, Notes, Partner, Scenes, Suggestions and Settings at phone and unfolded widths. A dedicated pixel comparison checks that paused room artwork stays identical during shelf scrolling in all three themes and both lights at 412 and 853 pixels; manuscript backing and visible gutters are checked at 360, 412 and 853 pixels.
+- Original Study chooses its portrait or wide photograph by width alone. A reproduced height-only resize at width 853 switched between both pictures under the old aspect-ratio rule; toolbar or keyboard height changes no longer select a different photograph.
+
+Checked with 47 suites: 2,138 checks passed, zero failures. The theme/foldable suite passed again after the photograph-selection fix. The visual walkthrough captured and reviewed 33 screen states at 360, 412 and 853 pixels. Synthetic temporary books and local stand-in providers only; no paid calls. Physical Android compositor restoration and 120 Hz behavior remain unverified.

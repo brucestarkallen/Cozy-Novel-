@@ -95,16 +95,16 @@ async def scenario(browser):
         for mode in ['dark', 'light']:
             await pg.evaluate("async look=>(await import('/js/ui/look.js')).applyLook(look)", {'theme': theme, 'mode': mode, 'motion': 'on'})
             await frames(pg, 4)
-            sample = await pg.evaluate("""async()=>{const box=document.querySelector('#pageWrap');box.scrollTop=box.scrollHeight;const values=[];for(let i=0;i<10;i++){await new Promise(requestAnimationFrame);const s=getComputedStyle(box);values.push([s.opacity,s.backgroundColor,box.scrollTop,box.scrollHeight])}return{values,paper:getComputedStyle(document.querySelector('.page')).backgroundColor,root:getComputedStyle(document.documentElement).overscrollBehavior}}""")
+            sample = await pg.evaluate("""async()=>{const box=document.querySelector('#pageWrap');box.scrollTop=box.scrollHeight;const values=[];for(let i=0;i<10;i++){await new Promise(requestAnimationFrame);const s=getComputedStyle(box);values.push([s.opacity,s.backgroundImage,box.scrollTop,box.scrollHeight])}return{values,paper:getComputedStyle(document.querySelector('.page')).backgroundColor,root:getComputedStyle(document.documentElement).overscrollBehavior}}""")
             rows = sample['values']
-            check(f'{theme} {mode}: bottom stays opaque, with stable geometry and no edge stretch', all(r[0] == '1' and r[1] == sample['paper'] and r[2:] == rows[0][2:] for r in rows) and sample['root'] == 'none', sample)
+            check(f'{theme} {mode}: bottom stays opaque, with stable geometry and no edge stretch', all(r[0] == '1' and sample['paper'] in r[1] and r[2:] == rows[0][2:] for r in rows) and sample['root'] == 'none', sample)
     # Exercise the application's visibility/resync handlers. This does not
     # emulate an Android GPU being reclaimed; that still needs a real device.
     await pg.evaluate("""() => {window.keptPage=document.querySelector('#passages>.passage');window.visibleTest='hidden';Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>visibleTest});Object.defineProperty(document,'hidden',{configurable:true,get:()=>visibleTest==='hidden'});document.dispatchEvent(new Event('visibilitychange'));}""")
     await pg.wait_for_timeout(100)
     await pg.evaluate("visibleTest='visible';document.dispatchEvent(new Event('visibilitychange'))")
     await pg.wait_for_timeout(500)
-    check('visibility resync retains the manuscript and its opaque scrolling surface', await pg.evaluate("keptPage.isConnected&&getComputedStyle(document.querySelector('#pageWrap')).opacity==='1'&&getComputedStyle(document.querySelector('#pageWrap')).backgroundColor===getComputedStyle(document.querySelector('.page')).backgroundColor"))
+    check('visibility resync retains the manuscript and its opaque scrolling surface', await pg.evaluate("keptPage.isConnected&&getComputedStyle(document.querySelector('#pageWrap')).opacity==='1'&&getComputedStyle(document.querySelector('#pageWrap')).backgroundImage.includes(getComputedStyle(document.querySelector('.page')).backgroundColor)"))
     await pg.evaluate("delete document.visibilityState;delete document.hidden")
     await pg.click('#moreBtn')
     check('an opened menu is opaque rather than fading through the room', await pg.locator('.menu-pop').evaluate("el=>getComputedStyle(el).opacity==='1'"))

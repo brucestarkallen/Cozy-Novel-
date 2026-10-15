@@ -17,7 +17,7 @@ export function showWorld(world) {
   if (world === 'study') {
     /* A folded phone keeps its portrait window even when the keyboard reduces
      * its height. An open, broader screen selects the whole room automatically. */
-    scene.innerHTML = '<picture class="study-picture"><source media="(max-width: 599px), (max-aspect-ratio: 4/5)" srcset="assets/room/mobile.webp"><img class="study-photo" src="assets/room/desktop.webp" alt="" decoding="async" draggable="false"></picture><div class="study-glow" aria-hidden="true"></div>';
+    scene.innerHTML = '<picture class="study-picture"><source media="(max-width: 599px)" srcset="assets/room/mobile.webp"><img class="study-photo" src="assets/room/desktop.webp" alt="" decoding="async" draggable="false"></picture><div class="study-glow" aria-hidden="true"></div>';
   } else scene.innerHTML = world === 'tokyo' ? tokyoArt() : academyArt();
   room.replaceChildren(scene);
   prepared = document.documentElement.dataset.room !== 'off' && compositeMotion(scene.querySelector('.world-art'));

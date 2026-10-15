@@ -136,9 +136,12 @@ a { color: var(--accent); }
 
 /* the room behind everything */
 .room {
-  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  position: fixed; inset: 0 0 auto; height: 100vh; height: 100lvh; z-index: 0; pointer-events: none;
+  /* Browser bars may slide while the shelf scrolls. Keep the drawing's crop
+   * tied to the large viewport, not the changing visible bottom edge. One
+   * isolated background layer keeps the shelf from repainting its artwork. */
+  transform: translateZ(0);
   background: var(--room-veil), var(--room-img) center / cover no-repeat, var(--bg);
-  transition: opacity .4s var(--ease);
 }
 body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / cover no-repeat, var(--bg); }
 
