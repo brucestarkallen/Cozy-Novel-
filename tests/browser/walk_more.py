@@ -1771,9 +1771,16 @@ async def scenario_rest(b):
     await close_sheet(pg)
     # the shelf when the phone sends no list: never shown as no books
     retry_requests = []
+    shelf_recovered = False
     async def list_after_retry(route):
+        nonlocal shelf_recovered
         if route.request.headers.get('x-test-shelf-retry') == 'clicked':
             retry_requests.append(route.request.url)
+            shelf_recovered = True
+        # Once the real retry reaches the phone, recovery must apply to later
+        # catch-up requests too. Otherwise a newer artificial failure can
+        # supersede the successful manual retry under concurrent test load.
+        if shelf_recovered:
             await route.continue_()
         else:
             await route.abort()

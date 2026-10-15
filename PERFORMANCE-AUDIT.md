@@ -1,4 +1,49 @@
-# Performance audit — 2.10.1
+# Performance audit — 2.10.2 follow-up
+
+The follow-up addressed visible flashing through to the room, sluggish scrolling
+and returning from a minimized app. The earlier 2.10.1 measurements below remain
+a record of that release, not proof that those symptoms were resolved.
+
+- The reading viewport itself now has an opaque paper background, as Tavern's
+  thread has its own background. It no longer depends solely on the tiles of a
+  potentially very long inner page. Pane and sheet scrolling bodies also have
+  explicit opaque backgrounds; the bars use solid theme colors. The long page's
+  decorative wash is bounded to one viewport and its large shadow is removed.
+- The document scroll root and inner reading surfaces use `overscroll-behavior:
+  none`, preventing the browser's edge stretch/glow and scroll chaining. The
+  writing view does not create an outer document scroll beside its inner one.
+- Returning to the shelf reproduced cover and welcome opacity of **0** on the
+  first frames. Replayed entrance fades are removed. Menus and sheets also keep
+  their content opaque while their short movement remains. The room's ambient
+  animation is still available.
+- Notes no longer uses `content-visibility: auto` with guessed offscreen card
+  heights. This trades some initial layout savings for stable real geometry
+  during fast scrolling. The old cold-Notes percentage below must not be used
+  as a measurement of 2.10.2. Retained cards and pane caching remain.
+- Tavern's page marker caches its offsets after layout changes. Novel now does
+  the same, refreshing after prose, viewport or size changes. An idle manuscript
+  also stops measuring a streaming follow target on each scroll event. A
+  150-passage synthetic chapter, scrolled over 120 frames after settling, went
+  from **1,211 bounding-rectangle reads to 0 additional reads**. This is a work
+  count, not an FPS claim.
+- A keyboard-sized resize reproduced replacement of the new-scene form and
+  loss of its entered name. The form and scene list now retain their elements,
+  and setup fields use the existing draft journal across pane changes and
+  reloads. Async loading has a visible status rather than an empty pane.
+- Each narrator answer displays its saved input-token count. Provider-reported
+  counts take priority; estimates say “About,” and older unrecorded counts say
+  so. The count follows the selected answer and agrees with “What was sent.”
+
+The new `walk_surface_stability.py` covers the bottom of a long chapter in all
+three themes and both lights, scene setup during keyboard/foldable resizing,
+scene token counts, shelf-return frames, and visibility/resync handlers.
+Visibility events in a desktop browser do **not** reproduce Android reclaiming
+GPU resources while an app is minimized. That device-specific return path and
+120 Hz behavior still require testing on the user's phone.
+
+Checked across all 46 suites: 2,120 distinct checks passed after affected reruns (1,094 server/application/focused checks and 1,026 Chromium browser checks). The initial run exposed three fixture issues: shelf recovery kept failing newer catch-up requests, search reload raced the sheet’s history cleanup, and the long scroll fixture unintentionally invoked the helper. The corrected shelf scenario, search suite and surface suite passed; the other extended scenarios completed successfully. Temporary books and local stand-in providers only; no paid calls. Physical Android minimize/reopen rendering and 120 Hz smoothness remain unverified.
+
+## Earlier audit — 2.10.1
 
 The reported stutter was most noticeable when opening menus, panes and switching
 screens. The audit reproduced unnecessary work both during those interactions

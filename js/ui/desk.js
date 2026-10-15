@@ -58,7 +58,7 @@ export function initDesk(elements, appHooks) {
   ui.outcomeBtn.addEventListener('click', () => outcomeMenu());
   ui.writerBtn.addEventListener('click', () => hooks.writerMenu(ui.writerBtn));
   ui.wrap.addEventListener('scroll', onScroll, { passive: true });
-  F = follower(ui.wrap, { tail: () => tailTop(S.followId), onChange: (on) => { ui.followBtn.hidden = on || !busy(); } });
+  F = follower(ui.wrap, { tail: () => tailTop(S.followId), active: busy, onChange: (on) => { ui.followBtn.hidden = on || !busy(); } });
   initScroller();
   ui.followBtn.addEventListener('click', () => { F.start(); ui.followBtn.hidden = true; toBottom(S.followId); });
   ui.chapname.addEventListener('focus', () => { ui.chapname.dataset.was = ui.chapname.textContent; });
@@ -1101,7 +1101,7 @@ function flushLive() {
  * under the eye ("Passage N of M", Cozy Tavern's "page N of M") is said in
  * the bar above the page, where no word of the story is, and beside the thumb
  * only while he holds it (Cozy Tavern M675). */
-const SC = { bar: null, thumb: null, tip: null, where: null, drag: null, idle: 0, frame: 0, self: 0, said: '', numbered: [] };
+const SC = { bar: null, thumb: null, tip: null, where: null, drag: null, idle: 0, frame: 0, self: 0, said: '', numbered: [], geometry: null };
 function initScroller() {
   SC.bar = document.getElementById('scroller');
   if (!SC.bar) return;
@@ -1133,10 +1133,25 @@ function initScroller() {
     toPassage(step);
   });
   window.addEventListener('resize', placeScrollerSoon);
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => {
+    SC.geometry = null;
+    placeScrollerSoon();
+  }).observe(ui.passages);
 }
 function placeScrollerSoon() { if (SC.bar && !SC.frame) SC.frame = requestAnimationFrame(() => { SC.frame = 0; placeScroller(); }); }
 /* the numbered passages on the page, in order, with their numbers */
 function numberedEls() { return SC.numbered; }
+/* Like Tavern's page mark, measure passage positions when layout changes,
+ * not on every frame of a fling. Scrolling itself only searches numbers. */
+function passageTops(list) {
+  const height = ui.wrap.scrollHeight, width = ui.wrap.clientWidth, viewHeight = ui.wrap.clientHeight;
+  const previous = SC.geometry;
+  if (previous?.list === list && previous.height === height && previous.width === width && previous.viewHeight === viewHeight) return previous.tops;
+  const origin = ui.wrap.getBoundingClientRect().top - ui.wrap.scrollTop;
+  const tops = list.map(({ el }) => el.getBoundingClientRect().top - origin);
+  SC.geometry = { list, height, width, viewHeight, tops };
+  return tops;
+}
 /* the passage under the eye: the last one that starts above a quarter of the
  * way down. (Cozy Tavern slides its line to the bottom near the end, M468, so
  * a short last passage is named there; here the page keeps 40–45% of the
@@ -1144,11 +1159,12 @@ function numberedEls() { return SC.numbered; }
  * the end — measured, and held by the walk.) */
 function passageUnderEye(list) {
   if (!list.length) return null;
-  const eye = ui.wrap.getBoundingClientRect().top + ui.wrap.clientHeight * 0.25;
+  const tops = passageTops(list);
+  const eye = ui.wrap.scrollTop + ui.wrap.clientHeight * 0.25;
   let lo = 0, hi = list.length - 1, best = 0;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (list[mid].el.getBoundingClientRect().top <= eye) { best = mid; lo = mid + 1; } else hi = mid - 1;
+    if (tops[mid] <= eye) { best = mid; lo = mid + 1; } else hi = mid - 1;
   }
   return best;
 }

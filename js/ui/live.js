@@ -138,7 +138,7 @@ export function streamLines(box, text, { blocks = false } = {}) {
 /* tail(): where the view stands when it is with the newest words (the
  * bottom, unless said otherwise). onChange(on): told when following starts
  * or stops. */
-export function follower(box, { tail = null, onChange = null } = {}) {
+export function follower(box, { tail = null, onChange = null, active = () => true } = {}) {
   let on = true;
   let hand = false;
   let last = box.scrollTop;
@@ -148,11 +148,12 @@ export function follower(box, { tail = null, onChange = null } = {}) {
   const set = (v) => { if (on === v) return; on = v; if (onChange) onChange(v); };
   box.addEventListener('scroll', () => {
     const y = box.scrollTop;
+    if (!active()) { last = y; return; }
     if (y < last - 2 && !atTail()) set(false);     /* the hand went up */
     else if (atTail()) set(true);                   /* and brought it back down */
     last = y;
   }, { passive: true });
-  for (const ev of ['wheel', 'touchmove']) box.addEventListener(ev, () => { if (!atTail()) set(false); }, { passive: true });
+  for (const ev of ['wheel', 'touchmove']) box.addEventListener(ev, () => { if (active() && !atTail()) set(false); }, { passive: true });
   box.addEventListener('touchstart', () => { hand = true; }, { passive: true });
   for (const ev of ['touchend', 'touchcancel']) box.addEventListener(ev, () => { hand = false; }, { passive: true });
   return {

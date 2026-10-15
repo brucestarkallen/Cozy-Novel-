@@ -246,7 +246,7 @@ body { color: var(--chrome-ink); }
 .field input:not([type="checkbox"]):not([type="radio"]), .field select, .field textarea, .keptfield textarea, .talkbox textarea, .searchsheet input[type="search"] { background: var(--field-bg); color: var(--chrome-ink); border-color: var(--line); }
 input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 1; }
 .field select option { background: var(--chrome-solid); color: var(--chrome-ink); }
-.deskbar, .composer { background: var(--chrome); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.deskbar, .composer { background: var(--chrome-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .composer .inner { background: var(--wash); border-color: var(--line); box-shadow: none; }
 .composer textarea { color: var(--chrome-ink); background: transparent; }
 .composer .crow { border-color: var(--line); }
@@ -281,7 +281,11 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
 .searchsheet .hit mark, .sug mark { background: color-mix(in srgb, var(--accent) 24%, transparent); color: inherit; }
 
 /* The manuscript keeps the reader's chosen typeface and measure. */
-.page { background: var(--paper); color: var(--ink); border-color: var(--paper-edge); box-shadow: 0 20px 65px color-mix(in srgb, var(--bg) 30%, transparent), 0 0 0 5px color-mix(in srgb, var(--paper) 9%, transparent); }
+/* Tavern paints its reading surface on the scroll viewport. Do the same:
+ * a long chapter's scrolling tiles must never be the only thing separating
+ * the words from the animated room, including when Android restores a tab. */
+.pagewrap { background: var(--paper); }
+.page { background: var(--paper); color: var(--ink); border-color: var(--paper-edge); box-shadow: none; }
 .page::before { opacity: .13; }
 .chapnum { color: var(--ink-soft); font-family: var(--label-font); }
 .chapname:empty::before { opacity: 1; color: var(--ink-soft); }

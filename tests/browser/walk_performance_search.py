@@ -90,6 +90,9 @@ async def scenario(browser):
 
         # Reload gives the cap test a genuinely unopened second book again.
         await pg.get_by_role('dialog', name='Search', exact=True).get_by_role('button', name='Close', exact=True).click()
+        # Closing a sheet unwinds its history entry asynchronously. Finish
+        # that navigation before asking Chromium to reload the document.
+        await pg.evaluate("import('/js/ui/dom.js').then(m=>m.afterBacks())")
         await pg.reload()
         await pg.wait_for_selector('#desk:not([hidden]) .passage')
         opened = []

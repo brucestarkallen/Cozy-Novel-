@@ -114,6 +114,10 @@
 /* ------------------------------------------------------------- base */
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; }
+/* The document itself is the shelf's scroll root. Contain still permits
+ * Android's edge stretch/glow; none keeps the room from flashing through. */
+html { background: var(--bg); overscroll-behavior: none; }
+body:not(.shelfview) { overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--chrome-ink);
@@ -188,7 +192,6 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 @media (min-width: 700px) { .books { grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); } }
 .book {
   position: relative; text-align: left; display: flex; flex-direction: column; gap: 8px;
-  animation: rise .5s var(--ease) both;
 }
 .cover {
   position: relative; aspect-ratio: 2 / 3; border-radius: 6px 12px 12px 6px; overflow: hidden;
@@ -259,7 +262,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .deskbody { position: relative; flex: 1; min-height: 0; display: flex; }
 /* the page's own column: the page, and beside its right edge the scroller */
 .pagecol { position: relative; flex: 1; min-width: 0; display: flex; }
-.pagewrap { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.pagewrap { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: none; }
 /* one thumb on the page: the passage mark, which says where he is and drags anywhere — the browser's own is not drawn (Cozy Tavern M752) */
 .pagewrap { scrollbar-width: none; }
 .pagewrap::-webkit-scrollbar { display: none; }
@@ -284,7 +287,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 @media (min-width: 700px) { .page { padding: 64px 64px 42vh; margin-top: 28px; } }
 @media (max-width: 520px) { .page { margin: 10px 8px 0; padding: 30px 20px 45vh; } }
 .page::before { /* paper grain, drawn not fetched */
-  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: .35;
+  content: ''; position: absolute; inset: 0; max-height: 100vh; border-radius: inherit; pointer-events: none; opacity: .35;
   background: radial-gradient(140% 90% at 50% 0%, rgba(255,255,255,.18), transparent 60%);
 }
 [data-theme="candle"] .page::before, [data-theme="rain"] .page::before, [data-theme="ink"] .page::before { opacity: .12; }
@@ -411,7 +414,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 }
 .panehead { display: flex; align-items: center; gap: 6px; padding: 10px 10px 8px 16px; border-bottom: 1px solid var(--line); }
 .panehead h2 { flex: 1; margin: 0; font: 600 21px/1.2 var(--display); }
-.panebody { flex: 1; overflow-y: auto; padding: 12px 14px 30px; overscroll-behavior: contain; }
+.panebody { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px 30px; overscroll-behavior: none; background: var(--chrome-solid); }
 .tabs { display: flex; gap: 2px; padding: 8px 10px 0; }
 .tabs button { flex: 1; height: 38px; border-radius: 10px 10px 0 0; color: var(--chrome-soft); font-weight: 500; border-bottom: 2px solid transparent; }
 .tabs button[aria-selected="true"] { color: var(--chrome-ink); border-bottom-color: var(--accent); }
@@ -505,20 +508,23 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 /* sheets (settings, book, dialogs) */
 .sheet {
   position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center;
-  background: rgba(0,0,0,.5); opacity: 0; transition: opacity .2s; padding-top: calc(var(--safe-t) + 20px);
+  background: rgba(0,0,0,.5); padding-top: calc(var(--safe-t) + 20px);
 }
 .sheet.on { opacity: 1; }
+/* Opaque content from the first frame to the last. Fading the entire sheet
+ * faded its text and reading surface into the room, too. */
+.sheet[aria-hidden="true"] { visibility: hidden; pointer-events: none; }
 .sheet > .box {
   width: 100%; max-width: 720px; max-height: 100%; display: flex; flex-direction: column;
   background: var(--chrome-solid); color: var(--chrome-ink); border-radius: 20px 20px 0 0;
-  box-shadow: var(--shadow); transform: translateY(24px); transition: transform .28s var(--ease);
+  box-shadow: var(--shadow); transform: translateY(8px); transition: transform .18s var(--ease);
   border: 1px solid var(--line); border-bottom: 0;
 }
 .sheet.on > .box { transform: none; }
 @media (min-width: 760px) { .sheet { align-items: center; padding: 30px; } .sheet > .box { border-radius: 20px; border-bottom: 1px solid var(--line); max-height: 90vh; } }
 .sheet .head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 10px 20px; border-bottom: 1px solid var(--line); }
 .sheet .head h2 { flex: 1; margin: 0; font: 600 24px/1.15 var(--display); }
-.sheet .body { overflow-y: auto; padding: 16px 20px calc(var(--safe-b) + 26px); overscroll-behavior: contain; }
+.sheet .body { min-height: 0; overflow-y: auto; padding: 16px 20px calc(var(--safe-b) + 26px); overscroll-behavior: none; background: var(--chrome-solid); }
 .sheet.small > .box { max-width: 460px; }
 
 .group { margin: 0 0 14px; border-radius: 16px; background: rgba(255,255,255,.035); border: 1px solid var(--line); }
@@ -605,7 +611,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .menu-pop button[aria-checked="true"]::after { content: '\2713'; margin-left: auto; color: var(--accent); }
 .menu-pop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 6px; }
 .menu-pop .label { padding: 8px 12px 4px; font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--chrome-soft); }
-@keyframes pop { from { opacity: 0; transform: scale(.97) translateY(-4px); } }
+@keyframes pop { from { transform: translateY(-4px); } }
 
 /* notices */
 .toast {
@@ -764,7 +770,7 @@ body.reading .scroller { bottom: 12px; }
 .switchrow em { margin-top: 0; }
 .presetrow .btn { flex: none; }
 .presetrow .icon { flex: none; width: 36px; height: 36px; }
-.menu-pop { max-height: calc(100vh - 16px); overflow-y: auto; }
+.menu-pop { max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: none; }
 /* the connection editor: Cozy Tavern's quiet lines, its template's example, the counts */
 .say.quiet { font-size: 12.5px; margin: -6px 0 12px; }
 .connform .toggle + .say.quiet, .prefillpart .toggle + .say.quiet { margin-top: -4px; }
@@ -877,13 +883,13 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .brand p { font-size: 16px; margin-top: 5px; }
 #shelfSettings { background: var(--room-panel); border: 1px solid var(--line); border-radius: 50%; width: 46px; height: 46px; }
 .shelf-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 365px); align-items: center; gap: 54px; padding: 58px 0 50px; min-height: 340px; }
-.shelf-welcome { min-width: 0; animation: room-arrival .65s var(--ease) both; }
+.shelf-welcome { min-width: 0; }
 .eyebrow { display: flex; align-items: center; gap: 12px; font-size: 10px; font-weight: 600; letter-spacing: .24em; color: var(--accent-2); margin: 0 0 20px; }
 .eyebrow::before { content: ''; width: 26px; height: 1px; background: currentColor; opacity: .65; }
 #shelfGreeting { margin: 0; font: 500 clamp(40px, 4.7vw, 66px)/1.04 var(--display); letter-spacing: -.025em; white-space: pre-line; text-wrap: balance; max-width: 650px; color: var(--chrome-ink); text-shadow: 0 2px 26px var(--bg); }
 .shelf-invitation { margin: 20px 0 0; max-width: 440px; color: var(--chrome-soft); font: 15px/1.75 var(--ui); text-wrap: pretty; }
 #shelfResume { min-width: 0; }
-.resume-card { position: relative; padding: 29px 28px 25px; background: var(--room-panel); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 18px; box-shadow: 0 16px 45px rgba(0,0,0,.18); overflow: hidden; animation: room-arrival .7s .08s var(--ease) both; }
+.resume-card { position: relative; padding: 29px 28px 25px; background: var(--room-panel); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 18px; box-shadow: 0 16px 45px rgba(0,0,0,.18); overflow: hidden; }
 .resume-card::before { content: ''; position: absolute; top: 0; left: 28px; height: 3px; width: 40px; background: var(--accent); border-radius: 0 0 3px 3px; }
 .resume-label { margin: 0 0 15px; font: 600 10px/1.4 var(--ui); letter-spacing: .18em; text-transform: uppercase; color: var(--chrome-soft); }
 .resume-title { font: 600 30px/1.12 var(--display); letter-spacing: -.01em; margin: 0 0 10px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }

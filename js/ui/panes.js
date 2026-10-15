@@ -36,7 +36,7 @@ export function initPanes(elements, appHooks) {
   ui.scrim.addEventListener('click', () => { closeLeft(); closeRight(); });
   for (const b of ui.tabs.querySelectorAll('button')) b.addEventListener('click', () => { P.side = b.dataset.tab; drawSide(); });
   archivist.onLight((novelId) => { if (novelId === P.novelId) { drawLight(); if (P.side === 'notes') drawSideSoon(); } });
-  SF = follower(ui.rightBody, { tail: sideTail });
+  SF = follower(ui.rightBody, { tail: sideTail, active: () => P.side === 'partner' ? talk.talkBusy('talk', P.novelId) : P.side === 'play' && P.playId && talk.talkBusy('play', P.playId) });
   talk.onTalkLive(onTalkLive);
   /* a reply asked for: the pane follows it in, until his hand moves it up */
   talk.onTalkJob((key, job) => {
@@ -534,6 +534,8 @@ function switchPane(key) {
     ui.rightFoot.hidden = cached.footHidden;
     ui.rightFoot.dataset.for = cached.draftFor || ''; ui.rightFoot.dataset.book = cached.draftBook || '';
     notesSignature = cached.notesSignature; P.drawn = cached.drawn;
+  } else if (P.side !== 'notes') {
+    ui.rightBody.append(h('p.pane-loading', { role: 'status' }, P.side === 'play' ? 'Opening your scenes…' : 'Opening your conversation…'));
   }
   renderedPane = { key, side: P.side, cacheable: P.side !== 'notes' || notesView === 'cards' };
 }
@@ -568,12 +570,6 @@ function drawSide() {
     return;
   }
   switchPane(nextPane);
-  if (P.side === 'play' && !P.playId) {
-    ui.rightBody.textContent = '';
-    ui.rightFoot.textContent = '';
-    ui.rightFoot.hidden = true;
-    notesSignature = '';
-  }
   if (P.side === 'notes') drawNotes();
   else if (P.side === 'partner') drawPartner();
   else drawPlay();
@@ -1235,6 +1231,13 @@ function drawTurn(kind, id, turn) {
   if (kind === 'talk' && v.read && v.read.length) el.append(h('div.turnnote', `It read ${v.read.join(', ')} whole.`));
   /* what was said of this answer — a lesson its model taught, what was taken off it — as a page's version says it */
   if (turn.by !== 'you' && v.notes && v.notes.length) el.append(h('div.turnnote.said', v.notes.join(' ')));
+  if (kind === 'play' && turn.by !== 'you') {
+    const usage = sceneInputTokens(v);
+    el.append(h('p.turn-tokens', { title: usage?.counted
+      ? 'Input tokens reported by the provider for this telling, including the instructions, notes and scene history sent with your move.'
+      : usage ? 'Estimated input tokens for this telling. The provider did not return an input-token count.' : 'This older telling has no saved input-token count.' },
+    usage ? `${usage.counted ? '' : 'About '}${usage.tokens.toLocaleString()} tokens sent` : 'Tokens sent not recorded'));
+  }
   /* what its own web search looked at — only an address on the web is ever a link */
   const looked = turn.by !== 'you' ? (v.sources || []).filter((x) => x && webUrl(x.url)) : [];
   if (looked.length) el.append(h('div.turnnote.sources', 'Looked up: ', ...looked.slice(0, 8).flatMap((x, k) => [k ? ' · ' : '', h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer' }, String(x.title || x.url).slice(0, 80))])));
@@ -1291,7 +1294,7 @@ function drawTurn(kind, id, turn) {
     kind === 'play' ? { label: 'Branch story from here', hint: 'A separate book with the story before this scene was turned into prose, and the scene up to this turn.', disabled: branchBusy(P.novelId), run: () => openBranch({ novelId: P.novelId, playId: id, turnId: turn.id }) } : null,
     /* the answer as it came, its blocks and all (Cozy Tavern's "What it said, whole") */
     !mine && kind === 'talk' && String(v.text || '').trim() !== wordsOf(v.text).trim() ? { label: 'What it said, whole', hint: 'The answer as it came — its changes block and all.', run: () => showWhole(v.text) } : null,
-    !mine && v.sent ? { label: 'What was sent', hint: 'Everything this answer was asked with, as it went out.', run: () => showSent(P.novelId, v.sent) } : null,
+    !mine && v.sent ? { label: 'What was sent', hint: 'Everything this answer was asked with, as it went out.', run: () => showSent(P.novelId, v.sent, kind === 'play' ? 'play' : 'partner') } : null,
     !mine && kind === 'play' && (String(v.tookOff || '').trim() || String(v.tookOffTop || '').trim()) ? { label: 'Put back what was taken off', hint: 'What the narrator added around its telling — a heading or its plan above it, a note to you, its check of its work or a block of tracking after it — back where it was, as a new version of this answer.', disabled: talk.talkBusy('play', id), run: () => { if (talk.putBackTelling({ playId: id, turnId: turn.id })) toast('Put back — the answer without it is one arrow away.'); } } : null,
     { label: 'Copy', hint: mine ? 'Your words, to paste anywhere.' : 'Its words, to paste anywhere.', run: async () => toast((await copyText(copyWords)) ? 'Copied.' : 'It could not be copied.') },
     '-',
@@ -1304,6 +1307,11 @@ function drawTurn(kind, id, turn) {
 /* A checkpoint or one changed answer is not a new conversation. Inspect the
  * selected answer only; its saved request and all older takes are not painted.
  * Keeping earlier turns connected also keeps text selection and open thinking. */
+function sceneInputTokens(v) {
+  if (Number.isFinite(v.usage?.in) && v.usage.in >= 0) return { tokens: v.usage.in, counted: true };
+  if (Number.isFinite(v.tokensIn) && v.tokensIn >= 0) return { tokens: v.tokensIn, counted: Boolean(v.tokensCounted) };
+  return null;
+}
 function turnSignature(turn, newest, kind, id) {
   const v = picked(turn) || {};
   const { ask, usage, ms, conn, model, beat, at, tab, text, thinking, ...visible } = v;
@@ -1315,7 +1323,7 @@ function turnSignature(turn, newest, kind, id) {
    * every checkpoint allocates another copy of every old paragraph. */
   return [turn.id, turn.by, turn.pick, (turn.versions || []).map(v => v.id).join('\0'), JSON.stringify(visible), JSON.stringify(changesContext),
     writingHere(v) ? null : text, writingHere(v) ? null : thinking,
-    newest, turn.by === 'you' && kind === 'talk' && talk.talkBusy(kind, id),
+    newest, kind === 'play' ? JSON.stringify(sceneInputTokens(v)) : '', turn.by === 'you' && kind === 'talk' && talk.talkBusy(kind, id),
     Boolean((kind === 'talk' ? partnerLive : playLive).get(turnKey(kind, id, turn.id)))];
 }
 const sameSignature = (a, b) => a?.length === b?.length && a.every((part, i) => part === b[i]);
@@ -1577,9 +1585,6 @@ async function drawPlay() {
     if (talk.mendScene(p.id)) return drawOnePlay(store.peek('play', p.id));
     return drawOnePlay(p);
   }
-  ui.rightBody.append(h('div.pane-intro.scene-intro', h('p.pane-kicker', 'Try another way in'), h('h2', 'Step into your story'),
-    h('p', 'Be one of its people. You write what they say and do; the narrator brings the world around them to life.'),
-    h('details.pane-guide', h('summary', 'From a scene to the page'), h('p', 'When a scene goes somewhere good, Turn it into prose writes what happened into the chapter. Your scenes stay here to return to.'))));
   const plays = [];
   for (const id of n.plays || []) {
     const p = store.peek('play', id) ?? await store.open('play', id).catch(() => null);
@@ -1587,36 +1592,76 @@ async function drawPlay() {
     if (p) plays.push(p);
   }
   plays.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  const intro = ui.rightBody.querySelector('.scene-intro') || h('div.pane-intro.scene-intro', h('p.pane-kicker', 'Try another way in'), h('h2', 'Step into your story'),
+    h('p', 'Be one of its people. You write what they say and do; the narrator brings the world around them to life.'),
+    h('details.pane-guide', h('summary', 'From a scene to the page'), h('p', 'When a scene goes somewhere good, Turn it into prose writes what happened into the chapter. Your scenes stay here to return to.')));
+  const children = [intro];
   if (plays.length) {
-    ui.rightBody.append(h('h3.pane-section-title', 'Return to a scene'));
-    const list = h('ul.plays');
-    for (const p of plays) {
+    children.push(ui.rightBody.querySelector('.scene-list-title') || h('h3.pane-section-title.scene-list-title', 'Return to a scene'));
+    const list = ui.rightBody.querySelector('.plays') || h('ul.plays');
+    const old = new Map([...list.children].map(el => [el.dataset.id, el]));
+    const items = plays.map(p => {
       const c = store.peek('chapter', p.chapterId);
-      list.append(h('li', h('button', { onclick: () => { P.playId = p.id; drawSide(); } },
-        h('b', `${p.who || 'Someone'}${p.from ? ` — ${p.from.slice(0, 50)}` : ''}`),
-        h('small', `${c ? chapterLabel(n, c, { withName: false }) : 'a chapter'} · ${plural((p.turns || []).length, 'turn')} · ${timeAgo(p.updated)}`))));
-    }
-    ui.rightBody.append(list);
+      const label = `${p.who || 'Someone'}${p.from ? ` — ${p.from.slice(0, 50)}` : ''}`;
+      const detail = `${c ? chapterLabel(n, c, { withName: false }) : 'a chapter'} · ${plural((p.turns || []).length, 'turn')} · ${timeAgo(p.updated)}`;
+      const el = old.get(p.id) || h('li', { 'data-id': p.id }, h('button', { onclick: () => { P.playId = p.id; drawSide(); } }, h('b'), h('small')));
+      setText(el.querySelector('b'), label); setText(el.querySelector('small'), detail);
+      return el;
+    });
+    keepChildren(list, items);
+    children.push(list);
   }
-  const people = (n.notes && n.notes.people) || [];
-  const who = h('input', { type: 'text', placeholder: people[0] ? people[0].name : 'Their name', list: 'cn-people' });
-  const dl = h('datalist', { id: 'cn-people' }, people.map((x) => h('option', { value: x.name })));
-  const from = h('input', { type: 'text', placeholder: 'Right where the chapter leaves off' });
-  ui.rightBody.append(h('div.group.scene-start', h('div.gbody', h('h3.pane-section-title', 'Begin somewhere new'),
-    field('Who do you play?', who), dl,
-    field('Where does it start?', from, 'Leave it empty to pick up right where the chapter stands now.'),
-    h('div.btnrow', h('button.btn.primary', { onclick: async () => {
+  children.push(sceneStartForm(n));
+  keepChildren(ui.rightBody, children);
+  ui.rightFoot.hidden = true;
+}
+
+/* A keyboard resize is not a new form. The same fields keep focus and their
+ * selection; the existing draft journal also keeps them across reloads. */
+function sceneStartForm(n) {
+  const key = `setup:${n.id}`;
+  let form = ui.rightBody.querySelector('.scene-start');
+  if (!form) {
+    const saved = composerOf(key, n.id);
+    composerBooks.set(key, n.id);
+    const who = h('input', { type: 'text', placeholder: 'Their name', list: 'cn-people', value: saved.value || '' });
+    const from = h('input', { type: 'text', placeholder: 'Right where the chapter leaves off', value: saved.tell || '' });
+    const save = () => keepComposer(n.id, key, { value: who.value, tell: from.value });
+    who.addEventListener('input', save); from.addEventListener('input', save);
+    const begin = h('button.btn.primary', { onclick: async () => {
       const name = who.value.trim();
       if (!name) { toast('Say who you play.'); who.focus(); return; }
-      const id = await talk.newPlay({ novelId: P.novelId, chapterId: P.chapterId, who: name, from: from.value.trim() });
-      P.playId = id;
-      P.offs.push(store.subscribe('play', id, () => { if (P.side === 'play' && P.playId === id && !drawnAlready('play', id)) drawSideSoon(); }));
-      drawSide();
-      const novelId = P.novelId;
-      const out = await talk.playSay({ playId: id, text: '' });
-      const away = elsewhere(novelId, id);
-      if (out && !out.ok && out.error) toast(`The narrator${away ? ` of your scene${away}` : ''} did not answer: ${out.error}`, 6000);
-    } }, 'Begin the scene')))));
+      if (begin.disabled) return;
+      const chapterId = P.chapterId;
+      const before = { value: who.value, tell: from.value };
+      begin.disabled = true;
+      try {
+        const id = await talk.newPlay({ novelId: n.id, chapterId, who: name, from: from.value.trim() });
+        if (who.value === before.value && from.value === before.tell) {
+          who.value = ''; from.value = ''; save();
+        }
+        if (P.novelId === n.id && P.chapterId === chapterId && P.side === 'play' && !P.playId && sideVisible()) {
+          P.playId = id;
+          drawSide();
+        }
+        const out = await talk.playSay({ playId: id, text: '' });
+        const away = elsewhere(n.id, id);
+        if (out && !out.ok && out.error) toast(`The narrator${away ? ` of your scene${away}` : ''} did not answer: ${out.error}`, 6000);
+      } catch (error) { toast(`The scene could not begin: ${error.message || error}`, 6000); }
+      finally { begin.disabled = false; }
+    } }, 'Begin the scene');
+    form = h('div.group.scene-start', h('div.gbody', h('h3.pane-section-title', 'Begin somewhere new'),
+      field('Who do you play?', who), h('datalist', { id: 'cn-people' }),
+      field('Where does it start?', from, 'Leave it empty to pick up right where the chapter stands now.'), h('div.btnrow', begin)));
+  }
+  const people = (n.notes?.people || []).map(p => p.name);
+  const signature = JSON.stringify(people);
+  if (form._people !== signature) {
+    form._people = signature;
+    form.querySelector('datalist').replaceChildren(...people.map(name => h('option', { value: name })));
+    form.querySelector('input').placeholder = people[0] || 'Their name';
+  }
+  return form;
 }
 
 let sideFrame = 0;

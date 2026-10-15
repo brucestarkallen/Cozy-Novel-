@@ -54,13 +54,9 @@
 .pane .notesec > .sechead h3 { font: 600 19px/1.25 var(--display); text-transform: none; letter-spacing: 0; color: var(--chrome-ink); }
 .pane .notesec > .sechead .count { display: grid; place-items: center; min-width: 23px; height: 23px; padding: 0 5px; border-radius: 7px; background: var(--pane-wash); font-size: 10px; }
 .pane .card { margin: 7px 0; border-radius: 11px; padding: 14px; background: color-mix(in srgb, var(--chrome-ink) 2.5%, transparent); }
+/* Keep actual card geometry during fast flings. Skipped content and guessed
+ * heights can expose empty tiles and move the bottom of a long notebook. */
 .pane .notecard { transition: background .18s ease, border-color .18s ease; }
-/* A long notebook need not lay out every distant paragraph before opening.
- * Native visibility keeps all cards searchable and keyboard reachable;
- * remembered sizes keep previously read cards steady when they leave view. */
-@supports (content-visibility: auto) {
-  .pane .notecard { content-visibility: auto; contain-intrinsic-block-size: auto 240px; }
-}
 .pane .notecard:hover { background: color-mix(in srgb, var(--chrome-ink) 5%, transparent); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
 .pane .notecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .pane .card .nm { font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; }
@@ -76,6 +72,7 @@
 .notes-empty { margin: 3px 5px 0; color: var(--chrome-soft); font: italic 15px/1.5 var(--display); }
 
 /* Conversations have an identifiable voice and an unhurried reading rhythm. */
+.pane .turn-tokens { margin: 9px 0 0; color: var(--chrome-soft); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .conversation-heading { margin: 0 0 20px; }
 .pane .convrow { gap: 4px; margin: 0; padding: 5px; background: var(--pane-wash); border: 1px solid var(--line); border-radius: 11px; }
 .pane .convrow .convpick { flex: 1 1 auto; font-family: var(--display); font-size: 18px; justify-content: space-between; padding: 4px 6px; }
