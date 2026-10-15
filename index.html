@@ -12,6 +12,10 @@
 <link rel="preload" href="assets/fonts/literata-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/cormorant-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/novel.css">
+<link rel="stylesheet" href="css/checks.css">
+<link rel="stylesheet" href="css/settings.css">
+<link rel="stylesheet" href="css/panes.css">
+<link rel="stylesheet" href="css/dialogs.css">
 </head>
 <body class="shelfview">
 <div class="room" aria-hidden="true"></div>
@@ -19,14 +23,27 @@
 <main id="shelf" hidden>
   <header class="shelf-head">
     <div class="brand">
+      <span class="brand-mark" aria-hidden="true">❦</span>
+      <div>
       <h1>Cozy Novel</h1>
       <p>a little room for a whole world</p>
+      </div>
     </div>
     <button class="icon" id="shelfSettings" aria-label="Settings" title="Settings">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 9v.03A1.7 1.7 0 0 0 21 10.06H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>
     </button>
   </header>
-  <div class="shelf-actions"><input class="shelf-search" id="search" type="search" placeholder="Find a book" aria-label="Find a book" hidden></div>
+  <section class="shelf-intro" id="shelfIntro" aria-labelledby="shelfGreeting">
+    <div class="shelf-welcome">
+      <p class="eyebrow" id="shelfEyebrow">YOUR WRITING ROOM</p>
+      <h2 id="shelfGreeting">A little room.<br>A whole world.</h2>
+      <p class="shelf-invitation" id="shelfInvitation">Settle in. There’s a story only you can tell.</p>
+    </div>
+    <div id="shelfResume" hidden></div>
+  </section>
+  <div class="shelf-actions">
+    <div class="collection-heading"><h2 id="shelfCollectionTitle">Your books</h2><span id="shelfCount"></span></div>
+    <input class="shelf-search" id="search" type="search" placeholder="Find a book" aria-label="Find a book" hidden></div>
   <section class="books" id="books" aria-label="Your books"></section>
   <footer class="shelf-foot" id="shelfFoot"></footer>
 </main>
@@ -40,16 +57,16 @@
     <button class="icon notesbtn" id="notesBtn" aria-label="Notes" title="Notes">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h9l3 3V20.5H6z"/><path d="M9 9.5h6M9 13h6M9 16.5h4"/></svg>
       <span class="dot" aria-hidden="true"></span>
-    </button>
+    <span class="tool-label" aria-hidden="true">Notes</span></button>
     <button class="icon" id="partnerBtn" aria-label="Partner" title="Partner">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16v10H9l-5 4z"/></svg>
-    </button>
+    <span class="tool-label" aria-hidden="true">Partner</span></button>
     <button class="icon" id="searchBtn" aria-label="Search" title="Search">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
-    </button>
+    <span class="tool-label" aria-hidden="true">Search</span></button>
     <button class="icon" id="moreBtn" aria-label="More" title="More">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
-    </button>
+    <span class="tool-label" aria-hidden="true">More</span></button>
   </header>
 
   <div class="scrim" id="scrim"></div>
@@ -64,7 +81,7 @@
         <article class="page" id="page">
           <header class="chapterhead">
             <p class="chapnum" id="chapnum"></p>
-            <h1 class="chapname" id="chapname" contenteditable="plaintext-only" spellcheck="false" aria-label="The chapter's name"></h1>
+            <h1 class="chapname" id="chapname" contenteditable="plaintext-only" spellcheck="false" aria-label="The chapter's name" title="Name this chapter — tap here to change it"></h1>
           </header>
           <div id="passages"></div>
           <div id="pageEnd"></div>

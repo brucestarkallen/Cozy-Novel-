@@ -187,7 +187,7 @@ function drawChapters() {
     const c = store.peek('chapter', id);
     const words = c ? chapterWords(c) : 0;
     const li = h('li' + (id === P.chapterId ? '.on' : ''),
-      h('button.go', { onclick: () => { closeLeft(); hooks.goChapter(id); } },
+      h('button.go', { 'aria-current': id === P.chapterId ? 'page' : null, onclick: () => { closeLeft(); hooks.goChapter(id); } },
         h('span.n', `Chapter ${numberWords(i + 1)}`),
         c && c.name ? h('span.nm', c.name) : h('span.nm', { style: { fontStyle: 'italic', opacity: '.75' } }, words ? openingOf(c) : 'Not begun'),
         h('span.w', plural(words, 'word')),
@@ -195,8 +195,8 @@ function drawChapters() {
       h('button.menu', { 'aria-label': 'More for this chapter', onclick: (e) => chapterMenu(e.currentTarget, id, i) }, icon('more', 18)));
     list.append(li);
   });
-  ui.leftBody.append(list,
-    h('div.btnrow', { style: { marginTop: '12px' } }, h('button.btn', { onclick: () => { closeLeft(); desk.newChapterAfter(n.order[n.order.length - 1]); } }, icon('plus', 16), 'New chapter')));
+  ui.leftBody.append(h('p.pane-kicker', 'The shape of your story'), list,
+    h('div.btnrow.chapter-add', h('button.btn', { title: 'Begin a fresh chapter at the end of the book.', onclick: () => { closeLeft(); desk.newChapterAfter(n.order[n.order.length - 1]); } }, icon('plus', 16), 'New chapter')));
   const words = n.order.reduce((a, id) => a + chapterWords(store.peek('chapter', id) || { passages: [] }), 0);
   ui.leftBody.append(h('p.hint', { style: { textAlign: 'center', marginTop: '14px' } }, `${plural(n.order.length, 'chapter')} · ${plural(words, 'word')} in all`));
   ui.leftTitle.textContent = 'Chapters';
@@ -365,7 +365,11 @@ function drawNotes() {
   if (!n) return;
   const novelId = P.novelId;
   const l = archivist.lightOf(novelId);
-  const card = h('div.lightcard', l.words);
+  const totalCards = NOTE_KINDS.reduce((a, k) => a + ((n.notes && n.notes[k]) || []).length, 0);
+  ui.rightBody.append(h('div.pane-intro', h('p.pane-kicker', 'Beside the story'), h('div.pane-title-row', h('h2', 'Your notebook'), h('span.pane-count', plural(totalCards, 'card')))));
+  const card = h('div.lightcard.note-status', { 'data-state': l.state },
+    h('div.note-status-heading', h('span.note-status-light', { 'aria-hidden': 'true' }), h('h3', l.state === 'off' ? 'No helper chosen' : l.state === 'reading' ? 'Reading your story' : l.state === 'trouble' ? 'The helper needs a hand' : l.state === 'waiting' ? 'Waiting to read' : 'Keeping the story close')),
+    h('p.note-status-copy', l.state === 'off' ? 'Choose one in Settings → Connections to keep your notes up to date. Your own cards are always yours to edit.' : l.words));
   const row = h('div.row');
   const m = n.memory || {};
   const u = m.undo;
@@ -422,11 +426,10 @@ function drawNotes() {
   const how = new Map((lit && lit.changed || []).map((c) => [c.kind + ':' + nameKey(c.name), c.how]));
   const whyOf = new Map((lit && lit.changed || []).filter((c) => c.why).map((c) => [c.kind + ':' + nameKey(c.name), c.why]));
   const gone = (lit && lit.changed || []).filter((c) => c.how === 'gone').map((c) => c.name);
-  const key = h('div.lightcard.keycard', h('p.notekey', { title: 'Each version of a passage keeps its own notes: another take or a rewrite takes the old version’s notes back out, and the arrows bring a version’s notes back with it. A card you wrote or changed keeps your words — the helper only moves where they are now and how they stand with others.' },
+  const key = h('div.lightcard.keycard.note-guide', h('h3.pane-section-title', 'Always with the story'), h('p.notekey', { title: 'Each version of a passage keeps its own notes: another take or a rewrite takes the old version’s notes back out, and the arrows bring a version’s notes back with it. A card you wrote or changed keeps your words — the helper only moves where they are now and how they stand with others.' },
     again ? 'Every card here goes to the helper as it reads the book again; until it is done, the writer and the rest are sent the notes as they were before. ' : 'Every card here goes to the writer before every page, lit or not. ',
     lit ? h('span', h('b.lit', 'Lit'), ` — changed by the helper last (${lit.label}, ${timeAgo(lit.at)})`, gone.length ? `; took out ${gone.slice(0, 6).join(', ')}${gone.length > 6 ? '…' : ''}` : '', '. ') : null,
     h('b.yours', 'Yours'), ' — your own words, kept.'));
-  ui.rightBody.append(key);
   for (const kind of NOTE_KINDS) {
     const cards = (n.notes && n.notes[kind]) || [];
     const key = 'notes.' + kind;
@@ -439,7 +442,11 @@ function drawNotes() {
     for (const c of sorted) {
       const state = how.get(kind + ':' + nameKey(c.name));
       const mine = Boolean(c.updated && c.updated.by === 'you');
-      box.append(h('div.card' + (state ? '.fresh' : '') + (kind === 'threads' && c.open === false ? '.closed' : ''), { onclick: () => editCard(kind, c.id) },
+      box.append(h('div.card.notecard' + (state ? '.fresh' : '') + (kind === 'threads' && c.open === false ? '.closed' : ''), {
+        role: 'button', tabindex: 0, 'aria-label': `Edit ${c.name}`, title: `Open ${c.name} to read or edit the card`,
+        onclick: () => editCard(kind, c.id),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editCard(kind, c.id); } },
+      },
         h('div.nm', c.name + (kind === 'threads' && c.open === false ? ' — closed' : ''),
           state ? h('span.ctag.lit', state === 'new' ? 'new' : 'updated') : null,
           mine ? h('span.ctag.yours', 'yours') : null),
@@ -450,11 +457,12 @@ function drawNotes() {
         kind === 'people' && c.ties ? h('div.nw.ties', h('b', 'With others'), c.ties) : null,
         kind === 'people' && c.now ? h('div.nw', h('b', nowLabelOf(n, c, 'Now')), c.now) : null));
     }
-    box.append(h('button.btn.quiet.small', { onclick: () => editCard(kind, null) }, icon('plus', 14), 'Add'));
+    if (!cards.length) box.append(h('p.notes-empty', kind === 'people' ? 'The people of your story will gather here.' : kind === 'places' ? 'A place for every corner of your world.' : kind === 'threads' ? 'Keep the questions your story has yet to answer.' : 'The small details that make your world its own.'));
+    box.append(h('button.btn.quiet.small.note-add', { title: `Add your own card to ${KIND_TITLE[kind].toLowerCase()}.`, onclick: () => editCard(kind, null) }, icon('plus', 14), 'Add'));
     sec.append(head, box);
     ui.rightBody.append(sec);
   }
-  ui.rightBody.append(readingsSection());
+  ui.rightBody.append(key, readingsSection());
 }
 
 /* The notes' last check against the book, in plain words (his ask: "whether
@@ -464,10 +472,10 @@ function drawNotes() {
 function checkReport(n, { asked, off, cards }) {
   const m = n.memory || {};
   const a = m.audit || {};
-  const box = h('div.lightcard.checkbox');
+  const box = h('div.lightcard.checkbox', h('div.note-report-label', icon('check', 14), 'Notes & continuity'));
   const left = Math.max(0, archivist.AUDIT_EVERY - (a.reads || 0));
   const next = left ? `It checks again by itself after ${plural(left, 'more reading')}.` : 'It checks again as soon as what is new is read.';
-  if (off) { box.append(h('b', 'Not checked: no helper is chosen.'), ' The notes are neither kept nor checked until one is (Settings → Connections).'); return box; }
+  if (off) { box.classList.add('note-report-quiet'); box.append(h('b', 'Not checked: no helper is chosen.')); return box; }
   if (!cards) { box.append(h('b', 'Nothing to check yet.'), ` The helper writes the notes as the book is read, and checks them against the book every ${archivist.AUDIT_EVERY} readings.`); return box; }
   if (asked) {
     box.append(h('b', 'Checking the notes against the book…'), ' It begins as soon as what is new has been read; what it finds shows here.');
@@ -688,7 +696,10 @@ async function drawPartner() {
   ui.rightBody.append(conversationRow(novelId, t));
   const box = h('div.talk');
   const turns = (t && t.turns) || [];
-  if (!turns.length) box.append(h('p.hint', `Talk the book over — a stuck scene, what someone would really do, where it could go next. Your partner knows the whole book and the notes, and when you ask, it makes the change itself: a passage (by its number on the page, like “Chapter Two, passage 3”), the same words across chapters, a name everywhere at once, a chapter’s name or summary, what the book is about, a card in the notes, a module’s words. Every change shows here with its Undo. Quick asks (⋯ beside Send) finds what contradicts itself, critiques a chapter, and more; the notes keep themselves — checked against the book by the helper, with its reasons in the notes.`));
+  if (!turns.length) box.append(h('div.pane-welcome', h('span.pane-welcome-mark', { 'aria-hidden': 'true' }, icon('chat', 28)), h('p.pane-kicker', 'A little room to think'), h('h2', 'Talk the story over'),
+    h('p', 'A scene that feels stuck. A character you want to understand. The next turn in the story. Your partner knows the book and its notes.'),
+    h('div.pane-welcome-tip', icon('more', 18), h('span', h('b', 'Need a starting point?'), ' Quick asks, beside Send, has a few.')),
+    h('details.pane-guide', h('summary', 'What your partner can help with'), h('p', 'Ask about any passage by its chapter and passage number, a name across the book, a chapter’s name or summary, what the book is about, a card in the notes, or a module’s words. When you ask for a change, it shows here with its Undo. The helper keeps and checks the notes; its reasons are in Notes.'))));
   for (const turn of turns) box.append(drawTurn('talk', novelId, turn));
   ui.rightBody.append(box);
   const ta = h('textarea', { rows: 1, placeholder: 'Ask your partner…', 'aria-label': 'Ask your partner' });
@@ -784,7 +795,7 @@ function conversationRow(novelId, t) {
   const busy = talk.talkBusy('talk', novelId);
   const full = fullKind() === 'partner';
   const empty = !((t && t.turns) || []).length && !(t && t.named);
-  return h('div.convrow',
+  return h('div.conversation-heading', h('p.pane-kicker', 'Your conversations'), h('div.convrow',
     h('button.btn.quiet.small.convpick', { title: 'Your conversations with your partner: open another, rename, copy or remove this one', 'aria-label': `Conversation: ${c.open.name}`, onclick: (e) => conversationMenu(e.currentTarget, novelId) }, h('span.convname', c.open.name), icon('down', 14)),
     h('button.btn.quiet.small', { 'aria-label': 'New conversation', title: 'New conversation — a fresh one for a new question; this one stays in the list', disabled: busy || empty, onclick: async () => {
       const out = await talk.newConversation(novelId);
@@ -792,7 +803,7 @@ function conversationRow(novelId, t) {
       drawSide();
     } }, icon('plus', 14), 'New'),
     h('span.grow'),
-    h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: partnerFull }, icon(full ? 'shrink' : 'expand', 18)));
+    h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: partnerFull }, icon(full ? 'shrink' : 'expand', 18))));
 }
 function conversationMenu(anchor, novelId) {
   const c = talk.partnerConversations(novelId);
@@ -851,6 +862,7 @@ function drawTurn(kind, id, turn) {
   const text = live ? live.text : v.text;
   const thinking = live ? live.thinking : v.thinking;
   const el = h('div.turn.' + (turn.by === 'you' ? 'you' : 'ai') + (kind === 'play' && turn.by !== 'you' ? '.prose-turn' : '') + (live || v.streaming ? '.streaming' : ''), { 'data-id': turn.id });
+  el.append(h('div.turn-speaker', turn.by === 'you' ? 'You' : kind === 'play' ? 'The narrator' : 'Your partner'));
   /* the thinking streams open while it comes, then folds once the words begin */
   if (turn.by !== 'you' && thinking) el.append(turnThinkBox(turn.id, thinking, Boolean(live && !live.text)));
   /* the narrator's telling is prose — a thought or a sound in italics is drawn in italics */
@@ -1169,12 +1181,15 @@ async function drawPlay() {
     if (talk.mendScene(p.id)) return drawOnePlay(store.peek('play', p.id));
     return drawOnePlay(p);
   }
-  ui.rightBody.append(h('p.hint', 'Step into the story as one of its people. You write what they say and do; the narrator plays everyone and everything else. When it went somewhere good, Turn it into prose writes it into the chapter.'));
+  ui.rightBody.append(h('div.pane-intro.scene-intro', h('p.pane-kicker', 'Try another way in'), h('h2', 'Step into your story'),
+    h('p', 'Be one of its people. You write what they say and do; the narrator brings the world around them to life.'),
+    h('details.pane-guide', h('summary', 'From a scene to the page'), h('p', 'When a scene goes somewhere good, Turn it into prose writes what happened into the chapter. Your scenes stay here to return to.'))));
   const plays = [];
   for (const id of n.plays || []) { const p = store.peek('play', id) ?? await store.open('play', id).catch(() => null); if (p) plays.push(p); }
   if (gen !== sideGen || P.side !== 'play' || P.playId) return;
   plays.sort((a, b) => (b.updated || 0) - (a.updated || 0));
   if (plays.length) {
+    ui.rightBody.append(h('h3.pane-section-title', 'Return to a scene'));
     const list = h('ul.plays');
     for (const p of plays) {
       const c = store.peek('chapter', p.chapterId);
@@ -1188,7 +1203,7 @@ async function drawPlay() {
   const who = h('input', { type: 'text', placeholder: people[0] ? people[0].name : 'Their name', list: 'cn-people' });
   const dl = h('datalist', { id: 'cn-people' }, people.map((x) => h('option', { value: x.name })));
   const from = h('input', { type: 'text', placeholder: 'Right where the chapter leaves off' });
-  ui.rightBody.append(h('div.group', h('div.gbody', { style: { paddingTop: '14px' } },
+  ui.rightBody.append(h('div.group.scene-start', h('div.gbody', h('h3.pane-section-title', 'Begin somewhere new'),
     field('Who do you play?', who), dl,
     field('Where does it start?', from, 'Leave it empty to pick up right where the chapter stands now.'),
     h('div.btnrow', h('button.btn.primary', { onclick: async () => {
@@ -1243,7 +1258,7 @@ function drawOnePlay(p) {
   const offered = lv && !lv.streaming && !working ? choicesIn(lv.text) : [];
   if (offered.length) {
     /* a way chosen is his move — with his line to the narrator, when its box is open */
-    box.append(h('div.choices', { role: 'group', 'aria-label': 'Three ways it could go' },
+    box.append(h('div.choices', { role: 'group', 'aria-label': 'Three ways it could go' }, h('p.choice-heading', 'Where will you take it?'),
       ...offered.map((c) => h('button.choice', { onclick: () => {
         const tb = ui.rightFoot.querySelector('textarea.tellbox');
         const tell = tb && !tb.hidden ? tb.value.trim() : '';

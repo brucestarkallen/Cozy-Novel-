@@ -145,6 +145,11 @@ node tests/app.mjs                  # the app's own modules against the real ser
 node tests/thinking.mjs             # thinking parity with Cozy Tavern
 python3 tests/browser/walk_main.py  # the whole app in a real browser (needs playwright + chromium)
 python3 tests/browser/walk_more.py
+python3 tests/browser/walk_accessibility.py  # dialogs, keyboard, search and file picking
+python3 tests/browser/walk_cozy.py           # shelf, resume, phone layouts and motion
+python3 tests/browser/walk_checks.py         # checker review, focus and all five themes
+python3 tests/browser/walk_settings.py       # pending edits, connection tests and module resets
+python3 tests/browser/walk_dialogs.py        # book exports, saved fields and sent words
 ```
 
 All of them use synthetic books in a temporary folder and stand-in models; nothing paid is ever called.

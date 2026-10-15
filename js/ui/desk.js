@@ -697,9 +697,13 @@ function drawEnd() {
   const hasText = list.some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
   if (!list.length) {
     const first = n.order.indexOf(c.id) === 0;
-    ui.end.append(h('p.emptypage', first
-      ? 'The first page. Say how the story opens and press Write — or write the opening yourself and press Add as my words.'
-      : 'A fresh chapter. Say what happens and press Write, or write it yourself. With the box left empty, Write carries the story on.'));
+    ui.end.append(h('div.firstpage',
+      h('span.firstpage-orn', { 'aria-hidden': 'true' }, '❧'),
+      h('h2', first ? 'A world begins here.' : 'A new chapter awaits.'),
+      h('p.emptypage', first
+        ? 'The first page. Say how the story opens and press Write — or write the opening yourself and press Add as my words.'
+        : 'A fresh chapter. Say what happens and press Write, or write it yourself. With the box left empty, Write carries the story on.'),
+      h('button.btn.quiet.small', { onclick: () => ui.direction.focus(), title: 'Move to the box below to write your opening or say what happens.' }, 'Start your opening', h('span', { 'aria-hidden': 'true' }, '↓'))));
   }
   /* a page that did not come, said in the chapter it was asked for — with
    * what the model thought, kept to read and copy (Cozy Tavern M301) */

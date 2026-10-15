@@ -40,6 +40,7 @@ export function showJudged(novelId, chapterId, passageId) {
   if (!g) { toast('This version is not graded yet.'); return; }
   const judge = checker.judgeOf(store.peek('house', 'house') || {});
   const s = openSheet('What the judge said', { small: true });
+  s.box.classList.add('judgesheet');
   const go = (words) => () => { s.close(); desk.whenOpen(chapterId, { passageId, show: { query: words } }); };
   s.body.append(h('p.judgehead', h('b', `Graded ${g.overall} of ${g.of || 10}`), judge ? ` — your mark is ${judge.target}${g.overall < judge.target ? '; this is under it' : ''}` : ''));
   if (!g.of) {
@@ -119,10 +120,31 @@ function drawSheet() {
   if (!novel) return;
   const st = checker.stateOf(novelId);
   const scroll = s.body.scrollTop;
+  const folds = new Map([...s.body.querySelectorAll('details[data-fold]')].map((d) => [d.dataset.fold, d.open]));
+  const active = s.body.contains(document.activeElement) ? document.activeElement : null;
+  const activeCard = active && active.closest('.sug');
+  const focus = active ? { words: active.textContent, card: activeCard && activeCard.dataset.key,
+    index: activeCard ? [...s.body.querySelectorAll('.sug')].indexOf(activeCard) : -1,
+    fold: active.tagName === 'SUMMARY' ? active.parentElement.dataset.fold : null } : null;
+  const restore = () => {
+    for (const d of s.body.querySelectorAll('details[data-fold]')) if (folds.has(d.dataset.fold)) d.open = folds.get(d.dataset.fold);
+    if (focus) {
+      const cards = [...s.body.querySelectorAll('.sug')];
+      const scope = focus.card ? cards.find((c) => c.dataset.key === focus.card) || cards[Math.min(focus.index, cards.length - 1)] : s.body;
+      const target = focus.fold ? [...s.body.querySelectorAll('details[data-fold]')].find((d) => d.dataset.fold === focus.fold)?.querySelector('summary')
+        : scope && ([...scope.querySelectorAll('button')].find((b) => b.textContent === focus.words) || (focus.card && scope.querySelector('button')));
+      (target || s.box.querySelector('.head button'))?.focus({ preventScroll: true });
+    }
+    s.body.scrollTop = scroll;
+  };
   s.body.textContent = '';
-  s.body.append(h('div.sugstate', { 'data-state': st.state }, h('span.dot'), h('span', st.words)));
+  s.body.append(h('div.check-intro',
+    h('p.eyebrow', novel.meta?.title || 'YOUR BOOK'),
+    h('h3', 'A little polish for your pages.'),
+    h('p', 'Keep what feels right. Every applied change saves a new version.')));
+  s.body.append(h('div.sugstate', { 'data-state': st.state, role: 'status' }, h('span.dot', { 'aria-hidden': 'true' }), h('span', st.words)));
   const list = checker.suggestions(novelId);
-  const row = h('div.btnrow');
+  const row = h('div.btnrow.check-actions');
   /* Apply all puts in every change that has its words (a sentence to write again is his to ask for) */
   const can = list.filter((x) => typeof x.item.replace === 'string').length;
   if (can > 1) row.append(h('button.btn.primary.small', { title: 'Every change below that has its words goes in — one new version for each passage, the words before one arrow away.', onclick: () => {
@@ -156,8 +178,8 @@ function drawSheet() {
   }
   if (!list.length) {
     /* (older writing: the line above says so, and the buttons are there) */
-    if (st.state === 'clean' && !allN) s.body.append(h('p.say', 'Each passage is read once it is finished — for grammar and clarity, wording that sounds machine-made (stock wording is counted too), your words to avoid, and slips against the book — and graded, with the judge on.'));
-    s.body.scrollTop = scroll;
+    if (st.state === 'clean' && !allN) s.body.append(h('div.check-empty', icon('feather', 30), h('h3', 'Room to keep writing.'), h('p.say', 'New passages are checked when they’re finished. Any suggestions will be waiting here.')));
+    restore();
     return;
   }
   /* the open chapter first, then the others in the book's order */
@@ -166,10 +188,10 @@ function drawSheet() {
   const order = [...groups.keys()].sort((a, b) => (a === C.chapterId ? -1 : b === C.chapterId ? 1 : novel.order.indexOf(a) - novel.order.indexOf(b)));
   for (const cid of order) {
     const c = store.peek('chapter', cid);
-    s.body.append(h('h3.sughead', c ? chapterLabel(novel, c) : 'A chapter'));
+    s.body.append(h('h3.sughead', h('span', c ? chapterLabel(novel, c) : 'A chapter'), h('small', plural(groups.get(cid).length, 'suggestion'))));
     for (const x of groups.get(cid)) s.body.append(card(novelId, x));
   }
-  s.body.scrollTop = scroll;
+  restore();
 }
 
 /* The benchmark, folded: for each writer its passages graded and their
@@ -190,15 +212,15 @@ function judgeBox(novelId) {
   const summary = avg !== null
     ? `Graded ${avg} of 10 on average · ${plural(g.rows.length, 'passage')}${j ? ` · ${under} under your ${j.target}` : ''}`
     : `Stock wording: ${per} in every 1,000 words`;
-  const box = h('details.judgebox', h('summary', summary),
-    h('table.usage-table',
+  const box = h('details.judgebox', { 'data-fold': 'grades' }, h('summary', summary),
+    h('div.check-table', { tabindex: 0, role: 'region', 'aria-label': 'Grades by writer' }, h('table.usage-table',
       h('tr', h('th', 'Who wrote it'), h('th', 'Graded'), h('th', 'Average'), h('th', 'Stock per 1,000 words'), head ? h('th', 'Head to head') : null),
       ...writers.map((m) => h('tr',
         h('td', m.model, m.self ? h('small.quiet', ' · judged by itself') : null),
         h('td.num', String(m.n)),
         h('td.num', m.average === null ? '—' : String(m.average)),
         h('td.num', m.per1000 === null ? '—' : String(m.per1000)),
-        head ? h('td.num', { title: 'won – lost – even' }, `${m.win}–${m.loss}–${m.tie}`) : null))));
+        head ? h('td.num', { title: 'won – lost – even' }, `${m.win}–${m.loss}–${m.tie}`) : null)))));
   if (g.fails.length) box.append(h('p.say', h('b', 'Fails most: '), g.fails.slice(0, 4).map((f) => `${f.name} ${f.n}`).join(' · ')));
   if (writers.some((m) => m.self && m.n)) box.append(h('p.say.quiet', 'A judge leans toward its own writing: a checker on another model grades the passages it wrote more fairly (Settings → Who does what).'));
   box.append(h('p.say.quiet', 'Ten checks a passage passes or fails — Opening, True to the book, Shown, Pacing, Specific, Fresh, Sentences, People, Moves, Ending — its grade the number passed. Stock wording is counted, not judged (for scale: classic books of fiction hold about 0.01 in every 1,000 words, machine-made stories 0.1 to 7). Two versions of one passage by two writers are read head to head, blind and both ways round. The mark, and whether it judges: Settings → Who does what.'));
@@ -211,11 +233,11 @@ function asideBox(novelId) {
   const list = checker.setAsideList(novelId);
   if (!list.length) return null;
   const novel = store.peek('novel', novelId);
-  const box = h('details.judgebox.asidebox', h('summary', `Set aside — ${list.length === 1 ? 'one passage' : plural(list.length, 'passage')} its model would not check`));
+  const box = h('details.judgebox.asidebox', { 'data-fold': 'aside' }, h('summary', `Set aside — ${list.length === 1 ? 'one passage' : plural(list.length, 'passage')} its model would not check`));
   for (const x of list) {
     const c = store.peek('chapter', x.chapterId);
     const go = () => { if (C.sheet) C.sheet.close(); desk.whenOpen(x.chapterId, { passageId: x.passageId, show: {} }); };
-    box.append(h('div.sug', { 'data-kind': 'aside' },
+    box.append(h('div.sug', { 'data-kind': 'aside', 'data-key': `aside:${x.chapterId}:${x.passageId}` },
       h('div.sugtop', h('span.tag', 'Set aside'), h('button.link', { title: 'Go to this passage.', onclick: go }, `${c && novel ? `${chapterLabel(novel, c, { withName: false })}, passage` : 'Passage'} ${x.number}`)),
       h('div.sugwhy', x.why),
       h('div.btnrow', h('button.btn.small', { title: 'Its model is asked to check this passage again, by itself, now.', onclick: () => {
@@ -241,18 +263,18 @@ function marked(text, words) {
 
 function card(novelId, x) {
   const { item } = x;
-  const el = h('div.sug', { 'data-kind': item.kind });
+  const el = h('div.sug', { 'data-kind': item.kind, 'data-key': `${x.chapterId}:${x.passageId}:${item.id}` });
   const show = () => {
     if (C.sheet) C.sheet.close();
     desk.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: item.find } });
   };
-  el.append(h('div.sugtop', h('span.tag', KIND[item.kind] || 'Wording'), h('button.link', { onclick: show }, `Passage ${x.number}`)));
+  el.append(h('div.sugtop', h('span.tag', KIND[item.kind] || 'Wording'), h('button.link', { title: 'Go to these words in the passage.', onclick: show }, `Passage ${x.number}`)));
   if (item.kind === 'grade') {
     /* graded under his mark: each check it fails with the words that fail it
      * (a tap goes to them), and what writing it again would need — a grade
      * from before 2.4.3 by its five */
     const gr = item.grade || {};
-    el.append(h('div.sugwhat', h('b', `${gr.overall} of ${gr.of || 10} — under your ${item.target}`), gr.faults ? null : h('small.gradeaxes', GRADE_AXES.filter(([k]) => Number.isFinite(gr[k])).map(([k, w]) => `${w} ${gr[k]}`).join(' · '))));
+    el.append(h('div.sugwhat.grade-score', h('b', `${gr.overall} of ${gr.of || 10} — under your ${item.target}`), gr.faults ? null : h('small.gradeaxes', GRADE_AXES.filter(([k]) => Number.isFinite(gr[k])).map(([k, w]) => `${w} ${gr[k]}`).join(' · '))));
     if (gr.faults && gr.faults.length) {
       el.append(h('ul.faults', ...gr.faults.map((f) => h('li',
         h('b', checker.CHECK_NAME[f.check] || f.check),
@@ -278,10 +300,12 @@ function card(novelId, x) {
     return el;
   }
   if (typeof item.replace === 'string') {
-    el.append(h('div.sugwhat', h('del', item.find), ' ', icon('right', 14), ' ', item.replace ? h('ins', item.replace) : h('i', '(taken out)')));
+    el.append(h('div.sugwhat.word-comparison',
+      h('div.word-before', h('small.word-label', 'Original'), h('del', item.find)),
+      h('div.word-after', h('small.word-label', 'Suggested'), item.replace ? h('ins', item.replace) : h('i', '(taken out)'))));
   } else {
     /* words he never wants, marked in their sentence — to be written again */
-    el.append(h('div.sugwhat', marked(item.find, phrasesOf(item))));
+    el.append(h('div.sugwhat.word-passage', h('small.word-label', 'In your passage'), marked(item.find, phrasesOf(item))));
   }
   if (item.why) el.append(h('div.sugwhy', item.why));
   const btns = h('div.btnrow');

@@ -59,6 +59,11 @@ export function icon(name, size = 22) {
 
 /* ------------------------------------------------------------- toast */
 let toastTimer = null;
+function placeToast() {
+  const t = $('#toast');
+  if (t) (focusedSheet()?.box || document.body).append(t);
+}
+function hideToast(t) { t.classList.remove('on'); t.inert = true; t.setAttribute('aria-hidden', 'true'); }
 /* One line at the bottom, for a moment. With an action (Undo), it stays a
  * little longer; whichever line came last is the one shown, for its own time. */
 export function toast(words, ms = 3200, action = null) {
@@ -66,11 +71,14 @@ export function toast(words, ms = 3200, action = null) {
   if (!t) { t = h('div.toast', { id: 'toast', role: 'status', 'aria-live': 'polite' }); document.body.append(t); }
   t.textContent = words;
   if (action) {
-    t.append(' ', h('button.toastact', { onclick: () => { clearTimeout(toastTimer); t.classList.remove('on'); action.run(); } }, action.label));
+    t.append(' ', h('button.toastact', { onclick: () => { clearTimeout(toastTimer); hideToast(t); action.run(); } }, action.label));
   }
+  placeToast();
+  t.inert = false;
+  t.removeAttribute('aria-hidden');
   t.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('on'), ms);
+  toastTimer = setTimeout(() => hideToast(t), ms);
 }
 export function undoToast(words, undo) { toast(words, 7000, { label: 'Undo', run: undo }); }
 
@@ -164,7 +172,39 @@ export function afterBacks() {
 /* ------------------------------------------------------------- sheets */
 /* A sheet over the page. Returns {box, body, close}. */
 const sheets = [];
+/* Only the sheet at the top of the Back stack owns the keyboard. A menu or
+ * another overlay opened from it gets the keyboard until it closes. */
+function focusedSheet() {
+  const top = sheets[sheets.length - 1];
+  return top && top.back === backs[backs.length - 1] ? top : null;
+}
+function canFocus(el) {
+  return el && el.isConnected && typeof el.focus === 'function' && !el.matches(':disabled') &&
+    !el.closest('[inert]') && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+}
+function sheetStops(box) {
+  return [...box.querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex], [contenteditable]')]
+    .filter((el) => el.tabIndex >= 0 && canFocus(el));
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab' || e.defaultPrevented) return;
+  const top = focusedSheet();
+  if (!top) return;
+  const stops = sheetStops(top.box);
+  const at = stops.indexOf(document.activeElement);
+  if (!stops.length || at < 0 || (e.shiftKey ? at === 0 : at === stops.length - 1)) {
+    e.preventDefault();
+    (stops.length ? stops[e.shiftKey ? stops.length - 1 : 0] : top.box).focus({ preventScroll: true });
+  }
+});
+document.addEventListener('focusin', (e) => {
+  const top = focusedSheet();
+  if (!top) return;
+  if (top.box.contains(e.target)) { top.lastFocus = e.target; return; }
+  (canFocus(top.lastFocus) ? top.lastFocus : top.box).focus({ preventScroll: true });
+});
 export function openSheet(title, { small = false, onClose = null, actions = [] } = {}) {
+  closeMenu();
   const body = h('div.body');
   const entry = { onClose, closed: false, from: document.activeElement };
   const close = () => shut(entry);
@@ -174,15 +214,18 @@ export function openSheet(title, { small = false, onClose = null, actions = [] }
     body);
   const wrap = h('div.sheet' + (small ? '.small' : ''), { onclick: (e) => { if (e.target === wrap) close(); } }, box);
   entry.wrap = wrap;
-  closeMenu();
+  entry.box = box;
   document.body.append(wrap);
   requestAnimationFrame(() => {
+    if (entry.closed) return;
     wrap.classList.add('on');
     /* the keyboard's place moves into the sheet (unless something in it took it already) */
-    if (!box.contains(document.activeElement)) box.focus({ preventScroll: true });
+    if (focusedSheet() === entry && !box.contains(document.activeElement)) box.focus({ preventScroll: true });
   });
   sheets.push(entry);
   entry.release = onBack(() => shut(entry, true));
+  entry.back = backs[backs.length - 1];
+  placeToast();
   const setTitle = (t) => { heading.textContent = t; box.setAttribute('aria-label', t); };
   return { box, body, close, wrap, setTitle };
 }
@@ -190,14 +233,24 @@ function shut(entry, fromBack = false) {
   if (entry.closed) return;
   entry.closed = true;
   const i = sheets.indexOf(entry);
+  const wasTop = i === sheets.length - 1;
+  if (openMenu && entry.wrap.contains(openMenu.anchor)) closeMenu();
   if (i >= 0) sheets.splice(i, 1);
   entry.wrap.classList.remove('on');
   setTimeout(() => entry.wrap.remove(), 220);
   if (!fromBack && entry.release) entry.release();
+  placeToast();
   if (entry.onClose) { try { entry.onClose(); } catch (e) { console.error(e); } }
-  /* and back to where it was */
+  /* A nested sheet returns to its opener in the parent. The parent's words
+   * may have been drawn again meanwhile; in that case return to its box. */
   const back = entry.from;
-  if (back && back.isConnected && typeof back.focus === 'function' && !sheets.length) { try { back.focus({ preventScroll: true }); } catch (_) { /* gone */ } }
+  const top = focusedSheet();
+  if (wasTop && (!sheets.length || top)) {
+    const target = canFocus(back) && (!top || top.box.contains(back)) ? back : top && top.box;
+    if (target) { try { target.focus({ preventScroll: true }); } catch (_) { /* gone */ } }
+  }
+  entry.wrap.inert = true;
+  entry.wrap.setAttribute('aria-hidden', 'true');
 }
 export function closeTopSheet() {
   const top = sheets[sheets.length - 1];
@@ -230,12 +283,12 @@ export function askText(title, { words = '', value = '', placeholder = '', yes =
     let out = null;
     const s = openSheet(title, { small: !multiline, onClose: () => resolve(out) });
     if (words) s.body.append(h('p.say', words));
-    const box = multiline ? h('textarea', { rows: 6, placeholder }) : h('input', { type: 'text', placeholder });
+    const box = multiline ? h('textarea', { rows: 6, placeholder, 'aria-label': title }) : h('input', { type: 'text', placeholder, 'aria-label': title });
     box.value = value;
     const field = h('label.field', box);
     s.body.append(field, h('div.btnrow', h('button.btn.primary', { onclick: () => { out = box.value; s.close(); } }, yes)));
-    box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !multiline) { out = box.value; s.close(); } });
-    setTimeout(() => { box.focus(); if (box.select && value) box.select(); }, 60);
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !multiline && !e.isComposing) { e.preventDefault(); out = box.value; s.close(); } });
+    setTimeout(() => { if (!s.wrap.classList.contains('on')) return; box.focus(); if (box.select && value) box.select(); }, 60);
   });
 }
 
@@ -351,7 +404,9 @@ export function download(name, blobOrText, type = 'text/plain') {
 export function pickFile(accept) {
   return new Promise((resolve) => {
     const inp = h('input', { type: 'file', accept, style: { display: 'none' } });
-    inp.addEventListener('change', () => { resolve(inp.files && inp.files[0] ? inp.files[0] : null); inp.remove(); });
+    const finish = () => { resolve(inp.files && inp.files[0] ? inp.files[0] : null); inp.remove(); };
+    inp.addEventListener('change', finish, { once: true });
+    inp.addEventListener('cancel', finish, { once: true });
     document.body.append(inp);
     inp.click();
   });
@@ -359,12 +414,16 @@ export function pickFile(accept) {
 
 export async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch (_) { /* fall back */ }
+  const from = document.activeElement;
   const ta = h('textarea', { style: { position: 'fixed', opacity: '0' } });
   ta.value = text;
-  document.body.append(ta);
+  /* Keep the fallback inside the active sheet so its focus guard does not
+   * take the selection away before the browser has copied the words. */
+  (focusedSheet()?.box || document.body).append(ta);
   ta.select();
   let ok = false;
   try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
   ta.remove();
+  if (canFocus(from)) from.focus({ preventScroll: true });
   return ok;
 }

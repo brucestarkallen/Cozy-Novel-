@@ -615,8 +615,9 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
   background: rgba(20,16,12,.94); color: #f5ecdc; font-size: 14px; line-height: 1.4; box-shadow: var(--shadow);
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s var(--ease);
 }
-.toast.on { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
-.toast .toastact { margin-left: 6px; padding: 4px 8px; border-radius: 8px; color: #f6c271; font-weight: 600; }
+.toast.on { opacity: 1; transform: translateX(-50%); }
+.toast .toastact { pointer-events: none; margin-left: 6px; padding: 4px 8px; border-radius: 8px; color: #f6c271; font-weight: 600; }
+.toast.on .toastact { pointer-events: auto; }
 .toast .toastact:hover, .toast .toastact:focus-visible { background: rgba(255,255,255,.1); }
 .banner {
   position: fixed; left: 10px; right: 10px; top: calc(var(--safe-t) + 60px); z-index: 70; margin: 0 auto; max-width: 620px;
@@ -851,3 +852,197 @@ ul.judged .link.quote { font: italic 14px/1.45 var(--serif); text-align: left; p
 .numbox { display: block; }
 .numbox .badnum { display: block; margin-top: 4px; font-size: 12.5px; color: var(--danger); }
 .numbox input[aria-invalid="true"] { border-color: var(--danger); }
+
+/* ------------------------------------------------------ the writing room
+ * Quiet surfaces over the room, cloth-bound books, and a generous page.
+ * All colours follow the chosen room; all movement yields to reduced motion. */
+:root { --room-panel: color-mix(in srgb, var(--chrome-solid) 94%, transparent); }
+body { background-color: var(--bg); }
+.room::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 72%, transparent), transparent 85%),
+    linear-gradient(0deg, color-mix(in srgb, var(--bg) 85%, transparent), transparent 65%);
+}
+body:not(.shelfview) .room::after { background: color-mix(in srgb, var(--bg) 38%, transparent); }
+.btn, .chip, .icon { touch-action: manipulation; }
+.btn:focus-visible, .chip:focus-visible, .icon:focus-visible { outline-offset: 4px; }
+.btn.primary { box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 16%, transparent), inset 0 1px rgba(255,255,255,.2); }
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+#shelf { max-width: 1160px; padding: calc(var(--safe-t) + 34px) 36px calc(var(--safe-b) + 56px); }
+.shelf-head { align-items: center; padding-bottom: 24px; margin: 0; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 15px; }
+.brand-mark { display: grid; place-items: center; flex: none; width: 48px; height: 54px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 14px 14px 5px 5px; color: var(--accent); background: var(--room-panel); font: 30px/1 var(--display); box-shadow: inset 0 0 0 4px var(--chrome-solid); }
+.brand h1 { font-size: 33px; letter-spacing: -.02em; color: var(--chrome-ink); }
+.brand p { font-size: 16px; margin-top: 5px; }
+#shelfSettings { background: var(--room-panel); border: 1px solid var(--line); border-radius: 50%; width: 46px; height: 46px; }
+.shelf-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 365px); align-items: center; gap: 54px; padding: 58px 0 50px; min-height: 340px; }
+.shelf-welcome { min-width: 0; animation: room-arrival .65s var(--ease) both; }
+.eyebrow { display: flex; align-items: center; gap: 12px; font-size: 10px; font-weight: 600; letter-spacing: .24em; color: var(--accent-2); margin: 0 0 20px; }
+.eyebrow::before { content: ''; width: 26px; height: 1px; background: currentColor; opacity: .65; }
+#shelfGreeting { margin: 0; font: 500 clamp(40px, 4.7vw, 66px)/1.04 var(--display); letter-spacing: -.025em; white-space: pre-line; text-wrap: balance; max-width: 650px; color: var(--chrome-ink); text-shadow: 0 2px 26px var(--bg); }
+.shelf-invitation { margin: 20px 0 0; max-width: 440px; color: var(--chrome-soft); font: 15px/1.75 var(--ui); text-wrap: pretty; }
+#shelfResume { min-width: 0; }
+.resume-card { position: relative; padding: 29px 28px 25px; background: var(--room-panel); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 18px; box-shadow: 0 16px 45px rgba(0,0,0,.18); overflow: hidden; animation: room-arrival .7s .08s var(--ease) both; }
+.resume-card::before { content: ''; position: absolute; top: 0; left: 28px; height: 3px; width: 40px; background: var(--accent); border-radius: 0 0 3px 3px; }
+.resume-label { margin: 0 0 15px; font: 600 10px/1.4 var(--ui); letter-spacing: .18em; text-transform: uppercase; color: var(--chrome-soft); }
+.resume-title { font: 600 30px/1.12 var(--display); letter-spacing: -.01em; margin: 0 0 10px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.resume-meta { font-size: 12px; color: var(--chrome-soft); margin: 0 0 22px; }
+.resume-card .btn { min-height: 44px; }
+.resume-action { display: flex; align-items: flex-start; flex-direction: column; gap: 10px; }
+.resume-hint { font-size: 11.5px; line-height: 1.5; color: var(--chrome-soft); }
+.shelf-actions { align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
+.collection-heading { display: flex; align-items: center; gap: 12px; }
+.collection-heading h2 { font: 500 27px/1.2 var(--display); margin: 0; }
+#shelfCount { color: var(--chrome-soft); font-size: 12px; }
+.shelf-search { flex: 0 1 245px; height: 40px; background: var(--room-panel); border-radius: 10px; font-size: 13px; }
+.shelf-search::placeholder { color: var(--chrome-soft); opacity: 1; }
+.books { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 30px 24px; }
+.book { min-width: 0; gap: 12px; }
+.book .cover { width: 100%; aspect-ratio: 2 / 3; border-radius: 4px 10px 10px 4px; padding: 24px 21px 20px 27px; border: 1px solid rgba(255,242,220,.12); box-shadow: 0 14px 28px rgba(0,0,0,.3), 4px 3px 0 -1px #c4b08a, 7px 5px 0 -2px #5c4731; }
+.book .cover::after { background: linear-gradient(90deg, transparent 12px, rgba(255,255,255,.12) 13px, transparent 14px), repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px), radial-gradient(ellipse at 70% 0%, rgba(255,255,255,.17), transparent 70%), linear-gradient(0deg, rgba(0,0,0,.22), transparent 65%); }
+.cover .t { padding-right: 12px; font-size: 25px; line-height: 1.1; -webkit-line-clamp: 4; }
+.cover-copy { min-width: 0; }
+.cover-copy > .cover-rule { display: none; }
+.cover .s { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cover-kicker { display: block; font: 500 8px/1.4 var(--ui); letter-spacing: .2em; text-transform: uppercase; opacity: .8; margin-bottom: 14px; }
+.cover-rule { display: block; width: 27px; border-top: 1px solid currentColor; opacity: .55; margin: 17px 0; }
+.cover-foot { flex: none; margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; font: 9px/1.2 var(--ui); letter-spacing: .12em; text-transform: uppercase; opacity: .8; }
+.cover-foot .cover-rule { margin: 0; }
+.book .meta { font-size: 11.5px; line-height: 1.65; }
+.book .more { width: 36px; height: 36px; top: 7px; right: 7px; background: rgba(0,0,0,.27); border-radius: 50%; }
+.book.new { align-self: start; }
+.book.new .cover { background: color-mix(in srgb, var(--chrome-solid) 65%, transparent); border: 1px dashed color-mix(in srgb, var(--chrome-soft) 45%, transparent); box-shadow: none; }
+.book.new .plus { font-size: 40px; color: var(--accent); margin-bottom: 10px; }
+.book:focus-within .cover { transform: translateY(-4px); }
+.empty-shelf { background: var(--room-panel); padding: 32px 36px; border-radius: 16px; position: relative; border-color: color-mix(in srgb, var(--accent) 20%, var(--line)); }
+.empty-shelf h2 { font-size: 30px; margin-bottom: 12px; }
+.empty-shelf p { max-width: 630px; font-size: 14px; line-height: 1.8; margin-bottom: 22px; }
+.empty-shelf .btn { min-height: 44px; }
+.shelf-foot { margin-top: 28px; padding-top: 15px; border-top: 1px solid var(--line); }
+.shelf-foot:empty { display: none; }
+
+/* A legible toolbar, and a page with the proportions of a real book. */
+.deskbar { background: color-mix(in srgb, var(--chrome-solid) 94%, transparent); padding: calc(var(--safe-t) + 9px) 14px 9px; }
+.deskbar .booktitle b { font-size: 22px; }
+.tool-label { display: none; }
+@media (min-width: 760px) {
+  .deskbar .icon:has(.tool-label) { width: auto; display: inline-flex; gap: 7px; padding: 0 12px; }
+  .tool-label { display: inline; font-size: 12px; color: var(--chrome-soft); }
+  .deskbar .notesbtn .dot { right: auto; left: 27px; top: 7px; }
+  .deskbar #moreBtn { margin-left: 6px; border-left: 1px solid var(--line); border-radius: 0; }
+}
+.page { border: 1px solid var(--paper-edge); border-bottom: 0; box-shadow: 0 24px 70px rgba(0,0,0,.28), 0 0 0 5px color-mix(in srgb, var(--paper) 12%, transparent); }
+.chapterhead { margin-bottom: 38px; }
+.chapterhead::after { content: '✧'; display: block; width: 90px; margin: 24px auto 0; color: var(--ink-soft); font: 15px/1 var(--display); background: linear-gradient(var(--paper), var(--paper)) center / 24px 100% no-repeat, linear-gradient(var(--paper-edge), var(--paper-edge)) center / 100% 1px no-repeat; }
+.chapnum { font-size: 10px; letter-spacing: .26em; }
+.chapname { font-size: 39px; margin-top: 16px; }
+.chapname:empty::before { content: 'Name this chapter'; font-size: 29px; font-style: italic; color: var(--ink-soft); opacity: .75; }
+.chapname:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); border-radius: 8px; }
+.firstpage { margin: 35px auto 0; max-width: 390px; text-align: center; padding: 24px 6px; }
+.firstpage-orn { display: block; color: var(--accent-on-paper); opacity: .7; font: 48px/1 var(--display); margin-bottom: 20px; }
+.firstpage h2 { font: 500 30px/1.2 var(--display); color: var(--ink); margin: 0 0 15px; }
+.firstpage .emptypage { padding: 0; margin: 0 0 22px; font: 14px/1.85 var(--ui); text-wrap: pretty; }
+.firstpage .btn { min-height: 40px; gap: 10px; border-bottom: 1px solid var(--paper-edge); border-radius: 0; }
+body.reading .firstpage { display: none; }
+body.reading .chapname:empty::before { content: none; }
+.composer { background: color-mix(in srgb, var(--chrome-solid) 96%, transparent); padding-top: 12px; padding-bottom: calc(var(--safe-b) + 12px); }
+.composer .inner { padding: 10px 12px 9px; border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); box-shadow: 0 5px 20px rgba(0,0,0,.08); }
+.composer textarea { border: 0; background: transparent; border-radius: 10px; padding-left: 7px; }
+[data-theme="day"] .composer textarea { background: transparent; }
+.composer textarea::placeholder { opacity: 1; }
+.say-row > .btn { border-radius: 12px; }
+.composer .crow { border-top: 1px solid var(--line); padding-top: 9px; margin-top: 8px; }
+.crow .chip { font-size: 11.5px; border-color: transparent; background: color-mix(in srgb, var(--chrome-ink) 5%, transparent); }
+.crow .chip:hover { background: color-mix(in srgb, var(--chrome-ink) 10%, transparent); }
+.panehead { min-height: 64px; }
+.pane.left.dock, .pane.right.dock { background: var(--room-panel); }
+.chlist li { margin-bottom: 5px; }
+.chlist li.on { background: color-mix(in srgb, var(--accent) 13%, transparent); box-shadow: inset 2px 0 var(--accent); }
+.chlist .go { padding-top: 13px; padding-bottom: 13px; }
+.chlist .nm { font-size: 20px; margin: 3px 0; }
+.tabs button { font-size: 12px; }
+.card, .lightcard, .group { background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); }
+.card .nm { font-size: 20px; }
+.sheet { background: rgba(0,0,0,.62); }
+.sheet > .box { background: var(--chrome-solid); box-shadow: 0 30px 110px rgba(0,0,0,.48); }
+.sheet .head { padding: 18px 16px 14px 24px; }
+.sheet .head h2 { font-size: 30px; }
+.sheet .body { padding: 22px 24px calc(var(--safe-b) + 28px); }
+.group > .ghead { padding-top: 17px; padding-bottom: 17px; }
+.group > .ghead h3 { font-size: 21px; }
+.menu-pop { box-shadow: 0 16px 50px rgba(0,0,0,.4); }
+.toast { border: 1px solid rgba(244,220,180,.16); }
+.searchsheet .searchtop { gap: 14px; }
+.searchsheet .searchtop input { padding: 14px 16px; min-height: 48px; background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); }
+.searchsheet .searchtop .segmented { align-self: flex-start; }
+.searchsheet .searchsay { padding: 10px 0 14px; margin-bottom: 0; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.6; }
+.searchsheet .searchgroup { margin-top: 22px; margin-bottom: 10px; font-size: 10px; letter-spacing: .12em; }
+.searchsheet .hit { margin: 8px 0; padding: 15px 16px; border: 1px solid var(--line); background: color-mix(in srgb, var(--chrome-ink) 2%, transparent); border-radius: 12px; }
+.searchsheet .hit .where { font-size: 11px; margin-bottom: 7px; }
+.searchsheet .hit .snip { line-height: 1.7; }
+.searchsheet .hit:hover, .searchsheet .hit:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+@keyframes room-arrival { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .resume-card { transition: border-color .25s, box-shadow .25s; }
+  .resume-card:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 16px 50px rgba(0,0,0,.27); }
+}
+@media (max-width: 759px) {
+  #shelf { padding: calc(var(--safe-t) + 22px) 22px calc(var(--safe-b) + 32px); }
+  .shelf-head { padding-bottom: 18px; }
+  .brand { gap: 11px; }
+  .brand h1 { font-size: 29px; }
+  .brand p { font-size: 14px; }
+  .brand-mark { width: 38px; height: 44px; font-size: 26px; }
+  #shelfSettings { width: 42px; height: 42px; }
+  .shelf-intro { grid-template-columns: 1fr; gap: 24px; padding: 35px 0 30px; min-height: 0; }
+  #shelfGreeting { font-size: 45px; max-width: 470px; }
+  .eyebrow { font-size: 9px; margin-bottom: 15px; }
+  .shelf-invitation { margin-top: 15px; font-size: 13px; max-width: 310px; }
+  .resume-card { padding: 23px 24px; }
+  .resume-title { font-size: 28px; }
+  .resume-meta { margin-bottom: 16px; }
+  .shelf-actions { gap: 14px; margin-bottom: 20px; }
+  .collection-heading h2 { font-size: 25px; }
+  .shelf-search { flex: 1 1 100%; height: 42px; }
+  .books { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 25px 19px; }
+  .book .cover { padding: 19px 15px 17px 22px; }
+  .cover .t { font-size: 23px; }
+  .cover-kicker { font-size: 7px; margin-bottom: 14px; }
+  .cover .s { font-size: 13px; }
+  .empty-shelf { padding: 25px 23px; }
+  .empty-shelf h2 { font-size: 28px; }
+  .empty-shelf p { font-size: 13px; }
+  .empty-shelf .btnrow { align-items: stretch; flex-direction: column; gap: 10px; }
+  .empty-shelf .btn { width: 100%; }
+  .deskbar { gap: 1px; padding: calc(var(--safe-t) + 7px) 5px 7px; }
+  .deskbar .booktitle { padding-left: 3px; }
+  .deskbar .booktitle b { font-size: 20px; }
+  .deskbar .icon { width: 38px; flex: none; }
+  .deskbar .booktitle small { font-size: 11px; }
+  .page { padding-top: 38px; }
+  .chapname { font-size: 33px; }
+  .chapname:empty::before { font-size: 25px; }
+  .chapterhead::after { margin-top: 20px; }
+  .firstpage { margin-top: 25px; padding-top: 12px; }
+  .firstpage h2 { font-size: 28px; }
+  .firstpage .emptypage { font-size: 13px; line-height: 1.8; }
+  .composer { padding: 7px 7px calc(var(--safe-b) + 7px); }
+  .composer .inner { padding: 6px 8px 7px; border-radius: 15px; }
+  .composer .crow { gap: 5px; padding-top: 7px; margin-top: 5px; }
+  .crow .chip { padding: 0 8px; }
+  .say-row { gap: 4px; }
+  .say-row .btn { padding: 0 16px; }
+  .sheet .head { padding: 12px 12px 10px 20px; }
+  .sheet .head h2 { font-size: 27px; }
+  .sheet .body { padding-left: 20px; padding-right: 20px; }
+}
+@media (max-width: 370px) {
+  #shelf { padding-left: 18px; padding-right: 18px; }
+  .brand h1 { font-size: 26px; }
+  .brand p { font-size: 12.5px; }
+  #shelfGreeting { font-size: 41px; }
+  .cover .t { font-size: 21px; }
+  .deskbar .icon { width: 35px; }
+}

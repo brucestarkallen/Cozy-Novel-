@@ -20,9 +20,13 @@ let query = '';
 let listState = 'idle';
 let asked = 0;
 let away = false;            /* the list failed because the phone did not answer at all */
+let listAvailable = false;   /* the last asking succeeded: a stale list offers no resume */
 
 export function initShelf(elements, appHooks) {
-  ui = elements;
+  ui = { ...elements };
+  for (const name of ['Intro', 'Eyebrow', 'Greeting', 'Invitation', 'Resume', 'Count', 'CollectionTitle']) {
+    ui[name[0].toLowerCase() + name.slice(1)] = ui.root.querySelector(`#shelf${name}`);
+  }
   hooks = appHooks;
   ui.search.addEventListener('input', debounce(() => { query = ui.search.value.trim().toLowerCase(); draw(); }, 150));
   store.onShelf(debounce(() => { if (!ui.root.hidden) refresh(); }, 250));
@@ -37,18 +41,64 @@ export async function refresh() {
   try { got = await store.listNovels(); } catch (_) { /* the banner says when the phone is not answering */ }
   /* only the newest asking draws: an older list arriving late is not the shelf */
   if (mine !== asked) return;
+  listAvailable = Boolean(got);
   if (got) { rows = got; listState = 'ok'; } else if (listState !== 'ok') { listState = 'failed'; away = store.status().offline; }
   draw();
 }
 
+function recentFirst(a, b) {
+  const at = (r) => Math.max(r.meta?.written || 0, r.meta?.opened || 0, r.meta?.created || 0);
+  return at(b) - at(a);
+}
+
+function drawWelcome(live, list, total) {
+  const ready = listState === 'ok';
+  if (ui.intro) ui.intro.hidden = !ready;
+  if (ui.eyebrow) ui.eyebrow.textContent = rows.length ? 'Make yourself at home' : 'Welcome to your writing room';
+  if (ui.greeting) ui.greeting.textContent = rows.length ? 'Your next chapter awaits.' : 'A little room.\nA whole world.';
+  if (ui.invitation) ui.invitation.textContent = rows.length
+    ? 'Settle in, find your story, and pick up the thread.'
+    : 'A quiet place to dream up worlds, fall in love with characters, and write at your own pace.';
+  if (ui.collectionTitle) ui.collectionTitle.textContent = showArchived ? 'Archived books' : 'Your books';
+  if (ui.count) {
+    ui.count.textContent = ready ? (query ? `${list.length} of ${plural(total, 'book')}` : plural(total, 'book')) : '';
+    ui.count.hidden = !ready;
+  }
+  if (!ui.resume) return;
+  /* A search or the archive is its own shelf; the invitation to return to a
+   * live book belongs only to the shelf of books being written. */
+  const latest = ready && listAvailable && !store.status().offline && !showArchived && !query ? [...live].sort(recentFirst)[0] : null;
+  ui.resume.hidden = !latest;
+  if (ui.intro) ui.intro.classList.toggle('has-resume', Boolean(latest));
+  if (!latest) { ui.resume.replaceChildren(); return; }
+  const m = latest.meta || {};
+  /* Shelf news can arrive while the button has focus. Update the words in
+   * place for the same book, so a save from another window never takes the
+   * Continue button (and the keyboard's place) away. */
+  if (ui.resume.dataset.book === latest.id && ui.resume.firstChild) {
+    ui.resume.querySelector('.resume-title').textContent = m.title || 'Untitled';
+    ui.resume.querySelector('.resume-meta').textContent = `${plural(m.words || 0, 'word')} · ${plural(m.chapters || 1, 'chapter')}`;
+    return;
+  }
+  ui.resume.dataset.book = latest.id;
+  ui.resume.replaceChildren(h('div.resume-card',
+    h('span.resume-label', 'Where you left off'),
+    h('h2.resume-title', m.title || 'Untitled'),
+    h('p.resume-meta', `${plural(m.words || 0, 'word')} · ${plural(m.chapters || 1, 'chapter')}`),
+    h('div.resume-action',
+      h('button.btn.primary', { onclick: () => hooks.openNovel(latest.id), title: 'Open this book at the chapter you last visited.' }, 'Continue writing', icon('right', 16)),
+      h('span.resume-hint', 'Back to the chapter you last visited.'))));
+}
+
 function draw() {
-  const list = rows
-    .filter((r) => Boolean(r.meta && r.meta.archived) === showArchived)
-    .filter((r) => !query || String(r.meta.title || '').toLowerCase().includes(query) || String(r.meta.subtitle || '').toLowerCase().includes(query))
-    .sort((a, b) => Math.max(b.meta.written || 0, b.meta.opened || 0) - Math.max(a.meta.written || 0, a.meta.opened || 0));
+  const collection = rows.filter((r) => Boolean(r.meta && r.meta.archived) === showArchived);
+  const list = collection
+    .filter((r) => !query || String(r.meta?.title || '').toLowerCase().includes(query) || String(r.meta?.subtitle || '').toLowerCase().includes(query))
+    .sort(recentFirst);
   ui.books.textContent = '';
   const live = rows.filter((r) => !(r.meta && r.meta.archived));
-  ui.search.hidden = rows.length < 7;
+  ui.search.hidden = !rows.length && !query;
+  drawWelcome(live, list, collection.length);
   if (!rows.length && listState !== 'ok') {
     ui.foot.textContent = '';
     if (listState === 'failed') {
@@ -66,21 +116,27 @@ function draw() {
       h('h2', 'Every story starts somewhere.'),
       h('p', 'Give it a title and begin. You can write every word yourself, or say what happens and let your writer write it — then keep it, try another take, or rewrite it.'),
       h('div.btnrow', h('button.btn.primary', { onclick: newBook, title: 'A new book: only a working title is asked.' }, 'Begin a book'), h('button.btn', { onclick: importBook, title: 'A book from a .txt or .md file — its chapter headings become chapters — or a copy from Backups.' }, 'Bring in a book'))));
-  } else if (!showArchived) {
+  } else if (!showArchived && !query) {
     ui.books.append(h('button.book.new', { onclick: newBook, 'aria-label': 'Begin a new book', title: 'A new book: only a working title is asked.' }, h('div.cover', h('div.plus', '+'), h('div', { style: { font: '500 18px/1.2 var(--display)' } }, 'A new book'))));
   }
   list.forEach((r, i) => {
     const m = r.meta || {};
     const el = h('div.book' + (m.archived ? '.archived' : ''), { style: { animationDelay: `${Math.min(i, 12) * 40}ms` } },
       h('button.cover.' + (m.cover || 'ember'), { onclick: () => hooks.openNovel(r.id), 'aria-label': `Open ${m.title}` },
-        h('div', h('div.t', m.title || 'Untitled'), m.subtitle ? h('div.s', m.subtitle) : null),
-        h('div.orn', '❦')),
-      h('div.meta', h('b', plural(m.words || 0, 'word')), ` · ${plural(m.chapters || 1, 'chapter')}`, h('br'), `written ${timeAgo(m.written || m.created) || 'not yet'}`),
+        h('div.cover-copy', h('span.cover-kicker', 'A novel'), h('span.cover-rule', { 'aria-hidden': 'true' }), h('div.t', m.title || 'Untitled'), m.subtitle ? h('div.s', m.subtitle) : null),
+        h('div.cover-foot', { 'aria-hidden': 'true' }, h('span.cover-rule'), h('div.orn', '❦'))),
+      h('div.meta', h('b', plural(m.words || 0, 'word')), ` · ${plural(m.chapters || 1, 'chapter')}`, h('br'), m.words > 0 && m.written ? `written ${timeAgo(m.written)}` : 'A beginning waiting for you'),
       h('button.more', { 'aria-label': `About ${m.title}`, title: 'About this book', onclick: () => aboutBook(r) }, icon('more', 18)));
     ui.books.append(el);
   });
-  if (showArchived && !list.length) ui.books.append(h('p.say', 'Nothing archived.'));
-  else if (query && !list.length) ui.books.append(h('p.say', `No book’s title has “${ui.search.value.trim()}” in it.`));
+  if (query && !list.length && rows.length) {
+    ui.books.append(h('div.empty-shelf.search-empty',
+      h('h2', 'No books found.'),
+      h('p', `No ${showArchived ? 'archived book' : 'book on your shelf'} matches “${ui.search.value.trim()}”. Try another title or subtitle.`),
+      h('button.btn', { onclick: () => { query = ''; ui.search.value = ''; draw(); ui.search.focus(); }, title: 'Clear the search and show every book on this shelf.' }, 'Clear search')));
+  } else if (showArchived && !list.length && rows.length) {
+    ui.books.append(h('div.empty-shelf', h('h2', 'Nothing archived.'), h('p', 'Books you archive will rest here until you want them on your shelf again.')));
+  }
   ui.foot.textContent = '';
   const archivedCount = rows.length - live.length;
   if (rows.length) ui.foot.append(h('button.btn.quiet.small', { onclick: importBook, title: 'A book from a .txt or .md file — its chapter headings become chapters — or a copy from Backups.' }, 'Bring in a book'));
@@ -112,9 +168,12 @@ function newBook() {
   const style = h('input', { type: 'text', placeholder: 'e.g. First person, past tense, warm and funny (optional)', value: kept.style || '' });
   const remember = () => keepDraft({ title: title.value, brief: brief.value, style: style.value });
   for (const el of [title, brief, style]) el.addEventListener('input', remember);
+  let making = false;
   const go = async () => {
+    if (making) return;
     const t = title.value.trim();
     if (!t) { toast('Give it a title — a working one is fine.'); title.focus(); return; }
+    making = true;
     begin.disabled = true;
     try {
       const { novel, chapter } = newNovel({ title: t, brief: brief.value.trim(), style: style.value.trim() });
@@ -124,12 +183,13 @@ function newBook() {
       s.close();
       hooks.openNovel(novel.id);
     } catch (e) {
+      making = false;
       begin.disabled = false;
       toast('The book could not be made: the phone is not answering. Is Cozy Novel running in Termux?', 6000);
     }
   };
   const begin = h('button.btn.primary', { onclick: go }, 'Open the book');
-  title.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  title.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); go(); } });
   s.body.append(field('Title', title), field('What it’s about', brief), field('How it reads', style), h('div.btnrow', begin));
   setTimeout(() => title.focus(), 80);
 }

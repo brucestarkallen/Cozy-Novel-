@@ -1,0 +1,100 @@
+/* The book's identity and the words behind a response. These sheets share
+ * the study's colours, with room to read and clear places for every action. */
+.booksheet .book-intro, .sentsheet .sent-intro { color: var(--chrome-soft); font-size: 13px; line-height: 1.65; margin: 0 0 23px; max-width: 54ch; }
+.booksheet .book-identity { padding-bottom: 26px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.booksheet .book-identity-main { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 25px; align-items: center; }
+.booksheet .book-preview { width: 104px; height: 156px; padding: 16px 11px 11px 15px; border-radius: 3px 8px 8px 3px; box-shadow: 0 8px 20px rgba(0,0,0,.24), 3px 2px 0 -1px #c4b08a; }
+.booksheet .book-preview .t { padding: 0; font-size: 18px; line-height: 1.15; }
+.booksheet .book-preview .s { font-size: 11px; margin-top: 5px; }
+.booksheet .book-preview .orn { font-size: 12px; }
+.booksheet .book-title-fields .field:last-child { margin-bottom: 0; }
+.booksheet .book-covers { display: flex; gap: 24px; align-items: center; margin: 20px 0 0; }
+.booksheet .book-covers > span { margin: 0; min-width: 104px; color: var(--chrome-soft); }
+.booksheet .covers { width: 100%; max-width: 330px; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.booksheet .covers button { position: relative; height: 42px; aspect-ratio: auto; border-radius: 3px 6px 6px 3px; box-shadow: 1px 2px 5px rgba(0,0,0,.2); transition: transform .15s ease, outline-color .15s ease; }
+.booksheet .covers button[aria-pressed="true"] { outline: 1px solid var(--accent); outline-offset: 3px; border-color: transparent; transform: translateY(-2px); }
+.booksheet .covers button[aria-pressed="true"]::after { content: '✓'; display: grid; place-items: center; position: absolute; inset: 0; padding: 0; background: none; color: #fff8e8; font-size: 16px; text-shadow: 0 1px 4px #000; }
+.booksheet .keptfield { padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.booksheet .keptrow { gap: 12px; margin-bottom: 13px; }
+.booksheet .keptname { font: 600 25px/1.15 var(--display); }
+.booksheet .segmented { background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); }
+.booksheet .segmented button { min-height: 36px; padding: 0 16px; font-size: 12px; }
+.booksheet .segmented button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 17%, transparent); }
+.booksheet .keptfield textarea { padding: 13px 15px; min-height: 130px; font-size: 14px; line-height: 1.65; }
+.booksheet .keptfield textarea.tall { min-height: 140px; }
+.booksheet .keptfield > em { font-size: 12px; line-height: 1.65; margin: 7px 0 15px; max-width: 66ch; }
+.booksheet .keptbox { padding: 0; border: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 3%, transparent); border-radius: 11px; }
+.booksheet .keptbox > summary { padding: 12px 15px; cursor: pointer; color: var(--chrome-soft); font-size: 12px; font-weight: 600; }
+.booksheet .keptbox[open] > summary { color: var(--chrome-ink); border-bottom: 1px solid var(--line); }
+.booksheet .keptcontent { padding: 14px; }
+.booksheet .keptlabel { margin-bottom: 8px; font-size: 10px; letter-spacing: .09em; }
+.booksheet .keptcontent .say { font-size: 12px; line-height: 1.6; }
+.booksheet .keptcontent .btnrow { margin-top: 12px; }
+.booksheet .book-sound { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 20px; margin-bottom: 25px; }
+.booksheet .book-sound > span { margin: 0; font: 600 25px/1.15 var(--display); }
+.booksheet .book-sound > em { grid-column: 1 / -1; margin: 0; font-size: 12px; line-height: 1.65; }
+.booksheet .book-plans { margin-bottom: 20px; }
+.booksheet .book-plans .field > span { font: 600 25px/1.15 var(--display); margin-bottom: 13px; }
+.booksheet .book-plans textarea { font-size: 14px; line-height: 1.65; padding: 13px 15px; }
+.booksheet .book-wordcount { border-top: 1px solid var(--line); padding-top: 18px; margin: 0 0 21px; font-size: 12px; }
+.booksheet .book-exports { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 15px 0; }
+.booksheet .book-exports .btn { min-height: 46px; padding: 8px; white-space: normal; line-height: 1.3; }
+.booksheet .group .say { font-size: 12px; line-height: 1.65; }
+.booksheet .group[data-key="book.away"] { background: transparent; }
+.booksheet .group[data-key="book.away"] .ghead h3 { color: var(--chrome-soft); }
+.sentsheet .sent-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; padding: 5px 18px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
+.sentsheet .sent-facts li { align-items: start; padding: 12px 0; font-size: 13px; overflow-wrap: anywhere; }
+.sentsheet .sent-facts li small { margin-bottom: 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+.sentsheet .sent-facts li[data-fact="Address"], .sentsheet .sent-facts li[data-fact="Thinking"] { grid-column: 1 / -1; }
+.sentsheet .sent-facts li:last-child { border-bottom: 0; }
+.sentsheet .sent-details { margin: 16px 0 25px; color: var(--chrome-soft); font-size: 12px; }
+.sentsheet .sent-details > summary { padding: 6px 0; cursor: pointer; }
+.sentsheet .sent-details dl { margin: 7px 0 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; }
+.sentsheet .sent-details dl > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 15px; padding: 5px 0; }
+.sentsheet .sent-details dt, .sentsheet .sent-details dd { margin: 0; overflow-wrap: anywhere; }
+.sentsheet .sent-details dd { color: var(--chrome-ink); }
+.sentsheet .sent-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 25px 0 14px; }
+.sentsheet .sent-section-title h3 { margin: 0; font: 600 25px/1.2 var(--display); }
+.sentsheet .sent-section-title > small { flex: none; font-size: 11px; color: var(--chrome-soft); }
+.sentsheet .sentmsg { border-radius: 12px; margin-bottom: 10px; }
+.sentsheet .sentmsg > button { padding: 14px 15px; gap: 12px; background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); }
+.sentsheet .sent-number { font-size: 11px; color: var(--chrome-soft); opacity: .8; font-variant-numeric: tabular-nums; }
+.sentsheet .sent-role { min-width: 0; }
+.sentsheet .sent-role b { font-size: 13px; font-weight: 600; }
+.sentsheet .sent-extra { display: block; font-size: 11px; color: var(--chrome-soft); overflow-wrap: anywhere; margin-top: 3px; }
+.sentsheet .sentmsg > button small { flex: none; font-size: 11px; }
+.sentsheet .sent-chevron { font: 23px/1 var(--display); color: var(--chrome-soft); transition: transform .15s ease; }
+.sentsheet .sentmsg.open .sent-chevron { transform: rotate(90deg); }
+.sentsheet .sentmsg.open > button { border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.sentsheet .sentmsg pre { padding: 18px; font-size: 12.5px; line-height: 1.75; background: color-mix(in srgb, var(--bg) 35%, transparent); }
+.sentsheet .sent-copy { padding-top: 15px; margin-top: 12px; border-top: 1px solid var(--line); }
+.sentsheet .sent-copy .btn { min-height: 44px; }
+.sentsheet .sent-empty { border: 1px solid var(--line); border-radius: 14px; padding: 24px; margin: 0; line-height: 1.7; }
+@media (max-width: 480px) {
+  .booksheet .body, .sentsheet .body { padding: 20px 20px calc(var(--safe-b) + 25px); }
+  .booksheet .book-identity-main { grid-template-columns: 76px minmax(0, 1fr); gap: 18px; }
+  .booksheet .book-preview { width: 76px; height: 120px; padding: 12px 8px 10px 12px; }
+  .booksheet .book-preview .t { font-size: 15px; }
+  .booksheet .book-preview .s { font-size: 10px; }
+  .booksheet .book-covers { display: block; }
+  .booksheet .book-covers > span { margin-bottom: 12px; }
+  .booksheet .covers { gap: 7px; max-width: none; }
+  .booksheet .covers button { height: 42px; }
+  .booksheet .keptrow { align-items: start; flex-direction: column; gap: 10px; }
+  .booksheet .keptrow .segmented { align-self: stretch; }
+  .booksheet .keptrow .segmented button { flex: 1; }
+  .booksheet .book-intro, .sentsheet .sent-intro { font-size: 12px; margin-bottom: 20px; }
+  .sentsheet .sent-facts { padding: 4px 14px; gap: 0 16px; }
+  .sentsheet .sentmsg > button { padding: 13px 12px; gap: 8px; }
+  .sentsheet .sent-section-title h3 { font-size: 23px; }
+  .sentsheet .sentmsg pre { padding: 14px; font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .booksheet .covers button, .sentsheet .sent-chevron { transition: none; }
+}
+.booksheet .book-export-option { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.booksheet .book-export-option small { color: var(--chrome-soft); font-size: 11px; text-align: center; }
+.sentsheet .sent-facts li[data-fact="Model"] { grid-column: 1 / -1; }
+.sentsheet .sent-facts li[data-fact="Model"] .grow > span { font: 600 23px/1.2 var(--display); }
+.sentsheet .sent-facts li[data-fact="Sent"] { border-bottom: 0; }
+.sentsheet .sent-fact-note { display: block; font-size: 11px; line-height: 1.6; color: var(--chrome-soft); margin-top: 5px; }

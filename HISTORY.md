@@ -284,3 +284,15 @@ Now, with every request that carries his words — a new page, another take, a r
 The checker's request grew by about forty tokens: a passage-in-parts fixture at a 6,000-token model fell 11 tokens short of its floor with a longer first wording, so the line was cut to fit — the floor is unchanged.
 
 Checked with all five suites — server 63/63, app 365/365, thinking 348/348 (0 leaks), walk_main 75/75, walk_more 277/277 — and every new piece taken out on its own with its check run: 14 of 14 caught; the 40 earlier ones in the files this change touched run again (40 caught). No paid provider call was made: what a real model does with the new words is not measured here.
+
+
+## 2.7.0, a room to come back to
+
+- A welcoming library with Continue writing at the chapter last visited, cloth-bound covers, and a search for even one book. The archive, a search with no matches, and a shelf that could not be read each say what happened.
+- A quieter writing desk: named tools on a wide screen, a chapter title that says it can be named, a gentle invitation on the first page, and a writing tray that fits a small phone. The five looks, reading mode, and the room switch keep working; new motion respects reduced motion.
+- Dialogs keep the keyboard with them and return it to the right place when closed, including nested sheets and menus. Rename boxes have names for screen readers; text composition never submits a rename early. Canceling a file picker lets go of the request.
+- Search announces its results, keeps the keyboard in the box on Enter, and stops drawing an old search when another begins or its sheet closes. Repeated Enter while a new book is being made makes only one book.
+- Suggestions separates original and proposed wording, gives grades and their evidence room to read, and keeps expanded grades and keyboard focus while changes land. Its status button uses the room’s colours. Notes, Partner, Scenes, the chapter list, book settings and sent requests share the same quieter layout.
+- Settings has direct section navigation and clearer connection controls, with Test beside the model. Testing or copying a connection uses the latest typed values. A module reset first keeps pending edits so confirmation and Undo use all of the user’s words. Book exports, whole-library backups and closing settings keep edits made just before the action.
+- Informational notices no longer block buttons behind them; their Undo actions remain clickable. Focused browser walks cover these save timing cases, checker interaction, phone layouts and keyboard use.
+- A correction to the helper’s book description stays while replacement words are requested, even when the request follows the last keystroke immediately. Undo notices are reachable by keyboard inside open dialogs.

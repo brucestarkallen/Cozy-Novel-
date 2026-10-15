@@ -1,0 +1,79 @@
+/* The reading companion: quiet status, generous margins, one decision at a time. */
+.checkbubble {
+  width: auto; min-width: 44px; height: 40px; padding: 0 13px; gap: 8px;
+  display: flex; border-radius: 14px 14px 5px 14px;
+  background: var(--chrome-solid); color: var(--chrome-soft); border: 1px solid var(--line);
+  box-shadow: 0 4px 16px rgba(0,0,0,.18); font: 600 13px/1 var(--ui);
+  transition: border-color .18s, box-shadow .18s, transform .18s;
+}
+.checkbubble::after { content: 'Suggestions'; font-size: 11px; font-weight: 500; color: var(--chrome-ink); }
+.checkbubble:hover { border-color: var(--accent); box-shadow: 0 5px 20px rgba(0,0,0,.25); }
+.checkbubble[data-state="clean"] { background: var(--chrome-solid); color: var(--ok); }
+[data-theme="day"] .checkbubble[data-state="clean"] { color: #466838; }
+.checkbubble[data-state="found"] { background: var(--chrome-solid); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.checkbubble[data-state="found"] b { display: grid; place-items: center; min-width: 22px; height: 22px; border-radius: 7px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.checkbubble[data-state="waiting"], .checkbubble[data-state="checking"] { background: var(--chrome-solid); color: var(--chrome-soft); }
+.checkbubble[data-state="trouble"] { background: var(--chrome-solid); color: var(--danger); }
+.checkbubble .ring { width: 16px; height: 16px; border-width: 2px; border-color: var(--line); border-top-color: var(--accent); }
+.check-intro { padding: 2px 0 21px; }
+.check-intro .eyebrow { margin: 0 0 9px; overflow-wrap: anywhere; }
+.check-intro h3 { font: 600 30px/1.15 var(--display); margin: 0 0 8px; color: var(--chrome-ink); }
+.check-intro > p:last-child { font: 13px/1.6 var(--ui); color: var(--chrome-soft); margin: 0; }
+.sugsheet .sugstate { padding: 13px 15px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--accent) 5%, transparent); line-height: 1.55; align-items: flex-start; font-size: 13px; }
+.sugsheet .sugstate .dot { width: 7px; height: 7px; margin-top: 6px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-soft) 8%, transparent); }
+.sugsheet .sugstate[data-state="found"] .dot { background: var(--accent); }
+.sugsheet .sugstate[data-state="clean"] .dot { background: var(--ok); }
+.sugsheet .check-actions { margin: 14px 0 20px; gap: 8px; }
+.sugsheet .judgebox { border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--chrome-ink) 2%, transparent); margin: 10px 0; padding: 0 15px; }
+.sugsheet .judgebox > summary { padding: 13px 0; font-size: 12px; line-height: 1.65; color: var(--chrome-soft); }
+.sugsheet .judgebox[open] > summary { color: var(--chrome-ink); border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.sugsheet .judgebox > .say { font-size: 12px; line-height: 1.65; margin: 13px 0; }
+.sugsheet .check-table { max-width: 100%; overflow-x: auto; }
+.sugsheet .usage-table { font-size: 12px; }
+.sugsheet .usage-table th { font-size: 10px; font-weight: 600; letter-spacing: .02em; line-height: 1.5; }
+.sugsheet .usage-table td { padding-top: 12px; padding-bottom: 12px; }
+.sugsheet .sughead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 28px 1px 12px; font: 600 21px/1.3 var(--display); }
+.sugsheet .sughead small { flex: none; color: var(--chrome-soft); font: 11px/1.5 var(--ui); }
+.sugsheet .sug { padding: 20px; margin-bottom: 16px; border-radius: 15px; background: color-mix(in srgb, var(--chrome-ink) 3%, var(--chrome-solid)); box-shadow: 0 3px 12px rgba(0,0,0,.04); }
+.sugsheet .sug .sugtop { gap: 14px; margin-bottom: 16px; }
+.sugsheet .sug .tag { background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--accent); font-size: 10px; letter-spacing: .1em; padding: 5px 9px; }
+.sugsheet .sug .sugtop > .link { font: 11px/1.4 var(--ui); color: var(--chrome-soft); text-decoration: none; padding: 6px 0 6px 8px; }
+.sugsheet .sug .sugtop > .link:hover { color: var(--accent); text-decoration: underline; }
+.sugsheet .word-comparison { display: grid; gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--line); }
+.sugsheet .word-before, .sugsheet .word-after { padding: 13px 15px 15px; background: var(--chrome-solid); }
+.sugsheet .word-after { background: color-mix(in srgb, var(--ok) 7%, var(--chrome-solid)); }
+.sugsheet .word-label { display: block; color: var(--chrome-soft); font: 500 10px/1.4 var(--ui); letter-spacing: .12em; text-transform: uppercase; margin-bottom: 7px; }
+.sugsheet .sug .sugwhat { font-size: 15px; line-height: 1.7; }
+.sugsheet .sug del { text-decoration-color: color-mix(in srgb, var(--chrome-soft) 35%, transparent); }
+.sugsheet .sug ins { color: var(--chrome-ink); background: none; padding: 0; }
+.sugsheet .word-passage { padding: 14px 16px; border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); background: var(--chrome-solid); border-radius: 0 9px 9px 0; }
+.sugsheet .sug .sugwhy { margin-top: 13px; line-height: 1.65; font-size: 12px; }
+.sugsheet .sug > .btnrow { border-top: 1px solid var(--line); margin-top: 17px; padding-top: 14px; gap: 10px; }
+.sugsheet .sug > .btnrow .quiet { margin-left: auto; }
+.sugsheet .grade-score { padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 10px; }
+.sugsheet .grade-score b { font: 600 21px/1.4 var(--display); }
+.sugsheet .sug ul.faults { list-style: none; margin: 6px 0; padding: 0; }
+.sugsheet .sug ul.faults li { padding: 13px 0; margin: 0; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.7; }
+.sugsheet .sug ul.faults b { font-size: 13px; }
+.sugsheet .sug ul.faults .link.quote { font-size: 14px; line-height: 1.7; }
+.check-empty { padding: 36px 20px 20px; text-align: center; color: var(--accent); }
+.check-empty h3 { font: 600 27px/1.2 var(--display); margin: 12px 0; color: var(--chrome-ink); }
+.check-empty .say { max-width: 330px; margin: auto; line-height: 1.7; }
+.judgesheet .judgehead { border: 1px solid var(--line); border-radius: 12px; padding: 16px; font-size: 13px; line-height: 1.6; color: var(--chrome-soft); }
+.judgesheet .judgehead b { display: block; font: 600 28px/1.3 var(--display); color: var(--accent); }
+.judgesheet ul.judged { list-style: none; padding: 0; counter-reset: judge; }
+.judgesheet ul.judged li { padding: 15px 15px 15px 43px; border: 1px solid var(--line); border-radius: 11px; margin: 10px 0; position: relative; font-size: 12px; line-height: 1.65; }
+.judgesheet ul.judged li::before { counter-increment: judge; content: counter(judge, decimal-leading-zero); position: absolute; left: 14px; top: 16px; font-size: 10px; color: var(--chrome-soft); }
+.judgesheet ul.judged li[data-said="no"] { border-left: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.judgesheet ul.judged small { margin-top: 6px; opacity: 1; font-size: 11px; }
+.judgesheet .say { font-size: 12px; line-height: 1.7; }
+@media (max-width: 500px) {
+  .check-intro h3 { font-size: 27px; }
+  .sugsheet .sug { padding: 16px; }
+  .sugsheet .sughead { align-items: flex-start; font-size: 20px; }
+  .sugsheet .sughead small { padding-top: 4px; }
+  .sugsheet .word-before, .sugsheet .word-after { padding: 12px; }
+  .sugsheet .sug .sugwhat { font-size: 14px; }
+  .sugsheet .sug > .btnrow .primary { max-width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .checkbubble { transition: none; } }

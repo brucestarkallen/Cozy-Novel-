@@ -37,7 +37,8 @@ function typing(fn, ms) {
 function landTyping() { for (const d of [...waiting]) d.now(); }
 
 export function openSettings(focus = '') {
-  sheet = openSheet('Settings', { onClose: () => { sheet = null; } });
+  sheet = openSheet('Settings', { onClose: () => { landTyping(); sheet = null; } });
+  sheet.box.classList.add('settings-sheet');
   draw(focus);
 }
 
@@ -53,6 +54,7 @@ function draw(focus = '') {
   sheet.body.textContent = '';
   const hs = house();
   sheet.body.append(
+    h('div.settings-welcome', h('span.settings-eyebrow', 'MAKE YOURSELF AT HOME'), h('p', 'Your writing room, just the way you like it.')),
     connectionsGroup(hs, focus === 'connections'),
     rolesGroup(hs, focus === 'connections'),
     usageGroup(hs),
@@ -63,7 +65,46 @@ function draw(focus = '') {
   for (const g of sheet.body.querySelectorAll('section.group[data-key]')) {
     if (open.has(g.dataset.key)) { g.classList.remove('fold'); g.firstChild.setAttribute('aria-expanded', 'true'); }
   }
+  arrangeSettings();
   sheet.body.scrollTop = scroll;
+}
+
+/* A short way back to every part of a long settings sheet. The section's
+ * own button still owns folding and remembers it for the next visit. */
+function arrangeSettings() {
+  const sections = [
+    ['connections', 'Connections', 'Choose who writes with you.'],
+    ['roles', 'Who does what', 'Your writer, helper, partner and checker.'],
+    ['usage', 'Usage', 'The words sent, and what they cost.'],
+    ['words', 'Instructions', 'Your voice, presets and writing rules.'],
+    ['look', 'Appearance', 'The room, the paper and the type.'],
+    ['backups', 'Backups', 'Keep a copy. Bring your books back.'],
+    ['about', 'About', 'This copy of Cozy Novel.'],
+  ];
+  const nav = h('nav.settings-nav', { 'aria-label': 'Settings sections' });
+  for (const [key, label, description] of sections) {
+    const section = sheet.body.querySelector(`:scope > .group[data-key="set.${key}"]`);
+    if (!section) continue;
+    section.id = `settings-${key}`;
+    section.classList.add('settings-section');
+    const heading = section.querySelector(':scope > .ghead');
+    const title = heading.querySelector('h3');
+    title.append(h('span.settings-summary', description));
+    const jump = h('button.settings-jump', {
+      'aria-label': `Go to ${label.toLowerCase()}`,
+      'aria-controls': section.id,
+      title: description,
+      onclick: () => {
+        if (section.classList.contains('fold')) heading.click();
+        heading.focus({ preventScroll: true });
+        const body = sheet.body;
+        const top = body.scrollTop + section.getBoundingClientRect().top - body.getBoundingClientRect().top - nav.getBoundingClientRect().height - 12;
+        body.scrollTo({ top: Math.max(0, top), behavior: 'instant' });
+      },
+    }, label);
+    nav.append(jump);
+  }
+  sheet.body.prepend(nav);
 }
 
 /* ------------------------------------------------------------ connections */
@@ -106,7 +147,7 @@ function connectionsGroup(hs, open) {
   const conns = [...(hs.connections || [])].sort((a, b) => connName(a).localeCompare(connName(b)));
   if (!editingId || !conns.some((c) => c.id === editingId)) editingId = (conns[0] || {}).id || null;
   const g = group('Connections', { key: 'set.connections', open: open || !conns.length, note: conns.length ? plural(conns.length, 'connection') : 'none yet' });
-  g.body.append(h('p.say', 'Who writes with you. The key lives only on this phone and travels nowhere but to them. What you set here is exactly what is sent — your temperature, your top-p, your thinking; what you leave empty is not sent at all, so the provider does what it normally does.'));
+  g.body.append(h('p.say', 'Your key stays on this phone and is sent only to your provider. Empty settings use the provider’s defaults.'));
   const pick = h('select', { 'aria-label': 'Which connection' });
   for (const c of conns) pick.append(h('option', { value: c.id, selected: c.id === editingId }, `${connName(c)}${c.model && c.name ? ` — ${c.model}` : ''}${partsOf(hs, c.id).length ? ' (in use)' : ''}`));
   pick.addEventListener('change', () => { editingId = pick.value; draw(); });
@@ -118,7 +159,7 @@ function connectionsGroup(hs, open) {
   const shown = conns.find((x) => x.id === editingId);
   const parts = shown ? partsOf(hs, shown.id) : [];
   g.body.append(row, shown ? h('p.say.inuse' + (parts.length ? '.good' : ''), parts.length ? `In use as ${partsWords(parts)}.` : 'Not in use — Who does what, below, gives it a part.') : '', h('p.say.quiet', conns.length
-    ? 'Your connections, A to Z — pick one to change it. Add a connection starts one from a provider; Copy makes a second with this one’s provider, key, address and dials, to change its model and name.'
+    ? 'Pick a connection to edit. Copy keeps its settings so you can try another model.'
     : 'No connections yet. Add one: pick your provider, paste your key, pick a model.'));
   const c = conns.find((x) => x.id === editingId);
   if (c) g.body.append(connectionForm(c));
@@ -143,6 +184,7 @@ function presetMenu(anchor) {
 }
 
 function copyConnection(id) {
+  landTyping();
   const c = (house().connections || []).find((x) => x.id === id);
   if (!c) return;
   const copy = JSON.parse(JSON.stringify(c));
@@ -216,6 +258,7 @@ function connectionForm(c) {
   const say = h('p.say', { hidden: true });
   const list = h('button.btn.small', { onclick: async () => {
     list.disabled = true; say.hidden = false; say.className = 'say'; say.textContent = 'Asking what’s on offer…';
+    landTyping();
     await store.flush('house', 'house');
     const r = await listModels(now());
     list.disabled = false;
@@ -241,41 +284,53 @@ function connectionForm(c) {
   }, 400));
   box.append(field('Model', model), quiet(MODEL_HINT[kind] || MODEL_HINT.custom), h('div.btnrow', list), pickBox, say);
 
+  const basicActions = h('div.connection-actions');
+  box.append(basicActions);
+  const section = (title, key, note) => {
+    const g = group(title, { key: `set.conn.${key}`, open: true, note });
+    g.classList.add('connection-section');
+    box.append(g);
+    return g.body;
+  };
+
   /* ---- thinking */
+  const thinkingBody = section('Thinking', 'thinking', 'Time to weigh the words');
   const think = h('select');
   for (const l of ['', ...LEVELS]) think.append(h('option', { value: l, selected: (c.thinking || '') === l }, THINK_WORDS[l] || l));
   think.addEventListener('change', () => set({ thinking: think.value || undefined }, { redraw: true }));
   const said = spokenAs(c);
-  box.append(field('Thinking — how long the writer weighs the page before writing', think),
+  thinkingBody.append(field('Thinking — how long the writer weighs the page before writing', think),
     quiet('A level this address can’t name is spoken as the nearest one it can — never a name the endpoint rejects. If the address ever refuses the thinking settings, the page is sent again without them, and none are sent for a day.'),
     quiet((c.thinking || alwaysThinks(c.model) || cannotStopThinking(c)) ? `For this connection: ${said}.` : 'Not set: nothing about thinking is sent until you choose a level.'));
-  box.append(field('Thinking room, in tokens (optional)', num('thinkingBudget', budgetFor({ ...c, thinkingBudget: 2048 }).sent ? 'Leave empty to follow the level' : 'Not used by this address', { whole: true })), quiet(roomWords(c)));
+  thinkingBody.append(field('Thinking room, in tokens (optional)', num('thinkingBudget', budgetFor({ ...c, thinkingBudget: 2048 }).sent ? 'Leave empty to follow the level' : 'Not used by this address', { whole: true })), quiet(roomWords(c)));
 
   /* ---- the dials */
-  box.append(h('div.fieldrow',
+  const dialsBody = section('Writing settings', 'dials', 'Sampling and reply length');
+  dialsBody.append(h('div.fieldrow',
     field('Temperature (0–2)', num('temperature', 'Their own default')),
     field('Top-p (0–1)', num('topP', 'Their own default'))));
   const claude = wireOf(c) === 'anthropic';
-  box.append(h('div.fieldrow',
+  dialsBody.append(h('div.fieldrow',
     field('Top-k', num('topK', 'Their own default', { whole: true })),
     claude ? null : field('Min-p (0–1)', num('minP', 'Their own default')),
     claude ? null : field('Presence penalty', num('presencePenalty', 'Their own default')),
     claude ? null : field('Frequency penalty', num('frequencyPenalty', 'Their own default')),
     claude ? null : field('Repetition penalty', num('repetitionPenalty', 'Their own default')),
     claude ? null : field('Seed', num('seed', 'None', { whole: true }))));
-  if (!claude) box.append(quiet('The three penalties make the model avoid words it has already written — sound effects too (*CLANG!*, “hah… hah…”). If the sounds thin out, keep them at 0 or low.'));
-  else box.append(quiet('Claude takes top-k and nothing else of these; with its thinking on it takes no top-k, and its temperature is 1.'));
+  if (!claude) dialsBody.append(quiet('The three penalties make the model avoid words it has already written — sound effects too (*CLANG!*, “hah… hah…”). If the sounds thin out, keep them at 0 or low.'));
+  else dialsBody.append(quiet('Claude takes top-k and nothing else of these; with its thinking on it takes no top-k, and its temperature is 1.'));
   const stop = h('textarea', { rows: 2, spellcheck: 'false', placeholder: 'Leave empty to send none' });
   stop.value = Array.isArray(c.stop) ? c.stop.join('\n') : '';
   stop.addEventListener('input', typing(() => { const lines = stop.value.split('\n').filter((l) => l !== ''); set({ stop: lines.length ? lines : undefined }); }, 500));
-  box.append(field('Stop text, one per line', stop, 'The reply ends where one of these would be written. The helper and the checker never get them (a stop can end a JSON answer halfway).'));
-  box.append(h('div.fieldrow',
+  dialsBody.append(field('Stop text, one per line', stop, 'The reply ends where one of these would be written. The helper and the checker never get them (a stop can end a JSON answer halfway).'));
+  dialsBody.append(h('div.fieldrow',
     field('Longest reply, in tokens', num('maxTokens', 'The provider’s own', { whole: true })),
     field('The model’s room, in tokens', num('context', `${contextOf({ ...c, context: undefined }).toLocaleString()} if empty`, { whole: true }))));
-  box.append(quiet('Longest reply: empty, nothing is sent (Claude, which must be told one, gets what the length you ask for needs); a model that thinks gets room to think and write. The room is how much the model can read at once — past it, the oldest chapters ride as their summaries; empty, what the provider says, or its usual size.'));
+  dialsBody.append(quiet('Longest reply: empty, nothing is sent (Claude, which must be told one, gets what the length you ask for needs); a model that thinks gets room to think and write. The room is how much the model can read at once — past it, the oldest chapters ride as their summaries; empty, what the provider says, or its usual size.'));
 
   /* ---- what it costs */
-  box.append(h('div.fieldrow',
+  const pricesBody = section('Prices', 'prices', 'For your usage record');
+  pricesBody.append(h('div.fieldrow',
     field('Input price, $ per million tokens', num('priceIn', 'e.g. 3')),
     field('Output price, $ per million tokens', num('priceOut', 'e.g. 15')),
     field('Cached input price, $ per million', num('priceCached', 'e.g. 0.3'))),
@@ -291,7 +346,7 @@ function connectionForm(c) {
   }
 
   /* ---- the prefill */
-  box.append(prefillPart(c, { set, now, quiet, tick }));
+  section('Starting the reply', 'prefill', 'Optional prefill').append(prefillPart(c, { set, now, quiet, tick }));
 
   /* ---- how the address talks */
   box.append(group('How the address talks', { key: 'set.conn.shape' },
@@ -325,6 +380,7 @@ function connectionForm(c) {
   const result = h('p.say' + (c.tested ? (c.tested.ok ? '.good' : '.bad') : ''), c.tested ? `Tested ${timeAgo(c.tested.at)}: ${c.tested.words}` : '');
   const testBtn = h('button.btn.primary.small', { onclick: async () => {
     testBtn.disabled = true; testBtn.textContent = 'Listening for an answer…';
+    landTyping();
     await store.flush('house', 'house');
     const out = await tryConnection(now());
     testBtn.disabled = false; testBtn.textContent = 'Test';
@@ -333,7 +389,8 @@ function connectionForm(c) {
     set({ tested: { at: Date.now(), ok: out.ok, words: out.words } });
     toast(out.ok ? `“${connName(c)}” answered — the connection works.` : 'No answer came back — the address, key or model may be off.');
   } }, 'Test');
-  box.append(h('div.btnrow', testBtn,
+  basicActions.append(h('div.btnrow', testBtn), quiet('Check that this connection answers with the model and settings above.'), result);
+  box.append(h('div.btnrow',
     h('button.btn.danger.small', { title: 'Removes this connection and its key; the parts it does go to the writer, said before and after.', onclick: async () => {
       /* the parts it does, and who does them after it — said before he says yes, and once it is gone (Cozy Tavern M301: never resolved silently) */
       const parts = partsOf(house(), c.id);
@@ -357,8 +414,7 @@ function connectionForm(c) {
       const said = [...by.entries()].map(([name, ps]) => (name ? `${partsWords(ps)} ${ps.length > 1 ? 'are' : 'is'} “${name}” now` : `nothing does ${partsWords(ps)} now — add a connection`)).join('; ');
       toast(said ? `“${connName(c)}” is gone — ${said.charAt(0).toLowerCase() + said.slice(1)}.` : `“${connName(c)}” is gone.`, 6000);
     } }, 'Let go')),
-    quiet('Test sends exactly what a page sends for the thinking and says whether thinking came back (asking again at the top level when it did not), then times one answer — how soon its first words came and how fast it writes. Let go removes this connection and its key.'),
-    result);
+    quiet('Let go removes this connection and its key. You’ll see who takes over its parts before anything changes.'));
   return box;
 }
 
@@ -449,6 +505,7 @@ function prefillPart(c, { set, now, quiet, tick }) {
   const testIt = h('button.btn.small', { onclick: async () => {
     testIt.disabled = true;
     verdict.className = 'say'; verdict.textContent = 'Asking, just a whisper of a request…';
+    landTyping();
     await store.flush('house', 'house');
     const live = now();
     const out = await testPrefill(live);
@@ -484,7 +541,9 @@ function rolesGroup(hs, open) {
   for (const c of conns) checkSel.append(h('option', { value: c.id, selected: curCheck === c.id }, connName(c)));
   checkSel.append(h('option', { value: 'off', selected: curCheck === 'off' }, 'Nobody — don’t check'));
   checkSel.addEventListener('change', () => changeHouse((x) => { x.roles = x.roles || {}; if (checkSel.value) x.roles.checker = checkSel.value; else delete x.roles.checker; }, { now: true }));
+  g.body.classList.add('settings-roles');
   g.body.append(
+    h('p.settings-intro', 'A small circle of help for your book. One connection can do every part, or you can choose a different one for each.'),
     roleSel('writer', 'The writer', 'Writes the pages, the other takes, the rewrites, and narrates the scenes you play. The writer button under the page switches it too.', false),
     roleSel('partner', 'The partner', 'Talks the book over with you.', true),
     roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true),
@@ -776,7 +835,7 @@ function openOwnWords(id, { fresh = false } = {}) {
   const later = (patch) => { pending = { ...(pending || {}), ...patch }; clearTimeout(t); t = setTimeout(flush, 500); };
   const flush = () => { clearTimeout(t); t = null; if (pending) { const p = pending; pending = null; if (now()) set(p, { now: true }); } };
   const s = openSheet(first.name.trim() || 'Words in the storyteller’s own voice', { onClose: () => { flush(); if (sheet) draw(); } });
-  s.box.classList.add('modsheet');
+  s.box.classList.add('modsheet', 'settings-detail');
   const on = h('input', { type: 'checkbox', checked: first.on });
   on.addEventListener('change', () => { set({ on: on.checked }, { now: true }); sayNow(); });
   const name = h('input', { type: 'text', value: first.name, maxlength: 60, placeholder: 'A name for these words — “Stay Batman”' });
@@ -859,8 +918,8 @@ function presetsField(hs) {
     h('div.btnrow',
       h('button.btn.small.primary', { title: 'Keeps what is in the boxes below right now under a name: How you like it written, How the narrator tells scenes, How the partner talks, both notes at the end, Words to avoid and your name.', onclick: savePresetNow }, icon('plus', 15), 'Save current preset'),
       h('button.btn.quiet.small', { title: 'A preset taken out as a file, brought back in here.', onclick: bringPreset }, 'Bring a preset in'),
-      h('button.btn.quiet.small', { title: 'Every box back to its starting words, the notes at the end and words to avoid empty — with Undo.', onclick: () => usePresetNow(null) }, 'The starting words')),
-    h('em', 'A preset holds How you like it written, How the narrator tells scenes, How the partner talks, both notes at the end, Words to avoid and your name. Using one puts every one of them back exactly as it was saved. Whether each note at the end is sent, and the modules, stay as they are.'));
+      h('button.btn.quiet.small', { title: 'Every box back to its starting words; notes at the end, words to avoid and storyteller’s own voice entries cleared — with Undo.', onclick: () => usePresetNow(null) }, 'The starting words')),
+    h('em', 'A preset keeps your three voices, both notes at the end, Words to avoid, your name, and Words in the storyteller’s own voice. Use restores them together. The notes’ Send it switches and your modules stay as they are.'));
   return wrap;
 }
 
@@ -1007,7 +1066,7 @@ function openModule(id, { fresh = false } = {}) {
   const set = (patch, opts) => changeHouse(moduleSteps.set(id, patch), opts);
   let offHouse = () => {};
   const s = openSheet(first.name, { onClose: () => { flushAll(); offHouse(); if (sheet) draw(); } });
-  s.box.classList.add('modsheet');
+  s.box.classList.add('modsheet', 'settings-detail');
 
   /* his own, not named yet: the box is empty for him to name it */
   const named = base ? first.name : String(((house().modules || {})[id] || {}).name || '');
@@ -1046,8 +1105,11 @@ function openModule(id, { fresh = false } = {}) {
     if (base) {
       /* always there, as in Cozy Tavern: greyed while the module is as it came */
       buttons.append(h('button.btn.quiet.small', { disabled: !m.changed, title: m.changed ? 'The app’s words come back, with who reads it and when it rides as they came — with Undo.' : 'Nothing is changed — it is as it came.', onclick: async () => {
+        /* A click can beat the typing pause. Save the visible words before
+         * deciding whether to ask, and before taking Undo's copy. */
+        flushAll();
         let how = 'back';
-        if (m.ownWords) {
+        if (now().ownWords) {
           how = await backChoice('Your words for this module go, and the app’s come back — with who reads it and when it rides as they came.');
           if (!how) return;
           if (how === 'copy' && !(await copyText(words.value))) { toast('Your words could not be copied, so they stay as they are.'); return; }
@@ -1170,6 +1232,8 @@ function backupsGroup() {
  * word and a copy brought back keeps them in the one made before it (Cozy
  * Tavern M670) — the box's last words too */
 async function allOnPhone() {
+  /* A backup also keeps the last keystroke in Settings, before its pause. */
+  landTyping();
   draftNow();
   /* a phone that does not answer is not waited on for long: it is said */
   await Promise.race([store.flush().catch(() => {}), new Promise((done) => setTimeout(done, 8000))]);

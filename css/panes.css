@@ -1,0 +1,143 @@
+/* The notebook, conversations and scenes belong to the same quiet study. */
+.pane { --pane-wash: color-mix(in srgb, var(--chrome-ink) 3%, transparent); }
+.pane .panebody { padding: 20px 16px 30px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.pane .panehead { border-bottom-color: var(--line); }
+.pane .tabs { gap: 4px; padding: 0; flex: 1; min-width: 0; }
+.pane .tabs button { height: 38px; border: 1px solid transparent; border-radius: 10px; font-size: 12px; }
+.pane .tabs button[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 24%, transparent); }
+.pane .tabs button:hover { background: var(--pane-wash); }
+.pane-kicker { margin: 0 0 8px; color: var(--chrome-soft); font: 500 10px/1.5 var(--ui); letter-spacing: .15em; text-transform: uppercase; }
+.pane-intro { margin: 0 0 19px; }
+.pane-intro h2, .pane-welcome h2 { margin: 0; font: 600 30px/1.1 var(--display); letter-spacing: -.015em; text-wrap: balance; }
+.pane-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pane-count { flex: none; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; color: var(--chrome-soft); }
+.pane-intro > p:not(.pane-kicker), .pane-welcome > p:not(.pane-kicker) { margin: 12px 0; font-size: 13px; line-height: 1.65; color: var(--chrome-soft); }
+.pane-section-title { margin: 20px 0 10px; font: 600 19px/1.25 var(--display); }
+
+/* A table of contents with a small book spine marking the current chapter. */
+.pane .chlist { margin-top: 15px; }
+.pane .chlist li { margin: 0 0 9px; border: 1px solid transparent; border-radius: 12px; }
+.pane .chlist li.on { border-color: color-mix(in srgb, var(--accent) 25%, transparent); background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 2px 0 var(--accent); }
+.pane .chlist .go { padding: 14px 11px; }
+.pane .chlist .n { font-size: 9px; letter-spacing: .14em; }
+.pane .chlist .nm { font-size: 21px; line-height: 1.2; margin: 5px 0 7px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.pane .chlist .w { font-size: 11px; }
+.pane .chlist .sum { margin-top: 9px; font-size: 12px; line-height: 1.55; }
+.pane .chlist .menu { align-self: center; flex: none; height: 44px; width: 34px; }
+.chapter-add { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 18px; }
+.chapter-add .btn { width: 100%; border-style: dashed; background: transparent; min-height: 42px; border-radius: 10px; font-size: 12px; }
+
+/* Keep the helper's state, its check and the cards visually distinct. */
+.pane .lightcard { border-radius: 13px; padding: 13px 14px; margin-bottom: 12px; background: var(--pane-wash); font-size: 12px; line-height: 1.6; }
+.note-status-heading { display: flex; align-items: center; gap: 9px; }
+.note-status-heading h3 { margin: 0; font: 600 17px/1.3 var(--display); color: var(--chrome-ink); }
+.note-status-light { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 10%, transparent); flex: none; }
+.note-status[data-state="off"] .note-status-light { background: var(--chrome-soft); box-shadow: 0 0 0 4px var(--pane-wash); }
+.note-status[data-state="reading"] .note-status-light, .note-status[data-state="waiting"] .note-status-light { background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 10%, transparent); }
+.note-status[data-state="trouble"] .note-status-light { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 10%, transparent); }
+.note-status-copy { margin: 9px 0 0; }
+.pane .note-status .row { gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.pane .note-status .row .btn { justify-content: flex-start; width: 100%; height: auto; min-height: 34px; padding: 7px 10px; border-radius: 8px; font-size: 11.5px; line-height: 1.4; text-align: left; }
+.note-report-label { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--accent); font: 500 10px/1.5 var(--ui); letter-spacing: .08em; text-transform: uppercase; }
+.pane .checkbox { background: transparent; border-color: var(--line); }
+.pane .checkbox > b { font-size: 12px; line-height: 1.6; }
+.pane .checkbox.note-report-quiet { padding: 3px 1px; border: 0; }
+.pane .checkbox.note-report-quiet .note-report-label { margin-bottom: 2px; }
+.pane .checkbox.note-report-quiet > b { color: var(--chrome-soft); font-weight: 400; font-size: 11px; }
+.pane .checkbox .verdict { padding-top: 9px; margin-top: 9px; border-top: 1px solid var(--line); }
+.pane .lightcard.keycard { padding: 0; border: 0; margin: 14px 0 20px; background: none; }
+.pane .note-guide summary, .pane-guide summary { cursor: pointer; color: var(--chrome-soft); font-size: 11.5px; line-height: 1.6; padding: 5px 0; }
+.pane .note-guide summary svg { vertical-align: -.2em; margin-right: 4px; }
+.pane .note-guide .notekey { padding: 11px 13px; margin: 5px 0 0; border-left: 2px solid var(--line); font-size: 12px; }
+.pane .notesec { margin-bottom: 19px; }
+.pane .notesec > .sechead { padding: 9px 0; gap: 7px; border-top: 1px solid var(--line); }
+.pane .notesec > .sechead h3 { font: 600 19px/1.25 var(--display); text-transform: none; letter-spacing: 0; color: var(--chrome-ink); }
+.pane .notesec > .sechead .count { display: grid; place-items: center; min-width: 23px; height: 23px; padding: 0 5px; border-radius: 7px; background: var(--pane-wash); font-size: 10px; }
+.pane .card { margin: 7px 0; border-radius: 11px; padding: 14px; background: color-mix(in srgb, var(--chrome-ink) 2.5%, transparent); }
+.pane .notecard { transition: background .18s ease, border-color .18s ease; }
+.pane .notecard:hover { background: color-mix(in srgb, var(--chrome-ink) 5%, transparent); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.pane .notecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pane .card .nm { font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; }
+.pane .card .ab { font-size: 12.5px; line-height: 1.6; margin-top: 7px; }
+.pane .card .aka, .pane .card .why { font-size: 11px; line-height: 1.5; margin-top: 5px; }
+.pane .card .nw { margin-top: 10px; font-size: 11.5px; line-height: 1.6; }
+.pane .card .nw b { display: block; margin-bottom: 2px; font-size: 9px; letter-spacing: .1em; }
+.pane .card .ctag { vertical-align: middle; font: 500 8px/1.5 var(--ui); letter-spacing: .08em; }
+.pane .card.fresh { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); box-shadow: inset 2px 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+.pane .card.reading { cursor: default; }
+.pane .card.reading .nm { font-size: 17px; }
+.pane .note-add { min-height: 36px; padding: 7px 10px; font-size: 11px; margin-top: 3px; }
+.notes-empty { margin: 3px 5px 0; color: var(--chrome-soft); font: italic 15px/1.5 var(--display); }
+
+/* Conversations have an identifiable voice and an unhurried reading rhythm. */
+.conversation-heading { margin: 0 0 20px; }
+.pane .convrow { gap: 4px; margin: 0; padding: 5px; background: var(--pane-wash); border: 1px solid var(--line); border-radius: 11px; }
+.pane .convrow .convpick { flex: 1 1 auto; font-family: var(--display); font-size: 18px; justify-content: space-between; padding: 4px 6px; }
+.pane .convrow .convpick + .btn { padding: 6px; font-size: 11px; }
+.pane .convrow .grow { display: none; }
+.pane .convrow .icon { width: 32px; height: 34px; }
+.pane .talk { gap: 18px; }
+.pane .turn { max-width: 96%; padding: 15px 14px 10px; border-radius: 13px; font-size: 13.5px; line-height: 1.7; }
+.pane .turn.ai { align-self: stretch; background: var(--pane-wash); border-color: var(--line); border-bottom-left-radius: 4px; }
+.pane .turn.you { max-width: 91%; background: color-mix(in srgb, var(--accent) 9%, transparent); border-color: color-mix(in srgb, var(--accent) 22%, var(--line)); border-bottom-right-radius: 4px; }
+.turn-speaker { margin: 0 0 10px; color: var(--accent); font: 500 9px/1.4 var(--ui); letter-spacing: .12em; text-transform: uppercase; white-space: normal; }
+.turn.you .turn-speaker { color: var(--chrome-soft); }
+.pane .turn.ai.prose-turn { font: 14px/1.8 var(--serif); }
+.pane .turn .tctl { margin-top: 13px; padding-top: 6px; border-top: 1px solid var(--line); gap: 3px; }
+.pane .turn .tctl button { height: 34px; padding: 0 8px; font-size: 11px; border-radius: 7px; }
+.pane .turn .tctl .tmore { margin-left: auto; width: 34px; padding: 0; }
+.pane .turn .thinkbox { border-radius: 8px; margin-bottom: 12px; }
+.pane .turn .change { padding: 12px; border-radius: 9px; }
+.pane .turn .cbtns { flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.pane .turn .cbtns button { min-height: 34px; height: auto; padding: 7px 10px; font-size: 11px; border-radius: 7px; }
+.pane .turn .turnnote { padding: 8px 0 0; font-size: 11px; line-height: 1.5; }
+.pane .talkbox { padding: 14px 14px calc(var(--safe-b) + 14px); background: var(--chrome-solid); box-shadow: 0 -10px 30px color-mix(in srgb, var(--bg) 15%, transparent); }
+.pane .talkbox textarea { padding: 12px; min-height: 64px; font-size: 16px; line-height: 1.55; border-radius: 12px; background: var(--pane-wash); }
+.pane .talkbox textarea:focus { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent); }
+.pane .talkbox .crow { gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.pane .talkbox .crow .btn, .pane .talkbox .crow .chip { min-height: 36px; height: auto; font-size: 11px; padding: 8px 10px; }
+.pane .talkbox .crow .primary { border-radius: 9px; min-width: 61px; }
+.pane-welcome { margin: 4px 0 10px; text-align: center; padding: 20px 10px; }
+.pane-welcome-mark { display: inline-grid; place-items: center; width: 62px; height: 62px; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, transparent); color: var(--accent); border-radius: 19px; margin-bottom: 20px; }
+.pane-welcome-tip { display: flex; align-items: flex-start; gap: 9px; padding: 12px; margin: 22px 0 15px; border: 1px solid var(--line); border-radius: 10px; color: var(--chrome-soft); text-align: left; font-size: 12px; line-height: 1.6; }
+.pane-welcome-tip svg { flex: none; margin-top: 2px; }
+.pane-welcome-tip b { display: block; font-weight: 500; color: var(--chrome-ink); }
+.pane-guide { text-align: left; margin-top: 12px; }
+.pane-guide > p { margin: 8px 0; color: var(--chrome-soft); font-size: 12px; line-height: 1.7; }
+
+/* Scenes read like a small chapter, with clear invitations to take part. */
+.pane .plays { display: grid; gap: 9px; margin-bottom: 22px; }
+.pane .plays li button { padding: 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--pane-wash); }
+.pane .plays li button:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.pane .plays b { font-size: 20px; line-height: 1.35; margin-bottom: 7px; overflow-wrap: anywhere; }
+.pane .plays small { font-size: 11px; line-height: 1.5; }
+.pane .scene-start { border-radius: 13px; background: var(--pane-wash); }
+.pane .scene-start .gbody { padding: 17px 15px; }
+.pane .scene-start .pane-section-title { margin: 0 0 18px; font-size: 22px; }
+.pane .scene-start .field > span { font-size: 12px; }
+.pane .scene-start input { font-size: 16px; min-height: 44px; }
+.pane .scene-start .field small { font-size: 11px; line-height: 1.6; }
+.pane .scene-start .btnrow { margin-top: 18px; }
+.pane .scene-start .btn { width: 100%; border-radius: 9px; min-height: 42px; font-size: 12px; }
+.pane .scenehead { margin: 0 0 18px; padding: 0 0 14px; border-bottom: 1px solid var(--line); gap: 4px; }
+.pane .scenehead .icon { flex: none; width: 34px; height: 38px; }
+.pane .choices { gap: 8px; padding-top: 3px; }
+.choice-heading { margin: 0 0 2px; color: var(--chrome-soft); font: italic 18px/1.4 var(--display); }
+.pane .choice { border-radius: 10px; padding: 12px 14px; font-size: 12px; line-height: 1.6; text-align: left; border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.pane .choice:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.pane.right.full .conversation-heading { position: sticky; top: -20px; z-index: 2; background: var(--chrome-solid); padding: 20px 0 12px; }
+.pane.right.full .convrow { position: static; background: var(--pane-wash); padding: 5px; }
+.pane.right.full .turn { font-size: 16px; }
+.pane.right.full .turn.ai.prose-turn { padding: 12px 2px; font: var(--prose-size)/var(--prose-lead) var(--serif); }
+@media (pointer: coarse) {
+  .pane .turn .tctl button, .pane .turn .cbtns button, .pane .talkbox .crow .btn, .pane .talkbox .crow .chip, .pane .note-add { min-height: 40px; }
+}
+@media (max-width: 380px) {
+  .pane .panebody { padding-left: 12px; padding-right: 12px; }
+  .pane .talkbox { padding-left: 10px; padding-right: 10px; }
+  .pane .convrow .convpick { font-size: 16px; }
+  .pane .tabs button { font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane .notecard { transition: none; }
+}
