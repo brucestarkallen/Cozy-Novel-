@@ -1030,7 +1030,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     /* changed for him, as if by his own hand — in the fields it wrote: the
      * helper keeps his words there, and writes the rest as the book goes on */
     next.updated = hisStamp(card, fields, at);
-    put('novel', novelId, novelSteps.putNote(kind, next), { now: true });
+    put('novel', novelId, novelSteps.editNote(kind, next, fields, { create: !card }), { now: true });
     /* its Undo puts back only what it wrote (the helper moves where they are now on his cards meanwhile: M74/M83-2) */
     return { ...base, status: 'made', undo: { what: 'note', kind, id: next.id, before: card, after: clone(next), fields: [...fields, 'updated'] }, before: card ? (card.about || '') : '', after: next.about || '' };
   }

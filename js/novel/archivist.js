@@ -339,12 +339,14 @@ export function healCards(novelId) {
 /* the book's chapters read in where they are not yet: how many could not be */
 async function loadChapters(novelId) {
   const novel = store.peek('novel', novelId);
-  let missing = 0;
   await Promise.all(((novel && novel.order) || []).map(async (id) => {
     if (store.peek('chapter', id) !== undefined) return;
-    try { await store.open('chapter', id); } catch (_) { missing += 1; }
+    try { await store.open('chapter', id); } catch (_) { /* counted below */ }
   }));
-  return missing;
+  /* A missing record answers null rather than throwing. Check the current
+   * order too: a chapter added while loading must not count as an empty one. */
+  const current = store.peek('novel', novelId);
+  return ((current && current.order) || []).filter((id) => !store.peek('chapter', id)).length;
 }
 function chaptersOf(novel) {
   const out = {};
@@ -704,6 +706,7 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
   const shownLevel = (id) => (short instanceof Map ? short.get(id) || 0 : shownShort(id) ? 1 : 0);
   const filled = (v) => v !== undefined && v !== null && (Array.isArray(v) ? v.length > 0 : typeof v === 'string' ? v.trim() !== '' : true);
   const askedCard = (kind, id) => ((asked && Array.isArray(asked[kind]) ? asked[kind] : []).find((c) => c.id === id) || null);
+  const standingCard = (kind, id) => ((notes && Array.isArray(notes[kind]) ? notes[kind] : []).find((c) => c.id === id) || null);
   /* a telling of someone's ties that no longer names a person the standing one did (Cozy Tavern M517-1: Sara's tie lost to one about Tom) */
   let peopleNames = null;
   const dropsSomeone = (old, neu) => {
@@ -786,6 +789,7 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     written.add(fresh.id);
     landed.add(fresh.id);
     touched.set(fresh.id, { kind, before: null });
+    givenBy.set(fresh.id, new Set(['about', 'now', 'ties'].filter((f) => String(fresh[f] || '').trim())));
     why(fresh.id, row);
     return fresh;
   };
@@ -870,15 +874,18 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     const clash = (f, v) => given.has(f) && Boolean(String(v || '').trim()) && String(card[f] || '').trim() !== String(v || '').trim();
     const then = asked ? askedCard(kind, card.id) : null;
     /* a field changed since it was asked — by his hand, or his partner's — is never written over by it (Cozy Tavern M299) */
-    const movedSince = (f) => Boolean(asked) && (then ? JSON.stringify(then[f] ?? null) !== JSON.stringify(card[f] ?? null) : filled(card[f]));
+    /* Compare with the card at the start of this fold, not with a field an
+     * earlier row of this same answer just wrote. */
+    const standing = standingCard(kind, card.id);
+    const movedSince = (f) => Boolean(asked) && (then ? JSON.stringify(then[f] ?? null) !== JSON.stringify(standing?.[f] ?? null) : filled(standing?.[f]));
     if (nameKey(card.name) !== nameKey(name) && kind === 'people' && m.how !== 'slip') {
       /* a name the story now goes by — told as the main name, the old one
        * among the others — unless the name is his */
-      if (!hisField(card, 'name') && !movedSince('name') && aka.some((a) => nameKey(a) === nameKey(card.name))) {
+      if (!hisField(card, 'name') && !movedSince('name') && !movedSince('aka') && aka.some((a) => nameKey(a) === nameKey(card.name))) {
         const old = card.name;
         card.name = name;
         card.aka = [...(card.aka || []), old];
-      } else if (!(card.aka || []).some((a) => nameKey(a) === nameKey(name))) card.aka = [...(card.aka || []), name];
+      } else if (!movedSince('aka') && !(card.aka || []).some((a) => nameKey(a) === nameKey(name))) card.aka = [...(card.aka || []), name];
     }
     /* who someone is: his words stand, and what the book adds rides beside
      * them; the helper keeps the rest — added to, never thinned by a reading
@@ -942,7 +949,7 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     const usedName = nameKey(name) !== nameKey(card.name) && m.how !== 'slip' ? [name] : [];
     const akaWhole = audit && Array.isArray(row.aka) && row.aka.every((a) => cleanName(a));
     if (akaWhole && !hisField(card, 'aka') && !movedSince('aka')) card.aka = uniq([...aka, ...renamedFrom, ...usedName], card.name);
-    else if (aka.length || (card.aka && card.aka.length)) card.aka = uniq([...(card.aka || []), ...aka], card.name);
+    else if (!movedSince('aka') && (aka.length || (card.aka && card.aka.length))) card.aka = uniq([...(card.aka || []), ...aka], card.name);
     if (kind === 'threads' && open !== undefined && !hisField(card, 'open') && !movedSince('open')) {
       if (open === false && card.open !== false && keepOpen && keepOpen.has(card.id)) refuse(kind, card.name, 'opened by the newest passage — only what comes after it can close it');
       else card.open = open;
@@ -979,6 +986,7 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     for (const c of cardsCalled(out[g.kind], cleanName(g.name))) {
       if (limit && !limit.has(c.id)) { refuse(g.kind, c.name, 'not among the cards checked this time'); continue; }
       if (his(c)) { refuse(g.kind, c.name, 'yours — never taken out'); continue; }
+      if (asked && JSON.stringify(askedCard(g.kind, c.id)) !== JSON.stringify(standingCard(g.kind, c.id))) { refuse(g.kind, c.name, 'changed in the notes while this was being read'); continue; }
       if (written.has(c.id)) { refuse(g.kind, c.name, 'given whole in the same answer'); continue; }
       const carriers = carriersOf(g.kind, c, out[g.kind]);
       if (carriers.length) {
@@ -1057,7 +1065,13 @@ export function readingRoom(conn, fixed) {
  * (Cozy Tavern's M246/M682: a cut answer stored as a finished reading) */
 /* only the answer's own parts: a row's map of ties ("Aldric": …) found inside a reply cut off is no answer (Cozy Tavern's M685) */
 const ANSWER_KEYS = new Set([...NOTE_KINDS, 'gone', 'chapterName', 'about', 'style', 'clear', 'verdict']);
-export const notesShape = (o) => Object.keys(o).every((k) => ANSWER_KEYS.has(k));
+export const notesShape = (o) => Boolean(o) && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => {
+  if (!ANSWER_KEYS.has(k)) return false;
+  if (NOTE_KINDS.includes(k) || k === 'gone') return Array.isArray(o[k]) && o[k].every((row) =>
+    Boolean(row) && typeof row === 'object' && !Array.isArray(row) && Boolean(cleanName(row.name)) && (k !== 'gone' || NOTE_KINDS.includes(row.kind)));
+  if (k === 'clear') return truthOf(o[k]) !== undefined;
+  return typeof o[k] === 'string' || (Array.isArray(o[k]) && o[k].every((x) => typeof x === 'string'));
+});
 const hasGone = (o) => Boolean(o && Array.isArray(o.gone) && o.gone.length);
 
 export async function askJson(conn, system, request, { want, beforeAsk } = {}) {
@@ -1278,7 +1292,7 @@ export function pendingWork(novelId) {
   if (toKeep(novel).length) return true;
   for (const id of novel.order || []) {
     const c = store.peek('chapter', id);
-    if (!c) continue;
+    if (!c) return true;
     const ch = changesIn(novel, c);
     if (ch.changes.length || ch.removed.length) return true;
   }
@@ -2247,14 +2261,22 @@ function openedByNewest(novel, chapters) {
   }
   return new Set();
 }
-/* the versions the check was shown, by passage: the book it read */
-function shownSigs(novel, chapters) {
-  const out = new Map();
-  for (const id of novel.order || []) for (const p of ((chapters[id] || {}).passages) || []) { const v = picked(p); if (v && !v.streaming) out.set(p.id, signature(v)); }
-  return out;
+/* Keep the inputs by value. A new passage, a different order or a manual
+ * note correction invalidates a check just as a rewritten passage does. */
+function auditStamp(novel, chapters) {
+  return JSON.stringify([
+    (novel.order || []).map((id) => {
+      const c = chapters[id];
+      return [id, c ? [c.name, c.summary, (c.passages || []).map((p) => {
+        const v = picked(p); return [p.id, p.by, signature(v), Boolean(v && v.streaming)];
+      })] : null];
+    }),
+    novel.notes, novel.brief, novel.style, novel.kept, novel.auto, novel.prefs,
+    novel.meta && [novel.meta.title, novel.meta.subtitle, novel.meta.char],
+  ]);
 }
 /* the shape of the check's answer: the notes' parts, or at least whether they are clear or its verdict — never an empty object */
-export const auditShape = (o) => notesShape(o) && (truthOf(o.clear) !== undefined || typeof o.verdict === 'string' || NOTE_KINDS.some((k) => Array.isArray(o[k])) || Array.isArray(o.gone));
+export const auditShape = (o) => notesShape(o) && (truthOf(o.clear) !== undefined || Boolean(cleanText(o.verdict)) || [...NOTE_KINDS, 'gone'].some((k) => Array.isArray(o[k]) && o[k].length));
 async function auditNotes(novelId, conn) {
   const novel = store.peek('novel', novelId);
   if (!novel) return;
@@ -2336,7 +2358,7 @@ async function auditNotes(novelId, conn) {
   const gen = (novel.memory || {}).reread || 0;
   const askedNotes = clone(novel.notes || {});
   const askedWords = wordsNow(novel);
-  const sigs = shownSigs(novel, chapters);
+  const stamp = auditStamp(novel, chapters);
   const got = await helperJson(novelId, conn, frame, auditRequest({ novel: namedBook(novel, house), bookText: bookText(fit.book), his, partial, only, others, endShort }), { want: auditShape });
   /* the whole book began to be read again while it checked: the notes it checked are not there any more */
   const now = store.peek('novel', novelId);
@@ -2371,8 +2393,7 @@ async function auditNotes(novelId, conn) {
    * taken out: its answer belongs to a book no longer there, and it checks
    * again once that is read (Cozy Tavern M709/M716) */
   const live = chaptersOf(latest);
-  const nowSigs = shownSigs(latest, live);
-  if ([...sigs].some(([pid, sig]) => nowSigs.get(pid) !== sig)) {
+  if (auditStamp(latest, live) !== stamp) {
     store.change('novel', novelId, novelSteps.setMemory({ auditAsked: true }));
     nudge(novelId, 2000);
     return;
@@ -2406,7 +2427,7 @@ async function auditNotes(novelId, conn) {
    * M259-6) */
   const verdict = cleanText(got.obj && got.obj.verdict, 800);
   const refused = folded.refused.slice(0, 40);
-  const clear = truthOf(got.obj && got.obj.clear) !== false && !folded.refused.length;
+  const clear = truthOf(got.obj && got.obj.clear) === true && !folded.refused.length;
   /* checked a group at a time: what the earlier groups of this round left open stays said through the round */
   const round = roundOn && a0.round ? a0.round : [];
   const nextRound = only ? [...round, ...(clear ? [] : [{ at: Date.now(), verdict, refused }])].slice(-6) : [];

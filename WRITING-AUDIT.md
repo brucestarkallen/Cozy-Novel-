@@ -82,6 +82,16 @@ is available for intentionally adopting the updated text in an edited module.
 
 ## Evidence and limits
 
+The 2.9.2 notes follow-up is documented in [NOTES-AUDIT.md](NOTES-AUDIT.md).
+It covers missing chapters, stale audit replies, malformed lists, duplicate-row
+merges, concurrent aliases and removals, field-specific saves, durable note drafts
+and the complete-note boundary during a whole-book reread. Source problems are
+reproduced with temporary books and local stand-ins before their repairs.
+Version 2.9.2 passed **1,228 checks**, including all five required suites, 17
+focused notes-integrity checks, 20 helper-reliability checks, and 13 browser
+checks for note edits, save conflicts and reload recovery. The full count is
+recorded in the notes audit.
+
 The 2.9.1 persona follow-up checks writer, scene and partner identities separately,
 including rewrites, continuation, scene conversion, partner follow-ups and visible
 thinking. App-added wording asks for the voice and humour described in the user's

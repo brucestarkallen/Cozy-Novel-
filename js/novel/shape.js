@@ -21,7 +21,7 @@
  *   version { id, text, at, how, ask, conn, model, thinking, cut, stopped, notes, usage, ms, sent, streaming }
  *   talk    { id:novelId, novelId, turns:[turn] }          the partner
  *   play    { id, novelId, title, who, from, chapterId, turns:[turn], turned, created, updated }
- *   draft   { id:novelId, novelId, direction, partner, play:{} }
+ *   draft   { id:novelId, novelId, direction, partner, play:{}, cards:{} }
  */
 
 import { newId, countWords, hashText, numberWords, nameKey } from '../util.js';
@@ -343,7 +343,48 @@ export const novelSteps = {
     const i = list.findIndex((c) => c.id === card.id);
     if (i >= 0) list[i] = card; else list.push(card);
   },
-  dropNote: (kind, cardId) => (n) => { n.notes[kind] = (n.notes[kind] || []).filter((c) => c.id !== cardId); },
+  /* A hand-edited card saves only the fields written. Replaying a refused
+   * save over another window's copy must preserve its untouched fields and
+   * must never recreate a card that window removed. */
+  editNote: (kind, card, fields, { create = false } = {}) => {
+    const words = JSON.parse(JSON.stringify(card));
+    const wrote = [...new Set(fields)].filter((k) => CARD_FIELDS.includes(k) || k === 'since');
+    const at = (words.updated && words.updated.at) || Date.now();
+    return (n) => {
+      n.notes = n.notes || {};
+      const list = n.notes[kind] || (n.notes[kind] = []);
+      const i = list.findIndex((c) => c.id === words.id);
+      const cur = i >= 0 ? list[i] : null;
+      if (!cur && !create) return false;
+      const next = JSON.parse(JSON.stringify(cur || words));
+      for (const field of wrote) {
+        if (words[field] === undefined) delete next[field];
+        else next[field] = JSON.parse(JSON.stringify(words[field]));
+      }
+      if (wrote.includes('name') && cur && nameKey(next.name) !== nameKey(cur.name)) next.aka = [...(next.aka || []), cur.name];
+      if (wrote.includes('aka') || wrote.includes('name')) next.aka = (next.aka || []).filter((a, j, all) => nameKey(a) !== nameKey(next.name) && all.findIndex((b) => nameKey(b) === nameKey(a)) === j);
+      if (wrote.includes('now')) {
+        delete next.nowPid; delete next.nowAt;
+        if (next.now && (words.nowAt || (n.order || []).length)) next.nowAt = words.nowAt || n.order[n.order.length - 1];
+      }
+      next.updated = hisStamp(cur, wrote, at);
+      if (i >= 0) list[i] = next; else list.push(next);
+      /* Everyone still uses the last complete notes during a rebuild. His
+       * explicit corrections belong there immediately; partial helper work
+       * does not. The snapshot has no memory, so this applies only once. */
+      const from = n.memory && n.memory.rereadFrom;
+      if (from && n.memory.undo && n.memory.undo.keep) {
+        const own = newCard(kind, { id: words.id, name: words.name, updated: { at }, ...Object.fromEntries(wrote.map((k) => [k, words[k]])), ...(words.nowAt ? { nowAt: words.nowAt } : {}) });
+        novelSteps.editNote(kind, own, wrote, { create: true })({ notes: from.notes || (from.notes = {}), order: n.order });
+      }
+      return true;
+    };
+  },
+  dropNote: (kind, cardId) => (n) => {
+    n.notes[kind] = (n.notes[kind] || []).filter((c) => c.id !== cardId);
+    const from = n.memory && n.memory.rereadFrom;
+    if (from && from.notes && n.memory.undo && n.memory.undo.keep) from.notes[kind] = (from.notes[kind] || []).filter((c) => c.id !== cardId);
+  },
   setNotes: (notes) => (n) => { n.notes = notes; },
   /* the helper's changes, card by card, by id: a card set to how it read
    * after, or taken out when it is gone after — only where it still reads as

@@ -147,6 +147,10 @@ The helper and checker recover from temporary failures while the app can run. Th
 
 ## For whoever works on it next
 
+Note-editor drafts save with the book, so Back and reload can restore words you
+have not saved onto a card. Add also recovers drafts whose cards were removed.
+[The notes audit](NOTES-AUDIT.md) explains the workflow, repairs, recovery and limits.
+
 No build step: `index.html`, `css/`, `js/` and `serve.py` are the whole app. `AGENTS.md` maps the code and the rules it keeps. The checks:
 
 ```sh
@@ -156,6 +160,7 @@ node tests/thinking.mjs             # thinking parity with Cozy Tavern
 node tests/instructions.mjs         # viewpoint, instruction priority and worker request contracts
 node tests/craft.mjs                # custom modules, routing, craft activation and sound scope
 node tests/archivist_reliability.mjs # summary races, leases, long readings and recovery
+node tests/notes_integrity.mjs       # stale audits, missing chapters, note merges and reread boundaries
 node tests/checker_edges.mjs        # grades, worker changes, comparisons and cancelling automatic rewrites
 node tests/provider_edges.mjs       # malformed provider blocks and structured output
 node tests/workflows.mjs            # scenes, Go on, late replies and concurrent edits
@@ -165,6 +170,7 @@ node tests/store_removal.mjs        # pending saves, failed deletion and whole-b
 python3 tests/browser/walk_main.py  # the whole app in a real browser (needs playwright + chromium)
 python3 tests/browser/walk_more.py
 python3 tests/browser/walk_removal.py # failed chapter/scene deletion stays visible; successful removal still works
+python3 tests/browser/walk_notes.py   # remote note edits, refused saves, durable drafts and reload recovery
 python3 tests/browser/walk_accessibility.py  # dialogs, keyboard, search and file picking
 python3 tests/browser/walk_cozy.py           # shelf, resume, phone layouts and motion
 python3 tests/browser/walk_checks.py         # checker review, focus and all three worlds in day/night

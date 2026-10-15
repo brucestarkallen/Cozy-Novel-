@@ -615,25 +615,57 @@ function readingsSection() {
 /* what he typed into a card and left without saving, kept for when he opens
  * it again (Cozy Tavern's M611/M618: the edit box keeps its words on Back) */
 const cardDrafts = new Map();
+/* Note boxes use the book's existing draft record, so closing a browser or
+ * Android suspending it does not throw away words left without Save. */
+function keepCardDraft(novelId, key, words, expected = null) {
+  if (words) cardDrafts.set(key, words); else cardDrafts.delete(key);
+  const save = async () => {
+    let d = store.peek('draft', novelId);
+    if (d === undefined) d = await store.open('draft', novelId);
+    if (cardDrafts.get(key) !== words) return;
+    if (!d) {
+      if (words) await store.create('draft', novelId, { id: novelId, novelId, cards: { [key]: words } });
+      return;
+    }
+    store.change('draft', novelId, (x) => {
+      x.cards = x.cards || {};
+      if (expected && JSON.stringify(x.cards[key] || null) !== JSON.stringify(expected)) return;
+      if (words) x.cards[key] = JSON.parse(JSON.stringify(words)); else delete x.cards[key];
+    }, { delay: 300 });
+  };
+  save().catch(() => { /* kept in this window until the phone answers */ });
+}
 
 /* A card, by his hand. Only the boxes he typed in are written, onto the card
  * as it stands when he saves — a change the helper made while it was open
  * stands (Cozy Tavern's M426/M428); a name he changes keeps the old one among
  * the others it goes by. */
-function editCard(kind, id) {
-  const n = store.peek('novel', P.novelId);
+async function editCard(kind, id) {
   const novelId = P.novelId;
+  if (store.peek('draft', novelId) === undefined) { try { await store.open('draft', novelId); } catch (_) { /* the local draft still works */ } }
+  if (P.novelId !== novelId) return;
+  const n = store.peek('novel', novelId);
+  if (!n) return;
   const cur = id ? (n.notes[kind] || []).find((c) => c.id === id) : null;
   const c = cur ? JSON.parse(JSON.stringify(cur)) : newCard(kind);
-  const draftKey = `${novelId}:${kind}:${id || 'new'}`;
-  const draft = cardDrafts.get(draftKey) || null;
+  const drafts = { ...((store.peek('draft', novelId) || {}).cards || {}), ...Object.fromEntries(cardDrafts) };
+  let draftKey = `${novelId}:${kind}:${id || 'new'}`;
+  let recovered = false;
+  if (!id && !drafts[draftKey]) {
+    /* A card removed while its editor was closed has no card to reopen.
+     * Add recovers its draft instead of leaving the words out of reach. */
+    const prefix = `${novelId}:${kind}:`;
+    const orphan = Object.keys(drafts).find((key) => key.startsWith(prefix) && drafts[key] && !(n.notes[kind] || []).some((x) => key === prefix + x.id));
+    if (orphan) { draftKey = orphan; recovered = true; }
+  }
+  const draft = drafts[draftKey] || null;
   const s = openSheet(cur ? c.name : `A new ${kind === 'people' ? 'person' : kind === 'places' ? 'place' : kind === 'lore' ? 'thing to remember' : 'thread'}`, { small: true, onClose: () => keepDraft() });
   const name = h('input', { type: 'text', value: c.name || '' });
   const about = h('textarea', { rows: 5 });
   about.value = c.about || '';
   const aka = h('input', { type: 'text', value: (c.aka || []).join(', ') });
   let now = null, ties = null, open = null;
-  if (draft) s.body.append(h('p.say', 'Your words from before, not saved yet, are back.'));
+  if (draft) s.body.append(h('p.say', recovered ? 'Your words from a card taken out are back. Save makes a new card.' : 'Your words from before, not saved yet, are back.'));
   s.body.append(field('Name', name));
   s.body.append(field('Also called', aka, 'Other names, separated by commas.'));
   if (kind === 'people') {
@@ -669,8 +701,10 @@ function editCard(kind, id) {
   const keepDraft = () => {
     if (done) return;
     const t = typed();
-    if (Object.keys(t).length) { cardDrafts.set(draftKey, t); toast('Your words are kept — open the card again to go on.'); } else cardDrafts.delete(draftKey);
+    if (Object.keys(t).length) { keepCardDraft(novelId, draftKey, { ...t, name: valueOf('name') }); toast('Your words are kept — open the card again to go on.'); } else keepCardDraft(novelId, draftKey, undefined);
   };
+  const draftTyped = () => { if (!done) { const t = typed(); keepCardDraft(novelId, draftKey, Object.keys(t).length ? { ...t, name: valueOf('name') } : undefined); } };
+  for (const box of [...Object.values(boxes), ...(open ? [open] : [])]) box.addEventListener('input', draftTyped);
   s.body.append(h('p.say', 'The helper keeps these as the book is written; what you write here it keeps too.'));
   const row = h('div.btnrow', h('button.btn.primary', { onclick: () => {
     const t = typed();
@@ -678,7 +712,7 @@ function editCard(kind, id) {
     if (!nm) { toast('It needs a name.'); return; }
     /* onto the card as it stands now: only what he typed */
     const live = cur ? ((store.peek('novel', novelId).notes[kind] || []).find((x) => x.id === cur.id) || null) : null;
-    if (cur && !live) { toast('This card was taken out meanwhile — your words are kept; Add makes it anew.'); cardDrafts.set(`${novelId}:${kind}:new`, { ...t, name: nm }); done = true; s.close(); return; }
+    if (cur && !live) { toast('This card was taken out meanwhile — your words are kept; Add makes it anew.'); keepCardDraft(novelId, `${novelId}:${kind}:new`, { ...t, name: nm }); keepCardDraft(novelId, draftKey, undefined); done = true; s.close(); return; }
     const out = live ? JSON.parse(JSON.stringify(live)) : c;
     if (t.aka !== undefined || (!cur && aka.value.trim())) out.aka = aka.value.split(',').map((x) => x.trim()).filter(Boolean);
     if (t.name !== undefined || !cur) {
@@ -697,23 +731,33 @@ function editCard(kind, id) {
     if (since && t.since !== undefined) { const v = since.value.trim(); if (v) out.since = v; else delete out.since; }
     if (ties && (t.ties !== undefined || !cur)) out.ties = ties.value.trim();
     if (open && (t.open !== undefined || !cur)) out.open = open.checked;
-    if (cur && !Object.keys(t).length) { done = true; cardDrafts.delete(draftKey); s.close(); return; }
+    if (cur && !Object.keys(t).length) { done = true; keepCardDraft(novelId, draftKey, undefined); s.close(); return; }
     /* his in what he wrote here (a new card: all he gave it) — the helper still writes the rest as the book goes on */
     const wrote = cur ? Object.keys(t) : ['name', ...Object.keys(t), ...(aka.value.trim() ? ['aka'] : [])];
     out.updated = hisStamp(live, wrote, Date.now());
-    store.change('novel', novelId, novelSteps.putNote(kind, out), { now: true });
+    store.change('novel', novelId, novelSteps.editNote(kind, out, wrote, { create: !cur }), { now: true });
+    /* Keep a way back until the phone accepts it. A card removed in another
+     * window during the save stays removed, with these words ready for Add. */
+    const saving = { ...t, name: nm };
+    keepCardDraft(novelId, draftKey, saving);
+    store.flush('novel', novelId).then(() => {
+      if (cardDrafts.get(draftKey) !== saving) return;
+      const kept = store.peek('novel', novelId);
+      const found = ((kept && kept.notes[kind]) || []).some((x) => x.id === out.id);
+      keepCardDraft(novelId, draftKey, undefined, saving);
+      if (!found) { keepCardDraft(novelId, `${novelId}:${kind}:new`, saving); toast('This card was taken out meanwhile — your words are kept; Add makes it anew.', 6000); }
+    });
     /* a name another card already goes by: two cards for one — the notes' check folds them (Cozy Tavern's M614, M730) */
     const twin = (store.peek('novel', novelId).notes[kind] || []).find((x) => x.id !== out.id && [x.name, ...(x.aka || [])].some((a) => nameKey(a) === nameKey(out.name)));
     if (twin) { archivist.askAudit(novelId); toast(`${twin.name === out.name ? 'Another card is called' : 'Another card also goes by'} ${out.name} — the notes’ check folds the two into one, keeping your words.`, 6000); }
     done = true;
-    cardDrafts.delete(draftKey);
     s.close();
   } }, 'Save'));
   if (cur) row.append(h('button.btn.danger', { onclick: async () => {
     if (!(await confirmIt('Take this out of the notes?', `${cur.name} goes from the notes. (The book itself is not changed.)`, 'Take it out', { danger: true }))) return;
     store.change('novel', novelId, novelSteps.dropNote(kind, cur.id), { now: true });
     done = true;
-    cardDrafts.delete(draftKey);
+    keepCardDraft(novelId, draftKey, undefined);
     s.close();
   } }, 'Take it out'));
   s.body.append(row);

@@ -326,7 +326,8 @@ export function rebuilding(novel) { const m = (novel && novel.memory) || {}; ret
 export function standingNotes(novel) {
   if (!rebuilding(novel)) return novel;
   const from = novel.memory.rereadFrom;
-  return { ...novel, notes: from.notes || {}, kept: { ...(from.kept || {}), ...(novel.kept || {}) } };
+  const corrected = Object.fromEntries(Object.entries(novel.kept || {}).filter(([, k]) => k && k.by === 'you'));
+  return { ...novel, notes: from.notes || {}, kept: { ...(from.kept || {}), ...corrected } };
 }
 
 /* What it's about and how it reads: his own words, set by hand ("Manual"),

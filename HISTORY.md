@@ -335,3 +335,13 @@ Checked with all five suites — server 63/63, app 365/365, thinking 348/348 (0 
 - Ready-made prefills preserve the words entered, including literal bracketed names. Reserved template marks are explained instead of silently removed; literal bracketed names also survive a provider's fallback to ordinary prefill. Connection settings explain that its opening and thinking seed are shared by the writer and narrator using it.
 - Focused persona requests cover writing, rewrites, selected rewrites, continuation, scenes, conversion, partner follow-ups and visible thinking. These are transport and instruction checks using local stand-ins, not claims about a model's private reasoning or literary performance.
 - Removing a book waits for its pending chapter, conversation, scene and draft saves. Failed removal preserves edits; restored records become editable again. Failed chapter or scene removal keeps the item in its book instead of silently hiding it.
+
+## 2.9.2, notes kept whole
+
+- A missing chapter stops the helper instead of being treated as empty. Its light reports the failure, the work retries, and the notes remain intact.
+- Notes audits reject delayed answers after additions, reordering, changed notes or changes to the book's premise. Malformed lists and empty verdicts are repaired before being accepted; a clear report requires an explicit yes.
+- Multiple rows in an answer can enrich the same card without being mistaken for concurrent edits. Conflicting locations keep the first; aliases removed and cards changed while waiting stay protected.
+- Hand edits and direct partner card edits save only their changed fields when replayed over newer saves. A card removed in another window stays removed, with typed words kept for Add.
+- Unsaved note-editor drafts are kept with the book's existing device-saved drafts, so Back and reload preserve them. Add recovers drafts for cards removed while their editors were closed. Save clears the acknowledged draft without applying unsaved words to a card.
+- Whole-book rereads keep complete automatic descriptions in use until the rebuild finishes. Explicit card corrections and removals take effect immediately, and Undo of the reread preserves later manual corrections.
+- NOTES-AUDIT.md explains the workflow, confirmed repairs, automatic recovery, verification and the limits of model-generated facts.
