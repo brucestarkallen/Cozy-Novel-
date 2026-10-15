@@ -155,9 +155,9 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
   transition: background .18s, border-color .18s, transform .12s;
 }
 .btn:hover { background: rgba(255,255,255,.1); }
-.btn:active { transform: scale(.97); }
+.btn:active { transform: translateY(1px); }
 .btn.primary { background: linear-gradient(180deg, var(--accent-2), var(--accent)); color: var(--accent-ink); border-color: transparent; font-weight: 600; box-shadow: 0 4px 18px rgba(216,150,58,.25); }
-.btn.primary:hover { filter: brightness(1.05); }
+@media (hover: hover) { .btn.primary:hover { filter: brightness(1.05); } }
 .btn.quiet { background: none; border-color: transparent; color: var(--chrome-soft); }
 .btn.quiet:hover { color: var(--chrome-ink); background: rgba(255,255,255,.06); }
 .btn.danger { color: var(--danger); border-color: rgba(224,122,95,.35); }
@@ -202,7 +202,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
   color: #fbf3e4; box-shadow: var(--shadow); isolation: isolate;
   transition: transform .25s var(--ease), box-shadow .25s;
 }
-.book:hover .cover { transform: translateY(-4px) rotate(-.4deg); }
+@media (hover: hover) { .book:hover .cover { transform: translateY(-4px) rotate(-.4deg); } }
 .cover::before { /* the spine */
   content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 9px;
   background: linear-gradient(90deg, rgba(0,0,0,.35), rgba(255,255,255,.12) 60%, rgba(0,0,0,.2)); z-index: 2;
@@ -400,12 +400,12 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
   position: fixed; top: 0; bottom: 0; z-index: 30; width: min(92vw, 400px);
   background: var(--chrome-solid); color: var(--chrome-ink);
   display: flex; flex-direction: column; box-shadow: var(--shadow);
-  transition: transform .28s var(--ease), visibility 0s linear .28s; visibility: hidden;
+  transition: transform .22s var(--ease), visibility 0s linear .22s; visibility: hidden;
   padding-top: var(--safe-t);
 }
-.pane.left { left: 0; transform: translateX(-102%); }
-.pane.right { right: 0; transform: translateX(102%); }
-.pane.open { transform: none; visibility: visible; transition: transform .28s var(--ease), visibility 0s; }
+.pane.left { left: 0; transform: translate3d(-102%, 0, 0); }
+.pane.right { right: 0; transform: translate3d(102%, 0, 0); }
+.pane.open { transform: translate3d(0, 0, 0); visibility: visible; transition: transform .22s var(--ease), visibility 0s; }
 .scrim { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .25s; }
 .scrim.on { opacity: 1; pointer-events: auto; }
 @media (min-width: 1180px) {
@@ -511,23 +511,31 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 /* sheets (settings, book, dialogs) */
 .sheet {
   position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center;
-  background: rgba(0,0,0,.5); padding-top: calc(var(--safe-t) + 20px);
+  padding-top: calc(var(--safe-t) + 20px); isolation: isolate;
 }
 .sheet.on { opacity: 1; }
-/* Opaque content from the first frame to the last. Fading the entire sheet
- * faded its text and reading surface into the room, too. */
-.sheet[aria-hidden="true"] { visibility: hidden; pointer-events: none; }
+/* Fade the dimming layer alone: the panel never fades in through the room.
+ * Keyframes establish a real first frame even after a busy Settings build. */
+.sheet::before { content: ''; position: absolute; inset: 0; z-index: -1; background: var(--sheet-dim, rgba(0,0,0,.5)); opacity: 0; }
+.sheet.on::before { opacity: 1; animation: sheet-dim-in .18s ease-out both; }
+.sheet[aria-hidden="true"] { pointer-events: none; }
+.sheet[aria-hidden="true"]::before { animation: sheet-dim-out .16s ease-in both; }
+.sheet[aria-hidden="true"] > .box { animation: sheet-out .16s ease-in both; }
 .sheet > .box {
   width: 100%; max-width: 720px; max-height: 100%; display: flex; flex-direction: column;
   background: var(--chrome-solid); color: var(--chrome-ink); border-radius: 20px 20px 0 0;
-  box-shadow: var(--shadow); transform: translateY(8px); transition: transform .18s var(--ease);
+  box-shadow: var(--shadow); transform: translate3d(0,0,0);
   border: 1px solid var(--line); border-bottom: 0;
 }
-.sheet.on > .box { transform: none; }
+.sheet.on > .box { animation: sheet-in .2s var(--ease) both; }
+@keyframes sheet-in { from { transform: translate3d(0,12px,0); } to { transform: translate3d(0,0,0); } }
+@keyframes sheet-out { from { transform: translate3d(0,0,0); opacity: 1; } to { transform: translate3d(0,12px,0); opacity: 0; } }
+@keyframes sheet-dim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-dim-out { from { opacity: 1; } to { opacity: 0; } }
 @media (min-width: 760px) { .sheet { align-items: center; padding: 30px; } .sheet > .box { border-radius: 20px; border-bottom: 1px solid var(--line); max-height: 90vh; } }
 .sheet .head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 10px 20px; border-bottom: 1px solid var(--line); }
 .sheet .head h2 { flex: 1; margin: 0; font: 600 24px/1.15 var(--display); }
-.sheet .body { min-height: 0; overflow-y: auto; padding: 16px 20px calc(var(--safe-b) + 26px); overscroll-behavior: none; background: var(--chrome-solid); }
+.sheet .body { min-height: 0; overflow-y: auto; padding: 16px 20px calc(var(--safe-b) + 26px); overscroll-behavior: none; background: var(--chrome-solid); border-bottom-left-radius: inherit; border-bottom-right-radius: inherit; }
 .sheet.small > .box { max-width: 460px; }
 
 .group { margin: 0 0 14px; border-radius: 16px; background: rgba(255,255,255,.035); border: 1px solid var(--line); }
@@ -676,7 +684,7 @@ body.reading .page { margin-top: 0; }
  * checks; red, its connection is in trouble */
 .checkbubble { position: absolute; right: 14px; bottom: 14px; z-index: 6; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
   color: #fff; font: 700 15px/1 var(--ui); background: #8a8378; box-shadow: 0 6px 18px rgba(0,0,0,.35), 0 0 0 2px var(--chrome-solid); transition: background .25s, transform .15s; }
-.checkbubble:active { transform: scale(.94); }
+.checkbubble:active { transform: translateY(1px); }
 .checkbubble[data-state="clean"] { background: #4f9e5c; }
 .checkbubble[data-state="waiting"], .checkbubble[data-state="checking"] { background: #3a82d6; }
 .checkbubble[data-state="found"] { background: #e2a72a; color: #2a1a00; }

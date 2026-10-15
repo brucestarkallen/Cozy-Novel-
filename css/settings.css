@@ -71,3 +71,15 @@
 /* A folded connection section keeps its own arrow even inside open Settings. */
 .settings-section .group > .ghead .chev { transform: none; }
 .settings-section .group:not(.fold) > .ghead .chev { transform: rotate(90deg); }
+
+/* Stable panel dimensions while saved copies and usage arrive. */
+.settings-sheet { height: 100%; }
+.reading-colours { padding: 16px; margin: 18px 0; border: 1px solid var(--line); border-radius: 14px; background: var(--wash); }
+.reading-colours h4 { margin: 0 0 14px; font: 600 21px/1.2 var(--display); }
+.reading-colours input[type="color"] { width: 100%; padding: 5px; cursor: pointer; }
+.colour-preview { padding: 17px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; font: 16px/1.7 var(--serif); }
+.colour-save { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.colour-save .field { flex: 1 1 150px; margin: 0; min-width: 0; }
+.colour-save .btn { flex: none; }
+.reading-colours .fieldrow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.reading-colours .fieldrow .field { min-width: 0; }

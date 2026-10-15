@@ -1,0 +1,102 @@
+"""Saved day/night reading colours and real sheet/drawer animation frames.
+Temporary records only; no model connections or paid calls.
+"""
+import asyncio, os, sys, traceback
+import harness as H
+from playwright.async_api import async_playwright
+H.PORT=int(os.environ.get('COZY_TEST_PORT','29481'));H.PROV=int(os.environ.get('COZY_TEST_PROVIDER_PORT','29499'))
+RESULTS=[]
+def check(name,ok,saw=''):
+ RESULTS.append(bool(ok));print(('  ok   ' if ok else '  FAIL ')+name+('' if ok else f' [{saw}]'),flush=True)
+async def close(pg):
+ await pg.evaluate("async()=>{const d=await import('/js/ui/dom.js');d.closeAllSheets();await d.afterBacks()}")
+ await pg.wait_for_selector('.sheet',state='detached')
+async def settings(pg):
+ await pg.evaluate("import('/js/ui/settings.js').then(s=>s.openSettings('look'))")
+ await pg.get_by_label('Dialogue colour preset',exact=True).wait_for()
+async def pick(pg,label,value):
+ el=pg.get_by_label(label,exact=True)
+ await el.evaluate("(el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}))}",value)
+async def main():
+ with H.Env():
+  async with async_playwright() as p:
+   browser=await p.chromium.launch(executable_path='/usr/bin/chromium')
+   try:
+    logs=[];pg=await H.page(browser,logs,w=412,hgt=915)
+    await H.new_book(pg,'Colours at midnight')
+    pid=await pg.evaluate(r'''async()=>{const s=await import('/js/store.js'),sh=await import('/js/novel/shape.js'),t=await import('/js/novel/talk.js');const n=s.peek('novel',location.hash.split('/')[2]);s.change('chapter',n.order[0],c=>{c.passages=[sh.newPassage('you','Mara looked up. “You stayed.”')]});const id=await t.newPlay({novelId:n.id,chapterId:n.order[0],who:'Mara',from:'At midnight'});s.change('play',id,p=>{p.turns=[sh.newTurn('ai','Rain tapped against the window. “One more chapter,” Rowan said.')]});await s.flush();return id}''')
+    await pg.evaluate("async id=>(await import('/js/ui/panes.js')).showTurn('play',id,'none')",pid)
+    await pg.wait_for_selector('.prose-turn .dlg')
+    check('scene dialogue is marked for tinting without changing its words',await pg.locator('.prose-turn .dlg').inner_text()=='“One more chapter,”')
+    await pg.evaluate("window.keptTelling=document.querySelector('.prose-turn')")
+    await pg.evaluate("import('/js/ui/panes.js').then(p=>p.closeRight())")
+    # Observe actual opening frames, not just the finished CSS.
+    frames=await pg.evaluate("""async()=>{const s=await import('/js/ui/settings.js');s.openSettings('look');const box=document.querySelector('.settings-sheet'),wrap=box.parentElement,out=[];for(let i=0;i<18;i++){await new Promise(requestAnimationFrame);out.push({dim:+getComputedStyle(wrap,'::before').opacity,panel:getComputedStyle(box).opacity,transform:getComputedStyle(box).transform,height:box.getBoundingClientRect().height})}return out}""")
+    check('Settings backdrop fades progressively instead of appearing fully dark',any(0<f['dim']<.95 for f in frames) and frames[-1]['dim']==1,frames)
+    check('Settings panel stays opaque through opening',all(f['panel']=='1' for f in frames))
+    check('Settings has real movement without height jumps',len(set(f['transform'] for f in frames))>2 and max(f['height'] for f in frames)-min(f['height'] for f in frames)<1)
+    check('both built-in palettes are available',await pg.get_by_label('Scene highlight colour preset',exact=True).locator('option[value=cozy]').count()==1 and await pg.get_by_label('Dialogue colour preset',exact=True).locator('option[value=orange]').count()==1)
+    await pg.get_by_label('Scene highlight colour preset',exact=True).select_option('cozy')
+    await pg.get_by_label('Dialogue colour preset',exact=True).select_option('orange')
+    check('night picks apply immediately',await pg.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--scene-paper').trim()==='#182420'&&getComputedStyle(document.documentElement).getPropertyValue('--dlg').trim()==='#f0b47b'"))
+    check('colour changes preserve the existing scene text',await pg.evaluate('keptTelling.isConnected'))
+    await pg.locator('.mode-choice[data-mode=light]').click()
+    check('day uses the saved day colours',await pg.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--scene-paper').trim()==='#f3ecde'&&getComputedStyle(document.documentElement).getPropertyValue('--dlg').trim()==='#8a430d'"))
+    await pg.locator('.mode-choice[data-mode=dark]').click()
+    for kind,label,col in [('scene','Scene highlight colour','#132d31'),('dialogue','Dialogue colour','#ffbb88')]:
+     for i in range(2):
+      await pick(pg,label+' at night',col)
+      await pick(pg,label+' by day','#884422' if kind=='dialogue' else '#fff4df')
+      await pg.get_by_label(label+' name',exact=True).fill(f'My {kind} {i+1}')
+      await pg.get_by_role('region',name=label,exact=True).get_by_role('button',name='Save colours',exact=True).click()
+     check(f'{kind}: saving another pair keeps both',await pg.get_by_label(label+' preset',exact=True).locator('option').filter(has_text='My '+kind).count()==2)
+    await pg.evaluate("async()=>await(await import('/js/store.js')).flush()")
+    await close(pg);await pg.reload();await pg.wait_for_selector('#desk:not([hidden])');await settings(pg)
+    check('saved pairs and choices survive reload',await pg.get_by_label('Dialogue colour preset',exact=True).locator('option:checked').inner_text()=='My dialogue 2' and await pg.get_by_label('Scene highlight colour at night',exact=True).input_value()=='#132d31')
+    scene=pg.get_by_role('region',name='Scene highlight colour',exact=True)
+    await scene.get_by_role('button',name='Back to default',exact=True).click()
+    check('scene reset clears only its override and keeps saved colours',await pg.evaluate("!document.documentElement.style.getPropertyValue('--scene-paper')&&document.documentElement.style.getPropertyValue('--dlg')==='#ffbb88'") and await scene.locator('option').filter(has_text='My scene').count()==2)
+    dialogue=pg.get_by_role('region',name='Dialogue colour',exact=True)
+    await dialogue.get_by_role('button',name='Remove saved colour',exact=True).click()
+    check('removing a saved pair leaves the other',await dialogue.locator('option').filter(has_text='My dialogue').count()==1)
+    await pg.locator('#toast').get_by_role('button',name='Undo',exact=True).click()
+    check('Undo restores the removed pair',await dialogue.locator('option').filter(has_text='My dialogue').count()==2)
+    await dialogue.get_by_role('button',name='Back to default',exact=True).click()
+    check('dialogue reset restores the theme recommendation',await pg.evaluate("!document.documentElement.style.getPropertyValue('--dlg')"))
+    await pg.get_by_label('Dialogue colour preset',exact=True).select_option('orange')
+    await pg.get_by_label('Scene highlight colour preset',exact=True).select_option('cozy')
+    await close(pg)
+    await pg.evaluate("async id=>(await import('/js/ui/panes.js')).showTurn('play',id,'none')",pid)
+    await pg.wait_for_selector('.prose-turn .dlg')
+    check('scene surface and dialogue use the selected colours',await pg.locator('.prose-turn').evaluate("e=>getComputedStyle(e).backgroundColor==='rgb(24, 36, 32)'&&getComputedStyle(e.querySelector('.dlg')).color==='rgb(240, 180, 123)'"))
+    await pg.locator('.scenehead').get_by_role('button',name='Full screen',exact=True).click()
+    await pg.wait_for_selector('#sidePane.full')
+    check('full-screen scene retains its selected highlight',await pg.locator('.prose-turn').evaluate("e=>getComputedStyle(e).backgroundColor==='rgb(24, 36, 32)'"))
+    await pg.locator('.scenehead').get_by_role('button',name='Leave full screen',exact=True).click()
+    await pg.wait_for_selector('#sidePane.full',state='detached')
+    check('book dialogue uses the same choice',await pg.locator('#passages .dlg').evaluate("e=>getComputedStyle(e).color==='rgb(240, 180, 123)'"))
+    await settings(pg);await pg.get_by_text('Tint the dialogue',exact=True).click();await close(pg)
+    check('tint switch still disables dialogue colour in scenes',await pg.locator('.prose-turn .dlg').evaluate("e=>getComputedStyle(e).color===getComputedStyle(e.parentElement).color"))
+    await settings(pg);await pg.get_by_role('button',name='Back to the default look',exact=True).click()
+    check('whole appearance reset retains saved palettes',await pg.evaluate("async()=>{const l=(await import('/js/store.js')).peek('house','house').look;return Object.keys(l.sceneSaved).length===2&&Object.keys(l.dialogueSaved).length===2&&!l.dialoguePalette}"))
+    await close(pg)
+    await pg.evaluate("import('/js/ui/panes.js').then(p=>p.closeRight())")
+    await pg.wait_for_timeout(240)
+    pane_frames=await pg.evaluate("""async()=>{const p=await import('/js/ui/panes.js');p.showSide('play');const el=document.querySelector('#sidePane'),out=[];for(let i=0;i<20;i++){await new Promise(requestAnimationFrame);out.push({x:el.getBoundingClientRect().x,opacity:getComputedStyle(el).opacity,width:el.getBoundingClientRect().width})}return out}""")
+    check('drawer moves without fading or changing width',all(f['opacity']=='1' for f in pane_frames) and max(f['width'] for f in pane_frames)-min(f['width'] for f in pane_frames)<1 and len(set(round(f['x'],1) for f in pane_frames))>2,pane_frames)
+    await pg.evaluate("import('/js/ui/panes.js').then(p=>p.closeRight())")
+    await pg.click('#moreBtn')
+    check('menu animation keeps its content opaque',await pg.locator('.menu-pop').evaluate("e=>getComputedStyle(e).opacity==='1'"))
+    await pg.keyboard.press('Escape');await pg.wait_for_selector('.menu-pop',state='detached')
+    await pg.emulate_media(reduced_motion='reduce')
+    await settings(pg)
+    check('reduced motion disables panel and backdrop animation',await pg.locator('.settings-sheet').evaluate("e=>getComputedStyle(e).animationName==='none'&&getComputedStyle(e.parentElement,'::before').animationName==='none'&&getComputedStyle(e.parentElement,'::before').opacity==='1'"))
+    await close(pg)
+    check('custom foreground stays readable across arbitrary background colours',await pg.evaluate("async()=>{const m=await import('/js/ui/look-colours.js');return ['#887760','#ffffff','#000000','#22113a','#ffcc00'].every(c=>m.contrast(c,m.inkFor(c))>=4.5)}"))
+    check('no browser exceptions or model calls',not [l for l in logs if l.startswith('PAGEERROR')] and not H.reqs(),logs)
+   except Exception:
+    traceback.print_exc();check('reading colour walkthrough completes',False)
+   finally:await browser.close()
+ print(f'reading colours: {sum(RESULTS)} passed, {len(RESULTS)-sum(RESULTS)} failed')
+ sys.exit(0 if RESULTS and all(RESULTS) else 1)
+if __name__=='__main__':asyncio.run(main())

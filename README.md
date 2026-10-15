@@ -171,6 +171,9 @@ The room remains visible around the manuscript, with opaque paper behind its wor
 The home background keeps a stable crop while mobile browser controls move. Each narrator
 answer shows how many input tokens were sent; estimates are marked “About.”
 The new-scene name and starting place also survive keyboard resizing and reloads.
+Settings → Appearance includes scene highlight and dialogue colours, with
+separate night/day values, saved colour pairs, Cozy dark and Warm orange presets,
+and Back to default. Saved colours stay available when the appearance is reset.
 
 No build step: `index.html`, `css/`, `js/` and `serve.py` are the whole app. `AGENTS.md` maps the code and the rules it keeps. The checks:
 
@@ -222,6 +225,7 @@ python3 tests/browser/walk_update_performance.py # background saves, Suggestions
 python3 tests/browser/walk_performance_search.py # pending searches, cancellation, limits and source navigation
 python3 tests/browser/walk_surface_stability.py # opaque scrolling, scene setup drafts and narrator input-token counts
 python3 tests/browser/walk_room_backing.py # stationary room pixels, visible gutters and manuscript backing
+python3 tests/browser/walk_reading_colours.py # saved night/day colours, tinting and overlay animation frames
 ```
 
 All of them use synthetic books in a temporary folder and stand-in models; nothing paid is ever called.

@@ -1,5 +1,6 @@
 /* The world, the light and the page change without reopening the book. */
 import { showWorld } from './worlds.js';
+import { colourPair, inkFor } from './look-colours.js';
 
 export const DEFAULT_LOOK = { theme: 'academy', mode: 'dark', motion: 'on', room: 'on', tint: 'on', indent: 'off', font: 'literata', size: '18', lead: '1.72', width: '680' };
 
@@ -43,6 +44,15 @@ export function applyLook(look = {}) {
     '--page-width': `${Number(look.width) || 680}px`,
   })) {
     if (d.style.getPropertyValue(key) !== value) d.style.setProperty(key, value);
+  }
+  const scene = colourPair(look, 'scene'), dialogue = colourPair(look, 'dialogue');
+  for (const [key, value] of Object.entries({
+    '--scene-paper': scene ? scene[mode] : '',
+    '--scene-ink': scene ? inkFor(scene[mode]) : '',
+    '--dlg': dialogue ? dialogue[mode] : '',
+  })) {
+    if (d.style.getPropertyValue(key) === value) continue;
+    if (value) d.style.setProperty(key, value); else d.style.removeProperty(key);
   }
   showWorld(world);
   for (const [id, name] of [['worldAcademy', 'academy'], ['worldTokyo', 'tokyo'], ['worldStudy', 'study']]) {

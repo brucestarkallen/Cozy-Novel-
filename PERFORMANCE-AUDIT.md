@@ -1,4 +1,37 @@
-# Room visibility follow-up — 2.10.3
+# Animation and reading-colour audit — 2.10.4
+
+The reported issue was the transition into Settings and the feeling of pressing
+controls, even after scrolling improved. This pass inspected all CSS animation
+and transition declarations, the shared sheet/menu lifecycle, drawer opening,
+reduced-motion rules and the ambient-room pause path.
+
+| Surface | Finding and change |
+| --- | --- |
+| Settings and other sheets | The backdrop appeared immediately at full strength. It now fades independently while the opening panel remains opaque. Light-mode dimming no longer washes the page toward white. |
+| Sheet movement | A transition whose starting state was appended and changed before painting could skip its entrance. Transform keyframes now define the first frame explicitly. Closing keeps the existing focus/Back/removal lifecycle. |
+| Settings height | The panel now holds its available height while usage and saved-copy lists arrive, instead of changing its bounds during the opening. |
+| Drawers | A 220 ms transform-only slide keeps its composited transform at rest; content stays opaque and width stays fixed. |
+| Button presses and book covers | Presses translate one pixel instead of scaling text. Hover lifts and brightness filters run only with hover-capable input. |
+| Night accents | Added static, small glows on selected controls and primary actions. No animated glow, backdrop filter or full-screen shadow was added. |
+| Other motion retained | Menu translation, toast fading, small chevron rotations, writing caret, status dot/spinner, bounded search-result emphasis and the existing local room animations remain. Reduced motion and paused ambient motion still disable animations/transitions globally. |
+
+The new browser walkthrough samples real opening frames: gradual backdrop
+opacity, continuously opaque sheet content, changing transforms and constant
+panel dimensions. It also checks drawer movement and reduced-motion behavior.
+These observations do not establish 120 Hz performance or reproduce Android
+reclaiming display resources while an app is minimized.
+
+Reading colours now live in the shared appearance record, with independent
+scene/dialogue choices and named night/day pairs. Built-ins are Cozy dark and
+Warm orange; theme defaults remain available without deleting saved pairs.
+Scene prose now renders the same dialogue marks as the manuscript, including
+streaming. Colour changes update CSS variables rather than replacing passages.
+Custom scene backgrounds select readable text; low-contrast dialogue choices
+show a hint while preserving the exact chosen colour.
+
+Checked across 48 suites: 2,163 distinct checks passed after final reruns. The new reading-colour/animation walkthrough passed 25 checks. Main, accessibility, dialogs, Settings and checker walks passed again after the final overlay changes. An initial branch-picker timeout did not reproduce with tracing; the complete branching rerun passed all 49 checks. Temporary synthetic books and local stand-in providers only; no paid calls. Physical Android display restoration and 120 Hz smoothness remain unverified.
+
+## Previous room follow-up — 2.10.3
 
 The 2.10.2 reading-viewport background covered the room outside the manuscript.
 That was an unwanted visual change. The backing is now an opaque, stationary

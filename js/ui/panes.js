@@ -1213,16 +1213,16 @@ function drawTurn(kind, id, turn) {
   /* the thinking streams open while it comes, then folds once the words begin */
   if (turn.by !== 'you' && thinking) el.append(turnThinkBox(key, thinking, Boolean(live && !live.text)));
   /* the narrator's telling is prose — a thought or a sound in italics is drawn in italics */
-  if (kind === 'play' && turn.by !== 'you') { const w = h('div.words.tprose'); drawProse(w, shownWords(kind, turn, text, live)); el.append(w); }
+  if (kind === 'play' && turn.by !== 'you') { const w = h('div.words.tprose'); drawProse(w, shownWords(kind, turn, text, live), { tint: true }); el.append(w); }
   else if (kind === 'talk' && turn.by !== 'you' && partsOf(text).some((x) => x.kind === 'direction')) {
     /* each premise it offered, with its own Use as the next direction */
     const w = h('div.words');
     for (const part of partsOf(text)) {
-      if (part.kind === 'words') { if (live || v.streaming) w.append(h('span', part.text)); else { const d = h('div.tprose.talkprose'); drawProse(d, part.text); w.append(d); } continue; }
+      if (part.kind === 'words') { if (live || v.streaming) w.append(h('span', part.text)); else { const d = h('div.tprose.talkprose'); drawProse(d, part.text, { tint: true }); w.append(d); } continue; }
       w.append(h('div.direction', h('span', part.text), part.done && !(live || v.streaming) ? h('button.btn.small', { title: 'Puts this premise in the box under the page — change it as you like, then Write.', onclick: async () => { if (!(await desk.useAsDirection(part.text))) return; if (!wide()) closeRight(); toast('It is in the box — change it as you like, then Write.'); } }, 'Use as the next direction') : null));
     }
     el.append(w);
-  } else if (kind === 'talk' && turn.by !== 'you' && !(live || v.streaming) && wordsOf(text)) { const w = h('div.words.tprose.talkprose'); drawProse(w, shownWords(kind, turn, text, live)); el.append(w); }
+  } else if (kind === 'talk' && turn.by !== 'you' && !(live || v.streaming) && wordsOf(text)) { const w = h('div.words.tprose.talkprose'); drawProse(w, shownWords(kind, turn, text, live), { tint: true }); el.append(w); }
   else el.append(h('span.words', shownWords(kind, turn, text, live)));
   /* his line to the narrator, not his character's */
   if (kind === 'play' && turn.by === 'you' && v.tell) el.append(h('div.tell', h('b', 'To the narrator: '), v.tell));
@@ -1556,7 +1556,7 @@ function paintSide() {
       box.remove();
     }
     const words = shownWords(ev.kind, { by: 'ai' }, ev.text || '', entry);
-    if (el.classList.contains('tprose')) growProse(el, words); else streamLines(el, words);
+    if (el.classList.contains('tprose')) growProse(el, words, { tint: true }); else streamLines(el, words);
     painted = true;
   }
   sideLive.clear();
