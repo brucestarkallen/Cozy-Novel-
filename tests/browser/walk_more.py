@@ -1031,6 +1031,35 @@ async def scenario_versions(b):
     await pg.uncheck('.sheet.on .switchrow >> nth=0 >> input'); await pg.wait_for_timeout(800)
     house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
     check('Send it, unticked, switches the book’s note at the end off', house['instructions'].get('lateOff') is True, house['instructions'])
+    # how each note at the end rides: Sent as, the book's and the scenes' each its own
+    sent_as = '.sheet.on label.field:has(> span:text-is("Sent as")) select'
+    check('each note at the end has its Sent as — the setup’s words to begin with', await pg.locator(sent_as).count() == 2 and await pg.input_value(f'{sent_as} >> nth=0') == 'system' and await pg.input_value(f'{sent_as} >> nth=1') == 'system')
+    await pg.select_option(f'{sent_as} >> nth=0', 'assistant'); await pg.select_option(f'{sent_as} >> nth=1', 'user'); await pg.wait_for_timeout(800)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    check('Sent as is kept, each note its own', house['instructions'].get('lateAs') == 'assistant' and house['instructions'].get('lateNarratorAs') == 'user', house['instructions'])
+    # words in the storyteller's own voice: each in a sheet of its own, kept as he goes, taken out with Undo
+    await pg.click('.sheet.on button:has-text("Add words")'); await pg.wait_for_timeout(500)
+    top = '.sheet.on >> nth=-1'
+    await pg.fill(f'{top} >> label.field:has(> span:text-is("Name")) input', 'Stay Batman')
+    await pg.select_option(f'{top} >> label.field:has(> span:text-is("Whose words")) select', 'you')
+    await pg.select_option(f'{top} >> label.field:has(> span:text-is("Where they ride")) select', 'before-pages')
+    await pg.select_option(f'{top} >> label.field:has(> span:text-is("Who reads them")) select', 'play')
+    await pg.fill(f'{top} >> label.field:has(> span:text-is("The words")) textarea', 'Batman here.')
+    await close_sheet(pg); await pg.wait_for_timeout(900)
+    house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
+    ow = house.get('ownWords') or []
+    row = await pg.inner_text('.sheet.on .ownlist .modrow') if await pg.locator('.sheet.on .ownlist .modrow').count() else ''
+    check('words in the storyteller’s own voice are kept as he set them, and the list says whose, where and for whom', len(ow) == 1 and ow[0].get('name') == 'Stay Batman' and ow[0].get('role') == 'you' and ow[0].get('place') == 'before-pages' and ow[0].get('to') == 'play' and ow[0].get('text') == 'Batman here.' and 'Stay Batman' in row and 'Your words, before the story — for the narrator' in row, (ow, row))
+    await pg.click('.sheet.on .ownlist .modrow'); await pg.wait_for_timeout(400)
+    await pg.click('.sheet.on >> nth=-1 >> button:has-text("Remove these words")'); await pg.wait_for_timeout(600)
+    gone = len(((await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']).get('ownWords') or [])
+    await pg.click('#toast button:has-text("Undo")'); await pg.wait_for_timeout(800)
+    back = ((await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']).get('ownWords') or []
+    check('Remove these words takes them out, and Undo puts them back', gone == 0 and len(back) == 1 and back[0].get('text') == 'Batman here.', (gone, back))
+    # (as they were, for the walks after: the house is shared)
+    await pg.click('.sheet.on .ownlist .modrow'); await pg.wait_for_timeout(400)
+    await pg.click('.sheet.on >> nth=-1 >> button:has-text("Remove these words")'); await pg.wait_for_timeout(500)
+    await pg.select_option(f'{sent_as} >> nth=0', 'system'); await pg.select_option(f'{sent_as} >> nth=1', 'system'); await pg.wait_for_timeout(700)
     # the connection editor: Structured shows the ready-made templates
     if not await pg.locator('.sheet.on label.field:has(> span:text-is("How it is sent")) select').is_visible():
         await pg.click('.sheet.on .ghead:has-text("Connections")'); await pg.wait_for_timeout(300)

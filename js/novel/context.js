@@ -24,7 +24,8 @@
 import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook } from './prompts.js';
+import { ownWordsFor } from './ownwords.js';
+import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook } from './prompts.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
@@ -312,16 +313,31 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
    * then the modules that always ride, then the frame */
   const head = withHis(withMacros([String(own || '').trim(), avoidLine(avoidList(house)), ...ride.always].filter(Boolean).join('\n\n'), names), frame);
   const opening = notesAs === 'system' ? '' : notesOpening(house, novel, notesAs, purpose);
-  /* his note at the end: the writer's, or the scenes' own (prompts.js lateFor) */
+  /* his note at the end: the writer's, or the scenes' own (prompts.js lateFor), as he chose it to ride — the
+   * storyteller's own voice marked, for the model layer to send it as the setup's words where it cannot go so */
   const late = withMacros(lateFor(instr, purpose), names);
+  const lateRole = lateRoleFor(instr, purpose);
+  /* his words in the storyteller's own voice (ownwords.js), each at its place — for the writer and the narrator */
+  const voiced = ownWordsFor(house, purpose, (t) => withMacros(t, names));
+  const ownMsg = (w) => ({ role: w.role, content: w.text, ...(w.role === 'assistant' ? { voice: true } : {}) });
   const after = [];
   for (const t of turns) after.push({ role: t.role, content: t.content });
   if (request) after.push({ role: 'user', content: request });
-  if (late) after.push({ role: 'system', content: late });
+  /* right before what he asks: his request, or his last move — with nothing of his to stand before, at the end */
+  const beforeYours = voiced.filter((w) => w.place === 'before-your-message').map(ownMsg);
+  if (beforeYours.length) {
+    let at = -1;
+    for (let i = after.length - 1; i >= 0; i--) if (after[i].role === 'user') { at = i; break; }
+    if (at === -1) after.push(...beforeYours); else after.splice(at, 0, ...beforeYours);
+  }
+  after.push(...voiced.filter((w) => w.place === 'after-your-message').map(ownMsg));
+  if (late) after.push({ role: lateRole, content: late, ...(lateRole === 'assistant' ? { voice: true } : {}) });
+  /* after the book and its notes, before the story */
+  const beforePages = voiced.filter((w) => w.place === 'before-pages').map(ownMsg);
 
   const total = contextOf(conn);
   const reserve = answerRoom(conn, length, purpose);
-  const afterCost = after.reduce((a, m) => a + estimateTokens(m.content) + 8, 0);
+  const afterCost = [...beforePages, ...after].reduce((a, m) => a + estimateTokens(m.content) + 8, 0);
   /* what has to go whatever the book — his words, the modules, the frame,
    * the talk and his request — with the room for the answer: the least this
    * model must hold before any of the book (a "too long" never fits the book
@@ -389,14 +405,17 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     systemParts = woken.trim() ? [head, woken] : [head];
     const lead = joinParts([opening, stableBook]);
     const body = joinParts([lead, moving]);
-    if (body.trim()) {
-      /* a book with no words yet has nothing to pick up: it begins */
-      const written = Object.values(chapters || {}).some((c) => c && chapterText(c).trim());
-      if (notesAs === 'assistant') messages.push({ role: 'user', content: written ? PICK_UP : PICK_UP_FIRST });
-      messages.push({ role: notesAs, content: body, cacheSplit: moving.trim() ? lead.length : body.length });
-    }
+    if (body.trim()) messages.push({ role: notesAs, content: body, cacheSplit: moving.trim() ? lead.length : body.length });
   }
-  messages.push(...after);
+  /* a request that would open on the storyteller's words of the app's making — the book as its notebook, or his own
+   * words in its voice before the story — opens on one line of his (a house that wants his turn first takes it, the
+   * rest read it as he says it); a book with no words yet has nothing to pick up: it begins */
+  const ours = messages.length ? messages[0].role === 'assistant' : Boolean(beforePages.length) && beforePages[0].role === 'assistant';
+  if (ours) {
+    const written = Object.values(chapters || {}).some((c) => c && chapterText(c).trim());
+    messages.unshift({ role: 'user', content: written ? PICK_UP : PICK_UP_FIRST });
+  }
+  messages.push(...beforePages, ...after);
   const tokens = estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0);
   /* the book is fitted to the room the answer would like; the request is
    * refused only when, with the least of the book that goes — What it's

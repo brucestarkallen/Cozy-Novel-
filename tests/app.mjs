@@ -8207,6 +8207,151 @@ await test('checked with the judge off, or graded before the ten checks: said, n
   await putAway(d);
 });
 
+heading('the note at the end as he chooses, and words in the storyteller’s own voice (2.6.4)');
+
+const claudePage = (text) => [
+  { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+  { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+  { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+  { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } },
+  { type: 'message_stop' },
+];
+
+await test('the note at the end rides as he chose it — the setup’s words, his, or the storyteller’s own voice — for the book and for scenes alike', async () => {
+  const ins = (extra) => ({ instructions: { system: 'HIS OWN WORDS FIRST', narrator: 'NARR', late: 'BOOK NOTE', lateNarrator: 'SCENE NOTE', partner: '', ...extra } });
+  const b = await makeBook([['Mara kept the light.']], { manual: true });
+  const roles = async () => (await requests()).map((x) => x.body.messages.slice(-2).map((m) => [m.role, m.content]));
+  /* his for the book, the storyteller's own for scenes — each note its own */
+  await setHouse({}, ins({ lateAs: 'user', lateNarratorAs: 'assistant' }));
+  await reset();
+  await script([{ text: 'A page.' }, { text: 'The gate creaks.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mina' });
+  await talk.playSay({ playId: id, text: 'I wait.' });
+  let [w, p] = (await requests()).map((x) => x.body.messages.at(-1));
+  assert.ok(w.role === 'user' && w.content.includes('She waits.') && w.content.endsWith('BOOK NOTE'), 'the book: with his request, last');
+  assert.deepEqual([p.role, p.content], ['assistant', 'SCENE NOTE'], 'a scene: in the narrator’s own voice, last');
+  /* the other way round */
+  await setHouse({}, ins({ lateAs: 'assistant', lateNarratorAs: 'user' }));
+  await reset();
+  await script([{ text: 'Another page.' }, { text: 'The gate shuts.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits more.' });
+  await talk.playSay({ playId: id, text: 'I wait more.' });
+  const own = await roles();
+  assert.deepEqual(own[0][1], ['assistant', 'BOOK NOTE'], 'the book: last, in the writer’s own voice');
+  assert.equal(own[0][0][0], 'user', 'right after what he asks');
+  assert.ok(own[1][1][0] === 'user' && own[1][1][1].includes('I wait more.') && own[1][1][1].endsWith('SCENE NOTE'), 'a scene: with his move');
+  /* the setup's, as before */
+  await setHouse({}, ins({}));
+  await reset();
+  await script([{ text: 'A third page.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She sleeps.' });
+  [w] = (await requests()).map((x) => x.body.messages.at(-1));
+  assert.deepEqual([w.role, w.content], ['system', 'BOOK NOTE']);
+  assert.equal(prompts.lateRoleFor({ lateAs: 'nonsense' }, 'write'), 'system', 'anything else: the setup’s words');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the storyteller’s own voice refused: sent again as the setup’s words, remembered — and the setup’s words refused there too: his', async () => {
+  await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', late: 'BOOK NOTE', partner: '', lateAs: 'assistant' } });
+  const b = await makeBook([['Mara kept the light.']], { manual: true });
+  await script([{ status: 400, message: 'Invalid request: the last message must be a user message, not assistant.' }, { text: 'A page.' }, { text: 'Next page.' }]);
+  const r = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  let sent = (await requests()).map((x) => x.body.messages.at(-1));
+  assert.deepEqual(sent.map((m) => [m.role, m.content]), [['assistant', 'BOOK NOTE'], ['system', 'BOOK NOTE']]);
+  const p = b.ch().passages.at(-1);
+  assert.ok((picked(p).notes || []).some((n) => n.includes('storyteller’s own voice') && n.includes('setup’s words')), JSON.stringify(picked(p).notes));
+  await reset();
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits more.' });
+  sent = (await requests()).map((x) => x.body.messages.at(-1));
+  assert.deepEqual(sent.map((m) => m.role), ['system'], 'remembered: the setup’s words at once');
+  /* a model that takes no system message there either: with his request */
+  await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', late: 'BOOK NOTE', partner: '', lateAs: 'assistant' } });
+  await reset();
+  await script([{ status: 400, message: 'The final message must be a user message (assistant prefill is not supported).' }, { status: 400, message: 'A system message is not allowed after the first message.' }, { text: 'A page.' }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She rests.' })).ok, true);
+  sent = (await requests()).map((x) => x.body.messages.at(-1));
+  assert.deepEqual(sent.map((m) => m.role), ['assistant', 'system', 'user']);
+  assert.ok(sent[2].content.includes('She rests.') && sent[2].content.endsWith('BOOK NOTE'), 'with his request');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the storyteller’s own voice on Claude: his prefill begins the page after it; with thinking set it rides as the setup’s words, and says why', async () => {
+  await setHouse({ shape: 'anthropic', prefill: 'Mara' }, { instructions: { system: 'HIS OWN WORDS FIRST', late: 'BOOK NOTE', partner: '', lateAs: 'assistant' } });
+  const b = await makeBook([['The lamp was cold.']], { manual: true });
+  await script([{ events: claudePage(' lit the lamp.') }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights it.' })).ok, true);
+  let [body] = (await requests()).map((x) => x.body);
+  assert.deepEqual(body.messages.at(-1), { role: 'assistant', content: 'BOOK NOTE\n\nMara' }, 'one started reply: his words, then his prefill');
+  assert.equal(picked(b.ch().passages.at(-1)).text, 'Mara lit the lamp.', 'the page: his prefill and what followed — never the note');
+  await setHouse({ shape: 'anthropic', thinking: 'high' }, { instructions: { system: 'HIS OWN WORDS FIRST', late: 'BOOK NOTE', partner: '', lateAs: 'assistant' } });
+  await reset();
+  await script([{ events: claudePage('A page for Claude.') }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' })).ok, true);
+  [body] = (await requests()).map((x) => x.body);
+  assert.deepEqual([body.messages.at(-1).role, body.messages.at(-1).content], ['system', 'BOOK NOTE']);
+  assert.ok((picked(b.ch().passages.at(-1)).notes || []).some((n) => n.includes('skip its thinking') && n.includes('high')));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('words in the storyteller’s own voice ride where he put them, whose he said, to whom he said — off or empty, nothing changes', async () => {
+  const own = [
+    { id: 'ow1', name: 'Stay Batman', role: 'teller', place: 'before-pages', to: 'both', text: '{{char}} here, still me.' },
+    { id: 'ow2', name: 'Mine', role: 'you', place: 'before-your-message', to: 'write', text: 'BEFORE MY ASK' },
+    { id: 'ow3', name: 'House', role: 'house', place: 'after-your-message', to: 'play', text: 'AFTER HIS MOVE' },
+    { id: 'ow4', on: false, role: 'teller', place: 'after-your-message', to: 'both', text: 'SWITCHED OFF' },
+    { id: 'ow5', role: 'teller', place: 'after-your-message', to: 'both', text: '   ' },
+  ];
+  await setHouse({}, { ownWords: own, instructions: { system: 'HIS OWN WORDS FIRST', narrator: 'NARR', late: '', partner: '' } });
+  const b = await makeBook([['Mara kept the light.']], { manual: true });
+  await script([{ text: 'A page.' }, { text: 'The gate creaks.' }, { text: 'Talk.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mina' });
+  await talk.playSay({ playId: id, text: 'I wait.' });
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Thoughts?' });
+  const [w, p, t] = (await requests()).map((x) => x.body.messages.filter((m) => m.role !== 'system' || x.body.messages.indexOf(m) > 0));
+  const flat = (list) => JSON.stringify(list);
+  /* the writer: his line first (the request opens on the storyteller's words), the words before the story, his own before his request */
+  assert.deepEqual(w.slice(0, 2).map((m) => [m.role, m.content]), [['user', prompts.PICK_UP], ['assistant', 'the writer here, still me.']]);
+  const ask = w.at(-1);
+  assert.ok(ask.role === 'user' && ask.content.startsWith('BEFORE MY ASK') && ask.content.includes('She waits.'), ask.content.slice(0, 120));
+  assert.ok(!flat(w).includes('AFTER HIS MOVE') && !flat(w).includes('SWITCHED OFF'));
+  /* the narrator: its own words with the narrator's name, the setup's after his move — never the writer's own */
+  assert.ok(flat(p).includes('the narrator here, still me.') && !flat(p).includes('BEFORE MY ASK'));
+  assert.deepEqual([p.at(-1).role, p.at(-1).content], ['system', 'AFTER HIS MOVE']);
+  /* the partner: none of it */
+  assert.ok(!flat(t).includes('still me') && !flat(t).includes('BEFORE MY ASK') && !flat(t).includes('AFTER HIS MOVE'));
+  /* all off: the requests are what they were */
+  await setHouse({}, { ownWords: own.map((x) => ({ ...x, on: false })), instructions: { system: 'HIS OWN WORDS FIRST', narrator: 'NARR', late: '', partner: '' } });
+  await reset();
+  await script([{ text: 'Another page.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
+  const [w2] = (await requests()).map((x) => x.body.messages);
+  assert.ok(!flat(w2).includes('still me') && !flat(w2).includes('BEFORE MY ASK') && w2.find((m) => m.role !== 'system').role === 'user' && w2.find((m) => m.role !== 'system').content !== prompts.PICK_UP);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a preset keeps his words in the storyteller’s own voice, and puts them back; one saved before keeps his as they are', async () => {
+  const mine = [{ id: 'ow1', on: true, name: 'Stay Batman', role: 'teller', place: 'before-pages', to: 'both', text: 'Batman here.' }];
+  const house = { instructions: { system: 'BATMAN WORDS' }, you: { name: 'Bruce' }, ownWords: mine };
+  const v = presetsMod.voiceOf(house);
+  assert.deepEqual(v.own.map((w) => w.text), ['Batman here.']);
+  const other = { instructions: { system: 'OTHER' }, ownWords: [] };
+  presetsMod.presetSteps.use(v)(other);
+  assert.deepEqual([other.instructions.system, other.ownWords.map((w) => w.text)], ['BATMAN WORDS', ['Batman here.']]);
+  /* a preset from before keeps his */
+  const old = { boxes: { system: 'OLD', narrator: '', partner: '', late: '', lateNarrator: '', avoid: '' }, name: 'Bruce' };
+  presetsMod.presetSteps.use(old)(other);
+  assert.deepEqual([other.instructions.system, other.ownWords.map((w) => w.text)], ['OLD', ['Batman here.']]);
+  assert.equal(presetsMod.sameVoice(presetsMod.cleanVoice(old), presetsMod.voiceOf(other)), true, 'the old one is the one in use');
+  assert.equal(presetsMod.sameVoice(v, presetsMod.voiceOf({ ...house, ownWords: [] })), false, 'different words: not the same voice');
+});
+
 /* last of all: it lets go of every record this page holds, as a page does when a copy comes back */
 await test('a copy brought back while the page was away: what it kept waiting is let go, never saved over the copy', async () => {
   const b = await makeBook([['Mara kept the light.']]);

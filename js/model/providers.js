@@ -241,6 +241,7 @@ export function learnedFacts(conn, now = Date.now()) {
     drop: Array.isArray(L.drop) ? L.drop : [],
     offThinks: L.offThinks === true,
     noLateSystem: L.noLateSystem === true,
+    noLateVoice: L.noLateVoice === true,
     down: Number.isFinite(L.downAt) && now - L.downAt <= REFUSAL_MEMORY_MS,
     prefillDown: Number.isFinite(L.prefillDownAt),
     context: Number.isFinite(L.context) && L.context > 0 ? L.context : 0,
@@ -705,6 +706,37 @@ export function lateSystemFitted(conn, messages) {
   return out;
 }
 
+/* ---------------------------- the storyteller's own voice at the end (M466) */
+/* His words in the storyteller's own voice that end a request — the note at the
+ * end sent so, or his own-voice words after what he asks — are a reply the
+ * storyteller has already begun: the page is written on from them (SillyTavern
+ * sends an assistant-role note at the end the same way). Where that cannot go,
+ * they ride as the setup's words (a system message) instead, said in what was
+ * sent — and where the setup's words cannot go there either, as his (the late
+ * system's own lesson, below):
+ *  - a model that refused them once (remembered for that model at its address);
+ *  - Claude and DeepSeek with thinking set: a started reply makes the model skip
+ *    its thinking, and his thinking setting is sent exactly. */
+export function hasLateVoice(messages) {
+  const list = messages || [];
+  const last = list[list.length - 1];
+  return Boolean(last && last.role === 'assistant' && last.voice);
+}
+export function lateVoiceFitted(conn, messages) {
+  const list = (messages || []).map((m) => ({ ...m }));
+  let i = list.length;
+  while (i > 0 && list[i - 1].role === 'assistant' && list[i - 1].voice) i--;
+  if (i === list.length) return { messages: list, why: '' };
+  const facts = learnedFacts(conn);
+  const effort = conn && typeof conn.thinking === 'string' ? conn.thinking : '';
+  const profile = prefillProfile(conn);
+  let why = '';
+  if (facts && facts.noLateVoice) why = 'This model would not take words in the storyteller’s own voice at the end of the request, so they rode as the setup’s words (a system message).';
+  else if ((profile === 'anthropic' || profile === 'deepseek') && effort && effort !== 'off' && !(facts && facts.down)) why = `Your words in the storyteller’s own voice at the end rode as the setup’s words (a system message): on this address a reply begun in the storyteller’s words makes the model skip its thinking, and thinking is set to ${effort}.`;
+  if (why) for (let k = i; k < list.length; k++) list[k] = { role: 'system', content: list[k].content };
+  return { messages: list, why };
+}
+
 /* ------------------------------------------------------------- the room */
 
 /* What a model of each house holds when nothing better is known (Cozy
@@ -840,15 +872,23 @@ export function buildRequest(conn, opts = {}) {
   const wire = wireOf(conn);
   const body = {};
   const limit = Number.isFinite(maxTokens) && maxTokens > 0 ? Math.round(maxTokens) : null;
-  const fitted = foldTurns(lateSystemFitted(conn, messages));
-  /* a request that already ends on the story's own words is a reply already started: no prefill on top of it */
-  const endsOnAssistant = fitted.length && fitted[fitted.length - 1].role === 'assistant';
+  const voiced = lateVoiceFitted(conn, messages);
+  const fitted = foldTurns(lateSystemFitted(conn, voiced.messages));
+  /* a request that already ends on the story's own words is a reply already started: no prefill on top of it
+   * (his words in the storyteller's own voice are not the story's: his prefill still begins the page after them) */
+  const endsOnAssistant = fitted.length && fitted[fitted.length - 1].role === 'assistant' && !fitted[fitted.length - 1].voice;
   /* a helper rides with the prefill only when he ticked "Workers riding this connection get it too" —
    * and never a Structured template's: its opening is a page's, and breaks a helper's JSON (Tavern M587) */
   const noPrefill = opts.noPrefill || (worker && (conn.prefillForWorkers !== true || conn.prefillMode === 'structured')) || endsOnAssistant;
   /* structured: his opening is asked of the model through the answer's schema — nothing is handed to it */
   const structured = !noPrefill && !opts.noStructured && !worker ? structuredPlanFor(conn) : null;
   const pf = noPrefill || structured ? { messages: fitted, applied: false } : applyPrefill(fitted, conn);
+  /* his prefill after his words in the storyteller's own voice: one started reply, his words first */
+  if (pf.applied && pf.messages.length > 1) {
+    const before = pf.messages[pf.messages.length - 2];
+    const started = pf.messages[pf.messages.length - 1];
+    if (before.role === 'assistant' && before.voice) pf.messages.splice(pf.messages.length - 2, 2, { ...started, content: `${before.content}\n\n${started.content}` });
+  }
   const facts0 = learnedFacts(conn);
 
   if (wire === 'anthropic') {
@@ -876,7 +916,7 @@ export function buildRequest(conn, opts = {}) {
     const list = [];
     if (system) list.push({ role: 'system', content: system });
     /* the app's own marks never go out */
-    for (const m of pf.messages) { const { cacheSplit, ...rest } = m; list.push(rest); }
+    for (const m of pf.messages) { const { cacheSplit, voice, ...rest } = m; list.push(rest); }
     body.messages = list;
     /* OpenAI's own address names the reply's length max_completion_tokens (its
      * newer models refuse max_tokens); elsewhere, once an address asked for it */
@@ -928,7 +968,7 @@ export function buildRequest(conn, opts = {}) {
     const beta = deepseekBetaBase(conn.url);
     if (beta) url = beta + '/chat/completions';
   }
-  return { url, headers: headersFor(conn), body, wire, house: wire, prefill: pf, structured };
+  return { url, headers: headersFor(conn), body, wire, house: wire, prefill: pf, structured, voiceNote: voiced.why };
 }
 
 /* Pull the answer out, whichever shape came back. Thinking is kept on its own

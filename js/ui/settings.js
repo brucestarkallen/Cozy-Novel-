@@ -12,6 +12,7 @@ import { connFor, connName, partsOf, partsWords, holderOf } from '../novel/write
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from '../novel/prompts.js';
 import { voiceOf, presetsOf, presetInUse, presetSteps, cleanVoice, cleanName, voiceLine, startingVoice, FORMAT as PRESET_FORMAT } from '../novel/presets.js';
 import { listModules, moduleOf, builtinOf, moduleSteps, rideLine, READERS, READER_WORDS, RIDES, RIDES_WORDS } from '../novel/modules.js';
+import { cleanOwn, ownLine, ownSteps, OWN_ROLES, OWN_PLACES, OWN_TO } from '../novel/ownwords.js';
 import { newId, debounce, timeAgo, plural, numberTyped, markTyped } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
@@ -707,8 +708,11 @@ function wordsGroup(hs) {
     modulesField(hs),
     field('A note at the end — the book', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer writes the book: a new page, Another take, Rewrite, Go on, a scene turned into prose. Empty, or Send it off: nothing is sent.'),
     sendIt('lateOff', ins.lateOff, 'Send it', 'Off: your words stay in the box, and nothing is sent until you switch it back on.'),
+    lateAs('lateAs', ins.lateAs),
     field('A note at the end — scenes', box('lateNarrator', 3, 'Optional. Rides after your move, like post-history instructions.'), 'Sent after your move each time the narrator tells a scene you play. Empty, or Send it off: nothing is sent.'),
     sendIt('lateNarratorOff', ins.lateNarratorOff, 'Send it', 'Off: your words stay in the box, and nothing is sent until you switch it back on.'),
+    lateAs('lateNarratorAs', ins.lateNarratorAs),
+    ownWordsField(hs),
     field('Words to avoid', box('avoid', 4, 'One to a line — for example:\na testament to\nshivers down her spine'), 'Words and phrases you never want in the book. The writer, the narrator and your partner are told them, after your own words; the checker marks any that slip through, with a way to write them again. Empty: nothing is sent.'),
     choose('notesAs', [
       ['system', 'The system message (the default)'],
@@ -723,6 +727,94 @@ function wordsGroup(hs) {
 }
 
 /* a note's switch: ticked, it is sent; off, his words wait in the box */
+/* how a note at the end rides: the setup's words (the default), his, or the storyteller's own — each falling back
+ * to the one before where a model will not take it (providers.js) */
+function lateAs(key, cur) {
+  const sel = h('select');
+  for (const [v, l] of [
+    ['system', 'A system message — like SillyTavern’s post-history instructions (the default)'],
+    ['user', 'A user message — as if you wrote it after your request'],
+    ['assistant', 'The storyteller’s own voice — an assistant message'],
+  ]) sel.append(h('option', { value: v, selected: (cur || 'system') === v }, l));
+  sel.addEventListener('change', () => changeHouse((x) => { x.instructions = x.instructions || {}; if (sel.value === 'system') delete x.instructions[key]; else x.instructions[key] = sel.value; }, { now: true }));
+  return field('Sent as', sel, 'As the storyteller’s own voice, the page is written on from your words, as if the storyteller had just said them — the way SillyTavern sends a note at the end with the role “AI Assistant”. A model that will not take that gets it as a system message (said in What was sent, and remembered for that model); one that will not take a system message there gets it as a user message. Claude and DeepSeek with thinking set get it as a system message: a reply begun in the storyteller’s words would skip the thinking.');
+}
+
+/* ------------------------------------------- words in the storyteller's own voice */
+/* Cozy Tavern's M466 (ownwords.js): a few lines the request carries as if the
+ * storyteller had already said them — or as his, or the setup's — each with its
+ * switch, its place and who reads it; each in a sheet of its own. */
+function ownWordsField(hs) {
+  const list = h('div.modlist.ownlist');
+  for (const w of cleanOwn(hs.ownWords)) {
+    list.append(h('button.modrow', { 'data-id': w.id, title: 'Its switch, whose words, where they ride, who reads them, and the words.', onclick: () => openOwnWords(w.id) },
+      h('span.grow', h('b', w.name.trim() || 'Words with no name yet'), h('small', ownLine(w))),
+      icon('right', 16)));
+  }
+  return h('div.field',
+    h('span', 'Words in the storyteller’s own voice'),
+    list,
+    h('div.btnrow', h('button.btn.small', { title: 'A new entry: its words, whose they are, where they ride and who reads them.', onclick: addOwnWords }, icon('plus', 15), 'Add words')),
+    h('em', 'Like SillyTavern’s prompt-manager entries with the role “AI Assistant”, as in Cozy Tavern: a few lines the request carries as if the writer — or the narrator, in a scene — had already said them, so a writer who is Batman reads his own voice on the way in. Or as your words, or the setup’s. Each has its switch, one of three places, and who reads it. {{user}} and {{char}} become the names. Off, or empty: nothing is sent.'));
+}
+
+function addOwnWords() {
+  const id = newId('ow');
+  changeHouse(ownSteps.add({ id, on: true, name: '', role: 'teller', place: 'before-your-message', to: 'both', text: '' }), { now: true });
+  draw();
+  openOwnWords(id, { fresh: true });
+}
+
+function openOwnWords(id, { fresh = false } = {}) {
+  const now = () => cleanOwn(house().ownWords).find((w) => w.id === id);
+  const first = now();
+  if (!first) return;
+  let t = null;
+  let pending = null;
+  const set = (patch, opts) => changeHouse(ownSteps.set(id, patch), opts);
+  /* the words and the name are kept after the typing pause — at once when the sheet closes */
+  const later = (patch) => { pending = { ...(pending || {}), ...patch }; clearTimeout(t); t = setTimeout(flush, 500); };
+  const flush = () => { clearTimeout(t); t = null; if (pending) { const p = pending; pending = null; if (now()) set(p, { now: true }); } };
+  const s = openSheet(first.name.trim() || 'Words in the storyteller’s own voice', { onClose: () => { flush(); if (sheet) draw(); } });
+  s.box.classList.add('modsheet');
+  const on = h('input', { type: 'checkbox', checked: first.on });
+  on.addEventListener('change', () => { set({ on: on.checked }, { now: true }); sayNow(); });
+  const name = h('input', { type: 'text', value: first.name, maxlength: 60, placeholder: 'A name for these words — “Stay Batman”' });
+  name.addEventListener('input', () => { later({ name: name.value }); s.setTitle(name.value.trim() || 'Words in the storyteller’s own voice'); });
+  const pick = (map, cur, key) => {
+    const sel = h('select');
+    for (const [v, l] of Object.entries(map)) sel.append(h('option', { value: v, selected: cur === v }, l));
+    sel.addEventListener('change', () => { set({ [key]: sel.value }, { now: true }); sayNow(); });
+    return sel;
+  };
+  const role = pick(OWN_ROLES, first.role, 'role');
+  const place = pick(OWN_PLACES, first.place, 'place');
+  const to = pick(OWN_TO, first.to, 'to');
+  const words = h('textarea.tall.modtext', { placeholder: 'The words, as the storyteller would say them — “Batman here, still me: I keep what the book has set down, and I talk like myself.”', spellcheck: 'false' });
+  words.value = first.text;
+  const say = h('em');
+  const sayNow = () => { say.textContent = ownLine({ ...(now() || first), on: on.checked, role: role.value, place: place.value, to: to.value, text: words.value }); };
+  words.addEventListener('input', () => { later({ text: words.value }); sayNow(); });
+  sayNow();
+  s.body.append(
+    h('div.field.switchrow', h('label.toggle', on, h('span', 'Send these words')), say),
+    field('Name', name),
+    field('Whose words', role, 'The storyteller’s own: an assistant message, as if the writer (or the narrator, in a scene) had said them. Yours: a user message. The setup’s: a system message, like a preset’s instructions.'),
+    field('Where they ride', place, 'After the book and its notes, before the story; right before what you ask; or after what you ask, before the note at the end. The storyteller’s own words at the very end of the request begin the page — sent as the setup’s words wherever a model will not take that, as the note at the end is.'),
+    field('Who reads them', to),
+    field('The words', words, 'Sent exactly as you write them. {{user}} and {{char}} become the names. Empty: nothing is sent.'),
+    h('div.btnrow', h('button.btn.danger.small', { title: 'These words go — with Undo.', onclick: () => {
+      flush();
+      const all = cleanOwn(house().ownWords);
+      const at = all.findIndex((w) => w.id === id);
+      const row = JSON.parse(JSON.stringify((house().ownWords || []).find((w) => w && w.id === id) || null));
+      changeHouse(ownSteps.remove(id), { now: true });
+      s.close();
+      undoToast('The words are taken out.', () => { if (row) changeHouse(ownSteps.restore(row, at), { now: true }); if (sheet) draw(); });
+    } }, 'Remove these words')));
+  if (fresh) name.focus();
+}
+
 function sendIt(key, off, label, hint) {
   const inp = h('input', { type: 'checkbox', checked: !off });
   inp.addEventListener('change', () => changeHouse((x) => { x.instructions = x.instructions || {}; if (inp.checked) delete x.instructions[key]; else x.instructions[key] = true; }, { now: true }));

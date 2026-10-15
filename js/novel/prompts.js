@@ -103,6 +103,16 @@ export function lateFor(instr, purpose) {
   return '';
 }
 
+/* how his note at the end rides (Settings → Your instructions → Sent as): the setup's words after his request — a
+ * system message, like SillyTavern's post-history instructions (the default) — his own, a user message, or the
+ * storyteller's own voice, an assistant message; a model that refuses one is sent the next (providers.js) */
+export const LATE_ROLES = ['system', 'user', 'assistant'];
+export function lateRoleFor(instr, purpose) {
+  const ins = instr || {};
+  const r = purpose === 'play' ? ins.lateNarratorAs : purpose === 'write' ? ins.lateAs : '';
+  return LATE_ROLES.includes(r) ? r : 'system';
+}
+
 export const DEFAULT_PARTNER = `Talk the book over like a seasoned novelist and editor who loves this story and wants it to be as good as it can be: honest, specific and warm. Say what works and what doesn't, and why. When I'm stuck, offer two or three real ways forward rather than a list of ten, and think about what the people in it would truly do. Keep it short when short will do.`;
 
 /* ------------------------------------------------------- said plainly */

@@ -19,13 +19,16 @@
 import {
   buildRequest, readAnswer, readChunk, wireOf, learnedFacts, learnKey, lessonFrom, familyStyle, cannotStopThinking,
   THINKING_FIELDS, REASONING_REFUSAL, PREFILL_REFUSAL, CONTEXT_REFUSAL, REPLY_TOO_LONG, COMPLETION_FIELD_REFUSAL,
-  KNOB_FIELDS, knobRefused, hasLateSystem, hermesLike, prefillGap, contextFrom, inputFrom, replyLimitFrom, contextOf,
+  KNOB_FIELDS, knobRefused, hasLateSystem, hasLateVoice, lateVoiceFitted, hermesLike, prefillGap, contextFrom, inputFrom, replyLimitFrom, contextOf,
   modelsUrl, headersFor, reportedIdentity, spokenAs, describePrefill, prefillProfile, deepseekBetaBase, structuredPlanFor, prefillPlan,
 } from './providers.js';
 import { estimateTokens } from '../util.js';
 import { makeStructuredDecoder, STRUCTURED_REFUSAL, unwrapStructured, readTemplate } from './structured.js';
 
 /* ------------------------------------------------------------- lessons */
+
+/* a refusal of a request that ends on the storyteller's own words, in the words houses use for it */
+const LATE_VOICE_REFUSAL = /assistant|prefill|prefix|must end with|last message|final message|role/i;
 
 const learners = new Set();
 /* the house hears every lesson and keeps it on the connection */
@@ -41,6 +44,7 @@ export function learn(conn, fact) {
     drop: [...new Set([...((was && was.drop) || []), ...(fact.drop || [])])],
     offThinks: fact.offThinks === true || Boolean(was && was.offThinks),
     noLateSystem: fact.noLateSystem === true || Boolean(was && was.noLateSystem),
+    noLateVoice: fact.noLateVoice === true || Boolean(was && was.noLateVoice),
     downAt: fact.downAt || (was && was.downAt) || null,
     prefillDownAt: fact.prefillDownAt || (was && was.prefillDownAt) || null,
     context: fact.context || (was && was.context) || null,
@@ -523,6 +527,8 @@ export async function ask(conn, opts = {}) {
     if (shape && shape.refuse) return { ok: false, text: '', thinking: '', notes, error: shape.refuse, status: lastStatus || 0 };
     const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined, noStructured: flags.noStructured, noSearch: Boolean(opts.noSearch) });
     if (req.prefill && req.prefill.note && !notes.includes(req.prefill.note)) notes.push(req.prefill.note);
+    /* (said once: after the refusal's own lesson, the same is not said again) */
+    if (req.voiceNote && !notes.some((n) => n.includes('storyteller’s own voice'))) notes.push(req.voiceNote);
     if (req.structured && req.structured.note && !notes.includes(req.structured.note)) notes.push(req.structured.note);
     const sent = { url: req.url, model: req.body && req.body.model, body: snapshotBody(req.body), at: Date.now(), tokens: sizeOf(shape), ...(req.structured ? { structured: true } : {}) };
     /* the started reply and the started thought are part of what comes back */
@@ -794,7 +800,15 @@ export async function ask(conn, opts = {}) {
           lessons++;
           continue;
         }
-        if (hasLateSystem(shape.messages) && /system/i.test(lastError) && !(learnedFacts(conn) || {}).noLateSystem) {
+        /* his words in the storyteller's own voice ending the request, refused: the setup's words from now on for this
+         * model (and, should those be refused too, his — the lesson below) */
+        if (hasLateVoice(lateVoiceFitted(conn, shape.messages).messages) && !(learnedFacts(conn) || {}).noLateVoice && LATE_VOICE_REFUSAL.test(lastError)) {
+          learn(conn, { noLateVoice: true });
+          notes.push('This model would not take your words in the storyteller’s own voice at the end of the request, so they were sent again as the setup’s words (a system message) — and go so for this model from now on.');
+          lessons++;
+          continue;
+        }
+        if (hasLateSystem(lateVoiceFitted(conn, shape.messages).messages) && /system/i.test(lastError) && !(learnedFacts(conn) || {}).noLateSystem) {
           learn(conn, { noLateSystem: true });
           notes.push('This model takes no system message after the request, so your note at the end rode at the end of the request instead.');
           lessons++;
