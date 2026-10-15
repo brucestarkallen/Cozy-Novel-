@@ -21,8 +21,8 @@ import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, NOTE_KINDS, matchCard } from './shape.js';
 import { newId, numberWords } from '../util.js';
-import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, CHOICES_OPEN } from './prompts.js';
-import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail } from './textshape.js';
+import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN } from './prompts.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropHeading } from './textshape.js';
 import { numberedText } from './context.js';
 import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf } from './changes.js';
 import { searchBook } from './search.js';
@@ -142,7 +142,10 @@ export function shapeTelling(words, { cut = false, notes = null } = {}) {
   const story = at >= 0 ? w.slice(0, at) : w;
   const rest = at >= 0 ? w.slice(at) : '';
   const say = (said) => { if (notes && !notes.includes(said)) notes.push(said); };
-  const unglued = dropGluedStrays(story);
+  /* a heading above the telling ("## The Scene") is not the telling (Cozy Tavern M116) */
+  const head = dropHeading(story);
+  if (head.removed) say('A heading above the telling was taken off — Put back what was taken off brings it back.');
+  const unglued = dropGluedStrays(head.text);
   if (unglued.changed) say('A stray character of another script, stuck to the front of a word, was taken off.');
   const fin = finishTail(joinSoftWraps(unglued.text));
   if (fin.removed) {
@@ -150,7 +153,7 @@ export function shapeTelling(words, { cut = false, notes = null } = {}) {
     say(`${what} after the telling ${fin.kinds.length > 1 ? 'were' : 'was'} taken off — Put back what was taken off brings ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
   }
   const telling = fin.removed ? fin.text.replace(/\s+$/, '') + (rest ? '\n\n' : '') : fin.text;
-  return { text: mendMarks(telling, { leaveLast: cut && !rest }).text + rest, tookOff: fin.removed || '' };
+  return { text: mendMarks(telling, { leaveLast: cut && !rest }).text + rest, tookOff: fin.removed || '', tookOffTop: head.removed || '' };
 }
 /* What came off a telling's end, put back where it was — before the ways it
  * offers — as a new version of that answer; the one without it stays one
@@ -159,14 +162,17 @@ export function putBackTelling({ playId, turnId }) {
   const play = store.peek('play', playId);
   const turn = play && (play.turns || []).find((t) => t.id === turnId);
   const v = turn && picked(turn);
-  if (!v || !String(v.tookOff || '').trim() || running.has(`play/${playId}`)) return false;
+  const top = String((v && v.tookOffTop) || '').trim();
+  const end = String((v && v.tookOff) || '').trim();
+  if (!v || (!top && !end) || running.has(`play/${playId}`)) return false;
   const w = String(v.text || '');
   const at = w.toLowerCase().indexOf(CHOICES_OPEN);
   const story = (at >= 0 ? w.slice(0, at) : w).replace(/\s+$/, '');
   const rest = at >= 0 ? w.slice(at) : '';
-  const text = `${story}\n\n${v.tookOff}${rest ? `\n\n${rest}` : ''}`;
-  const { id: _id, at: _at, tookOff: _off, notes: _n, ...keep } = v;
-  store.change('play', playId, turnSteps.addVersion(turnId, newVersion({ ...keep, text, done: Date.now() })), { now: true });
+  const text = `${top ? `${top}\n\n` : ''}${story}${end ? `\n\n${v.tookOff}` : ''}${rest ? `\n\n${rest}` : ''}`;
+  const { id: _id, at: _at, tookOff: _off, tookOffTop: _top, notes: _n, ...keep } = v;
+  /* as he wants it, whole: never made whole again (mend.js) */
+  store.change('play', playId, turnSteps.addVersion(turnId, newVersion({ ...keep, text, done: Date.now(), asIs: true })), { now: true });
   return true;
 }
 
@@ -249,6 +255,8 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   let numbers = null;
   /* the cards it was shown by their first line, and the ones it read whole since */
   let shortCards = new Set();
+  /* the oldest chapters its room left out even as summaries — said under the answer (Cozy Tavern M265: no silent cut) */
+  let leftOut = 0;
   const cardsRead = new Set();
   /* the thinking of every round, kept whole (Cozy Tavern's M77/M80): what
    * each round thought, and between them what happened next */
@@ -313,6 +321,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           const least = a.stats.least - extra.tokens;
           seen = new Set([...(a.stats.wholeIds || []), ...(extra.whole || [])]);
           shortCards = new Set((a.stats.shortCards || []).filter((x) => !cardsRead.has(x)));
+          leftOut = a.stats.omitted || 0;
           return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: replyRoom(c, kind, length), refuse: a.refuse, least };
         },
         stream: true,
@@ -370,6 +379,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     };
     out = await askReading();
     const leakNotes = [];
+    if (leftOut > 0) leakNotes.push(leftOutWords(leftOut, kind === 'play' ? 'the narrator' : 'your partner'));
     const firstWords = cleanAnswer(kind, id, turnId, String(out.text || text), leakNotes);
     if (!firstWords.trim()) {
       const why = out.stopped ? 'stopped before any words came'
@@ -399,6 +409,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       tokensCounted: out.usage && Number.isFinite(out.usage.in) ? true : undefined,
       read: read.length ? read : undefined,
       tookOff: shaped.tookOff || undefined,
+      tookOffTop: shaped.tookOffTop || undefined,
     }), { checkpoint: true, now: true });
     /* what the partner's block asks for: made now, or waiting for Apply. What
      * could not be made is told back for it to put right in the same answer

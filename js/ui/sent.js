@@ -39,6 +39,8 @@ export async function showSent(novelId, key, purpose = '') {
     ['How long', data.ms ? `${(data.ms / 1000).toFixed(1)} seconds` : ''],
     ['Sent', `about ${total.toLocaleString()} tokens${u.in ? ` (the provider counted ${u.in.toLocaleString()}${u.cached ? `, ${u.cached.toLocaleString()} from its cache` : ''})` : ''}`],
     ['Came back', u.out ? `${u.out.toLocaleString()} tokens` : ''],
+    /* thinking asked for and not shown: said here, never over the page */
+    ['Thinking', data.thought || ''],
   ].filter(([, v]) => v);
   s.body.append(h('ul.list', facts.map(([k, v]) => h('li', h('div.grow', h('small', k), v)))));
   const dials = Object.entries(body).filter(([k]) => !['messages', 'system', 'model', 'stream'].includes(k));

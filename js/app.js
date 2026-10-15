@@ -22,6 +22,7 @@ import { anyTalking, repairStaleTurns as talkRepair } from './novel/talk.js';
 import { startChecking, busyAny as checkingAny } from './novel/checker.js';
 import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
+import { mendBook } from './novel/mend.js';
 
 const A = { novelId: null, chapterId: null, booting: true, updateWaiting: false, fromShelf: false, reading: null };
 
@@ -167,6 +168,11 @@ async function showNovel(novelId, chapterId) {
   document.title = `${novel.meta.title} — Cozy Novel`;
   /* a page or a reply left being written by a window that closed is set right */
   repairNow(novelId);
+  /* pages kept before a repair to how a page is made whole: mended once, what came off kept with each (mend.js) */
+  mendBook(novelId).then(({ pages, tellings }) => {
+    const what = [pages ? plural(pages, 'page') : '', tellings ? `${plural(tellings, 'telling')} of a scene` : ''].filter(Boolean).join(' and ');
+    if (what) toast(`${what} kept from before ${pages + tellings === 1 ? 'was' : 'were'} made whole the way new ones are — anything taken off is kept with ${pages + tellings === 1 ? 'it' : 'each'} (⋯ → Put back).`, 8000);
+  }).catch((e) => console.warn(e));
   /* notes kept before the auditor are checked against the book, once, by themselves */
   archivist.firstCheck(novelId);
   /* the helper looks over what it has not read yet */

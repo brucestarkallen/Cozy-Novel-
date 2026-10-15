@@ -647,6 +647,13 @@ export function avoidLine(list) {
   return list && list.length ? `Words and phrases I never want in the book: ${list.map((w) => `“${w}”`).join(', ')}.` : '';
 }
 
+/* The oldest chapters a request left out even as summaries, said to him
+ * under the page or the answer (Cozy Tavern M265: no silent cut) */
+export function leftOutWords(n, who = 'the writer') {
+  const what = n === 1 ? 'The first chapter' : `The first ${numberWords(n).toLowerCase()} chapters`;
+  return `${what} did not fit ${who}’s room even as ${n === 1 ? 'a summary' : 'summaries'}, so ${n === 1 ? 'it was' : 'they were'} left out — a model with more room is given the whole story.`;
+}
+
 /* ------------------------------------------------------- the checker */
 
 export const CHECK_KINDS = ['grammar', 'humanize', 'avoid', 'seam', 'continuity', 'craft'];

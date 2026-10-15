@@ -25,17 +25,34 @@ export const EM = /(^|[^*\w])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![*\w])/g;
  * by blank lines, a lone line break followed by an indent, or one that leaves
  * a sentence hanging and goes on in lowercase, is a wrap the model let
  * through, not a new paragraph: joined with one space. White space only —
- * never a word; a line of marks (a scene break) is never joined. */
+ * never a word; a line of marks (a scene break) is never joined. And a
+ * book's own short lines never are (Cozy Tavern M675 §3): a run of three or
+ * more short lines (a letter, a song, a list), a block whose every line is
+ * indented (verse set in), or the lines under a letter's greeting ("Dear
+ * Kara,") keep their breaks. */
+const GREETING = /^[ \t]*(?:dear(?:est)?|my\s+dear(?:est)?|to|hello|hi)\b[^\n]{0,60},[ \t]*$/i;
 export function joinSoftWraps(text) {
   const given = String(text == null ? '' : text);
   if (!/\n[ \t]*\n/.test(given)) return given;
   const MARK_LINE = new RegExp(`^${SP}*(?:[*\\u2217\\u204e\\uff0a\\u2731_~—–-]+${SP}*)+$`);
   const lines = given.split('\n');
+  /* the line breaks that are the book's own: within a run of short lines, an indented block, a letter */
+  const own = new Set();
+  for (let i = 0; i < lines.length;) {
+    if (!lines[i].trim()) { i++; continue; }
+    let j = i;
+    while (j + 1 < lines.length && lines[j + 1].trim()) j++;
+    const block = lines.slice(i, j + 1);
+    const short = block.length >= 3 && block.slice(0, -1).every((l) => l.trim().length <= 60);
+    const indented = block.length >= 2 && block.every((l) => /^[ \t]+\S/.test(l));
+    if (short || indented || GREETING.test(block[0])) for (let k = i + 1; k <= j; k++) own.add(k);
+    i = j + 1;
+  }
   let out = lines[0];
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     const prev = lines[i - 1];
-    if (MARK_LINE.test(line) || MARK_LINE.test(prev)) out += '\n' + line;
+    if (own.has(i) || MARK_LINE.test(line) || MARK_LINE.test(prev)) out += '\n' + line;
     else if (/^[ \t]+\S/.test(line) && /\S/.test(prev)) out += ' ' + line.replace(/^[ \t]+/, '');
     else if (/[a-z,;:—–-]$/.test(prev) && /^[a-z]/.test(line)) out += ' ' + line;
     else out += '\n' + line;
@@ -55,9 +72,14 @@ export function joinSoftWraps(text) {
  * with the version, and the passage's menu puts it back. */
 const TAIL_SEPARATOR = /^[ \t]*(?:[-–—_=~•·*][ \t]*){3,}$/;
 /* "What will you do?" is the note; "What would you have done, in her place?"
- * is a narrator's own question — of "would", only "would you like" is one */
+ * is a narrator's own question — and so is "How do you forgive a man who
+ * never asked to be forgiven?" (Cozy Tavern M510-40): a note's question is a
+ * short one with a note's verb ("What do you want to happen next?", "How
+ * would you like to proceed?"), or one that names the story's next part */
+const NOTE_VERB = '(?:do|say|choose|decide|want|think|like|prefer|respond|react|try|proceed|continue)';
 const TAIL_META = [
-  /^(?:so,?\s+|now,?\s+|and\s+)?(?:what|how|where)\s+(?:(?:will|do|does|should|shall)\s+you|would\s+you\s+like)\b[^"“”]{0,140}\?$/i,
+  new RegExp(`^(?:so,?\\s+|now,?\\s+|and\\s+)?(?:what|how|where|which)\\s+(?:will|would|do|does|should|shall|can)\\s+you\\s+${NOTE_VERB}\\b(?:\\s+[^\\s"“”?]+){0,4}\\s*\\?$`, 'i'),
+  /^(?=[^"“”]*\byou\b)(?:so,?\s+|now,?\s+|and\s+)?(?:what|how|where|which)\b[^"“”?]{0,120}\b(?:happens?\s+next|next\s+(?:part|scene|chapter|page)|the\s+(?:story|scene|chapter|plot)|this\s+(?:story|scene|chapter))\b[^"“”?]{0,60}\?$/i,
   /^(?:would|do)\s+you\s+(?:like|want)\s+(?:me\s+)?to\b/i,
   /^(?:shall|should)\s+i\s+(?:continue|go\s+on|keep\s+going|proceed|write|carry\s+on)\b/i,
   /^let\s+me\s+know\s+(?:if|what|how|whether|when)\b/i,
@@ -139,6 +161,34 @@ export function finishTail(text, { minLeft = 200 } = {}) {
   const at = (piece) => { const i = given.indexOf(piece); return i < 0 ? Infinity : i; };
   const inOrder = taken.map((piece, k) => ({ piece, k, i: at(piece) })).sort((a, b) => a.i - b.i || a.k - b.k).map((x) => x.piece);
   return { text: page, removed: inOrder.join('\n\n'), kinds: [...(tracking ? ['tracking'] : []), ...(noted ? ['note'] : [])] };
+}
+
+/* A HEADING ABOVE A NEW PAGE IS NOT THE STORY (Cozy Tavern M116). The
+ * writer is told never to title a page; one that does anyway ("# Chapter
+ * Three: The Storm", "**Chapter 3**", "## The Scene", the chapter's own name
+ * on a line of its own) had it kept as the page's first line — drawn inside
+ * the chapter, sent back as story on every later page, printed twice in a
+ * book sent out. Only a first line that is nothing but such a heading — a
+ * Markdown heading, or a chapter's or part's heading, or the chapter's name,
+ * in bold or not — with story after it; a line of marks is a scene break and
+ * stays. What comes off is kept with the version (Put back). */
+const NUMBER_WORDS = 'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|final';
+const CHAPTER_HEAD = new RegExp(`^(?:chapter|ch\\.|part|book|prologue|epilogue|interlude)(?:\\s+(?:\\d+|[ivxlcdm]+|(?:${NUMBER_WORDS})(?:[\\s-]+(?:${NUMBER_WORDS}))*))?\\s*(?:[:.—–-]+\\s*\\S.{0,100})?$`, 'i');
+export function dropHeading(text, { names = [], minLeft = 200 } = {}) {
+  const given = String(text == null ? '' : text);
+  const none = { text: given, removed: '' };
+  const m = /^\s*([^\n]+)\n/.exec(given);
+  if (!m) return none;
+  const line = m[1].trim();
+  if (isBreakLine(line) || line.length > 160) return none;
+  const md = /^#{1,6}\s+\S/.test(line);
+  const bare = line.replace(/^#{1,6}\s+/, '').replace(/\s*#+$/, '').replace(/^(\*\*|__)(.+)\1$/, '$2').replace(/^(\*|_)(.+)\1$/, '$2').trim();
+  const fold = (x) => String(x || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const named = names.some((n) => fold(n) && fold(n) === fold(bare));
+  if (!bare || !(md || named || CHAPTER_HEAD.test(bare))) return none;
+  const rest = given.slice(m.index + m[0].length).replace(/^\s+/, '');
+  if (rest.replace(/\s+/g, ' ').trim().length < minLeft) return none;
+  return { text: rest, removed: line };
 }
 
 /* THE MARKS A MODEL LEFT OPEN ARE CLOSED (Cozy Tavern M458, M476, M490 —

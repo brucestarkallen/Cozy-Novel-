@@ -131,6 +131,9 @@ def answer_for(body):
     # two writers, two pages: the thinking model lights the lamp (the judge's head to head tells them apart)
     if body.get("model") == "fake-thinker" and "THE LAMP" in last_user:
         words.append("LAMP LIT.")
+    # a writer that titles its page anyway (the page takes the heading off and keeps it)
+    if "HEADING PLEASE" in last_user:
+        words.insert(0, "# Chapter Three: The Storm")
     return "\n\n".join(words)
 
 

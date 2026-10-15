@@ -859,12 +859,14 @@ export async function ask(conn, opts = {}) {
     if (!opened) noticeOff(conn, thinking);
     if (flags.usageTried) learn(conn, { drop: ['stream_options'] });
     const extra = { thinkTokens: Number(out.thinkTokens) || 0, hiddenThought: Boolean(out.hiddenThought), ...(emptySaid ? { emptyWhy: emptySaid } : {}) };
-    /* thinking asked for, and none came back: said quietly with the answer (Tavern M348, M351) */
+    /* thinking asked for, and none came back: kept with what was sent, beside
+     * the dials — never said under his page every time (Cozy Tavern M521:
+     * a finished product with no debug messaging over the story) */
     const askedThought = Boolean(conn.thinking) && conn.thinking !== 'off' && THINKING_FIELDS.some((f) => f in (req.body || {}));
-    if (askedThought && String(text).trim() && !String(thinking).trim()) {
-      notes.push(extra.thinkTokens > 0 || extra.hiddenThought
+    if (askedThought && String(text).trim() && !String(thinking).trim() && sent) {
+      sent.thought = extra.thinkTokens > 0 || extra.hiddenThought
         ? `It thought${extra.thinkTokens ? ` (${extra.thinkTokens.toLocaleString()} tokens)` : ''}, but its provider does not show the thinking.`
-        : 'Thinking was asked for, and none came back — this model or its provider may not think at this setting.');
+        : 'Thinking was asked for, and none came back — this model or its provider may not think at this setting.';
     }
     if (out.finish === 'error') {
       /* broken off partway: what arrived is kept, and said to be cut */

@@ -203,6 +203,27 @@ export function retireIfSeen(novelId, chapterId, passageId, versionId = null) {
   store.change('chapter', chapterId, chapterSteps.retire({ key: versionId ? passageId + SIG_SEP + vid : passageId, text, at: Date.now(), ...where }));
 }
 
+/* A version's words mended in place (mend.js: what was never the story taken
+ * off a page kept before a repair) — what the helper read of it is moved to
+ * the mended words, so nothing is read again for words that only lost what
+ * it never read as story: where it was marked read, its reading, the
+ * readings that point to it, and its place among those set aside */
+export function resign(novelId, chapterId, pid, vid, oldText, newText) {
+  const from = vid + SIG_SEP + hashText(oldText || '');
+  const to = vid + SIG_SEP + hashText(newText || '');
+  if (from === to || !store.peek('novel', novelId)) return;
+  store.change('novel', novelId, (n) => {
+    const m = n.memory || (n.memory = {});
+    const seen = m.seen && m.seen[chapterId];
+    if (seen && seen[pid] === from) seen[pid] = to;
+    const r = m.readings && m.readings[pid] && m.readings[pid][vid];
+    if (r && r.sig === from) r.sig = to;
+    for (const byV of Object.values(m.readings || {})) for (const x of Object.values(byV || {})) if (x && x.in && x.in.pid === pid && x.in.vid === vid && x.in.sig === from) x.in.sig = to;
+    const a = m.aside && m.aside[pid];
+    if (a && a.sig === from) a.sig = to;
+  }, { checkpoint: true });
+}
+
 /* A chapter's passages are about to be replaced whole (an earlier copy of it
  * brought back): whatever the helper had read that goes, or reads otherwise
  * now, is kept for it — so what came only from those words can be taken back. */

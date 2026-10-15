@@ -85,6 +85,15 @@ export function rootOf(v) {
 }
 export const howOf = (v) => (v && (v.rootHow || v.how)) || '';
 export const bornOf = (v) => (v ? v.rootAt || v.done || v.at || 0 : 0);
+/* What was taken off a page — a heading above it, a note or tracking after
+ * it — kept with a version made from it in place (a fix, his partner's
+ * words, a few words written again, his edit that keeps its end), so its
+ * Put back stays (Cozy Tavern M46/M55: a copy made field by field dropped
+ * what was not on its list) */
+export function keptTail(v) {
+  if (!v) return {};
+  return { ...(String(v.tookOff || '').trim() ? { tookOff: v.tookOff } : {}), ...(String(v.tookOffTop || '').trim() ? { tookOffTop: v.tookOffTop } : {}) };
+}
 /* the two read the same at their end: the last words untouched */
 export function sameEnd(a, b) {
   const tail = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(-40);
@@ -433,11 +442,20 @@ export const chapterSteps = {
     checksBack(c, copy.id);
   },
   removePassage: (pid) => (c) => { c.passages = c.passages.filter((p) => p.id !== pid); },
-  /* a new version on a passage (if not there yet), shown */
+  /* a new version on a passage (if not there yet), shown — knowing the one
+   * that was on show when it came (`was`): if it goes unkept (nothing came,
+   * Stop before a word, its writer's window closed, an Undo), that one is on
+   * show again, never simply the newest (Cozy Tavern M364) */
   addVersion: (pid, version) => (c) => {
     const p = findPassage(c, pid);
     if (!p) return;
-    if (!findVersion(p, version.id)) p.versions.push(JSON.parse(JSON.stringify(version)));
+    if (!findVersion(p, version.id)) {
+      const shown = picked(p);
+      const copy = JSON.parse(JSON.stringify(version));
+      /* (a copy of another version brings that one's `was`: this one's is the version on show now) */
+      if (shown) copy.was = shown.id; else delete copy.was;
+      p.versions.push(copy);
+    }
     p.pick = p.versions.findIndex((v) => v.id === version.id);
   },
   /* fields of one version set to these values */
@@ -463,8 +481,10 @@ export const chapterSteps = {
     const p = findPassage(c, pid);
     if (!p || p.versions.length < 2) return;
     const shown = picked(p);
+    const gone = findVersion(p, vid);
     p.versions = p.versions.filter((v) => v.id !== vid);
-    const keep = shown && shown.id !== vid ? p.versions.findIndex((v) => v.id === shown.id) : p.versions.length - 1;
+    const back = gone && gone.was ? p.versions.findIndex((v) => v.id === gone.was) : -1;
+    const keep = shown && shown.id !== vid ? p.versions.findIndex((v) => v.id === shown.id) : back >= 0 ? back : p.versions.length - 1;
     p.pick = Math.max(0, keep);
   },
   pick: (pid, vid) => (c) => {
@@ -588,7 +608,12 @@ export const turnSteps = {
   addVersion: (tid, version) => (d) => {
     const t = (d.turns || []).find((x) => x.id === tid);
     if (!t) return;
-    if (!t.versions.some((v) => v.id === version.id)) t.versions.push(JSON.parse(JSON.stringify(version)));
+    if (!t.versions.some((v) => v.id === version.id)) {
+      const shown = picked(t);
+      const copy = JSON.parse(JSON.stringify(version));
+      if (shown) copy.was = shown.id; else delete copy.was;
+      t.versions.push(copy);
+    }
     t.pick = t.versions.findIndex((v) => v.id === version.id);
   },
   setVersion: (tid, vid, patch) => (d) => {
@@ -607,8 +632,10 @@ export const turnSteps = {
     const t = (d.turns || []).find((x) => x.id === tid);
     if (!t || t.versions.length < 2) return;
     const shown = picked(t);
+    const gone = t.versions.find((v) => v.id === vid);
     t.versions = t.versions.filter((v) => v.id !== vid);
-    const keep = shown && shown.id !== vid ? t.versions.findIndex((v) => v.id === shown.id) : t.versions.length - 1;
+    const back = gone && gone.was ? t.versions.findIndex((v) => v.id === gone.was) : -1;
+    const keep = shown && shown.id !== vid ? t.versions.findIndex((v) => v.id === shown.id) : back >= 0 ? back : t.versions.length - 1;
     t.pick = Math.max(0, keep);
   },
   set: (patch) => (d) => { Object.assign(d, patch); },

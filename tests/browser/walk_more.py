@@ -1070,12 +1070,13 @@ async def scenario_notes(b):
     n = await novel()
     card = n['notes']['people'][0]
     check('a card renamed by his hand keeps its old name among the others it goes by', card['name'] == 'Mara Venn-Hale' and old_name in (card.get('aka') or []) and card.get('about') == 'TYPED AND SAVED.', card)
-    # what its model would not read: said, with Read it again
+    # what its model would not read: said where the passage stands now, with why and Read it again
+    # (a part no longer in the book is not listed — so a passage that is there)
     pid = await pg.evaluate("document.querySelector('#passages .passage').dataset.id || ''")
-    await pg.evaluate(f"import('/js/store.js').then((s) => s.change('novel', '{nid}', (n) => {{ n.memory.aside = {{ 'p-x': {{ label: 'Chapter One, passage 9', why: 'its answer could not be read', at: Date.now() }} }}; }}, {{ now: true }}))")
+    await pg.evaluate(f"import('/js/store.js').then((s) => s.change('novel', '{nid}', (n) => {{ n.memory.aside = {{ '{pid}': {{ label: 'Chapter One, passage 9', why: 'its answer could not be read', at: Date.now() }} }}; }}, {{ now: true }}))")
     await pg.wait_for_timeout(600)
     aside = await pg.inner_text('#sidePane .lightcard.aside') if await pg.locator('#sidePane .lightcard.aside').count() else ''
-    check('a part its model would not read is said in the notes, with why and Read it again', 'Chapter One, passage 9' in aside and 'could not be read' in aside and await pg.locator('#sidePane .lightcard.aside button:has-text("Read it again")').count() == 1, aside)
+    check('a part its model would not read is said in the notes where it stands now, with why and Read it again', pid and 'Chapter One, passage 1' in aside and 'could not be read' in aside and await pg.locator('#sidePane .lightcard.aside button:has-text("Read it again")').count() == 1, aside)
     await pg.click('#sidePane .lightcard.aside button:has-text("Read it again")'); await pg.wait_for_timeout(500)
     n = await novel()
     check('Read it again takes it off the list', not (n.get('memory') or {}).get('aside'), (n.get('memory') or {}).get('aside'))
@@ -1448,6 +1449,53 @@ async def scenario_suggestions_more(b):
     await pg.wait_for_timeout(300)
     errs = [l for l in logs if l.startswith('PAGEERROR')]
     check('no page errors (Suggestions, the edit box)', not errs, errs[:5])
+    await pg.close()
+
+async def scenario_page_whole(b):
+    """the page made whole: a heading taken off and put back from the passage's menu; pages kept from before mended once when the book opens"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Whole Page')
+    await add_conn(pg)
+    await write(pg, 'HEADING PLEASE')
+    prose = await pg.inner_text('#passages .passage >> nth=-1')
+    check('a heading the writer put above a new page is not on the page', 'Chapter Three: The Storm' not in prose and prose.strip().startswith('Rain hammered'), prose[:120])
+    await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    item = pg.locator('.menu-pop button:has-text("Put back the heading taken off its top")')
+    hint = await item.inner_text() if await item.count() else ''
+    check('the passage’s menu offers it back, saying what it does', await item.count() == 1 and 'The heading the writer put above the story' in hint, hint)
+    await item.click(); await pg.wait_for_timeout(500)
+    prose = await pg.inner_text('#passages .passage >> nth=-1')
+    check('Put back puts the heading back at the top, as a new version', 'Chapter Three: The Storm' in prose.split('\n')[0] and '2 / 2' in await pg.inner_text('.passage.selected .pctl'), prose[:160])
+    # a page kept from before, with tracking and a note after it: mended once, when the book opens
+    await pg.evaluate("""async () => {
+      const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const D = (await import('/js/ui/desk.js')).deskState();
+      const c = store.peek('chapter', D.chapterId);
+      const old = shape.newPassage('ai', 'Mara counted the ships that night, one by one, until the last light went under the edge of the world and only the lamp was left. ' + 'The wind came round to the west and the glass sang in its frame. '.repeat(2) + '\\n\\n{PULSE}\\nMara: tired\\n{/PULSE}\\n\\nI hope this captures the scene.', { how: 'write' });
+      store.change('chapter', D.chapterId, shape.chapterSteps.addPassage(old), { now: true });
+      store.change('novel', D.novelId, (n) => { n.memory = n.memory || {}; delete n.memory.mended; }, { now: true });
+      await store.flush();
+    }""")
+    hash_ = await pg.evaluate('location.hash')
+    await pg.goto(f'http://127.0.0.1:{PORT}/')
+    await pg.wait_for_selector('#shelf:not([hidden]) #books > *', timeout=8000)
+    await pg.goto(f'http://127.0.0.1:{PORT}/{hash_}')
+    await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
+    try:
+        await pg.wait_for_function("document.querySelector('#toast') && /made whole the way new ones are/.test(document.querySelector('#toast').textContent)", timeout=8000)
+        toast = await pg.inner_text('#toast')
+    except Exception:
+        toast = await pg.evaluate("document.querySelector('#toast') ? document.querySelector('#toast').textContent : ''")
+    prose = await pg.inner_text('#passages .passage >> nth=-1')
+    check('a page kept from before is made whole when the book opens, and he is told', '1 page kept from before was made whole the way new ones are' in toast and '{PULSE}' not in prose and 'I hope this captures' not in prose, (toast, prose[-160:]))
+    await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    check('what came off it is kept, to put back', await pg.locator('.menu-pop button:has-text("Put back what was taken off its end")').count() == 1)
+    await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (the page made whole)', not errs, errs[:5])
     await pg.close()
 
 async def scenario_auto(b):
@@ -1874,7 +1922,7 @@ async def main():
             async def offline(b):
                 """the server stops under an open page, then comes back"""
                 await scenario_offline(b, env)
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_suggestions_more, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_suggestions_more, scenario_page_whole, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

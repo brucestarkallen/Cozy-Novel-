@@ -15,9 +15,9 @@ import { ask, emptyWhy, stripControlLeak } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
-import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays } from './textshape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, cutAtEnd, sameEnd, picked, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
+import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropHeading, straysIn } from './textshape.js';
 import { renameIn } from './names.js';
 
 /* -------------------------------------------------------------- roles */
@@ -108,6 +108,13 @@ function bookNow(novelId) {
   const chapters = {};
   for (const id of (novel && novel.order) || []) { const c = store.peek('chapter', id); if (c) chapters[id] = c; }
   return { novel, chapters };
+}
+
+/* whether anyone checks the writing (checker.js checkerConn: his choice, or the helper's; "off" is nobody) */
+function someoneChecks(h) {
+  const roles = (h && h.roles) || {};
+  if (roles.checker === 'off') return false;
+  return Boolean((roles.checker && connById(h, roles.checker)) || connFor(h, 'helper'));
 }
 
 /* before anything is added to the page: is there a writer, and is the book free? */
@@ -332,6 +339,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     const notes = [...(out.notes || [])];
     /* the chapter open told in part to fit its model's room: he is told too, not only the writer */
     if (told && build.target && build.target.chapterId && Array.isArray(told.wholeIds) && !told.wholeIds.includes(build.target.chapterId)) notes.push('This chapter was longer than the writer’s room, so it was sent its opening and the words right before this point, with the middle left out.');
+    if (told && told.omitted > 0) notes.push(leftOutWords(told.omitted));
     if (leak.leaked) notes.push(leak.ranPast ? 'The writer ran past the end of its answer and began writing your next request — the words before that were kept.' : 'The words before the provider’s leak were kept.');
     let answer = mode === 'append' ? unfence(leak.text).replace(/\s+$/, '') : tidyAnswer(leak.text);
     /* the page made whole before it is kept — white space and its end only,
@@ -339,7 +347,14 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
      * model let through joined; a note to him after the story taken off and
      * kept with the version, to put back from the passage's menu */
     let tookOff = '';
+    let topOff = '';
     if (how !== 'selection') {
+      /* a heading above a new page — never one carried on (Cozy Tavern M116) */
+      if (mode !== 'append') {
+        const ch = store.peek('chapter', chapterId);
+        const head = dropHeading(answer, { names: [ch && ch.name].filter(Boolean) });
+        if (head.removed) { answer = head.text; topOff = head.removed; notes.push('A heading the writer put above the page was taken off — the passage’s menu puts it back.'); }
+      }
       answer = joinSoftWraps(answer);
       /* carried on: the story the passage already holds counts toward what must stay — the new part still has to bring some */
       const held = mode === 'append' && original ? String(original.text || '').replace(/\s+/g, ' ').trim().length : 0;
@@ -361,6 +376,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       const unglued = dropGluedStrays(finalText, { from });
       if (unglued.changed) notes.push('A stray character of another script, stuck to the front of a word, was taken off.');
       finalText = mendMarks(unglued.text, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
+      /* one standing loose ("the 틀 door") is not taken off by itself — a word may hang on it: said, for the checker to mend or for him (Cozy Tavern M119) */
+      const loose = straysIn(finalText).filter((x) => x.start >= from);
+      if (loose.length) notes.push(`A stray character of another script stands in it (“…${loose[0].words}…”) — ${someoneChecks(h) ? 'the checker offers to mend it, or Edit takes it out' : 'Edit takes it out'}.`);
     }
     /* a name changed everywhere while this was written: the page reads it as
      * the book does now (Cozy Tavern's M730 — work begun before the change is
@@ -424,8 +442,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       conn: connName(conn),
       sent: more ? original.sent : out.sent ? key : undefined,
       sentMore: more ? (out.sent ? [...(original.sentMore || []), key] : original.sentMore) : undefined,
-      /* carried on: what came off the first part is kept beside what came off now */
-      tookOff: [mode === 'append' && original ? original.tookOff : '', tookOff].filter((x) => String(x || '').trim()).join('\n\n') || undefined,
+      /* carried on: what came off the first part is kept beside what came off now; a few words written again keep what their passage had (keptTail) */
+      ...(how === 'selection' ? {} : { tookOff: [mode === 'append' && original ? original.tookOff : '', tookOff].filter((x) => String(x || '').trim()).join('\n\n') || undefined }),
+      ...(topOff ? { tookOffTop: topOff } : {}),
       words: countWords(finalText),
       done: Date.now(),
     };
@@ -644,7 +663,7 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   /* what wakes a rule, read before the new version shows */
   const moment = momentOf(chapter, p, note);
   /* a few words rewritten in place: the rest are the passage's as they were — his own, or from before the checker began, stay so (Cozy Tavern's M607) */
-  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV) });
+  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV), ...keptTail(baseV) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
@@ -741,14 +760,18 @@ export function addBreak({ chapterId, after = null }) {
   return passage.id;
 }
 
-/* What was taken off the end of a page as a note to him, put back as it came
- * — a new version, the page without it one arrow away. */
+/* What was taken off a page — a heading above it, a note to him or a block
+ * of tracking after it — put back where it stood, as it came: a new version,
+ * the page without it one arrow away. */
 export function putBackTail({ novelId, chapterId, passageId }) {
   const chapter = store.peek('chapter', chapterId);
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   const now = p && picked(p);
-  if (!now || !String(now.tookOff || '').trim()) return false;
-  const t = `${String(now.text || '').replace(/\s+$/, '')}\n\n${now.tookOff}`;
+  const top = String((now && now.tookOffTop) || '').trim();
+  const end = String((now && now.tookOff) || '').trim();
+  if (!now || (!top && !end)) return false;
+  const body = String(now.text || '').replace(/\s+$/, '');
+  const t = `${top ? `${top}\n\n` : ''}${body}${end ? `\n\n${now.tookOff}` : ''}`;
   const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
@@ -768,7 +791,7 @@ export function saveEdit({ novelId, chapterId, passageId, text, fromId = null })
   if (t === String(now.text || '')) return false;
   if (!t.trim()) return false;
   /* his words changed inside a passage cut short: it still stops where it stopped, and Go on stays — unless he wrote its end himself (Tavern M511-1) */
-  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...(sameEnd(now.text, t) ? endOf(now) : {}) });
+  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...(sameEnd(now.text, t) ? { ...endOf(now), ...keptTail(now) } : {}) });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
   recount(novelId);

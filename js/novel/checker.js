@@ -22,7 +22,7 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, howOf, bornOf, chapterText } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, howOf, bornOf, chapterText } from './shape.js';
 import { numberedText, shortOf, notesBehind } from './context.js';
 import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
@@ -847,7 +847,7 @@ function keepWords(novelId, w, next, rest) {
     store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, v.id, entry), { now: true });
   } else {
     /* words fixed in place: where the version stops goes with them (cut short, stopped — its Go on stays: Tavern M511-1) */
-    const version = newVersion({ text: next, how: 'suggested', round: e.round, from: v.id, words: countWords(next), ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v) });
+    const version = newVersion({ text: next, how: 'suggested', round: e.round, from: v.id, words: countWords(next), ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v), ...keptTail(v) });
     store.change('chapter', chapter.id, chapterSteps.addVersion(p.id, version), { now: true });
     store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, version.id, entry), { now: true });
   }
