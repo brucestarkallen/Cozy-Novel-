@@ -10097,6 +10097,76 @@ await test('a lorebook taken out and brought back in keeps each entry’s kind a
   assert.ok(prompts.writeRequest({ chapterLabel: 'Chapter Two', direction: 'They fight.', length: 'auto' }).includes('Carry what I asked for'));
 });
 
+await test('a book written before the bibliography heals by itself when it opens: its pages’ facts are filled in first, then its notes are checked once — a card grown into a record of scenes becomes a portrait, every lasting detail kept in the bibliography; never asked again', async () => {
+  const b = await makeBook([['Hae-won held her shoulders up as if bracing against cold.', 'Fine lines sat at the corners of Hae-won’s eyes.', 'Hae-won squared her glass with the table edge. She did the water-bottle trick and said nothing.']], { manual: true });
+  const record = 'An old friend of Mina from school. Holds her shoulders up as if bracing against cold. Has fine lines at the corners of her eyes. Squares her glass with the table edge. Did the water-bottle trick at the bar and said nothing.';
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people: [{ id: 'pe-h', name: 'Hae-won', aka: [], about: record, ties: '', now: '' }], places: [], lore: [], threads: [] }), { now: true });
+  markReadBefore212(b);
+  /* checked by the check of 2.4–2.11 already */
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { at: 1, reads: 0, v: 2, checked: true } }), { now: true });
+  assert.equal(archivist.firstCheck(b.novelId), true, 'a check is owed');
+  assert.equal(archivist.firstCheck(b.novelId), false, 'once');
+  const portrait = 'Mina’s old friend from school — guarded, exact, and quiet about what she feels.';
+  await script([
+    { bib: true, text: JSON.stringify({ bibliography: [
+      { source: 'Chapter One, passage 1', facts: [{ name: 'Hae-won', kind: 'people', fact: 'Holds her shoulders up as if bracing against cold.', evidence: 'held her shoulders up as if bracing against cold' }] },
+      { source: 'Chapter One, passage 2', facts: [{ name: 'Hae-won', kind: 'people', fact: 'Fine lines at the corners of her eyes.', evidence: 'Fine lines sat at the corners of Hae-won’s eyes' }] },
+      { source: 'Chapter One, passage 3', facts: [{ name: 'Hae-won', kind: 'people', fact: 'Squares her glass with the table edge.', evidence: 'Hae-won squared her glass with the table edge' }] }] }) },
+    { text: JSON.stringify({ people: [{ name: 'Hae-won', about: portrait, why: 'a record of one evening, its details in the bibliography' }], clear: true, verdict: 'The notes hold true to the book.' }) }]);
+  for (let i = 0; i < 3; i++) await archivist.run(b.novelId);
+  const asks = (await requests()).map((r) => r.body.messages.at(-1).content);
+  const fill = asks.findIndex((a) => a.includes('bibliography was kept'));
+  const check = asks.findIndex((a) => a.includes(prompts.AUDIT_ASK));
+  assert.ok(fill >= 0 && check > fill, `filled first, then checked: ${fill}, ${check}`);
+  assert.equal(asks.filter((a) => a.includes(prompts.AUDIT_ASK)).length, 1, 'checked once');
+  assert.equal(b.novel().notes.people[0].about, portrait, 'the card is a portrait now');
+  assert.deepEqual(bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) })[0].facts.map((f) => f.fact), ['Holds her shoulders up as if bracing against cold.', 'Fine lines at the corners of her eyes.', 'Squares her glass with the table edge.']);
+  await reset();
+  await archivist.run(b.novelId);
+  assert.equal((await requests()).length, 0, 'never asked again');
+  await putAway(b);
+});
+
+await test('with Fill it from the book off, a book checked by the check of before is not checked again for a portrait it has nothing to leave its details to; notes from before any check still are', async () => {
+  const b = await makeBook([['Mara kept the light.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people: [{ id: 'pe-m', name: 'Mara', aka: [], about: 'A keeper.', ties: '', now: '' }], places: [], lore: [], threads: [] }), { now: true });
+  markReadBefore212(b);
+  store.change('novel', b.novelId, shape.novelSteps.setPref('bibAuto', 'off'), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { at: 1, reads: 0, v: 2, checked: true } }), { now: true });
+  assert.equal(archivist.firstCheck(b.novelId), true);
+  await archivist.run(b.novelId);
+  assert.equal((await requests()).length, 0, 'nothing asked');
+  assert.equal(b.novel().memory.audit.owed, undefined, 'and nothing owed');
+  /* notes from before any check: checked, bibliography or not */
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: null }), { now: true });
+  assert.equal(archivist.firstCheck(b.novelId), true);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'The notes hold true to the book.' }) }]);
+  await archivist.run(b.novelId);
+  assert.equal((await requests()).filter((r) => r.body.messages.at(-1).content.includes(prompts.AUDIT_ASK)).length, 1);
+  await putAway(b);
+});
+
+await test('a check that runs while the old pages’ facts are still being filled in leaves the owed one owed: it is made again once they are in', async () => {
+  const long = (k) => `Mara walked the long shore of passage ${k}. ${'The tide came in and went out again over the grey stones. '.repeat(230)}`;
+  const b = await makeBook([[1, 2, 3, 4, 5].map(long)], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people: [{ id: 'pe-m', name: 'Mara', aka: [], about: 'A keeper.', ties: '', now: '' }], places: [], lore: [], threads: [] }), { now: true });
+  markReadBefore212(b);
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { at: 1, reads: 0, v: 2, checked: true } }), { now: true });
+  archivist.firstCheck(b.novelId);
+  /* a check due meanwhile (six readings, or his asking) */
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Held true.' }) }, { text: JSON.stringify({ clear: true, verdict: 'Held true again.' }) }]);
+  await archivist.run(b.novelId);
+  assert.ok(archivist.bibDue(b.novelId).length > 0, 'still filling');
+  assert.equal(b.novel().memory.audit.owed, 'portrait', 'the owed check stays owed');
+  for (let i = 0; i < 4 && b.novel().memory.audit.owed; i++) await archivist.run(b.novelId);
+  const checks = (await requests()).filter((r) => r.body.messages.at(-1).content.includes(prompts.AUDIT_ASK));
+  assert.equal(checks.length, 2, 'the one due, then the one owed');
+  assert.equal(b.novel().memory.audit.owed, undefined);
+  assert.equal(archivist.bibDue(b.novelId).length, 0);
+  await putAway(b);
+});
+
 await test('a name in italics written with underscores is still the name: marked in the page, changed everywhere with it, and found by the same words across chapters', async () => {
   const f = bib.makeFinder(bib.nameForms([bib.tidyEntry(bib.newEntry({ name: 'Rukia', kind: 'people', line: 'x' }))], {}));
   const t = '_Rukia_ ran. Rukia_Kuchiki is no name.';

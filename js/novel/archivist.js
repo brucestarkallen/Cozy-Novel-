@@ -1273,6 +1273,8 @@ export async function run(novelId) {
       const checksLeft = await checkSummaries(novelId, conn);
       /* the bibliography filled for pages read before it was kept, a few a run (bibliography.js) */
       const bibLeft = await bibBackfill(novelId, conn);
+      /* the check a book opened since the check learned more owes, once its facts are in */
+      owedCheck(novelId, conn, bibLeft);
       await keepTheBook(novelId, conn);
       await auditNotes(novelId, conn);
       failures.delete(novelId);
@@ -2804,9 +2806,11 @@ function triedKeeping(novelId, keys, asked) {
  * left for him to look at, and each change with its why. Nothing waits on
  * it: it runs once everything else is read. */
 export const AUDIT_EVERY = 6;
-/* what a check does, by version — 2: it folds repeats and says why. Notes
- * checked under an earlier one are checked again once, by themselves. */
-export const AUDIT_V = 2;
+/* what a check does, by version — 2: it folds repeats and says why; 3: a
+ * person's card is a short portrait, its lasting details in the bibliography
+ * (2.12). Notes checked under an earlier one are checked again once, by
+ * themselves — once the bibliography holds the book's facts (owedCheck). */
+export const AUDIT_V = 3;
 export function auditDue(novel) {
   const m = (novel && novel.memory) || {};
   const notes = (novel && novel.notes) || {};
@@ -2824,8 +2828,26 @@ export function firstCheck(novelId) {
   const a = (novel.memory && novel.memory.audit) || null;
   if (a && (a.v || 1) >= AUDIT_V) return false;
   const has = NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length);
-  store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V }, ...(has ? { auditAsked: true } : {}) }), { now: true });
+  /* owed once the bibliography holds the book's facts (owedCheck): notes checked by the check of 2.4–2.11 only for the
+   * portrait — so not where the bibliography is not filled from the book; older ones in any case */
+  const owed = !has ? null : a && (a.v || 1) >= 2 ? 'portrait' : 'all';
+  store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, ...(owed ? { owed } : {}) } }), { now: true });
   return has;
+}
+/* A check owed by a book opened for the first time since the check learned
+ * more: asked once the pages read before the bibliography have their facts —
+ * so a card made a portrait leaves its details to them, never to nothing —
+ * or at once where the bibliography is not filled from the book (a check owed
+ * only for the portrait is let go there: it has nothing to leave them to). */
+function owedCheck(novelId, conn, bibLeft) {
+  const novel = store.peek('novel', novelId);
+  const a = novel && novel.memory && novel.memory.audit;
+  if (!a || !a.owed) return;
+  const filling = bibReading(novel, conn);
+  if (filling && (bibLeft || bibDue(novelId).length)) return;
+  const { owed, ...rest } = a;
+  const ask = (owed === 'all' || filling) && NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length);
+  store.change('novel', novelId, novelSteps.setMemory({ audit: rest, ...(ask ? { auditAsked: true } : {}) }), { now: true });
 }
 /* Check the notes against the book, now (by hand, and for notes kept before the auditor) */
 export function askAudit(novelId, { soon = 300 } = {}) {
@@ -2931,10 +2953,12 @@ async function auditNotes(novelId, conn) {
   const roundId = roundOn && a0.roundId ? a0.roundId : newId('rd');
   const seenAfter = only ? [...(roundOn ? seen0 : []), ...only] : [];
   const roundLeft = only ? every.filter((x) => !seenAfter.includes(x.card.id)).length : 0;
+  /* a check owed for the portraits (owedCheck) stays owed through this one while the bibliography is still being filled: a portrait asked before its details are there is refused, and the card would stay as it was */
+  const owedKeep = a0.owed && bibReading(novel, conn) && bibDue(novelId).length ? { owed: a0.owed } : {};
   const roundKeep = only ? { roundId, roundAll: seenAfter.length + roundLeft, roundLeft, roundSeen: seenAfter, roundGen: gen0, roundFixed: roundOn ? a0.roundFixed || 0 : 0, roundChanges: roundOn ? a0.roundChanges || [] : [] } : {};
   const tooSmall = (why) => {
     /* never checked against no book: said, and not asked again until it is due */
-    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: why, fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...roundKeep, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
+    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: why, fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...roundKeep, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}), ...owedKeep }, auditAsked: false }));
   };
   if (budget < 800) { tooSmall(tooSmallWhy(conn, novel, 'the notes')); return; }
   const fixed = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true, only })) + estimateTokens(others.join(', ')) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 2000;
@@ -2983,7 +3007,7 @@ async function auditNotes(novelId, conn) {
     if (n < 2) throw failed({ error: got.error });
     stuck.delete('audit:' + novelId);
     /* its model would not check the notes: said so, and not asked again until it is due */
-    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: cutWords(got.error || 'its model would not check them', 300), fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...roundKeep, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) }, auditAsked: false }));
+    store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, failed: cutWords(got.error || 'its model would not check them', 300), fixed: 0, changes: [], verdict: '', clear: true, from: fromAfter, ...roundKeep, ...(a0.groupMax ? { groupMax: a0.groupMax } : {}), ...owedKeep }, auditAsked: false }));
     return;
   }
   stuck.delete('audit:' + novelId);
@@ -3033,7 +3057,7 @@ async function auditNotes(novelId, conn) {
   const nextRound = only ? [...round, ...(clear ? [] : [{ at: Date.now(), verdict, refused }])].slice(-6) : [];
   const fixedNow = folded.cards.length + Object.keys(kept).length;
   store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, fixed: fixedNow, changes: changed.slice(0, 200), verdict, clear, partial, refused, refusedAll: folded.refused.length,
-    ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round, ...roundKeep, roundFixed: roundKeep.roundFixed + fixedNow, roundChanges: [...roundKeep.roundChanges, ...changed].slice(0, 200) } : {}), ...(a0.groupMax ? { groupMax: a0.groupMax } : {}) },
+    ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round, ...roundKeep, roundFixed: roundKeep.roundFixed + fixedNow, roundChanges: [...roundKeep.roundChanges, ...changed].slice(0, 200) } : {}), ...(a0.groupMax ? { groupMax: a0.groupMax } : {}), ...owedKeep },
     /* the next group of the round, as soon as the helper is free */
     auditAsked: roundLeft > 0 }));
   await store.flush('novel', novelId);
