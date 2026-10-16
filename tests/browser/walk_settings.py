@@ -102,7 +102,7 @@ async def scenario_settings(browser):
     check('Undo restores the newest module words and its scope', await module.locator('textarea').input_value() == before and hs['modules']['novel-craft']['text'] == before and hs['modules']['novel-craft']['rides'] == 'off')
     await module.get_by_role('button', name='Close', exact=True).click()
     await dialog.get_by_role('button', name='Close', exact=True).click()
-    await pg.reload()
+    await harness.settled_reload(pg)
     await pg.wait_for_selector('#desk:not([hidden])')
     hs = await kept(pg)
     check('The restored words survive a reload', hs['modules']['novel-craft']['text'] == before)

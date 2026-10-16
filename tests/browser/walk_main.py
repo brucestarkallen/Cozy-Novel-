@@ -279,7 +279,7 @@ async def scenario_main(b):
     # ---- reload keeps the place and the draft
     await pg.fill('#direction', 'An unsent thought.')
     await pg.wait_for_timeout(1500)
-    await pg.reload()
+    await settled_reload(pg)
     await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
     await pg.wait_for_timeout(800)
     check('a reload comes back to the same chapter', await pg.text_content('#chapnum') == 'Chapter Two', await pg.text_content('#chapnum'))

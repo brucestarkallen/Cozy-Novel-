@@ -28,7 +28,7 @@ import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
-import { helperFrame, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
+import { helperFrame, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep } from './timeline.js';
@@ -1931,13 +1931,19 @@ function pruneReadings(novelId) {
  * stretches, each summed up once it is finished — the oldest first, the
  * stretch before it carried in so each picks up where the last ends. Past a
  * third of the smallest room of those who read the open chapter (the writer,
- * the narrator on the writer's connection, the partner on its own). A
- * stretch its model will not sum up is passed by after a second try, until
- * its words change. */
-function wantsStretches(house, tokens) {
+ * the narrator on the writer's connection, the partner on its own) — and,
+ * whatever the room, past the length where its one summary stops growing
+ * (prompts.js summarySize: 1,200 words for 14,400 and more): a chapter of
+ * 60,000 words on a model that holds it whole today would otherwise have
+ * nothing finer than those 1,200 words once the book outgrows the room, and
+ * the level between (context.js stretchesOf) needs its stretches. A stretch
+ * its model will not sum up is passed by after a second try, until its words
+ * change. */
+export const ONE_SUMMARY_WORDS = SUMMARY_MOST * 12;
+function wantsStretches(house, tokens, words = 0) {
   const rooms = ['writer', 'partner'].map((r) => connFor(house, r)).filter(Boolean).map((x) => contextOf(x));
   const room = rooms.length ? Math.min(...rooms) : 32000;
-  return tokens > Math.max(3500, Math.floor(room / 3));
+  return tokens > Math.max(3500, Math.floor(room / 3)) || words > ONE_SUMMARY_WORDS;
 }
 const stretchTried = new Map();   /* chapter:fingerprint -> refused runs */
 async function stretchUp(novelId, conn) {
@@ -1948,7 +1954,8 @@ async function stretchUp(novelId, conn) {
   for (let i = 0; i < order.length; i++) {
     const c = store.peek('chapter', order[i]);
     if (!c || (c.passages || []).some((p) => (picked(p) || {}).streaming)) continue;
-    if (!wantsStretches(house, estimateTokens(chapterText(c)))) continue;
+    const whole = chapterText(c);
+    if (!wantsStretches(house, estimateTokens(whole), countWords(whole))) continue;
     /* a chapter the writing has moved past: its last words make a stretch too */
     const opts = { closeLast: i < order.length - 1 };
     const plan = stretchPlan(c, opts);

@@ -62,6 +62,18 @@ async def panes_call(pg, name, args=()):
     said = await pg.evaluate("window.__paneCall")
     if said != 'ok':
         raise RuntimeError(f'{name} failed in the page: {said}')
+async def settled_reload(pg, **kw):
+    """A reload once the page's own steps back have landed (js/ui/dom.js
+    afterBacks). A sheet or menu closed a moment before gives its history step
+    back on the next turn of the page (dom.js sync -> history.go), and a reload
+    in that moment is aborted by the browser: net::ERR_ABORTED, "maybe frame
+    was detached" (walk_settings, 2.11.4; 4 reloads in 12 straight after a
+    sheet closed, 0 in 24 after its step landed). He never reloads within the
+    same few milliseconds; the walks wait as the app itself does before going
+    somewhere new."""
+    await pg.evaluate("() => { window.__backsLanded = false; import('/js/ui/dom.js').then((d) => d.afterBacks()).then(() => { window.__backsLanded = true; }, () => { window.__backsLanded = true; }); }")
+    await pg.wait_for_function("window.__backsLanded === true")
+    return await pg.reload(**kw)
 async def add_conn(pg, model='fake-writer'):
     if 'Choose a writer' not in await pg.inner_text('#writerBtn'):
         await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')

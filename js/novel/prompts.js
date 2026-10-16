@@ -1187,7 +1187,8 @@ function summaryClose(unit, size) {
  * eighth of its ~2,500 words), at most 1,200 — the same measure for every
  * length, with no step where a chapter of 10,001 words got almost twice the
  * summary of one of 9,999. */
-export function summarySize(words) { return Math.max(120, Math.min(1200, Math.round((Number(words) || 0) / 12))); }
+export const SUMMARY_MOST = 1200;
+export function summarySize(words) { return Math.max(120, Math.min(SUMMARY_MOST, Math.round((Number(words) || 0) / 12))); }
 export function stretchSize(words) { return Math.max(150, Math.min(700, Math.round((Number(words) || 0) / 8))); }
 
 /* A chapter summed up — whole, or (too long for the helper's model) in parts,

@@ -46,7 +46,7 @@ async def scenario(browser):
     await show(pg, 'play')
     check('scene setup retains both exact drafts across pane switches', await who.input_value() == 'Mara' and await start.input_value() == '  At the harbor.  ')
     await pg.evaluate("async()=>{await new Promise(r=>setTimeout(r,450));await(await import('/js/store.js')).flush()}")
-    await pg.reload()
+    await H.settled_reload(pg)
     await pg.wait_for_function('document.title.includes("Steady surfaces")')
     await show(pg, 'play')
     check('scene setup restores both drafts after reload', await who.input_value() == 'Mara' and await start.input_value() == '  At the harbor.  ')

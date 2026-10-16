@@ -82,7 +82,7 @@ async def scenario_book(browser):
     await pg.get_by_role('textbox', name='Under the title', exact=True).fill('Letters from the storm coast')
     await close_sheet(pg)
     await pg.evaluate("import('/js/store.js').then(s=>s.flush())")
-    await pg.reload()
+    await harness.settled_reload(pg)
     await pg.wait_for_selector('#desk:not([hidden])')
     await open_book(pg)
     check('book edits survive a full page reload', await pg.get_by_role('textbox', name='What it’s about — your words', exact=True).input_value() == own and await pg.get_by_role('textbox', name='What it’s about — kept by the helper', exact=True).input_value() == correction and await pg.locator('.covers button[aria-label="moss"]').get_attribute('aria-pressed') == 'true')

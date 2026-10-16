@@ -9329,6 +9329,43 @@ await test('the helper sums a long scene up in stretches — as its transcript, 
   await putAway(b);
 });
 
+heading('a long chapter kept in stretches on any model (2.11.4)');
+
+/* his question: chapter one reaches 100k tokens — does it become one summary, or per passage like Summaryception? On a model that holds it
+ * whole it had no stretches, so once the book outgrew the room it fell to its one summary: 1,200 words for 60,000 */
+await test('a chapter past 14,400 words is kept in stretches whatever the writer’s room — its one summary stops growing there — and summed up from them; a shorter one on a large model is not', async () => {
+  const words = (n, tag) => Array.from({ length: n }, (_, i) => `${tag}${i % 50}`).join(' ') + '.';
+  /* 15,000 words, on models that hold it whole many times over */
+  let b = await makeBook([Array.from({ length: 15 }, (_, i) => words(1000, `L${i}x`)), ['The next chapter.']], { manual: true });
+  markAllSeen(b);
+  await setHouse({ context: 500000 });
+  const n = stretchesMod.stretchPlan(b.ch(0), { closeLast: true }).stretches.length;
+  assert.equal(n, 5, 'five stretches of about 2,500–3,000 words, on passage boundaries');
+  await script(Array.from({ length: n }, (_, k) => ({ text: JSON.stringify({ summary: `long stretch ${k + 1}.` }) })));
+  await archivist.run(b.novelId);
+  const asks = (await requests()).map((x) => String(x.body.messages.at(-1).content));
+  assert.equal(asks.filter((m) => m.includes('Sum up this stretch alone')).length, n, 'each stretch summed up');
+  const sum = asks.find((m) => m.includes('is a long chapter, kept in stretches. Here is every stretch of it'));
+  assert.ok(sum && sum.includes('long stretch 1.') && sum.includes('long stretch 5.') && !sum.includes('L0x0 L0x1'), 'its one summary made from them, not from its pages');
+  await store.flush();
+  const kept = (await onPhone('chapter', b.ids[0])).stretches;
+  assert.deepEqual(kept.map((x) => x.text), Array.from({ length: n }, (_, k) => `long stretch ${k + 1}.`));
+  /* the level between is there for it once the book outgrows the room: by its stretches, not its 1,250-word summary */
+  const novel = b.novel();
+  const chapters = { [b.ids[0]]: b.ch(0), [b.ids[1]]: b.ch(1) };
+  const fit = context.fitBook({ novel, chapters, chapterId: b.ids[1], current: null, room: 6000 });
+  assert.ok(fit.book.summaries.length === 1 && fit.book.summaries[0].text.includes('long stretch 1.') && fit.book.summaries[0].text.includes('long stretch 5.'), JSON.stringify(fit.book.summaries).slice(0, 300));
+  await putAway(b);
+  /* 12,000 words on the same models: its one summary holds it at a twelfth — no stretches */
+  b = await makeBook([Array.from({ length: 12 }, (_, i) => words(1000, `S${i}x`)), ['The next chapter.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  await archivist.run(b.novelId);
+  assert.equal((await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Sum up this stretch alone')).length, 0);
+  await setHouse();
+  await putAway(b);
+});
+
 /* last of all: it lets go of every record this page holds, as a page does when a copy comes back */
 await test('a copy brought back while the page was away: what it kept waiting is let go, never saved over the copy', async () => {
   const b = await makeBook([['Mara kept the light.']]);

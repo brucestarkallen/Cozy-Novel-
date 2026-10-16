@@ -35,7 +35,7 @@ async def scene(pg, pid):
 
 async def reload(pg):
     await flush(pg)
-    await pg.reload()
+    await H.settled_reload(pg)
     await pg.wait_for_function('document.title.includes("Drafts by the Fire")')
 
 

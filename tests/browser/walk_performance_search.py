@@ -93,7 +93,7 @@ async def scenario(browser):
         # Closing a sheet unwinds its history entry asynchronously. Finish
         # that navigation before asking Chromium to reload the document.
         await pg.evaluate("import('/js/ui/dom.js').then(m=>m.afterBacks())")
-        await pg.reload()
+        await harness.settled_reload(pg)
         await pg.wait_for_selector('#desk:not([hidden]) .passage')
         opened = []
         pg.on('request', lambda request: opened.append(request.url) if '/api/store/novel/' + ids['other'] in request.url else None)

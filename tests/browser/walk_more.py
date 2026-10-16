@@ -791,7 +791,7 @@ async def scenario_crafts(b):
       data.instructions.late = 'MY OLD NOTE'; delete data.instructions.lateNarrator;
       await fetch('/api/store/house/house', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Base': String(r.rev) }, body: JSON.stringify({ data }) });
     }""", {'w': OLD_WRITING, 'n': OLD_NARRATOR})
-    await pg.reload()
+    await settled_reload(pg)
     await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
     await pg.wait_for_timeout(1000)
     ins = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']['instructions']
@@ -2362,7 +2362,7 @@ async def scenario_tavern_ui(b):
         req = urllib.request.Request(f'http://127.0.0.1:{PORT}/api/lease', data=json.dumps({'key': f'helper:{nid}', 'ttl': 60000}).encode(), headers={'Content-Type': 'application/json', 'X-Client': 'tab-another-browser'}, method='POST')
         return json.load(urllib.request.urlopen(req))
     before = other_asks()
-    await pg.reload(); await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
+    await settled_reload(pg); await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
     after = other_asks()
     urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{PORT}/api/lease', data=json.dumps({'key': f'helper:{nid}', 'release': True}).encode(), headers={'Content-Type': 'application/json', 'X-Client': 'tab-another-browser'}, method='POST'))
     check('a page that goes lets its book’s lease go at once — another browser never waits it out', held and before.get('ok') is False and after.get('ok') is True, (held, before, after))

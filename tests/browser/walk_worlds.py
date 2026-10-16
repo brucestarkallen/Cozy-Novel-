@@ -103,7 +103,7 @@ async def scenario_worlds(browser):
           await pg.locator('#worldTokyo').get_attribute('aria-pressed') == 'true' and
           await pg.locator('#worldAcademy').get_attribute('aria-pressed') == 'false' and
           await pg.locator('#motionToggle').get_attribute('aria-pressed') == 'false')
-    await pg.reload()
+    await H.settled_reload(pg)
     await pg.wait_for_selector('#shelf:not([hidden])')
     check('all three choices survive a reload', await state(pg) == expected, await state(pg))
     await pg.emulate_media(color_scheme='dark')
@@ -282,7 +282,7 @@ async def scenario_legacy(browser):
           s.change('house','house',h=>{h.look={theme,font:'classic',size:'21',lead:'1.9',width:'720',indent:'on',tint:'off'};});
           await s.flush();
         }""", legacy)
-        await pg.reload()
+        await H.settled_reload(pg)
         await pg.wait_for_selector('#shelf:not([hidden])')
         current = await state(pg)
         check(f'legacy {legacy} opens as {world} {mode}', current['world'] == world and current['mode'] == mode, current)
@@ -300,7 +300,7 @@ async def scenario_legacy(browser):
             restored = await pg.evaluate("async()=>structuredClone((await import('/js/store.js')).peek('house','house').look)")
             check('Undo restores every older reading preference exactly', restored == saved, restored)
             await close_settings(pg)
-            await pg.reload()
+            await H.settled_reload(pg)
             await pg.wait_for_selector('#shelf:not([hidden])')
             check('restored legacy daylight survives reloading', (await state(pg))['world'] == 'academy' and (await state(pg))['mode'] == 'light', await state(pg))
     await pg.context.close()
@@ -330,7 +330,7 @@ async def scenario_foldable(browser):
         await pg.click('#motionToggle')
     await flush(pg)
     expected = {'world': 'study', 'theme': 'study', 'mode': 'light', 'motion': 'off'}
-    await pg.reload()
+    await H.settled_reload(pg)
     await pg.wait_for_selector('#shelf:not([hidden])')
     check('Original Study, daylight and paused motion survive reloading', await state(pg) == expected, await state(pg))
     check('Original Study announces its selected shelf control', await pg.locator('#worldStudy').get_attribute('aria-pressed') == 'true' and
