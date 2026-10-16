@@ -28,10 +28,11 @@ import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
-import { helperFrame, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
-import { fitBook } from './context.js';
+import { helperFrame, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
+import { fitBook, bibAutoOn } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep } from './timeline.js';
+import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey } from './bibliography.js';
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
 import { applyCheck, checkSig, checkedNow } from './summarycheck.js';
 
@@ -619,12 +620,14 @@ function heldIn(text, other) {
   for (const w of was) if (now.has(w)) kept += 1;
   return kept / was.size;
 }
-export function thins(standing, offered) {
+/* besides: words kept elsewhere (the bibliography) that the shorter one may
+ * leave to them — counted as held, never as making the new one longer */
+export function thins(standing, offered, besides = '') {
   const old = String(standing || '').trim();
   const neu = String(offered || '').trim();
   if (!old || !neu) return false;
   if (!telling(old).size) return false;
-  return heldIn(old, neu) < 0.6 && neu.length < old.length;
+  return heldIn(old, besides ? `${neu} ${besides}` : neu) < 0.6 && neu.length < old.length;
 }
 /* the sentences of `add` that `have` does not say already */
 function newSentences(have, add) {
@@ -687,7 +690,32 @@ function pastFirstLine(text) {
  *    never a slip of the pen for another's (Robert is not Roberta)
  *  keepOpen — threads the newest passage's reading opened: the check never
  *    closes one (a loose end closes only with what comes after it, M681) */
-export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null, grounds = null } = {}) {
+/* The bibliography's words about each person of the notes — the book's facts
+ * (and the passages' words that say them), his entry's words, and what this
+ * answer establishes — so a portrait made shorter may leave to it what it
+ * keeps, and never lose a word of the book (foldNotes keptElsewhere). Asked
+ * for only by a reading that asked for a short portrait (askedCodex); the
+ * facts it counts ride whatever the switch says by now. */
+export function factsByCard(novelId, extra = []) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return null;
+  const chapters = {};
+  for (const id of novel.order || []) { const c = store.peek('chapter', id); if (c) chapters[id] = c; }
+  const people = (novel.notes || {}).people || [];
+  const map = new Map();
+  const add = (id, t) => { if (id && t) map.set(id, `${map.get(id) || ''} ${t}`); };
+  const cardOf = (name, aka = []) => matchCard(people, name, aka, { kind: 'people', near: true, slip: false }).card;
+  for (const it of bibItems(novel, chapters, { facts: true })) {
+    const card = it.card && it.card.kind === 'people' ? people.find((c) => c.id === it.card.id) : it.entry ? cardOf(it.name, it.aka) : null;
+    if (!card) continue;
+    add(card.id, it.facts.map((f) => `${f.fact} ${(f.evidence || []).join(' ')} ${(f.more || []).join(' ')}`).join(' '));
+    /* his entry's words, unless he keeps them for himself — the writer never reads those */
+    if (it.entry && it.rides !== 'never') add(card.id, `${it.entry.line || ''} ${it.entry.text || ''}`);
+  }
+  for (const f of extra || []) { const card = cardOf(f.name); if (card) add(card.id, `${f.fact} ${(f.evidence || []).join(' ')}`); }
+  return (card) => map.get(card.id) || '';
+}
+export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null, grounds = null, keptElsewhere = null } = {}) {
   const out = clone(notes || {});
   for (const k of NOTE_KINDS) if (!Array.isArray(out[k])) out[k] = [];
   const touched = new Map();       /* card id -> {kind, before} */
@@ -910,8 +938,13 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
           if (next !== old) card.since = next;
         }
       } else if (shownShort(card.id) && !audit) card.about = shownLevel(card.id) >= 2 ? addedTo(card.about, about) : addedTo(about, pastFirstLine(card.about));
-      /* the check, which folds repeats and puts drift right, may thin one — unless it saw some of the book only in short (Cozy Tavern M403), when nothing is thinned */
-      else if (audit ? !unseen || !thins(card.about, about) : kind !== 'people' || !thins(card.about, about)) card.about = about;
+      /* the check, which folds repeats and puts drift right, may thin one — unless it saw some of the book only in short (Cozy Tavern M403), when nothing is thinned;
+       * and a person's portrait made shorter is taken when what it leaves out is kept in the bibliography (keptElsewhere: its facts and their words) */
+      else {
+        const elsewhere = kind === 'people' && keptElsewhere ? keptElsewhere(card) : '';
+        const thinner = thins(card.about, about, elsewhere);
+        if (audit ? !unseen || !thinner : kind !== 'people' || !thinner) card.about = about;
+      }
     }
     if (kind === 'people') {
       /* "Unknown." for someone the words read name is where they are — nobody
@@ -1070,12 +1103,12 @@ export function readingRoom(conn, fixed) {
  * of them, which is what the first whole object of an answer cut off is
  * (Cozy Tavern's M246/M682: a cut answer stored as a finished reading) */
 /* only the answer's own parts: a row's map of ties ("Aldric": …) found inside a reply cut off is no answer (Cozy Tavern's M685) */
-const ANSWER_KEYS = new Set([...NOTE_KINDS, 'gone', 'chapterName', 'about', 'style', 'clear', 'verdict', 'timeline']);
+const ANSWER_KEYS = new Set([...NOTE_KINDS, 'gone', 'chapterName', 'about', 'style', 'clear', 'verdict', 'timeline', 'bibliography']);
 export const notesShape = (o) => Boolean(o) && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => {
   if (!ANSWER_KEYS.has(k)) return false;
   /* A bad history does not discard sound notes or ask the model again.
    * Its valid events survive; its coverage stays incomplete (timeline.js). */
-  if (k === 'timeline') return true;
+  if (k === 'timeline' || k === 'bibliography') return true;
   if (NOTE_KINDS.includes(k) || k === 'gone') return Array.isArray(o[k]) && o[k].every((row) =>
     Boolean(row) && typeof row === 'object' && !Array.isArray(row) && Boolean(cleanName(row.name)) && (k !== 'gone' || NOTE_KINDS.includes(row.kind)));
   if (k === 'clear') return truthOf(o[k]) !== undefined;
@@ -1238,10 +1271,12 @@ export async function run(novelId) {
       await summarise(novelId, conn);
       /* each summary held once against its own words, a few a run — the rest next time (summarycheck.js) */
       const checksLeft = await checkSummaries(novelId, conn);
+      /* the bibliography filled for pages read before it was kept, a few a run (bibliography.js) */
+      const bibLeft = await bibBackfill(novelId, conn);
       await keepTheBook(novelId, conn);
       await auditNotes(novelId, conn);
       failures.delete(novelId);
-      const left = pendingWork(novelId) || checksLeft;
+      const left = pendingWork(novelId) || checksLeft || bibLeft;
       if (left) nudge(novelId, 2000);
       else {
         finishReread(novelId);
@@ -1500,7 +1535,7 @@ async function readChanges(novelId, conn) {
     const named = namedBook(novel, house);
     const fixedWith = (notes) => estimateTokens(helperFrame(house, novel)) + estimateTokens(notesRequest({
       novel: named, chapterLabel: label, before: '', changes: [], removed: [], removedChapters: [],
-      notesShown: notes, at, of: (novel.order || []).length, later: true, goesOn: true,
+      notesShown: notes, at, of: (novel.order || []).length, later: true, goesOn: true, codex: bibReading(novel, conn),
     })) + 160;
     const roomWith = (notes) => readingRoom(conn, fixedWith(notes)) + 900;
     let room = roomWith(notesText(named, { forHelper: true, fit: notesFit, focus: focusAll }));
@@ -1601,6 +1636,8 @@ async function readChanges(novelId, conn) {
     let acc = [];
     let accKept = {};
     const histories = new Map();
+    /* what each passage establishes for the bibliography, gathered as its history is (bibliography.js) */
+    const codexes = new Map();
     /* A PASSAGE READ IN PARTS THAT CANNOT BE FINISHED (Cozy Tavern M205,
      * M218: a part-built reading is never left half in the notes): what its
      * earlier parts changed is taken back — where it still reads as they left
@@ -1613,6 +1650,7 @@ async function readChanges(novelId, conn) {
       if (!midPassage) return;
       takeBackInParts(novelId, parts);
       histories.clear();
+      codexes.clear();
       midPassage = false;
     };
     for (let b = 0; b < batches.length; b++) {
@@ -1626,6 +1664,8 @@ async function readChanges(novelId, conn) {
       /* each passage named as the page names it ("Passage 4"), never by the app's own id */
       const pageNums = chapter ? passageNumbers(store.peek('chapter', chapter.id) || chapter) : new Map();
       for (const c of B.items) c.source = c.pid ? `Passage ${pageNums.get(c.pid) || '—'}` : '';
+      /* whether this reading asks for the bibliography (and a short portrait): what comes back is read as what was asked, whatever the switch says by then */
+      const askedCodex = bibReading(now, conn);
       const request = notesRequest({
         novel: namedBook(now, house),
         chapterLabel: label,
@@ -1633,7 +1673,7 @@ async function readChanges(novelId, conn) {
         changes: B.items,
         removed: B.removed.map((r) => r.text).filter((t) => String(t || '').trim()),
         removedChapters: B.chapters.map((r) => r.text),
-        at, of: (now.order || []).length, later: laterRead, goesOn, notesFit, shortIds, plain,
+        at, of: (now.order || []).length, later: laterRead, goesOn, notesFit, shortIds, plain, codex: askedCodex,
       });
       let got;
       const gen = ((now.memory || {}).reread || 0);
@@ -1689,7 +1729,28 @@ async function readChanges(novelId, conn) {
       if (chapter && !((latest.order || []).includes(chapter.id) && store.peek('chapter', chapter.id))) { takeBackParts(); break; }
       const lastPid = B.items.length ? B.items[B.items.length - 1].pid : '';
       const liveChapter = chapter ? store.peek('chapter', chapter.id) || chapter : null;
+      /* what each source establishes for the bibliography (bibliography.js), held to its own words — gathered first, so
+       * a shorter "who they are" may leave to it what it keeps (factsByCard) */
+      const batchFacts = [];
+      /* an answer that gives none for a source leaves an honest gap, as the Timeline's does — never asked again for it */
+      if (askedCodex) {
+        /* a source as the answer says it ("Passage 4", "passage 4.") */
+        const said = (r) => sourceKey(r && r.source);
+        for (const c of B.items) {
+          if (c.oldOnly) continue;
+          const source = { text: c.text, whole: c.whole !== undefined ? c.whole : c.text };
+          const rows = Array.isArray(got.obj.bibliography) ? got.obj.bibliography.filter((r) => r && c.source && (said(r) === sourceKey(c.source) || r.source === c.pid)) : [];
+          let codex = rows.length ? null : codexOf(undefined, source);
+          for (const row of rows) codex = mergeCodex(codex, codexOf(row.facts, source));
+          if (rows.length !== 1) codex.complete = false;
+          /* a passage further back read as a change: what its version before established that the new words still say stays */
+          if (c.old) codex = withCarriedFacts(codex, codexBefore(chapter && chapter.id, c), source.whole);
+          codexes.set(c.sig, mergeCodex(codexes.get(c.sig), codex));
+          batchFacts.push(...codex.facts);
+        }
+      }
       const folded = foldNotes(latest.notes, got.obj, {
+        keptElsewhere: askedCodex ? factsByCard(novelId, batchFacts) : null,
         chapterId: chapter ? chapter.id : '', at: Date.now(),
         stands: hasGone(got.obj) ? bookFolded(latest) : null,
         nowStays: liveChapter ? nowWrittenLater(latest, liveChapter, lastPid, { laterRead, goesOn }) : (laterRead || goesOn),
@@ -1807,6 +1868,12 @@ async function readChanges(novelId, conn) {
              * a refused save is replayed over another browser's changes. */
             store.change('chapter', cid, continuityStep(c.pid, c.sig.split(SIG_SEP)[0], history));
             histories.delete(c.sig);
+          }
+          for (const c of done) {
+            const codex = codexes.get(c.sig);
+            if (!codex) continue;
+            store.change('chapter', movedTo.get(c.pid) || chapter.id, codexStep(c.pid, c.sig.split(SIG_SEP)[0], codex));
+            codexes.delete(c.sig);
           }
           keepReading(novelId, chapter, done, acc, accKept, { mixed: B.removed.length > 0 || B.chapters.length > 0 });
           acc = [];
@@ -1997,8 +2064,9 @@ async function stretchUp(novelId, conn) {
         const got = await helperJson(novelId, conn, frame, stretchRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[q], words: st.words, before: q === 0 ? before : '', known,
           part: parts.length > 1 ? q + 1 : 0, parts: parts.length, soFar: summary }), { want: (o) => Boolean(summaryWords(o.summary)) });
         if (!got.ok) {
-          if (got.leashed) throw failed(got);
-          const fault = await helperFault(novelId, conn, got);
+          /* a stall on these words (heard, but no progress for minutes) is theirs, as the notes' reading counts it (M748): tried a bounded number of times, never for ever */
+          if (got.leashed && got.leashed !== 'long') throw failed(got);
+          const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
           if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
           refused = true;
           break;
@@ -2148,8 +2216,9 @@ async function summarise(novelId, conn) {
         part: parts.length > 1 ? k + 1 : 0, parts: parts.length, soFar: summary, known, his: lastPart ? his : '', stretched: parts[0] === stretched && Boolean(stretched), tail: stretched ? tail : '' }), { want: (o) => Boolean(summaryWords(o.summary)) });
       if (!(await summaryStillCurrent(novelId, c.id, stamp))) { setAsideNow = true; break; }
       if (!got.ok) {
-        if (got.leashed) throw failed(got);
-        const fault = await helperFault(novelId, conn, got);
+        /* a stall on these words is theirs (M748): asked once more, then set aside — never for ever */
+        if (got.leashed && got.leashed !== 'long') throw failed(got);
+        const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
         if (!(await summaryStillCurrent(novelId, c.id, stamp))) { setAsideNow = true; break; }
         if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
         const key = `summary:${c.id}:${fp}`;
@@ -2294,8 +2363,9 @@ async function sceneStretchUp(novelId, conn) {
         const got = await helperJson(novelId, conn, frame, sceneStretchRequest({ novel: namedBook(now, house), chapterLabel: c ? chapterLabel(now, c, { withName: true }) : 'the book', who: p.who, text: parts[q], words: st.words, before: q === 0 ? before : '', known,
           part: parts.length > 1 ? q + 1 : 0, parts: parts.length, soFar: summary }), { want: (o) => Boolean(summaryWords(o.summary)) });
         if (!got.ok) {
-          if (got.leashed) throw failed(got);
-          const fault = await helperFault(novelId, conn, got);
+          /* a stall on these words (heard, but no progress for minutes) is theirs, as the notes' reading counts it (M748): tried a bounded number of times, never for ever */
+          if (got.leashed && got.leashed !== 'long') throw failed(got);
+          const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
           if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
           refused = true;
           break;
@@ -2422,8 +2492,9 @@ async function checkSummaries(novelId, conn) {
       const got = await helperJson(novelId, conn, frame, summaryCheckRequest({ novel: book, what, source: parts[q], summary: text, part: parts.length > 1 ? q + 1 : 0, parts: parts.length, scene: item.kind === 'scene' }),
         { want: (o) => Array.isArray(o.wrong) || Array.isArray(o.missing) });
       if (!got.ok) {
-        if (got.leashed) throw failed(got);
-        const fault = await helperFault(novelId, conn, got);
+        /* a stall on these words is theirs (M748): tried a bounded number of times, never for ever */
+        if (got.leashed && got.leashed !== 'long') throw failed(got);
+        const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
         if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
         refused = true;
         break;
@@ -2443,6 +2514,119 @@ async function checkSummaries(novelId, conn) {
     done++;
   }
   return false;
+}
+
+/* ---------------------------------------- the bibliography, filled in */
+
+/* The pages read into the notes before the bibliography was kept (or while
+ * he had it filled by hand only): their versions on show, read as they are
+ * now, with no facts kept for their words — read for the bibliography alone,
+ * a few at a time, the oldest first; the rest next run. A part its model
+ * will not read is passed by after two runs (an empty, incomplete mark), so
+ * nothing is asked for ever. Returns whether some are left. */
+export const BIB_BATCHES_PER_RUN = 2;
+/* a helper whose model holds less than this keeps the notes alone: the
+ * bibliography's facts and their rules would take the room its reading needs */
+export const BIB_HELPER_MIN = 16000;
+export function bibReading(novel, conn) { return bibAutoOn(novel) && Boolean(conn) && contextOf(conn) >= BIB_HELPER_MIN; }
+/* the facts the version a change replaced had for its words (the version whose words the change was read against) */
+function codexBefore(chapterId, c) {
+  const ch = chapterId ? store.peek('chapter', chapterId) : null;
+  const p = ch && (ch.passages || []).find((x) => x.id === c.pid);
+  if (!p) return null;
+  for (const v of p.versions || []) if (String(v.text || '') === String(c.old || '')) { const k = codexNow(v); if (k) return k; }
+  return null;
+}
+/* the backfill's tries, by version: a batch its model will not read is read one passage at a time (bibNarrow), and a
+ * passage tried twice alone is passed by — never asked for ever, never paid for again */
+const bibTried = new Map();
+const bibNarrow = new Set();
+export function bibDue(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel || !bibAutoOn(novel)) return [];
+  const seen = (novel.memory || {}).seen || {};
+  /* a passage its model would not read is not asked for again here either */
+  const aside = (novel.memory || {}).aside || {};
+  const out = [];
+  for (const cid of novel.order || []) {
+    const c = store.peek('chapter', cid);
+    if (!c) continue;
+    const nums = passageNumbers(c);
+    for (const p of c.passages || []) {
+      if (p.by === 'break' || aside[p.id]) continue;
+      const v = picked(p);
+      if (!v || v.streaming || !String(v.text || '').trim() || codexNow(v)) continue;
+      /* not read yet: its reading gathers its facts */
+      if ((seen[cid] || {})[p.id] !== signature(v)) continue;
+      out.push({ chapterId: cid, pid: p.id, vid: v.id, text: String(v.text), source: `${chapterLabel(novel, c, { withName: false })}, passage ${nums.get(p.id) || '—'}` });
+    }
+  }
+  return out;
+}
+async function bibBackfill(novelId, conn) {
+  if (!bibReading(store.peek('novel', novelId), conn)) return false;
+  const due = bibDue(novelId);
+  if (!due.length) return false;
+  const house = store.peek('house', 'house') || {};
+  let batches = 0;
+  let i = 0;
+  let again = false;
+  while (i < due.length) {
+    if (batches >= BIB_BATCHES_PER_RUN) return true;
+    const now = store.peek('novel', novelId);
+    if (!now || !bibAutoOn(now)) return false;
+    const frame = helperFrame(house, now);
+    const names = NOTE_KINDS.filter((k) => k !== 'threads').flatMap((k) => ((now.notes || {})[k] || []).map((c) => c.name)).filter(Boolean).slice(0, 200);
+    const room = readingRoom(conn, estimateTokens(frame) + estimateTokens(bibFactsRequest({ novel: now, sources: [], names })) + 400);
+    const words = Math.max(300, Math.min(6000, Math.floor((room * 0.6) / 1.4)));
+    const batch = [];
+    let w = 0;
+    const one = bibNarrow.has(novelId);
+    while (i < due.length && (!batch.length || (!one && w + countWords(due[i].text) <= words))) { batch.push(due[i]); w += countWords(due[i].text); i++; }
+    setLight(novelId, 'reading', 'Filling the bibliography from the book…');
+    const lay = (x, codex) => store.change('chapter', x.chapterId, codexStep(x.pid, x.vid, codex));
+    /* tried twice and not read (or not answered for): passed by, never asked for again */
+    for (const x of batch.filter((y) => (bibTried.get(y.vid) || 0) >= 2)) { lay(x, { ...codexOf(undefined, { text: x.text }), complete: false }); bibTried.delete(x.vid); }
+    const asking = batch.filter((y) => bibTried.get(y.vid) === undefined || bibTried.get(y.vid) < 2);
+    if (!asking.length) continue;
+    /* one passage longer than the room: only as much of it as fits is read, the rest left — never asked for ever */
+    const sources = asking.map((x) => ({ ...x, shown: countWords(x.text) > words ? cutWords(x.text, Math.floor(words * 5)) : x.text }));
+    const got = await helperJson(novelId, conn, frame, bibFactsRequest({ novel: namedBook(now, house), sources: sources.map((x) => ({ source: x.source, text: x.shown })), names }),
+      { want: (o) => Array.isArray(o.bibliography) });
+    if (!got.ok) {
+      /* let go on its leash: never the words' fault, unless it stalled reading them (as the notes' reading: M748) */
+      if (got.leashed === 'gaveway') throw failed(got);
+      if (got.leashed && sources.length > 1) { bibNarrow.add(novelId); throw failed(got); }
+      if (got.leashed && got.leashed !== 'long') throw failed(got);
+      const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
+      if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
+      /* its model will not read them: one at a time from here, each tried twice at most */
+      if (sources.length > 1) bibNarrow.add(novelId);
+      else bibTried.set(sources[0].vid, (bibTried.get(sources[0].vid) || 0) + 1);
+      batches++;
+      continue;
+    }
+    await mustHold('helper', novelId);
+    /* a source as the answer says it ("Chapter 3, passage 4" for Chapter Three, passage 4) */
+    const said = (r) => sourceKey(r && r.source);
+    const answered = got.obj.bibliography.filter((r) => r && typeof r === 'object');
+    for (const x of sources) {
+      let rows = answered.filter((r) => said(r) === sourceKey(x.source));
+      /* asked for one, answered for one: that one, however it named it */
+      if (!rows.length && sources.length === 1 && answered.length === 1) rows = answered;
+      /* not answered for among others: asked again later (twice at most) */
+      if (!rows.length && sources.length > 1) { bibTried.set(x.vid, (bibTried.get(x.vid) || 0) + 1); again = true; continue; }
+      let codex = rows.length ? null : codexOf(undefined, { text: x.shown, whole: x.text });
+      for (const row of rows) codex = mergeCodex(codex, codexOf(row.facts, { text: x.shown, whole: x.text }));
+      if (rows.length !== 1 || x.shown !== x.text) codex.complete = false;
+      lay(x, codex);
+      bibTried.delete(x.vid);
+    }
+    await store.flush();
+    batches++;
+  }
+  if (!again) bibNarrow.delete(novelId);
+  return again;
 }
 
 /* ------------------------------------------- what it's about, how it reads */
@@ -2774,15 +2958,16 @@ async function auditNotes(novelId, conn) {
   const askedNotes = clone(novel.notes || {});
   const askedWords = wordsNow(novel);
   const stamp = auditStamp(novel, chapters);
-  const got = await helperJson(novelId, conn, frame, auditRequest({ novel: namedBook(novel, house), bookText: bookText(fit.book), his, partial, only, others, endShort }), { want: auditShape });
+  const askedCodex = bibReading(novel, conn);
+  const got = await helperJson(novelId, conn, frame, auditRequest({ novel: namedBook(novel, house), bookText: bookText(fit.book), his, partial, only, others, endShort, codex: askedCodex }), { want: auditShape });
   /* the whole book began to be read again while it checked: the notes it checked are not there any more */
   const now = store.peek('novel', novelId);
   if (!now || ((now.memory || {}).reread || 0) !== gen || rebuildingNow(now)) return;
   await mustHold('helper', novelId);
   if (!got.ok) {
-    /* let go on its leash: never the notes' fault — tried again later as it was */
-    if (got.leashed) throw failed(got);
-    const fault = await helperFault(novelId, conn, got);
+    /* let go on its leash: never the notes' fault — tried again later as it was; but a stall on them (heard, no progress for minutes) is theirs (M748): asked once more, then said, and not asked again until it is due */
+    if (got.leashed && got.leashed !== 'long') throw failed(got);
+    const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
     await mustHold('helper', novelId);
     if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
     /* its answer outgrew the room, asked again with more: half as many cards at once, asked again now — never the same whole for ever (Cozy Tavern M719) */
@@ -2819,7 +3004,7 @@ async function auditNotes(novelId, conn) {
     chapterId: '', at: Date.now(), audit: true, limit: only,
     stands: hasGone(got.obj) ? bookFolded(latest) : null,
     grounds: groundsOf(namedBook(latest, store.peek('house', 'house') || {})),
-    asked: askedNotes, keepOpen: openedByNewest(latest, live), unseen,
+    asked: askedNotes, keepOpen: openedByNewest(latest, live), unseen, keptElsewhere: askedCodex ? factsByCard(novelId) : null,
     /* where people are "now" is the end of the book's: when it read the end only in short, it only fills one never written */
     nowStays: endShort, nowAt: endId, nowPid: endPid,
   });

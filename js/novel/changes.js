@@ -23,6 +23,7 @@ import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays } from './textshape.js';
 import { replaceMany, renameRule } from './names.js';
+import { entriesOf, entryNamed, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 
 /* ------------------------------------------------------------ reading it */
 
@@ -98,7 +99,8 @@ export function readAsks(text) {
       const ask = /^find\s*:/i.test(t) ? { find: t.replace(/^find\s*:\s*/i, '').slice(0, 200) }
         : /^module\s*:/i.test(t) ? { module: t.replace(/^module\s*:\s*/i, '').slice(0, 120) }
           : /^card\s*:/i.test(t) ? { card: t.replace(/^card\s*:\s*/i, '').slice(0, 120) }
-            : chapterNumber(t);
+            : /^entry\s*:/i.test(t) ? { entry: t.replace(/^entry\s*:\s*/i, '').slice(0, 120) }
+              : chapterNumber(t);
       if (ask === null || (typeof ask === 'object' && !Object.values(ask)[0])) continue;
       if (!out.some((y) => JSON.stringify(y) === JSON.stringify(ask))) out.push(ask);
     }
@@ -163,6 +165,7 @@ export function editableOf(op) {
   if (o.summary !== undefined) { add('text', 'The summary', 6); return out; }
   if (o.plan !== undefined) { add('text', 'What the chapter is for', 6); return out; }
   if (o.note !== undefined) { add('newName', 'Its new name', 1); add('about', 'Who or what it is'); add('ties', 'With others'); add('now', 'Right now'); return out; }
+  if (o.entry !== undefined) { add('newName', 'Its new name', 1); add('line', 'In a line', 2); add('text', 'The entry', 8); add('add', 'The paragraph it adds', 4); return out; }
   if (o.chapter !== undefined && o.passage === undefined) { add('name', 'The chapter’s new name', 1); return out; }
   add('replace', 'The new words');
   add('text', o.passage !== undefined ? 'The passage, written anew' : 'The words, whole', 10);
@@ -310,6 +313,7 @@ export function labelOf(op) {
   if (op.chapter !== undefined) return `Chapter ${numberWords(chapterNumber(op.chapter) || 0)}’s name`;
   if (op.book !== undefined) return BOOK_WORDS[op.book] || 'The book';
   if (op.note !== undefined) return `${String(op.name || '').trim() || 'A card'} (${KIND_WORD[op.note] || 'notes'})`;
+  if (op.entry !== undefined) return `${String(op.entry || '').trim() || 'An entry'} (bibliography)`;
   return 'A change';
 }
 
@@ -436,8 +440,9 @@ function renamed(text, from, to) { return replaceMany(text, [renameRule(from, to
  * letters or numbers ("Ann" is not in "Annual" nor "Anna") */
 function wordsRe(find) {
   const f = String(find || '');
-  const before = /^[\p{L}\p{N}_]/u.test(f) ? '(?<![\\p{L}\\p{N}_])' : '';
-  const after = /[\p{L}\p{N}_]$/u.test(f) ? '(?![\\p{L}\\p{N}_])' : '';
+  /* (an underscore is no letter: "Ann" stands in _Ann_, her name in italics) */
+  const before = /^[\p{L}\p{N}]/u.test(f) ? '(?<![\\p{L}\\p{N}])' : '';
+  const after = /[\p{L}\p{N}]$/u.test(f) ? '(?![\\p{L}\\p{N}])' : '';
   return new RegExp(`${before}${esc(f)}${after}`, 'gu');
 }
 /* every passage on the page, in book order: {chapterId, chapter, passage, version, ci} */
@@ -514,7 +519,7 @@ function renameOf(novel, op) {
   if (!from || !to || from === to) return { why: 'it needs a name as it stands and the name it becomes, not the same' };
   if (!archivist.cleanName(to)) return { why: `“${to}” is no name` };
   if (from === from.toLowerCase() || MONTH_OR_DAY.test(from)) return { why: `“${from}” is an ordinary word as well as a name — change it passage by passage instead` };
-  const lower = new RegExp(`(?<![\\p{L}\\p{N}_])${esc(from.toLowerCase())}(?![\\p{L}\\p{N}_])`, 'u');
+  const lower = new RegExp(`(?<![\\p{L}\\p{N}])${esc(from.toLowerCase())}(?![\\p{L}\\p{N}])`, 'u');
   if (eachPassage(novel).some((x) => lower.test(String(x.version.text)))) return { why: `the book also uses “${from.toLowerCase()}” as an ordinary word — change it passage by passage instead` };
   return { from, to, rule: renameRule(from, to) };
 }
@@ -538,7 +543,7 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
  * over every text as it stood; the rest one by one. [[op index, …], …] */
 export function groupsOf(ops) {
   const out = [];
-  const holds = (x, y) => Boolean(x && y) && new RegExp(`(?<![\\p{L}\\p{N}_])${esc(x)}(?![\\p{L}\\p{N}_])`, 'iu').test(y);
+  const holds = (x, y) => Boolean(x && y) && new RegExp(`(?<![\\p{L}\\p{N}])${esc(x)}(?![\\p{L}\\p{N}])`, 'iu').test(y);
   const kinds = [
     [(o) => o && !o.unreadable && o.rename && typeof o.rename === 'object', (o) => [text(o.rename.from), text(o.rename.to)]],
     [(o) => o && !o.unreadable && !o.rename && o.replace_all !== undefined, (o) => [String(o.find || '').trim(), String(newWords(o) || '').trim()]],
@@ -683,6 +688,16 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
       else copy = { ...clone(r), sig: to.sig, cards: (r.cards || []).map((c) => ({ ...c, before: swapCard(c.before), after: swapCard(c.after) })), kept: Object.fromEntries(Object.entries(r.kept || {}).map(([k, v]) => [k, { before: swapKept(v.before), after: swapKept(v.after) }])) };
       put('novel', novelId, novelSteps.putReading(x.passage.id, made.versionId, copy), { now: true });
     }
+    /* the bibliography's facts it established, their words changed with it (bibliography.js carriedCodex): never read for again */
+    const facts = carriedCodex(codexNow(x.version), next, quiet);
+    if (facts) {
+      put('chapter', x.chapterId, (ch) => {
+        const p = (ch.passages || []).find((y) => y.id === x.passage.id);
+        const v = p && (p.versions || []).find((y) => y.id === made.versionId);
+        if (!v || hashText(String(v.text || '')) !== facts.fp) return false;
+        v.codex = JSON.parse(JSON.stringify(facts));
+      }, { now: true });
+    }
     /* the checker's findings on it, their words changed with it */
     const live = store.peek('chapter', x.chapterId);
     const e = live && live.checks && live.checks[x.passage.id] && live.checks[x.passage.id][x.version.id];
@@ -778,6 +793,65 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
 
 /* One change, made. Returns the change as kept on the reply:
  * {id, op, label, why, status: 'made'|'refused', said?, undo?}. */
+/* when the writer reads an entry, as it may be said */
+const RIDES_SAID = { always: 'always', named: 'named', 'when named': 'named', 'when its name comes up': 'named', never: 'never', 'only for me': 'never' };
+const entryRides = (v) => RIDES_SAID[String(v || '').trim().toLowerCase()] || '';
+function makeEntry(novelId, novel, op, { base, refuse, put, at }) {
+  const entries = entriesOf(novel);
+  const name = archivist.cleanName(op.entry);
+  if (!name) return refuse(text(op.entry) ? `“${clipped(text(op.entry))}” is no name — name the entry as the bibliography does` : 'the entry needs a name');
+  const m = entryNamed(entries, name);
+  if (m.ambiguous) return refuse(`more than one entry goes by ${name} — name it by its full name`);
+  const cur = m.entry ? clone(m.entry) : null;
+  if (truthOf(op.remove) === true) {
+    if (!cur) return refuse(`there is no ${name} in the bibliography`);
+    put('novel', novelId, novelSteps.dropEntry(cur.id), { now: true });
+    return { ...base, status: 'made', undo: { what: 'entry', id: cur.id, before: cur, after: null }, before: cur.text || cur.line || '', after: '' };
+  }
+  const next = cur ? clone(cur) : newEntry({ name, kind: 'people', at });
+  const newName = archivist.cleanName(op.newName !== undefined ? op.newName : op.rename_to);
+  if (newName && !cur) return refuse(`there is no ${name} in the bibliography to rename`);
+  if (newName && nameKey(newName) !== nameKey(cur.name)) {
+    if (nameTaken(entries, newName, cur.id)) return refuse(`another entry goes by ${newName} already`);
+    next.aka = [...(next.aka || []), cur.name];
+    next.name = newName;
+  }
+  if (op.kind !== undefined) {
+    const k = kindSaid(op.kind);
+    if (!k) return refuse(`“${clipped(text(op.kind))}” is not a kind of entry — people, places, things, groups or lore`);
+    next.kind = k;
+  }
+  if (op.rides !== undefined) {
+    const r = entryRides(op.rides);
+    if (!r) return refuse(`“${clipped(text(op.rides))}” is not when the writer reads it — always, named or never`);
+    next.rides = r;
+  }
+  const line = op.line === undefined ? '' : archivist.cleanText(op.line, 400);
+  if (line) next.line = line.replace(/\s*\n+\s*/g, ' ');
+  const whole = op.text === undefined ? '' : archivist.cleanText(op.text, 20000);
+  if (whole) next.text = whole;
+  const more = op.add === undefined ? '' : archivist.cleanText(op.add, 8000);
+  /* the same paragraph never twice (an answer asked again, a round sent again: as the book's own words, M79/M603) */
+  const had = String(next.text || '');
+  const twice = Boolean(more && had.trim() && (!locate(had, more).why || had.includes(more)));
+  if (more && !twice) next.text = [had.trim(), more].filter(Boolean).join('\n\n');
+  const names = (v) => (v === undefined || v === null ? [] : Array.isArray(v) ? v : String(v).split(',')).map(archivist.cleanName).filter(Boolean);
+  const less = names(op.dropAka).map(nameKey);
+  for (const a of names(op.aka)) {
+    if (nameKey(a) === nameKey(next.name) || less.includes(nameKey(a))) continue;
+    if (nameTaken(entries, a, next.id)) return refuse(`another entry goes by ${a} already`);
+    next.aka = [...(next.aka || []), a];
+  }
+  if (less.length) next.aka = (next.aka || []).filter((a) => !less.includes(nameKey(a)));
+  const tidy = tidyEntry(next);
+  if (!ENTRY_KINDS.includes(tidy.kind) || !RIDES.includes(tidy.rides)) return refuse('the entry could not be read');
+  if (cur && JSON.stringify(tidy) === JSON.stringify(tidyEntry(cur))) return refuse(twice ? 'those words are there already' : 'the entry already says that');
+  if (!cur && !tidy.line && !tidy.text) return refuse('it gave nothing to write in a new entry');
+  const after = { ...tidy, at, by: 'partner' };
+  put('novel', novelId, novelSteps.putEntry(after), { now: true });
+  return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(after) }, before: cur ? (cur.text || cur.line || '') : '', after: after.text || after.line || '' };
+}
+
 export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null, short = null } = {}) {
   /* dry: everything looked at as it would be, nothing written — whether it would land (whyNot) */
   const put = dry ? () => {} : (...a) => store.change(...a);
@@ -994,6 +1068,8 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     return { ...base, status: 'made', undo: { what: 'book', field, meta, before: old, after: next }, before: old, after: next };
   }
 
+  /* an entry in his bibliography (bibliography.js): his, made at his asking */
+  if (op.entry !== undefined) return makeEntry(novelId, novel, op, { base, refuse, put, at });
   if (op.note !== undefined && archivist.rereading(novelId)) return refuse(REREADING);
   if (op.note !== undefined) {
     const kind = op.note;
@@ -1178,6 +1254,11 @@ export function undoChange(novelId, change) {
     if (!back) return { ok: false, said: 'everything it changed has been changed again since' };
     return { ok: true, said: kept ? `${back} put back; ${kept} changed since, kept as they are` : '' };
   }
+  if (u.what === 'entry') {
+    const done = store.change('novel', novelId, novelSteps.entryBack(u.id, u.before, u.after), { now: true });
+    if (done === false) return { ok: false, said: u.after ? 'the entry has been changed since' : 'the entry is back in the bibliography already' };
+    return { ok: true };
+  }
   if (u.what === 'module') {
     const m = listModules(store.peek('house', 'house') || {}).find((x) => x.id === u.id);
     if (!m || String(m.text || '') !== u.after) return { ok: false, said: 'the module has been changed since' };
@@ -1273,6 +1354,7 @@ export function targetOf(op, where = null) {
   if (o.unreadable || o.rename || o.replace_all !== undefined) return '';
   if (o.passage !== undefined) return where && where.passageId ? `p#${where.passageId}` : `p:${String(o.passage).trim()}`;
   if (o.note !== undefined) return `n:${o.note}:${nameKey(archivist.cleanName(o.name) || o.name)}`;
+  if (o.entry !== undefined) return `e:${nameKey(archivist.cleanName(o.entry) || o.entry)}`;
   if (o.module !== undefined) return `m:${nameKey(o.module)}`;
   if (o.summary !== undefined) return where && where.chapterId ? `s#${where.chapterId}` : `s:${chapterNumber(o.summary) || 0}`;
   if (o.plan !== undefined) return where && where.chapterId ? `pl#${where.chapterId}` : `pl:${chapterNumber(o.plan) || 0}`;
@@ -1285,12 +1367,44 @@ export function targetOf(op, where = null) {
  * writes its thing whole */
 export function fieldsOf(op) {
   const o = op || {};
+  if (o.entry !== undefined) return entryFieldsOf(o, { clash: true });
   if (o.note === undefined || truthOf(o.remove) === true) return null;
   const out = ['about', 'now', 'ties'].filter((k) => o[k] !== undefined && archivist.cleanText(o[k]));
   if (archivist.cleanName(o.newName !== undefined ? o.newName : o.rename_to)) out.push('name');
   if (o.aka !== undefined || o.dropAka !== undefined) out.push('aka');
   if (openOf(o) !== undefined) out.push('open');
   return out;
+}
+/* the parts of an entry a change to it writes: its name, other names, kind,
+ * when it rides, its line, its words whole (null: the entry taken out,
+ * whole). A paragraph it only adds is watched for nothing — it goes on
+ * whatever stands — but `clash`: a newer answer's words for the entry, a
+ * paragraph or the whole of them, set aside an older one's still waiting
+ * (M397), as the book's own words do. */
+function entryFieldsOf(o, { clash = false } = {}) {
+  if (truthOf(o.remove) === true) return null;
+  const out = [];
+  if (archivist.cleanName(o.newName !== undefined ? o.newName : o.rename_to)) out.push('name', 'aka');
+  if ((o.aka !== undefined || o.dropAka !== undefined) && !out.includes('aka')) out.push('aka');
+  for (const k of ['kind', 'rides', 'line', 'text']) if (o[k] !== undefined) out.push(k);
+  if (clash && o.add !== undefined && !out.includes('text')) out.push('text');
+  return out;
+}
+/* the thing a change renames comes to be called this (an entry or a card given a new name): '' when it renames nothing */
+export function renamedTarget(op) {
+  const o = op || {};
+  const to = archivist.cleanName(o.newName !== undefined ? o.newName : o.rename_to);
+  if (!to) return '';
+  if (o.entry !== undefined) return `e:${nameKey(to)}`;
+  if (o.note !== undefined) return `n:${o.note}:${nameKey(to)}`;
+  return '';
+}
+/* how an entry stood for a change to it: the parts it writes ("f:"), the whole entry it takes out ("w:"), or none there */
+function entryBase(op, entry) {
+  if (!entry) return 'none';
+  const fields = entryFieldsOf(op);
+  return fields ? `f:${hashText(JSON.stringify(fields.map((k) => (entry[k] === undefined ? null : entry[k]))))}`
+    : `w:${hashText(JSON.stringify({ ...entry, at: null, by: null }))}`;
 }
 function cardBase(op, card) {
   if (!card) return 'none';
@@ -1308,7 +1422,7 @@ function moduleNamed(rows, name) {
 /* Follow makeChange's routing: extra fields a model supplied must not turn
  * a whole edit into a quote or addition that the applying branch ignores. */
 function scopeOf(op) {
-  return ['module', 'summary', 'plan', 'passage', 'chapter', 'book', 'note'].find((key) => op[key] !== undefined);
+  return ['module', 'summary', 'plan', 'passage', 'chapter', 'book', 'note', 'entry'].find((key) => op[key] !== undefined);
 }
 function quotedChange(op, scope = scopeOf(op)) {
   return op.find !== undefined && (['module', 'summary', 'book'].includes(scope)
@@ -1321,7 +1435,7 @@ function quotedChange(op, scope = scopeOf(op)) {
 export function snapshotForChanges(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return null;
-  const snapshot = { book: {}, chapters: {}, passages: {}, notes: clone(novel.notes || {}),
+  const snapshot = { book: {}, chapters: {}, passages: {}, notes: clone(novel.notes || {}), entries: clone(entriesOf(novel)),
     modules: listModules(store.peek('house', 'house') || {}).map((m) => ({ id: m.id, name: m.name, base: hashText(String(m.text || '')) })) };
   for (const book of Object.keys(BOOK_FIELDS)) snapshot.book[book] = baseOf(novelId, { book });
   for (const chapterId of novel.order || []) {
@@ -1377,6 +1491,13 @@ export function changedSinceSnapshot(novelId, op, snapshot, { where = null, numb
     if ((old && old.id) !== (current && current.id)) return changed;
     before = cardBase(o, old);
     now = cardBase(o, current);
+  } else if (scope === 'entry') {
+    const name = archivist.cleanName(o.entry) || text(o.entry);
+    const old = entryNamed(snapshot.entries || [], name).entry;
+    const current = entryNamed(entriesOf(novel), name).entry;
+    if ((old && old.id) !== (current && current.id)) return changed;
+    before = entryBase(o, old);
+    now = entryBase(o, current);
   }
   return before !== undefined && before !== now ? changed : '';
 }
@@ -1397,6 +1518,7 @@ export function baseOf(novelId, op, where = null) {
     if (o.plan !== undefined) { const c = chapterAt(novel, o.plan, { where }).chapter; return c ? hashText(String(c.plan || '')) : ''; }
     if (o.chapter !== undefined) { const c = chapterAt(novel, o.chapter, { where }).chapter; return c ? hashText(String(c.name || '')) : ''; }
     if (o.module !== undefined) { const m = moduleNamed(listModules(store.peek('house', 'house') || {}), o.module); return m ? hashText(String(m.text || '')) : ''; }
+    if (o.entry !== undefined) return entryBase(o, entryNamed(entriesOf(novel), archivist.cleanName(o.entry) || text(o.entry)).entry);
   } catch (_) { /* nothing to print */ }
   return '';
 }
@@ -1434,6 +1556,7 @@ export function wordsNow(novelId, change) {
     if (o.plan !== undefined) { const x = chapterAt(novel, o.plan, { where: c.where || null }).chapter; return x ? String(x.plan || '') : ''; }
     if (o.chapter !== undefined && o.passage === undefined) { const x = chapterAt(novel, o.chapter, { where: c.where || null }).chapter; return x ? String(x.name || '') : ''; }
     if (o.note !== undefined && o.about !== undefined) { const m = matchCard((novel.notes || {})[o.note] || [], archivist.cleanName(o.name), [], { kind: o.note, near: false }); return m.card ? String(m.card.about || '') : ''; }
+    if (o.entry !== undefined && o.text !== undefined) { const e = entryNamed(entriesOf(novel), archivist.cleanName(o.entry)).entry; return e ? String(e.text || '') : ''; }
   } catch (_) { /* nothing to show */ }
   return '';
 }

@@ -26,6 +26,7 @@ import { resign } from './archivist.js';
 import { locate } from './changes.js';
 import { liftOfFaults } from './checker.js';
 import { hashText, countWords } from '../util.js';
+import { carriedCodex } from './bibliography.js';
 
 /* 2: a plan or a draft above the page, and its check of its own work after it, come off too; a lift echoed from an old example is said again */
 export const MEND_V = 2;
@@ -82,6 +83,15 @@ export async function mendBook(novelId) {
           if (!e || e.sig !== hashText(was)) return;
           e.sig = hashText(m.text);
           e.items = (e.items || []).filter((x) => x.kind === 'grade' || !x.find || !locate(m.text, x.find).why);
+        }, { checkpoint: true });
+        /* the bibliography's facts of them, where every one still stands in the mended words (else read for them again) */
+        store.change('chapter', c.id, (ch) => {
+          const pp = (ch.passages || []).find((x) => x.id === p.id);
+          const vv = pp && (pp.versions || []).find((x) => x.id === v.id);
+          if (!vv || !vv.codex || vv.codex.fp !== hashText(was) || hashText(String(vv.text || '')) !== hashText(m.text)) return false;
+          const facts = carriedCodex(vv.codex, m.text);
+          if (!facts) return false;
+          vv.codex = facts;
         }, { checkpoint: true });
         /* and what the helper read of them */
         resign(novelId, c.id, p.id, v.id, was, m.text);

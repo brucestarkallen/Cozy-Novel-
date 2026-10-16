@@ -10,7 +10,24 @@
 
 /* a name with its letters folded: accents off, case off, punctuation to spaces */
 export function foldName(name) {
-  return String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const key = String(name || '');
+  return remembered(FOLDED, key, () => key.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim());
+}
+/* A name is folded and parsed again and again — every card held against
+ * every name the bibliography gathers (bibItems: 1,500 names and 400 cards
+ * took 1.7 s, most of it here): each short name's answer is kept, up to a
+ * few thousand, and the store let go once it is full. Pure functions of the
+ * name, so the answer kept is the answer. */
+const FOLDED = new Map();
+const PARSED = new Map();
+function remembered(store, key, make) {
+  if (key.length > 200) return make();
+  const had = store.get(key);
+  if (had !== undefined) return had;
+  const made = make();
+  if (store.size >= 8000) store.clear();
+  store.set(key, made);
+  return made;
 }
 
 const TITLE_KIND = {
@@ -41,7 +58,12 @@ function nameFold(name) {
 }
 /* a courtesy or a rank after the name only when joined to it the Japanese way */
 const TRAILING = /[-‐‑–]\s*(san|sama|kun|chan|dono|sensei|senpai|taich[oō]u?|fukutaich[oō]u?|s[oō]taich[oō]u?)\s*$/iu;
+/* (kept: never changed by those who read it — titles read, words copied before sorting) */
 function parseName(name) {
+  const key = String(name || '');
+  return remembered(PARSED, key, () => parsedName(key));
+}
+function parsedName(name) {
   let raw = String(name || '').trim();
   const titles = new Set();
   for (let m = TRAILING.exec(raw); m && raw.slice(0, m.index).trim(); m = TRAILING.exec(raw)) {
@@ -409,8 +431,9 @@ const escRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /* a name as a whole word, as written or in capitals (Cozy Tavern's
  * spelling) — never part of a longer word, nor of a name joined with a
  * hyphen ("Mary" is not in "Mary-Jane") */
-const EDGE_BEFORE = '(?<![\\p{L}\\p{N}_])(?<![\\p{L}\\p{N}]-)';
-const EDGE_AFTER = '(?![\\p{L}\\p{N}_])(?!-[\\p{L}\\p{N}])';
+/* (an underscore is no letter: _Mara_ is Mara in italics, and is changed with her) */
+const EDGE_BEFORE = '(?<![\\p{L}\\p{N}])(?<![\\p{L}\\p{N}]-)';
+const EDGE_AFTER = '(?![\\p{L}\\p{N}])(?!-[\\p{L}\\p{N}])';
 export function nameRe(name) {
   const n = String(name || '');
   const forms = [...new Set([n, n.toUpperCase()])].map(escRe).join('|');

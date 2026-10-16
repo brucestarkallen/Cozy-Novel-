@@ -95,8 +95,12 @@ class H(BaseHTTPRequestHandler):
         entry = {"path": self.path, "body": body, "at": time.time()}
         with LOCK:
             REQUESTS.append(entry)
-            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")):
+            backfill = "were read into the notes before the book’s bibliography was kept" in last_user
+            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")):
                 beh = QUEUE.pop(0)
+            elif backfill:
+                # the bibliography filled for pages read before it (2.12): nothing found, unless the test queued an answer for it ({"bib": true})
+                beh = {"text": json.dumps({"bibliography": []})}
             elif 'Answer with {"ok": true} and nothing else.' in last_user:
                 # the helper making sure its model is there: yes, unless the test says otherwise ({"probe": ...})
                 beh = {"text": '{"ok": true}'}

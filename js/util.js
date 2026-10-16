@@ -160,7 +160,19 @@ export function openOf(row) {
 
 /* A name compared the way a person would: case, accents and spacing aside. */
 export function nameKey(s) {
-  return String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const raw = String(s || '');
+  /* a name is keyed again and again (every card against every name the bibliography gathers): a short one's key is kept */
+  if (raw.length > 200) return keyOfName(raw);
+  const had = NAME_KEYS.get(raw);
+  if (had !== undefined) return had;
+  const made = keyOfName(raw);
+  if (NAME_KEYS.size >= 8000) NAME_KEYS.clear();
+  NAME_KEYS.set(raw, made);
+  return made;
+}
+const NAME_KEYS = new Map();
+function keyOfName(raw) {
+  return raw.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
 export function slug(s, max = 40) {

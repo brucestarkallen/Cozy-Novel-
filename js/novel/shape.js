@@ -386,6 +386,31 @@ export const novelSteps = {
     if (from && from.notes && n.memory.undo && n.memory.undo.keep) from.notes[kind] = (from.notes[kind] || []).filter((c) => c.id !== cardId);
   },
   setNotes: (notes) => (n) => { n.notes = notes; },
+  /* THE BIBLIOGRAPHY (bibliography.js): an entry set whole, by id — laid
+   * again over a newer copy it writes only that entry; taken out by id */
+  putEntry: (entry) => (n) => {
+    const e = JSON.parse(JSON.stringify(entry));
+    const list = Array.isArray(n.bibliography) ? n.bibliography : (n.bibliography = []);
+    const i = list.findIndex((x) => x && x.id === e.id);
+    if (i >= 0) list[i] = e; else list.push(e);
+  },
+  dropEntry: (id) => (n) => {
+    if (!Array.isArray(n.bibliography)) return false;
+    const before = n.bibliography.length;
+    n.bibliography = n.bibliography.filter((x) => x && x.id !== id);
+    return n.bibliography.length !== before;
+  },
+  /* an entry put back as it was — only where it still reads as it did after (an Undo) */
+  entryBack: (id, before, after) => (n) => {
+    const list = Array.isArray(n.bibliography) ? n.bibliography : (n.bibliography = []);
+    const i = list.findIndex((x) => x && x.id === id);
+    const cur = i >= 0 ? list[i] : null;
+    if (JSON.stringify(cur) !== JSON.stringify(after || null)) return false;
+    if (!before) { if (i >= 0) list.splice(i, 1); }
+    else if (i >= 0) list[i] = JSON.parse(JSON.stringify(before));
+    else list.push(JSON.parse(JSON.stringify(before)));
+    return true;
+  },
   /* the helper's changes, card by card, by id: a card set to how it read
    * after, or taken out when it is gone after — only where it still reads as
    * it did when the change was made (Cozy Tavern's M680-5: a step laid again

@@ -20,6 +20,7 @@ import { findIn } from '../novel/search.js';
 import { makeChange, undoChange } from '../novel/changes.js';
 import { nameChange, namedMidSentence, foldName } from '../novel/names.js';
 import { openBranch, branchBusy } from './branches.js';
+import { pageNames, tapName } from './bibliography.js';
 
 const S = {
   novelId: null, chapterId: null,
@@ -50,6 +51,7 @@ export function initDesk(elements, appHooks) {
   hooks = appHooks;
   fitDirection = autoGrow(ui.direction);
   ui.direction.addEventListener('input', saveDraft);
+  ui.direction.addEventListener('input', () => drawWriteLabel());
   ui.direction.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onWrite(); } });
   ui.writeBtn.addEventListener('click', onWrite);
   ui.mineBtn.addEventListener('click', onMine);
@@ -57,6 +59,8 @@ export function initDesk(elements, appHooks) {
   ui.lengthBtn.addEventListener('click', () => lengthMenu());
   ui.outcomeBtn.addEventListener('click', () => outcomeMenu());
   ui.writerBtn.addEventListener('click', () => hooks.writerMenu(ui.writerBtn));
+  /* Tap names switched on or off, here or in another window */
+  store.subscribe('house', 'house', () => namesMoved());
   ui.wrap.addEventListener('scroll', onScroll, { passive: true });
   F = follower(ui.wrap, { tail: () => tailTop(S.followId), active: busy, onChange: (on) => { ui.followBtn.hidden = on || !busy(); } });
   initScroller();
@@ -106,7 +110,7 @@ export async function openChapter(novelId, chapterId) {
     if (S.drawn !== null && samePage(S.drawn, shownSig(chapter()))) return;
     drawSoon();
   }));
-  S.offs.push(store.subscribe('novel', novelId, () => { drawHead(); drawComposer(); }));
+  S.offs.push(store.subscribe('novel', novelId, () => { drawHead(); drawComposer(); namesMoved(); }));
   if (changingBook) loadDraft();
   drawHead();
   drawPage({ keepScroll: false });
@@ -240,6 +244,14 @@ function renameFromHeading() {
 
 let drawFrame = 0;
 function drawSoon() { if (!drawFrame) drawFrame = requestAnimationFrame(() => { drawFrame = 0; drawPage(); }); }
+/* the names the page marks changed (an entry, a card, Tap names): drawn again with them */
+let namesDrawn = '';
+function namesMoved() {
+  if (!S.novelId) return;
+  const names = pageNames(S.novelId);
+  if ((names ? names.sig : '') !== namesDrawn) drawSoon();
+}
+export { namesMoved };
 
 /* Keep only what is visible. Comparing whole records serialized every old
  * version, request, and folded thinking on every save, even when the page
@@ -254,7 +266,8 @@ function shownSig(c) {
   if (!c) return { name: '', keys: [] };
   const tint = ((store.peek('house', 'house') || {}).look || {}).tint !== 'off';
   const nums = passageNumbers(c), working = busy();
-  return { name: c.name || '', keys: (c.passages || []).map((p) => drawnKey(p, { tint, nums, working, snapshot: true })) };
+  const names = pageNames(S.novelId);
+  return { name: c.name || '', keys: (c.passages || []).map((p) => drawnKey(p, { tint, nums, working, names, snapshot: true })) };
 }
 
 export function drawPage({ keepScroll = true } = {}) {
@@ -264,6 +277,9 @@ export function drawPage({ keepScroll = true } = {}) {
   if (!c || !n) return;
   const look = (store.peek('house', 'house') || {}).look || {};
   const tint = look.tint !== 'off';
+  /* the names the page marks, each opening its card (bibliography.js; Tap names) */
+  const names = pageNames(S.novelId);
+  namesDrawn = names ? names.sig : '';
   const keep = keepScroll ? ui.wrap.scrollTop : 0;
   /* what he is typing on the page survives the page being drawn again */
   const editing = ui.passages.querySelector('.editbox');
@@ -283,14 +299,14 @@ export function drawPage({ keepScroll = true } = {}) {
   for (const [id, el] of was) if (!wanted.has(id)) el.remove();
   let at = ui.passages.firstChild;
   for (const p of list) {
-    const key = drawnKey(p, { tint, nums, working });
+    const key = drawnKey(p, { tint, nums, working, names });
     const old = was.get(p.id);
     const as = old && drawnAs.get(old);
     let el = old;
     if (!as || as.chapterId !== S.chapterId || old.parentNode !== ui.passages || as.key.body[1] !== p.by || as.key.body[7] !== (S.editing === p.id)) {
-      el = drawPassage(p, { tint });
+      el = drawPassage(p, { tint, names });
       if (old && old.parentNode === ui.passages) { if (at === old) at = old.nextSibling; old.replaceWith(el); }
-    } else if (!sameKey(as.key, key)) updatePassage(el, p, { tint }, as.key, key);
+    } else if (!sameKey(as.key, key)) updatePassage(el, p, { tint, names }, as.key, key);
     drawnAs.set(el, { chapterId: S.chapterId, key });
     S.els.set(p.id, el);
     if (el === at) at = at.nextSibling;
@@ -316,14 +332,14 @@ export function drawPage({ keepScroll = true } = {}) {
  * and how it is shown (chosen, being edited, the rewrite box, its thinking
  * unfolded) — and for the chosen one its controls (busy, its number, when) */
 const drawnAs = new WeakMap();   /* element -> its visible fields */
-function drawnKey(p, { tint, nums, working, snapshot = false }) {
+function drawnKey(p, { tint, nums, working, names = null, snapshot = false }) {
   const sel = S.selected === p.id;
   const v = picked(p) || {};
   const live = S.live.get(p.id);
   const checkpoint = snapshot && writingHere(v);
   const text = checkpoint ? null : (live ? live.text : v.text);
   const thinking = checkpoint ? null : (live ? live.thinking : v.thinking);
-  const body = [p.id, p.by, v.id, text, thinking, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id), Boolean(v.streaming || live)];
+  const body = [p.id, p.by, v.id, text, thinking, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id), Boolean(v.streaming || live), names ? names.sig : ''];
   const controls = sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : '', gradeSaid(p),
     p.pick, (p.versions || []).length, ...(p.versions || []).map((x) => x.id), Boolean(v.streaming || live), cutAtEnd(v), Boolean(writer.takeOf(p)),
     v.how, v.why, checkpoint ? null : v.words, checkpoint ? null : v.text, v.tokensIn, v.tokensCounted, v.ask && v.ask.note,
@@ -331,7 +347,7 @@ function drawnKey(p, { tint, nums, working, snapshot = false }) {
   return { body, controls };
 }
 
-function updatePassage(el, p, { tint }, before, after) {
+function updatePassage(el, p, { tint, names = null }, before, after) {
   const v = picked(p) || {};
   const live = S.live.get(p.id);
   const text = live ? live.text : v.text;
@@ -343,8 +359,8 @@ function updatePassage(el, p, { tint }, before, after) {
   else if (box && !thinking) box.remove();
   else if (box) updateThinkBox(box, thinking, { live: Boolean(live && !live.text) });
   const prose = el.querySelector(':scope > .prose');
-  if (prose && (before.body[3] !== after.body[3] || before.body[5] !== tint || (!text && Boolean(before.body[4]) !== Boolean(after.body[4])))) {
-    growProse(prose, text, { tint });
+  if (prose && (before.body[3] !== after.body[3] || before.body[5] !== tint || before.body[11] !== after.body[11] || (!text && Boolean(before.body[4]) !== Boolean(after.body[4])))) {
+    growProse(prose, text, { tint, names });
     if (!text && (v.streaming || live)) prose.append(h('p', { style: { color: 'var(--ink-faint)', fontStyle: 'italic' } }, thinking ? 'Thinking…' : 'Writing…'));
   }
   if (!sameParts(before.controls, after.controls) || before.body[6] !== after.body[6]) {
@@ -369,7 +385,7 @@ function defaultSelected(list) {
   return null;
 }
 
-function drawPassage(p, { tint }) {
+function drawPassage(p, { tint, names = null }) {
   /* a passage is reached by keyboard too: Enter shows its controls */
   const el = h('div.passage', { 'data-id': p.id, tabindex: '0' });
   el.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); select(p.id); } });
@@ -400,12 +416,15 @@ function drawPassage(p, { tint }) {
     return el;
   }
   const prose = h('div.prose');
-  drawProse(prose, text, { tint });
+  drawProse(prose, text, { tint, names });
   if (!text && (v.streaming || live)) prose.append(h('p', { style: { color: 'var(--ink-faint)', fontStyle: 'italic' } }, thinking ? 'Thinking…' : 'Writing…'));
   el.append(prose);
   el.addEventListener('click', (e) => {
     if (e.target.closest('.pctl, .thinkbox, .rewriterow, button, textarea, input')) return;
     if (window.getSelection && !window.getSelection().isCollapsed) return;
+    /* a marked name opens its card (Tap names) — the passage stays as it was */
+    const nm = e.target.closest('.prose .nm');
+    if (nm && nm.dataset.name) { tapName(S.novelId, nm.dataset.name, e); return; }
     select(p.id);
   });
   if (S.selected === p.id) {
@@ -816,6 +835,29 @@ function drawChip(button, label) {
   button.replaceChildren(h('b', label), icon('down', 14));
 }
 let writeLabel = '';
+/* the one button under the page says what it does now: Stop while the writer
+ * writes, Rewrite for selected words, Write for his premise — and Continue
+ * with the box empty: the writer chooses what happens next (prompts.js
+ * writeRequest, no premise) */
+/* Continue: the box empty and the next passage at the chapter's end (Write from here on its last passage too) —
+ * between two passages the writer bridges them, and the button says Write */
+function atTheEnd() {
+  if (!S.insertAfter) return true;
+  const c = chapter();
+  const list = (c && c.passages) || [];
+  const at = list.findIndex((p) => p.id === S.insertAfter);
+  return at < 0 || !list.slice(at + 1).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
+}
+function drawWriteLabel(working = busy()) {
+  const empty = !ui.direction.value.trim();
+  const label = working ? 'Stop' : S.sel ? 'Rewrite' : empty && atTheEnd() ? 'Continue' : 'Write';
+  if (label === writeLabel) return;
+  writeLabel = label;
+  ui.writeBtn.replaceChildren(...(working ? [icon('stop', 16), label] : [label]));
+  ui.writeBtn.classList.toggle('primary', !working);
+  ui.writeBtn.title = working ? 'Stops the writer — what came is kept' : label === 'Rewrite' ? 'Writes the selected words again, the rest of the passage as it is'
+    : label === 'Continue' ? 'The writer decides what happens next — whatever this story most needs now — and writes it onto the page' : 'Writes what the box says happens next';
+}
 function drawComposer() {
   const n = novel();
   if (!n) return;
@@ -826,12 +868,7 @@ function drawComposer() {
   const house = store.peek('house', 'house') || {};
   const w = writer.connFor(house, 'writer');
   drawChip(ui.writerBtn, w ? writer.connName(w) : 'Choose a writer');
-  const label = working ? 'Stop' : S.sel ? 'Rewrite' : 'Write';
-  if (label !== writeLabel) {
-    writeLabel = label;
-    ui.writeBtn.replaceChildren(...(working ? [icon('stop', 16), label] : [label]));
-    ui.writeBtn.classList.toggle('primary', !working);
-  }
+  drawWriteLabel(working);
   ui.mineBtn.disabled = working || Boolean(S.sel);
   /* Ideas: there only while it is on (Settings → Who does what) */
   ui.ideasBtn.hidden = !ideasOn(house);
@@ -1086,6 +1123,7 @@ function onLive(ev) {
 function flushLive() {
   if (!pending.size) return;
   const tint = ((store.peek('house', 'house') || {}).look || {}).tint !== 'off';
+  const names = pageNames(S.novelId);
   for (const [pid, ev] of pending) {
     const el = S.els.get(pid);
     if (!el) { drawPage(); break; }
@@ -1094,7 +1132,7 @@ function flushLive() {
     if (ev.thinking && !box) { box = thinkBox(pid, ev.thinking, !ev.text); el.prepend(box); }
     else if (box) updateThinkBox(box, ev.thinking, { live: !ev.text });
     const prose = el.querySelector(':scope > .prose');
-    if (prose && ev.text) growProse(prose, ev.text, { tint });
+    if (prose && ev.text) growProse(prose, ev.text, { tint, names });
   }
   const his = [...pending.values()].some((ev) => !ev.auto);
   pending.clear();
@@ -1317,7 +1355,7 @@ async function loadDraft() {
   try {
     const d = await store.open('draft', id);
     /* still this book, and he has not started typing meanwhile */
-    if (S.novelId === id && d && d.direction && !ui.direction.value) { ui.direction.value = d.direction; fitDirection(); }
+    if (S.novelId === id && d && d.direction && !ui.direction.value) { ui.direction.value = d.direction; fitDirection(); drawWriteLabel(); }
   } catch (_) { /* nothing kept */ }
 }
 

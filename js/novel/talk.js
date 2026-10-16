@@ -24,13 +24,14 @@ import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN } from './prompts.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop } from './textshape.js';
 import { numberedText } from './context.js';
-import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot } from './changes.js';
+import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot, renamedTarget } from './changes.js';
 import { searchBook } from './search.js';
 import { listModules } from './modules.js';
 import { nameKey } from '../util.js';
 import * as archivist from './archivist.js';
 import { convSteps, conversationsOf, freeName, openName, cleanConvName, markedName } from './conversations.js';
 import { scenePlan } from './stretches.js';
+import { entriesOf, entryNamed, entryWords, KIND_TITLE } from './bibliography.js';
 
 const running = new Map();        /* 'talk/<id>' | 'play/<id>' -> job */
 const jobFns = new Set();
@@ -550,7 +551,7 @@ function joinThought(before, now, why) {
 }
 const READ_LAST = 'That is all of the book one answer can read: answer now, from what you have.';
 const AGAIN_CUT = 'Asked again for the change it described, the answer came back cut — its first answer stands, with what the second one made.';
-const READ_HOW = 'That read block could not be read. Ask for a chapter by its number — [3] — for every place some words stand with "find: …", or for a module with "module: …", in a read block; or answer from what you have.';
+const READ_HOW = 'That read block could not be read. Ask for a chapter by its number — [3] — for every place some words stand with "find: …", for an entry of the bibliography with "entry: …", or for a module with "module: …", in a read block; or answer from what you have.';
 
 /* ----------------------------------------------------- the partner's changes */
 
@@ -558,6 +559,7 @@ const READ_HOW = 'That read block could not be read. Ask for a chapter by its nu
 function askLabel(n) {
   if (n && typeof n === 'object' && n.find) return `where “${n.find}” stands`;
   if (n && typeof n === 'object' && n.card) return `the card “${n.card}”`;
+  if (n && typeof n === 'object' && n.entry) return `the entry “${n.entry}”`;
   if (n && typeof n === 'object' && n.module) return `the module “${n.module}”`;
   return `Chapter ${numberWords(n)}`;
 }
@@ -593,6 +595,15 @@ function readRows(novelId, asked) {
         return { label: `The card “${c.name}”`, text: lines.join('\n'), cardId: c.id };
       }
       return { label: `The card “${n.card}”`, text: '(there is no card by that name in the notes)', missing: true };
+    }
+    /* an entry of his bibliography, whole */
+    if (n && typeof n === 'object' && n.entry) {
+      const m = entryNamed(entriesOf(novel), n.entry);
+      if (m.ambiguous) return { label: `The entry “${n.entry}”`, text: '(more than one entry goes by that name — ask for it by its full name)', missing: true };
+      if (!m.entry) return { label: `The entry “${n.entry}”`, text: '(there is no entry by that name in the bibliography)', missing: true };
+      const e = m.entry;
+      const when = e.rides === 'always' ? 'The writer always reads it.' : e.rides === 'never' ? 'Only for me — the writer never reads it.' : 'The writer reads it when its name comes up.';
+      return { label: `The entry “${e.name}”`, text: `${entryWords(e)}\n(${KIND_TITLE[e.kind] || 'Lore'}. ${when})` };
     }
     /* a module's words, whole */
     if (n && typeof n === 'object' && n.module) {
@@ -827,6 +838,19 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
   let next = c;
   /* written whole over a thing changed since it was offered: said, never made (his own words by hand are his to put) */
   const drift = how === 'apply' && c.status === 'waiting' && !patch ? driftOf(novelId, c) : '';
+  /* the others of this answer still waiting for the same thing — or for it by the new name this one gives it — as it
+   * stood when they were offered: this one making or changing it is the answer's own doing, never a change since, and
+   * they are watched from what it leaves (an entry made and then added to, a card made and then moved, renamed and
+   * then changed under its new name). One it takes out is gone for them too (said as changed since). M422 is for
+   * changes made by anyone else. */
+  const keys = [targetOf(c.op, c.where), renamedTarget(c.op)].filter(Boolean);
+  const inStep = how === 'apply' && c.status === 'waiting' && keys.length
+    ? list.filter((x) => x !== c && x.status === 'waiting' && !x.copied && !x.group && x.base && keys.includes(targetOf(x.op, x.where)) && !driftOf(novelId, x))
+    : [];
+  const rebased = (x) => {
+    const now = baseOf(novelId, x.op, x.where || null);
+    return now && !(x.base !== 'none' && now === 'none') ? { ...x, base: now, rebased: { by: c.id, base: x.base } } : x;
+  };
   const at = c.where ? { where: c.where } : {};
   if (drift) next = { ...c, status: 'refused', said: drift };
   else if (how === 'apply' && c.status === 'waiting') next = patch ? { ...makeChange(novelId, withEdits(c.op, patch), { id: c.id, where: c.where || null }), ...at, edited: true } : { ...makeChange(novelId, c.op, { id: c.id, where: c.where || null }), ...at };
@@ -840,7 +864,11 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
     next = { ...c, status: 'undone', ...(u.said ? { undoneSaid: u.said } : {}) };
   } else return { ok: false, said: 'nothing to do' };
   /* the others made with it are taken back with it */
-  const changes = list.map((x, k) => (k === i ? next : next.status === 'undone' && x.with === c.id && x.status === 'made' ? { ...x, status: 'undone' } : x));
+  /* and when it is undone, they are watched from where it found it again */
+  const unbased = (x) => { const { rebased: was, ...rest } = x; return { ...rest, base: was.base }; };
+  const changes = list.map((x, k) => (k === i ? next : next.status === 'undone' && x.with === c.id && x.status === 'made' ? { ...x, status: 'undone' }
+    : next.status === 'made' && inStep.includes(x) ? rebased(x)
+      : next.status === 'undone' && x.status === 'waiting' && x.rebased && x.rebased.by === c.id ? unbased(x) : x));
   write(changes);
   if (next.status === 'made' || next.status === 'undone') afterChanges(novelId);
   if (how === 'undo') return { ok: true, said: next.undoneSaid || '', partly: Boolean(next.undoneSaid), change: next };

@@ -30,7 +30,8 @@ import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain, rewriteSelection as writeSpanAgain } from './writer.js';
 import * as archivist from './archivist.js';
 import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, writtenWith, howOf, bornOf, chapterText, duelMatches } from './shape.js';
-import { numberedText, shortOf, notesBehind } from './context.js';
+import { numberedText, shortOf, notesBehind, passagesAfter } from './context.js';
+import { bibItems, ridingItems } from './bibliography.js';
 import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
 import { findIn } from './search.js';
@@ -819,7 +820,13 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
   const his = hisWords(house);
   const story = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
   /* the passages before these that the notes have not read, or never will (set aside) */
-  const behind = notesBehind(view, Object.fromEntries(chaptersOf(novelId).map((c) => [c.id, c])), chapter, { before: batch.passages[0].id }, 'write');
+  const inHand = Object.fromEntries(chaptersOf(novelId).map((c) => [c.id, c]));
+  const behind = notesBehind(view, inHand, chapter, { before: batch.passages[0].id }, 'write');
+  /* the bibliography (bibliography.js): who and what these passages name, as the book set them down before them and as
+   * his entries tell them — never from these passages or after them — so a slip against a chapter it reads only in
+   * short is still caught */
+  const bib = ridingItems(bibItems(view, inHand, { facts: true }), { near: batch.passages.map((x) => String((picked(x) || {}).text || '')).join('\n\n'),
+    budget: Math.max(0, Math.min(2500, Math.floor(spare * 0.2))), skip: passagesAfter(novel, inHand, chapter.id, { before: batch.passages[0].id }, 'write') }).words.join('\n\n');
   const edits = [];
   const grades = [];
   const incompleteParts = new Set();
@@ -836,7 +843,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
       const again = (a.repeats || []).map((h) => h.words).filter((w) => words.includes(w)).slice(0, 4);
       if (again.length) repeats[n] = again;
     }
-    return checkRequest({ novel: view, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, beforeFrom: lead.from, judge, stock, strays, repeats, his, sofar: story.text, left: story.left, notesFit, asked: askedOf(words), behind, ...extra });
+    return checkRequest({ novel: view, chapterLabel: chapterLabel(novel, chapter), numbered: words, avoid, before, beforeFrom: lead.from, judge, stock, strays, repeats, his, sofar: story.text, left: story.left, notesFit, asked: askedOf(words), behind, bib, ...extra });
   };
   /* passages checked already, read again for their grade alone: what was found in them is kept as it is */
   const gradeOnly = Boolean(batch.gradeOnly) && Boolean(judge);

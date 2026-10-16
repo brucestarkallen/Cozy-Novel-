@@ -14,8 +14,10 @@ const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;
 export const maps = new WeakMap();      /* <p> -> {start, srcOf: number[]} */
 
 /* where the markup is in one paragraph's raw text: the delimiters to hide and
- * the tags to open and close around the letters */
-function marks(raw, tint) {
+ * the tags to open and close around the letters — and, with the names the
+ * page marks (bibliography.js makeFinder), each name as a mark of its own */
+const NAME_TAG = 'nm\u0001';
+function marks(raw, tint, names = null) {
   const hide = new Set();
   const open = new Map();   /* index -> [tags] opened before the letter */
   const close = new Map();  /* index -> [tags] closed after the letter */
@@ -46,18 +48,25 @@ function marks(raw, tint) {
       add(open, a, 'dlg'); add(close, b, 'dlg');
     }
   }
+  if (names) {
+    for (const x of names.find(raw)) {
+      if (x.end <= x.start) continue;
+      add(open, x.start, NAME_TAG + x.key); add(close, x.end - 1, NAME_TAG + x.key);
+    }
+  }
   return { hide, open, close };
 }
 
 /* one paragraph: {html, srcOf} — srcOf[k] is where the k-th letter on screen
  * stands in the raw text */
-export function paragraph(raw, { tint = false } = {}) {
-  const { hide, open, close } = marks(raw, tint);
+export function paragraph(raw, { tint = false, names = null } = {}) {
+  const { hide, open, close } = marks(raw, tint, names);
   let html = '';
   const srcOf = [];
   const stack = [];
-  const tag = (t) => (t === 'dlg' ? '<span class="dlg">' : `<${t}>`);
-  const end = (t) => (t === 'dlg' ? '</span>' : `</${t}>`);
+  const attr = (v) => String(v).replace(/[&<>"']/g, (c) => ESC[c]);
+  const tag = (t) => (t === 'dlg' ? '<span class="dlg">' : t.startsWith(NAME_TAG) ? `<span class="nm" data-name="${attr(t.slice(NAME_TAG.length))}">` : `<${t}>`);
+  const end = (t) => (t === 'dlg' || t.startsWith(NAME_TAG) ? '</span>' : `</${t}>`);
   for (let i = 0; i < raw.length; i++) {
     for (const t of open.get(i) || []) { html += tag(t); stack.push(t); }
     if (!hide.has(i)) {
@@ -80,13 +89,13 @@ export function paragraph(raw, { tint = false } = {}) {
 
 /* one line of the stored text as it is drawn: a paragraph, a scene break, a
  * heading — or nothing, for an empty line. start: where it stands in the text */
-function lineEl(line, start, tint) {
+function lineEl(line, start, tint, names = null) {
   if (!line.trim()) return null;
   if (BREAK.test(line)) { const p = document.createElement('p'); p.className = 'brk'; p.textContent = '❦'; return p; }
   const hm = HEADING.exec(line);
   if (hm) { const p = document.createElement('p'); p.className = 'sub'; p.textContent = hm[1].replace(/\*+/g, ''); return p; }
   const lead = line.match(/^\s*/)[0].length;
-  const { html, srcOf } = paragraph(line.slice(lead), { tint });
+  const { html, srcOf } = paragraph(line.slice(lead), { tint, names });
   const p = document.createElement('p');
   p.innerHTML = html;
   maps.set(p, { start: start + lead, srcOf });
@@ -97,38 +106,39 @@ function lineEl(line, start, tint) {
  * arriving redraw only the paragraph they land on: the text, its lines (and
  * the paragraph each became), how many paragraphs are on screen, and where
  * its last line begins */
-const drawn = new WeakMap();   /* .prose -> { tint, text, lines: [{ line, el }], shown, lastAt } */
+const drawn = new WeakMap();   /* .prose -> { tint, names, text, lines: [{ line, el }], shown, lastAt } */
 
-function drawLines(frag, parts, pos, tint, lines) {
+function drawLines(frag, parts, pos, tint, lines, names) {
   for (const line of parts) {
-    const el = lineEl(line, pos, tint);
+    const el = lineEl(line, pos, tint, names);
     lines.push({ line, el });
     if (el) frag.append(el);
     pos += line.length + 1;
   }
 }
-function keep(into, tint, text, lines) {
+function keep(into, tint, text, lines, names) {
   let shown = 0;
   for (const l of lines) if (l.el) shown++;
-  drawn.set(into, { tint, text, lines, shown, lastAt: text.length - lines[lines.length - 1].line.length });
+  drawn.set(into, { tint, names: names ? names.sig : '', text, lines, shown, lastAt: text.length - lines[lines.length - 1].line.length });
 }
 
-/* Draw a passage's text into `into` (a .prose element). */
-export function drawProse(into, text, { tint = false } = {}) {
+/* Draw a passage's text into `into` (a .prose element). names: the names the
+ * page marks (bibliography.js), or null. */
+export function drawProse(into, text, { tint = false, names = null } = {}) {
   const raw = String(text || '');
   into.textContent = '';
   const lines = [];
   const frag = document.createDocumentFragment();
-  drawLines(frag, raw.split('\n'), 0, tint, lines);
+  drawLines(frag, raw.split('\n'), 0, tint, lines, names);
   into.append(frag);
-  keep(into, tint, raw, lines);
+  keep(into, tint, raw, lines, names);
 }
 
 /* Reuse the paragraph and its unchanged inline nodes while a sentence
  * grows. appendData also keeps a selection in the words already written;
  * replacing a whole paragraph used to make those words blink each token. */
 function sameNode(a, b) {
-  return a.nodeType === b.nodeType && (a.nodeType === 3 || (a.nodeName === b.nodeName && a.className === b.className));
+  return a.nodeType === b.nodeType && (a.nodeType === 3 || (a.nodeName === b.nodeName && a.className === b.className && a.getAttribute('data-name') === b.getAttribute('data-name')));
 }
 function amendNode(into, fresh) {
   if (into.nodeType === 3) {
@@ -153,11 +163,18 @@ function amendNode(into, fresh) {
  * first one that changed stay exactly as they are on screen. Words that only
  * grow the text (the usual stream) are not even split again before the last
  * line drawn — the work is the newest paragraph's, however long the passage. */
-export function growProse(into, text, { tint = false } = {}) {
+export function growProse(into, text, { tint = false, names = null } = {}) {
   const raw = String(text || '');
   const was = drawn.get(into);
-  /* drawn some other way since (or with something else in it, like "Writing…"): drawn whole */
-  if (!was || was.tint !== tint || into.childNodes.length !== was.shown) { drawProse(into, raw, { tint }); return; }
+  /* drawn some other way since (or with something else in it, like "Writing…"), or other names marked: drawn whole —
+   * keeping the words he has selected in it selected (a name the helper just found never takes his selection away) */
+  if (!was || was.tint !== tint || was.names !== (names ? names.sig : '') || into.childNodes.length !== was.shown) {
+    /* (only over the same words: offsets into words since changed would select others) */
+    const held = was && raw === was.text ? heldSelection(into) : null;
+    drawProse(into, raw, { tint, names });
+    if (held) putSelection(into, held);
+    return;
+  }
   if (raw === was.text) return;
   let k;
   let pos;
@@ -178,7 +195,7 @@ export function growProse(into, text, { tint = false } = {}) {
   }
   const lines = was.lines.slice(0, k);
   for (const line of parts) {
-    let el = lineEl(line, pos, tint);
+    let el = lineEl(line, pos, tint, names);
     const before = was.lines[lines.length]?.el;
     if (el && before && sameNode(before, el)) {
       amendNode(before, el);
@@ -196,7 +213,59 @@ export function growProse(into, text, { tint = false } = {}) {
     pos += line.length + 1;
   }
   for (let i = was.lines.length - 1; i >= lines.length; i--) if (was.lines[i].el) was.lines[i].el.remove();
-  keep(into, tint, raw, lines);
+  keep(into, tint, raw, lines, names);
+}
+
+/* The words selected inside one .prose, as stored offsets (null when none) —
+ * and put back after it is drawn again: the letter on screen each offset
+ * stands at found by the paragraph's map, so the same words are selected. */
+function heldSelection(into) {
+  const sel = typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null;
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+  const r = sel.getRangeAt(0);
+  if (!into.contains(r.startContainer) || !into.contains(r.endContainer)) return null;
+  const a = sourceOffset(r.startContainer, r.startOffset, 'start');
+  const b = sourceOffset(r.endContainer, r.endOffset, 'end');
+  if (a < 0 || b <= a) return null;
+  const backward = sel.anchorNode === r.endContainer && sel.anchorOffset === r.endOffset && !(sel.focusNode === r.endContainer && sel.focusOffset === r.endOffset);
+  return { a, b, backward };
+}
+function screenPoint(into, at, edge) {
+  const endOf = (p) => { const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT); let last = null; for (let t = w.nextNode(); t; t = w.nextNode()) last = t; return last ? { node: last, offset: last.data.length } : null; };
+  let before = null;
+  for (const p of into.querySelectorAll('p')) {
+    const m = maps.get(p);
+    if (!m || !m.srcOf.length) continue;
+    const first = m.start + m.srcOf[0];
+    const end = m.start + m.srcOf[m.srcOf.length - 1] + 1;
+    if (edge === 'start' ? at >= end : at > end) { before = p; continue; }
+    /* an end between two paragraphs is the end of the one before */
+    if (at <= first && edge === 'end') return before ? endOf(before) : null;
+    /* the k-th letter on screen: the first at or past the offset (start), or the count before it (end) */
+    let k = 0;
+    while (k < m.srcOf.length && m.start + m.srcOf[k] < at) k++;
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    let seen = 0;
+    let last = null;
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+      const len = t.data.length;
+      if (edge === 'start' ? k < seen + len : k <= seen + len) return { node: t, offset: k - seen };
+      seen += len;
+      last = t;
+    }
+    return last ? { node: last, offset: last.data.length } : null;
+  }
+  return null;
+}
+function putSelection(into, held) {
+  try {
+    const sel = window.getSelection();
+    const a = screenPoint(into, held.a, 'start');
+    const b = screenPoint(into, held.b, 'end');
+    if (!sel || !a || !b) return;
+    if (held.backward) sel.setBaseAndExtent(b.node, b.offset, a.node, a.offset);
+    else sel.setBaseAndExtent(a.node, a.offset, b.node, b.offset);
+  } catch (_) { /* the words are gone: nothing to select */ }
 }
 
 /* Where a point on screen (a text node and an offset in it) stands in the

@@ -120,15 +120,19 @@ async function makeBook(chapters, { title = 'Test Book', brief = 'A lighthouse k
   return { novelId: novel.id, ids, ch: (i = 0) => store.peek('chapter', ids[i]), novel: () => store.peek('novel', novel.id) };
 }
 /* a book read by the helper as it stands */
-function markAllSeen(b) {
+/* (2.12: a passage the helper reads now has its bibliography facts kept with it — none here — so a book marked read is
+ * not one read before the bibliography was kept; markReadBefore212 is that book) */
+function markAllSeen(b, { facts = true } = {}) {
   const n = b.novel();
   for (const id of n.order) {
     const c = store.peek('chapter', id);
     const map = {};
     for (const p of c.passages) if (p.by !== 'break') map[p.id] = archivist.signature(picked(p));
     store.change('novel', b.novelId, shape.novelSteps.seen(id, map));
+    if (facts) store.change('chapter', id, (ch) => { for (const p of ch.passages) { const v = picked(p); if (p.by !== 'break' && v && !v.codex) v.codex = { schema: 1, fp: util.hashText(v.text || ''), facts: [], complete: true }; } });
   }
 }
+const markReadBefore212 = (b) => markAllSeen(b, { facts: false });
 /* a book done with: its helper has nothing to come back for */
 async function putAway(b) { try { await store.flush(); await store.remove('novel', b.novelId); } catch (_) { /* gone */ } }
 
@@ -9483,6 +9487,625 @@ await test('the partner may write anew a passage it had word for word in a chapt
   assert.ok(first && first.status === 'refused' && /only in short/.test(first.said), JSON.stringify(v.changes));
   assert.notEqual(picked(b.ch(0).passages[0]).text, 'THE FIRST PASSAGE, ANEW.');
   await setHouse();
+  await putAway(b);
+});
+
+heading('the bibliography (2.12)');
+
+const bib = await import(path.join(ROOT, 'js/novel/bibliography.js'));
+
+await test('a name is found as it is written: with its capitals (or shouted), a word of his in small letters however written, a person by a name of theirs alone — never inside another word, a hyphened name or a description', () => {
+  const entries = [bib.tidyEntry(bib.newEntry({ name: 'Rukia Kuchiki', kind: 'people', line: 'x' })), bib.tidyEntry(bib.newEntry({ name: 'bankai', kind: 'lore', line: 'x' })), bib.tidyEntry(bib.newEntry({ name: 'Will Turner', kind: 'people', line: 'x' }))];
+  const cards = { people: [{ id: 'p1', name: 'Mary', aka: [] }, { id: 'p2', name: 'the girl', aka: [] }], lore: [{ id: 'l1', name: 'the letter' }, { id: 'l2', name: 'the Hollow Crown' }] };
+  const f = bib.makeFinder(bib.nameForms(entries, cards));
+  const t = 'RUKIA ran. Rukia Kuchiki stood. Kuchiki bowed. She will go. Will came. Bankai! bankai. Mary-Jane met Mary. the girl read the letter by the Hollow Crown. Rukias.';
+  const found = f.find(t).map((x) => t.slice(x.start, x.end));
+  assert.deepEqual(found, ['RUKIA', 'Rukia Kuchiki', 'Kuchiki', 'Will', 'Bankai', 'bankai', 'Mary', 'Hollow Crown']);
+});
+
+await test('a fact is kept for the bibliography only with the words of its passage that say it, about a name the passage gives — loose about quote marks and dashes, never about the words themselves', () => {
+  const text = 'Hae-won set her glass square to the table’s edge. “No,” she said — firmly.';
+  const c = bib.codexOf([
+    { name: 'Hae-won', kind: 'people', fact: 'She squares her glass with the table’s edge.', evidence: "set her glass square to the table's edge" },
+    { name: 'Hae-won', kind: 'people', fact: 'She is a nurse.', evidence: 'she worked nights at the hospital' },
+    { name: 'Mina', kind: 'people', fact: 'Mina is tall.', evidence: 'set her glass square' },
+    { name: 'Hae-won', kind: 'people', fact: '', evidence: 'set her glass' },
+  ], { text });
+  assert.deepEqual(c.facts.map((x) => x.fact), ['She squares her glass with the table’s edge.']);
+  assert.equal(c.complete, false, 'what was refused leaves it incomplete');
+  assert.equal(c.fp, util.hashText(text));
+});
+
+/* a book in hand, pure: chapter one with a fact kept on its first passage, his entries, and a chapter being written */
+function bibBook() {
+  const { novel, chapter: c1 } = shape.newNovel({ title: 'Soul Gate', brief: 'A reaper story.' });
+  const c2 = shape.newChapter(novel.id);
+  const c3 = shape.newChapter(novel.id);
+  novel.order = [c1.id, c2.id, c3.id];
+  const filler = (tag) => `${tag} The hall was long and the lanterns swung. `.repeat(300);
+  c1.passages = [shape.newPassage('ai', 'Rukia Kuchiki stood at the gate. Her eyes were a deep violet. ' + filler('C1A')), shape.newPassage('ai', 'Later, Rukia cut her hair short. ' + filler('C1B'))];
+  c2.passages = [shape.newPassage('ai', filler('C2'))];
+  c3.passages = [shape.newPassage('ai', 'The chapter being written begins.')];
+  const v1 = picked(c1.passages[0]);
+  v1.codex = bib.codexOf([{ name: 'Rukia Kuchiki', kind: 'people', fact: 'Her eyes are violet.', evidence: 'Her eyes were a deep violet' }], { text: v1.text });
+  const v2 = picked(c1.passages[1]);
+  v2.codex = bib.codexOf([{ name: 'Rukia', kind: 'people', fact: 'She cut her hair short.', evidence: 'Rukia cut her hair short' }], { text: v2.text });
+  novel.bibliography = [
+    bib.tidyEntry(bib.newEntry({ name: 'Gotei 13', kind: 'groups', rides: 'always', text: 'THE THIRTEEN SQUADS.' })),
+    bib.tidyEntry(bib.newEntry({ name: 'bankai', kind: 'lore', line: 'THE FINAL RELEASE' })),
+    bib.tidyEntry(bib.newEntry({ name: 'Secret Ending', kind: 'lore', rides: 'never', text: 'SPOILER WORDS' })),
+  ];
+  return { novel, chapters: { [c1.id]: c1, [c2.id]: c2, [c3.id]: c3 }, c1, c2, c3 };
+}
+
+await test('the writer reads an entry only when its name comes up — or always, as he set it, never one kept for him — and the book’s facts only from chapters it is not reading word for word, never from after the point', () => {
+  const b = bibBook();
+  const sent = (room, request, target = { chapterId: b.c3.id }, purpose = 'write') => {
+    const a = context.assemble({ house: quietHouse(), novel: b.novel, chapters: b.chapters, conn: { ...CONN, context: room, maxTokens: 1000 }, purpose, ...(purpose === 'partner' ? { turns: [] } : {}), target, request });
+    return { t: sentOf(a), a };
+  };
+  let { t } = sent(200000, 'They walk on.');
+  assert.ok(t.includes('THE THIRTEEN SQUADS.'), 'always rides');
+  assert.ok(!t.includes('THE FINAL RELEASE'), 'not named: not sent');
+  assert.ok(!t.includes('SPOILER WORDS'), 'his alone: never the writer’s');
+  ({ t } = sent(200000, 'Rukia uses her bankai.'));
+  assert.ok(t.includes('THE FINAL RELEASE'), 'named in his words, in small letters or with a capital: sent');
+  assert.ok(!t.includes('Her eyes are violet.'), 'chapter one rides word for word: its facts are not sent again');
+  let a;
+  ({ t, a } = sent(9000, 'Rukia uses her bankai.'));
+  assert.ok(!a.stats.wholeIds.includes(b.c1.id), 'chapter one is not word for word in this room');
+  assert.ok(t.includes('Her eyes are violet. (Chapter One)') && t.includes('She cut her hair short. (Chapter One)'), 'its facts about the name come back');
+  /* writing again the first passage of chapter one: nothing after it has happened yet — a fact chapter two tells is not sent */
+  const v3 = picked(b.c2.passages[0]);
+  v3.text = 'Rukia took the captain’s white coat that winter. ' + v3.text;
+  v3.codex = bib.codexOf([{ name: 'Rukia', kind: 'people', fact: 'She became a captain.', evidence: 'Rukia took the captain’s white coat' }], { text: v3.text });
+  let small = 0;
+  for (let room = 9000; room >= 3000 && !small; room -= 250) { ({ a } = sent(room, 'Rukia waits.')); if (!a.stats.wholeIds.includes(b.c2.id)) small = room; }
+  assert.ok(small, 'a room where chapter two rides in short');
+  ({ t } = sent(small, 'Rukia waits.', { chapterId: b.c3.id }));
+  assert.ok(t.includes('She became a captain. (Chapter Two)'), 'written after chapter two, which rides in short: its fact is sent');
+  ({ t } = sent(small, 'Rukia waits.', { chapterId: b.c1.id, mark: b.c1.passages[0].id }));
+  assert.ok(!t.includes('She became a captain.') && !t.includes('She cut her hair short.'), 'never a fact from after the point');
+  /* his entry kept for him alone is never the writer's, even named */
+  ({ t } = sent(200000, 'The Secret Ending comes.'));
+  assert.ok(!t.includes('SPOILER WORDS'), 'kept for him: never the writer’s, even named');
+  /* the partner: every entry of his by name and line, the one kept for him marked, and the ones named whole */
+  const p = sent(200000, 'What about the Secret Ending?', { chapterId: b.c3.id }, 'partner');
+  assert.ok(p.t.includes(prompts.BIB_INDEX) && p.t.includes('- Secret Ending [only for me — the writer never reads it]') && p.t.includes('SPOILER WORDS'), p.t.slice(p.t.indexOf(prompts.BIB_INDEX), p.t.indexOf(prompts.BIB_INDEX) + 400));
+});
+
+await test('an entry crowds out nothing: past its share of the room the farthest named entries give way, his words’ names first, the nearest next', () => {
+  const b = bibBook();
+  const long = 'WORD '.repeat(3000);
+  b.novel.bibliography = ['Ann', 'Bo', 'Cy'].map((n) => bib.tidyEntry(bib.newEntry({ name: n, kind: 'people', text: `${n.toUpperCase()}-ENTRY ${long}` })));
+  const ride = bib.ridingItems(bib.bibItems(b.novel, b.chapters), { his: 'Cy speaks.', near: 'Ann sat. Bo stood.', budget: 9000 });
+  assert.deepEqual(ride.items.map((x) => x.name), ['Cy', 'Bo'], 'his words first, then the nearest');
+  assert.equal(ride.left, 1);
+});
+
+await test('the helper fills the bibliography as it reads, each fact on the version that says it — a fact with no words of its passage is never kept; another version takes its facts with it and the arrows bring them back', async () => {
+  const b = await makeBook([['Hae-won set her glass square to the table’s edge.']]);
+  await script([{ text: JSON.stringify({ people: [{ name: 'Hae-won', about: 'An old friend.' }], bibliography: [{ source: 'Passage 1', facts: [
+    { name: 'Hae-won', kind: 'people', fact: 'She squares her glass with the edge of the table.', evidence: 'set her glass square to the table’s edge' },
+    { name: 'Hae-won', kind: 'people', fact: 'She is a nurse.', evidence: 'she was a nurse' }] }] }) }]);
+  await archivist.run(b.novelId);
+  const ask = (await requests()).map((x) => x.body.messages.at(-1).content).find((c) => c.includes('Update the notes'));
+  assert.ok(ask.includes(prompts.BIB_FACTS_RULE), 'it is asked for the facts as it reads');
+  await store.flush();
+  const kept = picked((await onPhone('chapter', b.ids[0])).passages[0]).codex;
+  assert.deepEqual(kept.facts.map((f) => f.fact), ['She squares her glass with the edge of the table.']);
+  const items = () => bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) });
+  assert.deepEqual(items().map((it) => [it.name, it.facts.length]), [['Hae-won', 1]]);
+  /* another version on show: its facts are its own (none yet) */
+  store.change('chapter', b.ids[0], shape.chapterSteps.addVersion(b.ch(0).passages[0].id, shape.newVersion({ text: 'Hae-won left early.', how: 'edit' })), { now: true });
+  assert.deepEqual(items(), [], 'the old words’ facts go with them');
+  store.change('chapter', b.ids[0], shape.chapterSteps.pick(b.ch(0).passages[0].id, picked(b.ch(0).passages[0]) && b.ch(0).passages[0].versions[0].id), { now: true });
+  assert.deepEqual(items().map((it) => it.name), ['Hae-won'], 'the arrows bring them back');
+  await putAway(b);
+});
+
+await test('pages read before the bibliography was kept are filled in a few at a time, from their own words — and never asked for again', async () => {
+  const b = await makeBook([['Mina wore a red scarf her mother knitted.', 'Joon laughed.']], { manual: true });
+  markReadBefore212(b);
+  await script([{ bib: true, text: JSON.stringify({ bibliography: [{ source: 'Chapter One, passage 1', facts: [{ name: 'Mina', kind: 'people', fact: 'Her red scarf was knitted by her mother.', evidence: 'a red scarf her mother knitted' }] }, { source: 'Chapter One, passage 2', facts: [] }] }) }]);
+  assert.equal(archivist.bibDue(b.novelId).length, 2, 'both pages are due');
+  await archivist.run(b.novelId);
+  const asks = (await requests()).filter((x) => x.body.messages.at(-1).content.includes('were read into the notes before the book’s bibliography was kept'));
+  assert.equal(asks.length, 1, 'one ask for both');
+  assert.equal(archivist.bibDue(b.novelId).length, 0, 'none due after');
+  assert.deepEqual(bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) }).map((it) => [it.name, it.facts[0].fact]), [['Mina', 'Her red scarf was knitted by her mother.']]);
+  await reset();
+  await archivist.run(b.novelId);
+  assert.equal((await requests()).filter((x) => x.body.messages.at(-1).content.includes('bibliography was kept')).length, 0, 'never asked again');
+  /* filled by hand only: not asked */
+  store.change('novel', b.novelId, shape.novelSteps.setPref('bibAuto', 'off'), { now: true });
+  store.change('chapter', b.ids[0], (c) => { c.passages.push(shape.newPassage('ai', 'Mina sang.')); }, { now: true });
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  const read = (await requests()).map((x) => x.body.messages.at(-1).content).find((c) => c.includes('Update the notes'));
+  assert.ok(read && !read.includes(prompts.BIB_FACTS_RULE), 'off: the reading never asks for it');
+  await putAway(b);
+});
+
+await test('a person’s card is kept a short portrait: a shorter “who they are” is taken only when what it leaves out is kept in the bibliography — never a word of the book lost', async () => {
+  const long = 'An old friend of Mina from school. Holds her shoulders up as if bracing against cold. Has fine lines at the corners of her eyes. Squares her glass with the table edge when she has decided something.';
+  const short = 'An old friend of Mina from school, precise and unhurried.';
+  const notes = { people: [{ id: 'p1', name: 'Hae-won', aka: [], about: long, ties: '', now: '' }] };
+  const answer = { people: [{ name: 'Hae-won', about: short }] };
+  const without = archivist.foldNotes(JSON.parse(JSON.stringify(notes)), answer, { keptElsewhere: () => '' });
+  assert.equal(without.notes.people[0].about, long, 'nothing keeps what it drops: the card stays as it was');
+  const kept = 'Holds her shoulders up as if bracing against cold. Has fine lines at the corners of her eyes. She squares her glass with the table edge when she has decided something.';
+  const withFacts = archivist.foldNotes(JSON.parse(JSON.stringify(notes)), answer, { keptElsewhere: () => kept });
+  assert.equal(withFacts.notes.people[0].about, short, 'the bibliography keeps it: the portrait is taken');
+});
+
+await test('with the bibliography kept from the book, the helper is asked for a short portrait; filled by hand only, for who they are whole as before', () => {
+  const novel = shape.newNovel({ title: 'T' }).novel;
+  const on = prompts.notesRequest({ novel, chapterLabel: 'Chapter One', before: '', changes: [], removed: [], removedChapters: [], codex: true });
+  const off = prompts.notesRequest({ novel, chapterLabel: 'Chapter One', before: '', changes: [], removed: [], removedChapters: [], codex: false });
+  assert.ok(on.includes('is a short portrait of who they are for good') && on.includes('"bibliography"'));
+  assert.ok(!off.includes('short portrait') && !off.includes('"bibliography"') && off.includes('keep everything already in it'));
+});
+
+await test('his partner writes an entry when he asks — kind, line, words, other names, when the writer reads it — renamed and taken out with Undo; never a second entry for a name another goes by', async () => {
+  const b = await makeBook([['Rukia stood.']]);
+  let r = changes.makeChange(b.novelId, { entry: 'Rukia Kuchiki', kind: 'person', line: 'Lieutenant of the 13th', text: 'She wields Sode no Shirayuki.', aka: ['Rukia'], why: 'asked' });
+  assert.equal(r.status, 'made', r.said);
+  let e = bib.entriesOf(b.novel())[0];
+  assert.deepEqual([e.name, e.kind, e.line, e.text, e.aka, e.rides, e.by], ['Rukia Kuchiki', 'people', 'Lieutenant of the 13th', 'She wields Sode no Shirayuki.', ['Rukia'], 'named', 'partner']);
+  r = changes.makeChange(b.novelId, { entry: 'Rukia', add: 'Her eyes are violet.', rides: 'always' });
+  assert.equal(r.status, 'made', r.said);
+  e = bib.entriesOf(b.novel())[0];
+  assert.equal(e.text, 'She wields Sode no Shirayuki.\n\nHer eyes are violet.');
+  assert.equal(e.rides, 'always');
+  assert.equal(changes.undoChange(b.novelId, r).ok, true);
+  assert.equal(bib.entriesOf(b.novel())[0].text, 'She wields Sode no Shirayuki.', 'Undo puts the entry back as it was');
+  assert.equal(changes.makeChange(b.novelId, { entry: 'Byakuya', text: 'Her brother.', aka: ['Rukia'] }).status, 'refused', 'a name another entry goes by');
+  assert.equal(changes.makeChange(b.novelId, { entry: 'Nobody', line: 'x', kind: 'spaceship drive' }).status, 'refused', 'no such kind');
+  r = changes.makeChange(b.novelId, { entry: 'Rukia Kuchiki', remove: true });
+  assert.equal(r.status, 'made');
+  assert.equal(bib.entriesOf(b.novel()).length, 0);
+  assert.equal(changes.undoChange(b.novelId, r).ok, true);
+  assert.equal(bib.entriesOf(b.novel()).length, 1, 'taken out and put back');
+  /* it reads one whole when it asks */
+  assert.deepEqual(changes.readAsks('<read>["entry: Rukia"]</read>'), [{ entry: 'Rukia' }]);
+  await putAway(b);
+});
+
+await test('Continue — his box empty — hands the writer what happens next, to choose for the best novel it can be; his premise, when he gives one, is what happens', () => {
+  const chosen = prompts.writeRequest({ chapterLabel: 'Chapter Two', direction: '', length: 'auto' });
+  assert.ok(chosen.includes(prompts.CHOSEN_NEXT) && chosen.includes('carry what you chose through'), chosen);
+  assert.ok(!chosen.includes('Never begin a new turn of the story I didn’t ask for'), 'never told not to begin what it chose');
+  const his = prompts.writeRequest({ chapterLabel: 'Chapter Two', direction: 'They fight.', length: 'auto' });
+  assert.ok(his.includes('What happens next: They fight.') && !his.includes(prompts.CHOSEN_NEXT) && his.includes('Never begin a new turn of the story I didn’t ask for'));
+  const open = prompts.writeRequest({ chapterLabel: 'Chapter One', direction: '', length: 'auto', empty: true, firstOfBook: true });
+  assert.ok(open.includes(prompts.CHOSEN_OPEN));
+});
+
+await test('a SillyTavern lorebook comes in as entries — its first key the name, the others and its title names it goes by, a pattern no name, constant always and switched off never — and goes out the same way', () => {
+  const wi = { entries: { 0: { uid: 0, key: ['Gotei 13', 'the Thirteen'], comment: 'Court Guard', content: 'Thirteen squads.', constant: true }, 1: { uid: 1, key: ['/sword/i', 'Zanpakuto'], content: 'A soul-cutter.', disable: true }, 2: { uid: 2, key: [], comment: '', content: 'no name' } } };
+  const rows = bib.entriesFromLorebook(JSON.stringify(wi));
+  assert.deepEqual(rows.map((e) => [e.name, e.aka, e.text, e.rides]), [['Gotei 13', ['Court Guard', 'the Thirteen'], 'Thirteen squads.', 'always'], ['Zanpakuto', [], 'A soul-cutter.', 'never']]);
+  const card = { data: { character_book: { entries: [{ keys: ['Ichigo'], content: 'A substitute.', enabled: true }] } } };
+  assert.deepEqual(bib.entriesFromLorebook(card).map((e) => [e.name, e.rides]), [['Ichigo', 'named']]);
+  const out = bib.lorebookOf(rows);
+  assert.deepEqual(bib.entriesFromLorebook(out).map((e) => [e.name, e.rides]), [['Gotei 13', 'always'], ['Zanpakuto', 'never']], 'out and back in, the same');
+});
+
+await test('the checker reads the bibliography for who and what its passages name — the book’s facts from before them and his entries — so a slip against a chapter it has only in short is caught', async () => {
+  await setHouse({}, { checksFrom: 0 });
+  const b = await makeBook([['Rukia’s eyes were a deep violet.'], ['Rukia looked up with her blue eyes.']]);
+  store.change('chapter', b.ids[0], (c) => { const v = picked(c.passages[0]); v.codex = bib.codexOf([{ name: 'Rukia', kind: 'people', fact: 'Her eyes are violet.', evidence: 'eyes were a deep violet' }], { text: v.text }); }, { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'Rukia', kind: 'people', line: 'HIS LINE FOR RUKIA' }))), { now: true });
+  await checker.runCheck(b.novelId);
+  const asks = (await requests()).map((x) => x.body.messages.at(-1).content);
+  const two = asks.find((a) => a.includes('Check these passages from Chapter Two'));
+  assert.ok(two && two.includes(prompts.BIB_FOR_A_READER) && two.includes('Her eyes are violet. (Chapter One)') && two.includes('HIS LINE FOR RUKIA'), (two || '').slice(0, 900));
+  const one = asks.find((a) => a.includes('Check these passages from Chapter One'));
+  assert.ok(one && !one.includes('Her eyes are violet.'), 'never a fact from the passages it checks');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('Search finds his entries in the bibliography', () => {
+  const b = bibBook();
+  const hits = search.searchBook({ novel: b.novel, chapters: b.chapters, query: 'final release' });
+  assert.ok(hits.some((x) => x.where === 'entry' && x.group === 'Bibliography' && x.label === 'bankai'), JSON.stringify(hits.map((x) => [x.where, x.label])));
+});
+
+/* what a review of 2.12 found, each run as it happens */
+await test('a portrait made shorter is held to what the bibliography really keeps: words of its own that keep none of what the card leaves out never let the card be cut', () => {
+  const long = 'An old friend of Mina from school. Holds her shoulders up as if bracing against cold. Has fine lines at the corners of her eyes. Squares her glass with the table edge when she has decided something.';
+  const short = 'An old friend of Mina from school, precise and unhurried.';
+  const notes = { people: [{ id: 'p1', name: 'Hae-won', aka: [], about: long, ties: '', now: '' }] };
+  const answer = { people: [{ name: 'Hae-won', about: short }] };
+  const other = 'The lanterns swung in the long hall at night, and the rain kept on against the shutters until morning came grey. '.repeat(3);
+  const fold = (kept) => archivist.foldNotes(JSON.parse(JSON.stringify(notes)), answer, { keptElsewhere: () => kept }).notes.people[0].about;
+  assert.equal(fold(other), long, 'the bibliography holds none of it, however long its words: the card stands');
+  assert.equal(fold('Holds her shoulders up as if bracing against cold.'), long, 'one of three details kept: the card stands');
+  assert.equal(fold(`${other} Holds her shoulders up as if bracing against cold. Fine lines at the corners of her eyes. She squares her glass with the table edge once she has decided.`), short, 'all of it kept there: the portrait is taken');
+});
+
+await test('what rides of the bibliography keeps to its share however much the book has told — an entry set to always as well — his own words first, then a fact for each in turn, so the one told of most is never the one left out', () => {
+  const facts = (tag, n) => Array.from({ length: n }, (_, i) => ({ id: `${tag}${i}`, fact: `${tag} detail number ${i}, a lasting one about the ${['sword', 'eyes', 'coat', 'rank', 'squad', 'past'][i % 6]}.`, evidence: [`${tag} ${i}`], passageId: `p${i}`, label: `Chapter ${['One', 'Two', 'Three'][i % 3]}, passage ${i + 1}` }));
+  const item = (ref, name, kind, entry, n, rides = 'named') => ({ ref, name, aka: [], kind, rides, line: '', text: '', entry, card: null, facts: facts(name.toUpperCase(), n), kinds: {} });
+  const items = [
+    item('e:r', 'Rukia Kuchiki', 'people', { name: 'Rukia Kuchiki', line: 'HIS LINE', text: 'HIS WORDS FOR RUKIA', rides: 'named' }, 600),
+    item('e:g', 'Gotei 13', 'groups', { name: 'Gotei 13', line: '', text: 'HIS WORDS FOR THE SQUADS', rides: 'always' }, 600, 'always'),
+    item('n:byakuya', 'Byakuya', 'people', null, 3),
+  ];
+  for (const budget of [1500, 4000, 12000]) {
+    const ride = bib.ridingItems(items, { his: 'Rukia Kuchiki draws.', near: 'Byakuya watched.', budget });
+    const words = ride.words.join('\n\n');
+    assert.ok(ride.cost <= budget && util.estimateTokens(words) <= budget * 1.05, `${budget}: ${ride.cost} / ${util.estimateTokens(words)}`);
+    assert.deepEqual(ride.items.map((x) => x.name), ['Gotei 13', 'Rukia Kuchiki', 'Byakuya'], `${budget}: every one rides`);
+    assert.ok(words.includes('HIS WORDS FOR RUKIA') && words.includes('HIS WORDS FOR THE SQUADS'), 'his own words ride whole');
+    assert.ok(words.includes('BYAKUYA detail number 2') && words.includes('RUKIA KUCHIKI detail number 0') && words.includes('GOTEI 13 detail number 0'), 'each told of in turn');
+    assert.ok(!words.includes('RUKIA KUCHIKI detail number 599'), 'never all six hundred');
+  }
+});
+
+/* chapter one in short at 9,000 (as above): what the writer reads of a name */
+function sentBib(b, room, request) {
+  const a = context.assemble({ house: quietHouse(), novel: b.novel, chapters: b.chapters, conn: { ...CONN, context: room, maxTokens: 1000 }, target: { chapterId: b.c3.id }, request });
+  return { t: sentOf(a), a };
+}
+await test('an entry he keeps for himself hides his words, never what the book itself says of the name; and with Fill it from the book off, what the helper found still rides', () => {
+  const b = bibBook();
+  b.novel.bibliography.push(bib.tidyEntry(bib.newEntry({ name: 'Rukia Kuchiki', aka: ['THE TRAITOR'], kind: 'people', rides: 'never', line: 'HIS SECRET LINE', text: 'SHE BETRAYS THEM IN BOOK TWO.' })));
+  let { t, a } = sentBib(b, 9000, 'Rukia waits.');
+  assert.ok(!a.stats.wholeIds.includes(b.c1.id), 'chapter one rides in short');
+  assert.ok(t.includes('Her eyes are violet. (Chapter One)'), 'the book’s own words about her ride');
+  assert.ok(!t.includes('SHE BETRAYS') && !t.includes('THE TRAITOR') && !t.includes('HIS SECRET LINE'), 'his never');
+  b.novel.prefs = { ...(b.novel.prefs || {}), bibAuto: 'off' };
+  ({ t } = sentBib(b, 9000, 'Rukia waits.'));
+  assert.ok(t.includes('Her eyes are violet. (Chapter One)'), 'the helper adds nothing more — what it found stays');
+});
+
+await test('the facts that ride are those of the chapters the request carries in short: fitted together, a chapter is never sent as neither its words nor its facts — nor a passage of the chapter open that is not there word for word', () => {
+  /* thirty short chapters, a fact of hers in each: the room her facts take moves the line between whole and in short */
+  const { novel, chapter: first } = shape.newNovel({ title: 'Soul Gate', brief: 'A reaper story.' });
+  const chapters = {};
+  novel.order = [];
+  for (let i = 0; i < 31; i++) {
+    const c = i === 0 ? first : shape.newChapter(novel.id);
+    const line = `Rukia kept the token of chapter ${i + 1}.`;
+    c.passages = [shape.newPassage('ai', `${line} ${`C${i + 1} The hall was long and the lanterns swung. `.repeat(50)}`)];
+    c.summary = { text: `Chapter ${i + 1} in short.` };
+    if (i < 30) { const v = picked(c.passages[0]); v.codex = bib.codexOf([{ name: 'Rukia', kind: 'people', fact: `In chapter ${i + 1} she keeps a token.`, evidence: line }], { text: v.text }); }
+    novel.order.push(c.id);
+    chapters[c.id] = c;
+  }
+  const now = novel.order[30];
+  let mixed = 0;
+  for (let room = 6000; room <= 20000; room += 20) {
+    const a = context.assemble({ house: quietHouse(), novel, chapters, conn: { ...CONN, context: room, maxTokens: 1000 }, target: { chapterId: now }, request: 'Rukia waits.' });
+    if (a.over) continue;
+    const t = sentOf(a);
+    const row = novel.order.slice(0, 30).map((id, i) => ({ whole: a.stats.wholeIds.includes(id) || t.includes(`Rukia kept the token of chapter ${i + 1}.`), told: t.includes(`In chapter ${i + 1} she keeps a token.`) }));
+    row.forEach((x, i) => assert.ok(x.whole || x.told, `room ${room}: chapter ${i + 1} is in neither its words nor its facts`));
+    if (row.some((x) => x.told) && row.some((x) => x.whole)) mixed++;
+  }
+  assert.ok(mixed > 100, `rooms where some chapters ride whole and others by their facts: ${mixed}`);
+  /* the chapter open, longer than the room: the passages of it that are not there word for word give their facts; those after the point never */
+  const open = novel.order[30];
+  chapters[open].passages = Array.from({ length: 40 }, (_, k) => {
+    const line = `Rukia kept the charm of passage ${k + 1}.`;
+    const p = shape.newPassage('ai', `${line} ${`P${k + 1} The rain went on and on against the shutters. `.repeat(25)}`);
+    const v = picked(p);
+    v.codex = bib.codexOf([{ name: 'Rukia', kind: 'people', fact: `By passage ${k + 1} she keeps a charm.`, evidence: line }], { text: v.text });
+    return p;
+  });
+  const a = context.assemble({ house: quietHouse(), novel, chapters, conn: { ...CONN, context: 9000, maxTokens: 1000 }, target: { chapterId: open, mark: chapters[open].passages[36].id }, request: 'Rukia waits.' });
+  const t = sentOf(a);
+  /* there word for word: the whole of it (a passage cut at the edge of what is told is not) */
+  const there = (k) => t.includes(picked(chapters[open].passages[k - 1]).text.trim());
+  const told = (k) => t.includes(`By passage ${k} she keeps a charm.`);
+  const missing = Array.from({ length: 36 }, (_, k) => k + 1).filter((k) => !there(k));
+  assert.ok(missing.length > 5, `the chapter is told in part: ${missing.length} passages not there`);
+  /* the share they fit in may run out: then it is the latest that wait, never one in the middle */
+  const toldOnes = missing.filter(told);
+  assert.ok(toldOnes.length >= 5, `told: ${toldOnes.join(',')} of ${missing.join(',')}`);
+  assert.deepEqual(toldOnes, missing.slice(0, toldOnes.length), 'the earliest first, none skipped');
+  for (let k = 1; k <= 36; k++) if (there(k)) assert.ok(!told(k), `passage ${k} is there word for word: its fact is not sent again`);
+  for (let k = 37; k <= 40; k++) assert.ok(!told(k), `passage ${k} is after the point`);
+});
+
+await test('switched on while a reading is on its way, the bibliography leaves no gap: what that reading was not asked for is filled in after it', async () => {
+  const b = await makeBook([['Mina wore a red scarf her mother knitted.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.setPref('bibAuto', 'off'), { now: true });
+  await script([{ text: JSON.stringify({ people: [{ name: 'Mina', about: 'A girl with a red scarf.' }] }), delay: 0.15, chunk: 2 },
+    { bib: true, text: JSON.stringify({ bibliography: [{ source: 'Chapter One, passage 1', facts: [{ name: 'Mina', kind: 'people', fact: 'Her mother knitted her red scarf.', evidence: 'a red scarf her mother knitted' }] }] }) }]);
+  const run = archivist.run(b.novelId);
+  for (let i = 0; i < 100 && !(await requests()).length; i++) await sleep(20);
+  store.change('novel', b.novelId, shape.novelSteps.setPref('bibAuto', ''), { now: true });
+  await run;
+  for (let i = 0; i < 3 && archivist.bibDue(b.novelId).length; i++) await archivist.run(b.novelId);
+  assert.deepEqual(bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) }).map((it) => [it.name, it.facts.map((f) => f.fact)]), [['Mina', ['Her mother knitted her red scarf.']]]);
+  assert.equal(archivist.bibDue(b.novelId).length, 0);
+  await putAway(b);
+});
+
+await test('changes waiting for Apply to one entry or one card — made, then added to, in one answer — both land, each watched only in the parts it writes; a newer answer adding to it leaves an older change of another part waiting; a paragraph is never added twice', async () => {
+  await setHouse({}, { partnerApplies: 'wait' });
+  const b = await makeBook([['Rukia stood. Kai worked the forge.']], { manual: true });
+  await script([{ text: '<changes>[{"entry": "Rukia", "kind": "people", "line": "A reaper.", "text": "She fights with ice.", "why": "a"}, {"entry": "Rukia", "add": "Her eyes are violet.", "why": "b"}, {"note": "people", "name": "Kai", "about": "A smith.", "why": "c"}, {"note": "people", "name": "Kai", "now": "At the forge.", "why": "d"}]</changes>\nFour.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Write Rukia and Kai.' });
+  let turn = store.peek('talk', b.novelId).turns.at(-1);
+  let v = picked(turn);
+  assert.deepEqual(v.changes.map((c) => c.status), ['waiting', 'waiting', 'waiting', 'waiting'], JSON.stringify(v.changes.map((c) => c.said || '')));
+  const all = talk.settleAll(b.novelId, turn.id, v.id, 'apply');
+  assert.equal(all.done, 4, JSON.stringify(all));
+  const e = bib.entriesOf(b.novel())[0];
+  assert.deepEqual([e.name, e.line, e.text], ['Rukia', 'A reaper.', 'She fights with ice.\n\nHer eyes are violet.']);
+  const kai = b.novel().notes.people.find((c) => c.name === 'Kai');
+  assert.deepEqual([kai.about, kai.now], ['A smith.', 'At the forge.']);
+  /* an older answer's change of when it rides waits on through a newer one that only adds to it */
+  await script([{ text: '<changes>[{"entry": "Rukia", "rides": "always", "why": "e"}]</changes>\nOne.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Always Rukia.' });
+  const older = store.peek('talk', b.novelId).turns.at(-1);
+  await script([{ text: '<changes>[{"entry": "Rukia", "add": "She hates the rain.", "why": "f"}]</changes>\nTwo.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Add the rain.' });
+  turn = store.peek('talk', b.novelId).turns.at(-1);
+  v = picked(turn);
+  assert.equal(talk.applyChange(b.novelId, turn.id, v.id, v.changes[0].id).ok, true);
+  const o = picked(store.peek('talk', b.novelId).turns.find((t) => t.id === older.id));
+  assert.equal(o.changes[0].status, 'waiting', 'not set aside');
+  assert.equal(talk.waitingWhy(b.novelId, o.changes[0]), '', 'nor changed since, for the part it writes');
+  assert.equal(talk.applyChange(b.novelId, older.id, o.id, o.changes[0].id).ok, true);
+  assert.equal(bib.entriesOf(b.novel())[0].rides, 'always');
+  /* the same paragraph never twice */
+  const again = changes.makeChange(b.novelId, { entry: 'Rukia', add: 'She hates the rain.' });
+  assert.equal(again.status, 'refused');
+  assert.match(again.said, /there already/);
+  assert.equal(bib.entriesOf(b.novel())[0].text, 'She fights with ice.\n\nHer eyes are violet.\n\nShe hates the rain.');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('an entry he keeps for himself never tells the writer his name for it, nor which names he puts together under it — the book’s facts ride under the name the book gives, found by that name', () => {
+  const { novel, chapter } = shape.newNovel({ title: 'Soul Gate', brief: 'A reaper story.' });
+  novel.order = [chapter.id];
+  chapter.passages = [shape.newPassage('ai', 'The Masked Man wore a white mask. Kira bowed to the captain.')];
+  const v = picked(chapter.passages[0]);
+  v.codex = bib.codexOf([{ name: 'The Masked Man', kind: 'people', fact: 'He wears a white mask.', evidence: 'The Masked Man wore a white mask' }], { text: v.text });
+  novel.bibliography = [bib.tidyEntry(bib.newEntry({ name: 'Kira', aka: ['The Masked Man'], kind: 'people', rides: 'never', text: 'HIS SECRET: KIRA IS THE MASKED MAN.' }))];
+  const items = bib.bibItems(novel, { [chapter.id]: chapter });
+  let ride = bib.ridingItems(items, { near: 'The Masked Man waited.', budget: 4000 });
+  let words = ride.words.join('\n');
+  assert.ok(words.includes('The Masked Man') && words.includes('He wears a white mask.'), words);
+  assert.ok(!words.includes('Kira') && !words.includes('SECRET'), words);
+  ride = bib.ridingItems(items, { near: 'Kira waited.', budget: 4000 });
+  assert.equal(ride.words.join('\n'), '', 'by his own name for it, nothing');
+  /* the partner plans with him: it sees his entry */
+  ride = bib.ridingItems(items, { near: 'Kira waited.', budget: 4000, purpose: 'partner' });
+  assert.ok(ride.words.join('\n').includes('HIS SECRET'));
+});
+
+await test('a name the book alone tells of takes room only with a fact of its own: never an entry of his left out for one that then says nothing; the other names a card goes by are counted as sent', () => {
+  const entry = { ref: 'e:a', name: 'Ann', aka: [], kind: 'people', rides: 'named', line: '', text: '', entry: { name: 'Ann', line: '', text: 'HIS WORDS FOR ANN, A FEW OF THEM.' }, card: null, facts: [], kinds: {} };
+  const own = util.estimateTokens(bib.itemWords(entry, { facts: [] })) + 4;
+  const book = { ref: 'n:bo', name: 'Bo', aka: [], kind: 'people', rides: 'named', line: '', text: '', entry: null, card: null, facts: [{ id: 'f', fact: 'Bo is tall and has a long scar across the left cheek from the war.', passageId: 'p', label: 'Chapter One, passage 1' }], kinds: {} };
+  const ride = bib.ridingItems([entry, book], { near: 'Ann sat. Bo stood.', budget: own + 2 });
+  assert.deepEqual(ride.items.map((x) => x.name), ['Ann'], 'Bo, nearer, could not say anything in the room left: Ann rides');
+  const card = { ref: 'c:people:k', name: 'Kai', aka: Array.from({ length: 12 }, (_, i) => `Kai the Smith of the North Gate ${i}`), kind: 'people', rides: 'named', line: '', text: '', entry: null, card: { kind: 'people', id: 'k' }, facts: book.facts.map((f) => ({ ...f, fact: 'Kai forges blades.' })), kinds: {} };
+  for (const budget of [40, 120, 400]) {
+    const r = bib.ridingItems([card], { near: 'Kai worked.', budget });
+    assert.ok(util.estimateTokens(r.words.join('\n\n')) <= budget, `${budget}: ${util.estimateTokens(r.words.join('\n\n'))}`);
+  }
+});
+
+await test('the partner’s list of every entry is the same whether or not the book has told facts that do not ride', () => {
+  const b = bibBook();
+  /* the chapter open far longer than the room: little is left for the chapters before */
+  b.c3.passages = Array.from({ length: 60 }, (_, i) => shape.newPassage('ai', `Passage ${i} of a long chapter. ${'The rain went on against the shutters. '.repeat(80)}`));
+  b.novel.bibliography.push(...Array.from({ length: 60 }, (_, i) => bib.tidyEntry(bib.newEntry({ name: `Name${i} Zeta`, kind: 'people', line: `The line of entry ${i}, which says who they are.` }))));
+  const index = (novel) => {
+    const t = sentOf(context.assemble({ house: quietHouse(), novel, chapters: b.chapters, conn: { ...CONN, context: 32000, maxTokens: 1000 }, purpose: 'partner', turns: [], target: { chapterId: b.c3.id }, request: 'Talk.' }));
+    return t.slice(t.indexOf(prompts.BIB_INDEX)).split('\n').filter((l) => l.startsWith('- Name')).length;
+  };
+  const withFacts = index(b.novel);
+  for (const c of Object.values(b.chapters)) for (const p of c.passages) delete picked(p).codex;
+  assert.equal(withFacts, index(b.novel));
+  assert.ok(withFacts > 10, String(withFacts));
+});
+
+await test('a fact said again in other words of the name is said once; one that says otherwise — a “no”, a “can’t”, who did what to whom — never', () => {
+  const { novel, chapter } = shape.newNovel({ title: 'Soul Gate', brief: 'x' });
+  novel.order = [chapter.id];
+  const pairs = [['Rukia carries Sode no Shirayuki.', 'Rukia Kuchiki carries Sode no Shirayuki'], ['Rukia can swim.', 'Rukia can’t swim.'], ['Rukia has a sister.', 'Rukia has no sister.'], ['Rukia stabbed Ichigo.', 'Ichigo stabbed Rukia.'], ['Rukia is older than Ichigo.', 'Ichigo is older than Rukia.']];
+  chapter.passages = pairs.flat().map((t) => shape.newPassage('ai', `${t} Rukia Kuchiki nodded.`));
+  chapter.passages.forEach((p, k) => { const v = picked(p); v.codex = bib.codexOf([{ name: k % 2 ? 'Rukia Kuchiki' : 'Rukia', kind: 'people', fact: pairs.flat()[k], evidence: pairs.flat()[k].replace(/\.$/, '') }], { text: v.text }); });
+  novel.bibliography = [bib.tidyEntry(bib.newEntry({ name: 'Rukia Kuchiki', aka: ['Rukia'], kind: 'people', line: 'x' }))];
+  const facts = bib.bibItems(novel, { [chapter.id]: chapter })[0].facts.map((f) => f.fact);
+  assert.deepEqual(facts, ['Rukia carries Sode no Shirayuki.', ...pairs.slice(1).flat()]);
+});
+
+await test('a name with or without its “the” is placed alike, whatever the book read before', () => {
+  const { novel, chapter } = shape.newNovel({ title: 'Soul Gate', brief: 'x' });
+  novel.order = [chapter.id];
+  const lay = (p, name, fact, ev) => { const v = picked(p); v.codex = bib.codexOf([{ name, kind: 'groups', fact, evidence: ev }], { text: v.text }); };
+  const p1 = shape.newPassage('ai', 'The Order met at dawn.');
+  const p2 = shape.newPassage('ai', 'Order keeps its oaths.');
+  lay(p1, 'The Order', 'It meets at dawn.', 'The Order met at dawn');
+  lay(p2, 'Order', 'It keeps its oaths.', 'Order keeps its oaths');
+  novel.bibliography = [bib.tidyEntry(bib.newEntry({ name: 'Order', kind: 'groups', line: 'HIS LINE' }))];
+  chapter.passages = [p1, p2];
+  const where = () => bib.bibItems(novel, { [chapter.id]: chapter }).map((it) => [it.ref.slice(0, 2), it.facts.map((f) => f.fact)]);
+  assert.deepEqual(where(), [['e:', ['It meets at dawn.', 'It keeps its oaths.']]]);
+  chapter.passages = [p2];
+  assert.deepEqual(where(), [['e:', ['It keeps its oaths.']]]);
+});
+
+await test('one answer’s changes waiting for Apply: one it takes out leaves the next to it said as changed since; Undo of one gives the others back what they were watched from; one renamed and then changed under its new name both land; a newer answer’s paragraph sets aside an older one’s', async () => {
+  await setHouse({}, { partnerApplies: 'wait' });
+  const b = await makeBook([['Rukia stood. Kai worked the forge.']], { manual: true });
+  const ask = async (block, said) => {
+    await script([{ text: `<changes>${JSON.stringify(block)}</changes>\nDone.` }]);
+    await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: said });
+    const turn = store.peek('talk', b.novelId).turns.at(-1);
+    return { turn, v: () => picked(store.peek('talk', b.novelId).turns.find((t) => t.id === turn.id)) };
+  };
+  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'Rukia', kind: 'people', text: 'A reaper.', by: 'you' }))), { now: true });
+  /* taken out, then added to: the paragraph is never a new entry */
+  let a = await ask([{ entry: 'Rukia', remove: true, why: 'a' }, { entry: 'Rukia', add: 'She fights with ice.', why: 'b' }], 'Out, then add.');
+  assert.equal(talk.applyChange(b.novelId, a.turn.id, a.v().id, a.v().changes[0].id).ok, true);
+  const second = talk.applyChange(b.novelId, a.turn.id, a.v().id, a.v().changes[1].id);
+  assert.equal(second.ok, false);
+  assert.match(second.said, /changed since/);
+  assert.equal(bib.entriesOf(b.novel()).length, 0, 'no entry made of the paragraph alone');
+  assert.equal(talk.undoOneChange(b.novelId, a.turn.id, a.v().id, a.v().changes[0].id).ok, true);
+  /* made, undone, then the other: it lands on the card as it was offered */
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-k', name: 'Kai', about: 'A smith.', now: 'At the forge.', ties: '', aka: [] }), { now: true });
+  a = await ask([{ note: 'people', name: 'Kai', now: 'At the well.', why: 'c' }, { note: 'people', name: 'Kai', now: 'Asleep.', why: 'd' }], 'Where is Kai?');
+  assert.equal(talk.applyChange(b.novelId, a.turn.id, a.v().id, a.v().changes[0].id).ok, true);
+  assert.equal(talk.undoOneChange(b.novelId, a.turn.id, a.v().id, a.v().changes[0].id).ok, true);
+  assert.equal(talk.waitingWhy(b.novelId, a.v().changes[1]), '');
+  assert.equal(talk.applyChange(b.novelId, a.turn.id, a.v().id, a.v().changes[1].id).ok, true);
+  assert.equal(b.novel().notes.people.find((c) => c.id === 'pe-k').now, 'Asleep.');
+  /* renamed, then added to under the new name */
+  a = await ask([{ entry: 'Rukia', newName: 'Rukia Kuchiki', why: 'e' }, { entry: 'Rukia Kuchiki', add: 'Her eyes are violet.', why: 'f' }], 'Her full name.');
+  const all = talk.settleAll(b.novelId, a.turn.id, a.v().id, 'apply');
+  assert.equal(all.done, 2, JSON.stringify(all));
+  const e = bib.entriesOf(b.novel())[0];
+  assert.deepEqual([e.name, e.aka, e.text], ['Rukia Kuchiki', ['Rukia'], 'A reaper.\n\nHer eyes are violet.']);
+  /* a newer answer's paragraph sets aside an older one's still waiting */
+  const older = await ask([{ entry: 'Rukia Kuchiki', add: 'She hates the rain.', why: 'g' }], 'Rain.');
+  await ask([{ entry: 'Rukia Kuchiki', add: 'She loves the rain.', why: 'h' }], 'No — rain.');
+  assert.equal(older.v().changes[0].status, 'skipped');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a short portrait asked for is held to what the bibliography keeps even when Fill it from the book is switched off while it is on its way', async () => {
+  const b = await makeBook([['Hae-won held her shoulders up as if bracing against cold. Fine lines sat at the corners of her eyes. She squared her glass with the table edge.']]);
+  const long = 'An old friend of Mina from school. Holds her shoulders up as if bracing against cold. Has fine lines at the corners of her eyes. Squares her glass with the table edge when she has decided something.';
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { id: 'pe-h', name: 'Hae-won', aka: [], about: long, ties: '', now: '' }), { now: true });
+  await script([{ delay: 0.15, chunk: 2, text: JSON.stringify({ people: [{ name: 'Hae-won', about: 'An old friend of Mina from school, precise and unhurried.' }], bibliography: [{ source: 'Passage 1', facts: [
+    { name: 'Hae-won', kind: 'people', fact: 'Holds her shoulders up as if bracing against cold.', evidence: 'held her shoulders up as if bracing against cold' },
+    { name: 'Hae-won', kind: 'people', fact: 'Fine lines at the corners of her eyes.', evidence: 'Fine lines sat at the corners of her eyes' },
+    { name: 'Hae-won', kind: 'people', fact: 'Squares her glass with the table edge.', evidence: 'She squared her glass with the table edge' }] }] }) }]);
+  const run = archivist.run(b.novelId);
+  for (let i = 0; i < 100 && !(await requests()).length; i++) await sleep(20);
+  store.change('novel', b.novelId, shape.novelSteps.setPref('bibAuto', 'off'), { now: true });
+  await run;
+  assert.equal(b.novel().notes.people.find((c) => c.id === 'pe-h').about, 'An old friend of Mina from school, precise and unhurried.');
+  assert.equal(bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) })[0].facts.length, 3, 'and what it leaves to them is kept');
+  await putAway(b);
+});
+
+/* a codex laid on a passage's version on show, as the helper's reading lays it */
+function layFacts(b, ci, pi, rows) {
+  store.change('chapter', b.ids[ci], (c) => { const v = picked(c.passages[pi]); v.codex = bib.codexOf(rows, { text: v.text }); }, { now: true });
+}
+await test('a name changed everywhere takes the book’s facts with it, their words changed too — nothing read or paid for again', async () => {
+  const b = await makeBook([['Rukia’s eyes were a deep violet.', 'Rukia cut her hair short.']], { manual: true });
+  markAllSeen(b);
+  layFacts(b, 0, 0, [{ name: 'Rukia', kind: 'people', fact: 'Rukia’s eyes are violet.', evidence: 'Rukia’s eyes were a deep violet' }]);
+  layFacts(b, 0, 1, [{ name: 'Rukia', kind: 'people', fact: 'Rukia cut her hair short.', evidence: 'Rukia cut her hair short' }]);
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Rukia', to: 'Ilse' } }).status, 'made');
+  assert.deepEqual(bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) }).map((it) => [it.name, it.facts.map((f) => f.fact)]), [['Ilse', ['Ilse’s eyes are violet.', 'Ilse cut her hair short.']]]);
+  assert.equal(archivist.bibDue(b.novelId).length, 0, 'never due again');
+  await putAway(b);
+});
+
+await test('a passage further back read as a change keeps what its version before established that the new words still say, whatever the answer lists', async () => {
+  const b = await makeBook([['Rukia’s eyes were a deep violet. She carried a white sword.', 'Tom came.']]);
+  markAllSeen(b);
+  layFacts(b, 0, 0, [{ name: 'Rukia', kind: 'people', fact: 'Her eyes are violet.', evidence: 'Rukia’s eyes were a deep violet' }, { name: 'Rukia', kind: 'people', fact: 'She carries a white sword.', evidence: 'She carried a white sword' }]);
+  const p = b.ch().passages[0];
+  writer.saveEdit({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id, text: 'Rukia’s eyes were a deep violet. She carried a white sword. Snow fell.' });
+  await script([{ text: JSON.stringify({ people: [], bibliography: [{ source: 'Passage 1', facts: [{ name: 'Rukia', kind: 'people', fact: 'She walks in snow.', evidence: 'Snow fell' }] }] }) }]);
+  await archivist.run(b.novelId);
+  const asked = (await requests()).map((x) => x.body.messages.at(-1).content).find((c) => c.includes('Update the notes'));
+  assert.ok(asked && asked.includes('It used to read'), 'read as a change');
+  const facts = bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) }).flatMap((it) => it.facts.map((f) => f.fact));
+  assert.ok(facts.includes('Her eyes are violet.') && facts.includes('She carries a white sword.'), JSON.stringify(facts));
+  await putAway(b);
+});
+
+await test('a page mended in place keeps its facts where every one still stands in the mended words', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([[`${story200} Gulls cried over Crane Point.\n\nI hope this captures the scene.`]], { manual: true });
+  markAllSeen(b);
+  layFacts(b, 0, 0, [{ name: 'Crane Point', kind: 'places', fact: 'Gulls cry over it.', evidence: 'Gulls cried over Crane Point' }]);
+  store.change('novel', b.novelId, (n) => { n.memory.mended = 0; }, { now: true });
+  assert.deepEqual(await mend.mendBook(b.novelId), { pages: 1, tellings: 0 });
+  assert.ok(!picked(b.ch().passages[0]).text.includes('I hope this captures'));
+  assert.deepEqual(bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) }).map((it) => [it.name, it.facts.map((f) => f.fact)]), [['Crane Point', ['Gulls cry over it.']]]);
+  assert.equal(archivist.bibDue(b.novelId).length, 0);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('pages filled in after: a source the answer names its own way is still its own; a batch its model will not read is read a page at a time, each tried twice at most', async () => {
+  const b = await makeBook([['Mina wore a red scarf her mother knitted.', 'Joon laughed at the sea.']], { manual: true });
+  markReadBefore212(b);
+  await script([{ bib: true, text: JSON.stringify({ bibliography: [{ source: 'Chapter 1, Passage 1.', facts: [{ name: 'Mina', kind: 'people', fact: 'Her mother knitted her red scarf.', evidence: 'a red scarf her mother knitted' }] }, { source: 'chapter one passage 2', facts: [] }] }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual(bib.bibItems(b.novel(), { [b.ids[0]]: b.ch(0) }).map((it) => it.facts[0].fact), ['Her mother knitted her red scarf.']);
+  assert.equal(archivist.bibDue(b.novelId).length, 0);
+  /* its model will not read two at once: one at a time, and each passed by after two tries */
+  const c = await makeBook([['Kai forged a blade of black iron.', 'Rin sang by the well.']], { manual: true });
+  markReadBefore212(c);
+  const tooLong = { bib: true, status: 400, message: "This model's maximum context length is 4000 tokens. However, your messages resulted in 9000 tokens." };
+  await reset();
+  await script([tooLong, { bib: true, text: JSON.stringify({ bibliography: [{ source: 'Chapter One, passage 1', facts: [{ name: 'Kai', kind: 'people', fact: 'He forged a black iron blade.', evidence: 'Kai forged a blade of black iron' }] }] }) }, tooLong, tooLong]);
+  for (let i = 0; i < 6 && archivist.bibDue(c.novelId).length; i++) { archivist.forTests().failures.delete(c.novelId); await archivist.run(c.novelId); }
+  const asks = (await requests()).filter((x) => x.body.messages.at(-1).content.includes('bibliography was kept'));
+  assert.ok(asks.length <= 4, `asked ${asks.length} times`);
+  /* (a too-long answer is fitted and sent once more by the call itself, as every ask is: the second ask is that one) */
+  const sourcesIn = (x) => (x.body.messages.at(-1).content.match(/^Chapter One, passage \d+:$/gm) || []).length;
+  assert.deepEqual(asks.map(sourcesIn), [2, 2, 1, 1], 'two together, then the one left a page at a time');
+  assert.equal(archivist.bibDue(c.novelId).length, 0, 'and done');
+  assert.deepEqual(bib.bibItems(c.novel(), { [c.ids[0]]: c.ch(0) }).map((it) => it.name), ['Kai']);
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a chapter’s summary whose ask stalls on its words is asked once more, then set aside — never asked for ever', async () => {
+  globalThis.__cozyLeashQuietMs = 2000;
+  globalThis.__cozyLeashAllMs = 700;
+  try {
+    const b = await makeBook([['Mara kept the light.', 'Tom came.']], { manual: true });
+    markAllSeen(b);
+    store.change('chapter', b.ids[0], (c) => { for (const x of c.passages) for (const v of x.versions) v.at = Date.now() - 3600000; }, { now: true });
+    for (let k = 0; k < 2; k++) {
+      archivist.forTests().failures.delete(b.novelId);
+      await reset();
+      await script([{ hang_after: '{"summary": "Mara' }]);
+      await archivist.run(b.novelId);
+    }
+    assert.ok(Object.keys(b.novel().memory.aside || {}).some((k) => k.startsWith('summary:')), JSON.stringify(b.novel().memory.aside || {}));
+    await putAway(b);
+  } finally {
+    delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashAllMs;
+  }
+});
+
+await test('a lorebook taken out and brought back in keeps each entry’s kind and line; with the bibliography kept, a first description goes to it, and Continue’s outcome speaks of what the writer chose', () => {
+  const es = [bib.tidyEntry(bib.newEntry({ name: 'Rukia', kind: 'people', line: 'A reaper.', text: 'She fights with ice.' })), bib.tidyEntry(bib.newEntry({ name: 'Gotei 13', kind: 'groups', text: 'Thirteen squads.' }))];
+  assert.deepEqual(bib.entriesFromLorebook(JSON.stringify(bib.lorebookOf(es))).map((e) => [e.name, e.kind, e.line, e.text]), [['Rukia', 'people', 'A reaper.', 'She fights with ice.'], ['Gotei 13', 'groups', '', 'Thirteen squads.']]);
+  const b = bibBook();
+  const on = prompts.notesRequest({ novel: b.novel, chapterLabel: 'Chapter One', before: '', changes: [{ pid: 'p', text: 'x', source: 'Passage 1' }], removed: [], removedChapters: [], at: 0, of: 1, codex: true });
+  assert.ok(on.includes('what they wear or carry — in "bibliography"') && on.includes('on its card, or in "bibliography"'), on.slice(0, 1600));
+  const off = prompts.notesRequest({ novel: b.novel, chapterLabel: 'Chapter One', before: '', changes: [{ pid: 'p', text: 'x', source: 'Passage 1' }], removed: [], removedChapters: [], at: 0, of: 1, codex: false });
+  assert.ok(off.includes('what they wear or carry. It can') && !off.includes('"bibliography"'));
+  const chosen = prompts.writeRequest({ chapterLabel: 'Chapter Two', direction: '', length: 'auto' });
+  assert.ok(chosen.includes('Carry what you choose through') && !chosen.includes('Carry what I asked for'), chosen);
+  assert.ok(prompts.writeRequest({ chapterLabel: 'Chapter Two', direction: 'They fight.', length: 'auto' }).includes('Carry what I asked for'));
+});
+
+await test('a name in italics written with underscores is still the name: marked in the page, changed everywhere with it, and found by the same words across chapters', async () => {
+  const f = bib.makeFinder(bib.nameForms([bib.tidyEntry(bib.newEntry({ name: 'Rukia', kind: 'people', line: 'x' }))], {}));
+  const t = '_Rukia_ ran. Rukia_Kuchiki is no name.';
+  assert.deepEqual(f.find(t).map((x) => t.slice(x.start, x.end)), ['Rukia', 'Rukia', 'Kuchiki'].slice(0, f.find(t).length));
+  assert.equal(t.slice(f.find(t)[0].start, f.find(t)[0].end), 'Rukia');
+  const b = await makeBook([['_Mara_ waited by _Ann_. Mara left.']], { manual: true });
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Mara', to: 'Ilse' } }).status, 'made');
+  assert.equal(changes.makeChange(b.novelId, { replace_all: true, find: 'Ann', replace: 'Beth', chapters: 'all' }).status, 'made');
+  assert.equal(picked(b.ch().passages[0]).text, '_Ilse_ waited by _Beth_. Ilse left.');
   await putAway(b);
 });
 

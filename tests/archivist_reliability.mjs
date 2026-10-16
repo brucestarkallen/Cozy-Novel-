@@ -61,8 +61,10 @@ async function book(text = 'The keeper watches the quiet water.') {
   const b = { novelId: novel.id, chapterId: chapter.id, n: () => store.peek('novel', novel.id), c: () => store.peek('chapter', chapter.id) };
   books.push(b); seen(b); return b;
 }
+/* read as the helper reads now (2.12: with the bibliography's facts for its words kept — none here) */
 function seen(b) {
   store.change('novel', b.novelId, shape.novelSteps.seen(b.chapterId, Object.fromEntries(b.c().passages.map((p) => [p.id, archivist.signature(shape.picked(p))]))));
+  store.change('chapter', b.chapterId, (c) => { for (const p of c.passages) { const v = shape.picked(p); if (v && !v.codex) v.codex = { schema: 1, fp: util.hashText(v.text || ''), facts: [], complete: true }; } });
 }
 function setSummary(b, summary) { store.change('chapter', b.chapterId, shape.chapterSteps.setSummary(summary)); }
 function edit(b, text) {

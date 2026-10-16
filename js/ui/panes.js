@@ -22,6 +22,7 @@ import * as desk from './desk.js';
 import { sceneWords, choicesIn, nowLabelOf } from '../novel/prompts.js';
 import { openBranch, branchBusy } from './branches.js';
 import { makeTimeline } from './timeline.js';
+import { bibliographyView, bibliographyPrint, pageNames, tapName } from './bibliography.js';
 
 let ui = null;
 let hooks = {};
@@ -36,6 +37,13 @@ export function initPanes(elements, appHooks) {
   ui = elements;
   hooks = appHooks;
   ui.scrim.addEventListener('click', () => { closeLeft(); closeRight(); });
+  /* a marked name in a scene's telling opens its card (Tap names) */
+  ui.rightBody.addEventListener('click', (e) => {
+    const nm = e.target.closest && e.target.closest('.tprose .nm');
+    if (!nm || !nm.dataset.name || (window.getSelection && !window.getSelection().isCollapsed)) return;
+    e.stopPropagation();
+    tapName(P.novelId, nm.dataset.name, e);
+  }, true);
   for (const b of ui.tabs.querySelectorAll('button')) b.addEventListener('click', () => { P.side = b.dataset.tab; drawSide(); });
   archivist.onLight((novelId) => { if (novelId === P.novelId) { drawLight(); if (P.side === 'notes') drawSideSoon(); } });
   SF = follower(ui.rightBody, { tail: sideTail, active: () => P.side === 'partner' ? talk.talkBusy('talk', P.novelId) : P.side === 'play' && P.playId && talk.talkBusy('play', P.playId) });
@@ -681,7 +689,7 @@ let notesSignature = '';
  * cards and to the existing reading action, never to another set of notes. */
 function notesViews() {
   const views = h('div.segmented.notes-views', { role: 'group', 'aria-label': 'Notebook view' });
-  for (const [value, label, title] of [['cards', 'Cards', 'Read or edit the notes that travel with your story.'], ['timeline', 'Timeline', 'Follow changes in people, relationships and threads, with their source passages.']]) {
+  for (const [value, label, title] of [['cards', 'Cards', 'Read or edit the notes that travel with your story.'], ['timeline', 'Timeline', 'Follow changes in people, relationships and threads, with their source passages.'], ['bibliography', 'Bibliography', 'What each name in the book means — filled from the book as it is read, with your own entries.']]) {
     views.append(h('button', { 'data-notes-view': value, title, 'aria-pressed': String(notesView === value), onclick: () => {
       if (notesView === value) return;
       notesView = value;
@@ -693,10 +701,33 @@ function notesViews() {
   return views;
 }
 
+let bibSignature = '';
 function drawNotes() {
   const n = store.peek('novel', P.novelId);
   if (!n) return;
   const novelId = P.novelId;
+  /* Notes → Bibliography (bibliography.js): drawn again only when what it shows changed */
+  if (notesView === 'bibliography') {
+    const sig = bibliographyPrint(novelId);
+    if (sig === bibSignature && ui.rightBody.querySelector('.bibview')) return;
+    bibSignature = sig;
+    notesSignature = '';
+    let intro = ui.rightBody.querySelector('.pane-intro');
+    if (!intro) intro = h('div.pane-intro', h('p.pane-kicker', 'Beside the story'), h('div.pane-title-row', h('h2', 'Your notebook'), h('span.pane-count')));
+    /* drawn again while he types in its filter, or reads down the list: the box keeps his place in it, the list its place */
+    const old = ui.rightBody.querySelector('.bibview .bibfilter');
+    const typing = old && document.activeElement === old ? [old.selectionStart, old.selectionEnd] : null;
+    const top = ui.rightBody.scrollTop;
+    const view = bibliographyView(novelId, { redraw: () => { bibSignature = ''; drawSide(); } });
+    const count = intro.querySelector('.pane-count');
+    if (count.textContent !== view.dataset.count) count.textContent = view.dataset.count || '';
+    keepChildren(ui.rightBody, [intro, ui.rightBody.querySelector('.notes-views') || notesViews(), view]);
+    const box = typing && view.querySelector('.bibfilter');
+    if (box) { box.focus({ preventScroll: true }); try { box.setSelectionRange(typing[0], typing[1]); } catch (_) { /* fine */ } }
+    if (ui.rightBody.scrollTop !== top) ui.rightBody.scrollTop = top;
+    return;
+  }
+  bibSignature = '';
   const l = archivist.lightOf(novelId);
   const m = n.memory || {};
   const readings = notesView === 'cards' ? archivist.readingsList(novelId) : [];
@@ -1311,7 +1342,7 @@ function drawTurn(kind, id, turn) {
   /* the thinking streams open while it comes, then folds once the words begin */
   if (turn.by !== 'you' && thinking) el.append(turnThinkBox(key, thinking, Boolean(live && !live.text)));
   /* the narrator's telling is prose — a thought or a sound in italics is drawn in italics */
-  if (kind === 'play' && turn.by !== 'you') { const w = h('div.words.tprose'); drawProse(w, shownWords(kind, turn, text, live), { tint: true }); el.append(w); }
+  if (kind === 'play' && turn.by !== 'you') { const w = h('div.words.tprose'); drawProse(w, shownWords(kind, turn, text, live), { tint: true, names: pageNames(P.novelId) }); el.append(w); }
   else if (kind === 'talk' && turn.by !== 'you' && partsOf(text).some((x) => x.kind === 'direction')) {
     /* each premise it offered, with its own Use as the next direction */
     const w = h('div.words');
@@ -1654,7 +1685,7 @@ function paintSide() {
       box.remove();
     }
     const words = shownWords(ev.kind, { by: 'ai' }, ev.text || '', entry);
-    if (el.classList.contains('tprose')) growProse(el, words, { tint: true }); else streamLines(el, words);
+    if (el.classList.contains('tprose')) growProse(el, words, { tint: true, names: P.side === 'play' ? pageNames(P.novelId) : null }); else streamLines(el, words);
     painted = true;
   }
   sideLive.clear();

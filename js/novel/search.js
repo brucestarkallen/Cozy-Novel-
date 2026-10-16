@@ -163,6 +163,14 @@ function* sourcesOf({ novel, chapters = {}, talk = null, plays = [] }) {
       for (const f of ['about', 'ties', 'now']) if (card[f]) yield [base, card[f]];
     }
   }
+  /* his entries in the bibliography: their names and words (a tap opens the entry's card) */
+  for (const e of Array.isArray(novel.bibliography) ? novel.bibliography : []) {
+    if (!e || !e.name) continue;
+    const base = { where: 'entry', label: e.name, group: 'Bibliography', entryId: e.id };
+    yield [base, e.name];
+    for (const a of e.aka || []) yield [base, a];
+    for (const f of ['line', 'text']) if (e[f]) yield [base, e[f]];
+  }
   for (const [field, words] of BOOK_WORDS) if (novel[field]) yield [{ where: 'book', label: words, group: 'About this book', field }, novel[field]];
   /* the words a turn shows: the partner's without its blocks, the narrator's without its offers */
   /* every conversation with the partner: the open one, and the others (a tap opens that one) */

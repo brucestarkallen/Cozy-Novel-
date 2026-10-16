@@ -1,0 +1,689 @@
+/* Cozy Novel — js/novel/bibliography.js — THE BIBLIOGRAPHY (pure)
+ *
+ * His own entries for the book's people, places, things, groups and lore —
+ * what a name means, the way an RPG's codex tells it — kept with the book
+ * (`novel.bibliography`). The notes are something else: what the story has
+ * established so far, kept by the helper from the pages. An entry is his
+ * (or his partner's, at his asking) and nothing else ever writes it.
+ *
+ * So that it never crowds the request, the writer, the narrator and the
+ * checker read an entry only when its name comes up — in his words, or in
+ * the words right before the point being written — or always, when he says
+ * so; never, when he keeps it for himself. What rides is fitted to a share
+ * of the room, his words' names first, then the nearest. The partner sees
+ * every entry by its name and line, and the ones named here whole.
+ *
+ * A name is found the way it is written: one written with capitals only with
+ * them (or in all capitals, shouted), so "Will" is never "she will"; one in
+ * small letters ("bankai") however it is written. Never inside a longer word,
+ * nor in a name joined with a hyphen ("Mary" is not in "Mary-Jane"). */
+import { newId, nameKey, estimateTokens, hashText } from '../util.js';
+import { picked, matchCard, chapterLabel } from './shape.js';
+import { foldedText, nameInText, firstSentence } from './names.js';
+
+export const ENTRY_KINDS = ['people', 'places', 'things', 'groups', 'lore'];
+export const KIND_TITLE = { people: 'People', places: 'Places', things: 'Things', groups: 'Groups', lore: 'Lore' };
+export const KIND_ONE = { people: 'person', places: 'place', things: 'thing', groups: 'group', lore: 'piece of lore' };
+/* when the writer reads it */
+export const RIDES = ['named', 'always', 'never'];
+export const RIDES_WORDS = {
+  named: 'When its name comes up',
+  always: 'Always',
+  never: 'Never — it’s only for me',
+};
+
+const clean = (s) => String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
+const cleanName = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 120);
+export const kindOf = (k) => (ENTRY_KINDS.includes(k) ? k : 'lore');
+/* the kind of entry a word names, as a person or a model would say it ('' when none) */
+const KIND_WORDS = { person: 'people', people: 'people', character: 'people', characters: 'people', place: 'places', places: 'places', location: 'places', locations: 'places',
+  thing: 'things', things: 'things', item: 'things', items: 'things', object: 'things', objects: 'things', weapon: 'things', group: 'groups', groups: 'groups', faction: 'groups', factions: 'groups', organization: 'groups', organisation: 'groups', clan: 'groups', family: 'groups',
+  lore: 'lore', term: 'lore', terms: 'lore', concept: 'lore', rule: 'lore', magic: 'lore', power: 'lore', ability: 'lore', technique: 'lore', event: 'lore', history: 'lore', word: 'lore' };
+export const kindSaid = (v) => KIND_WORDS[String(v || '').trim().toLowerCase()] || '';
+export const ridesOf = (r) => (RIDES.includes(r) ? r : 'named');
+
+export function newEntry(fields = {}) {
+  return {
+    id: newId('bb'),
+    name: '',
+    aka: [],
+    kind: 'people',
+    line: '',
+    text: '',
+    rides: 'named',
+    at: Date.now(),
+    ...fields,
+  };
+}
+
+/* the entries of a book, as stored (never null) */
+export function entriesOf(novel) {
+  const list = novel && Array.isArray(novel.bibliography) ? novel.bibliography : [];
+  return list.filter((e) => e && typeof e === 'object' && cleanName(e.name));
+}
+
+/* an entry made tidy for keeping: a name, other names once each (never its own name), a kind, when it rides */
+export function tidyEntry(e) {
+  const name = cleanName(e.name);
+  const seen = new Set([nameKey(name)]);
+  const aka = [];
+  for (const a of Array.isArray(e.aka) ? e.aka : String(e.aka || '').split(',')) {
+    const n = cleanName(a);
+    const k = nameKey(n);
+    if (!n || !k || seen.has(k)) continue;
+    seen.add(k);
+    aka.push(n);
+  }
+  return { ...e, name, aka, kind: kindOf(e.kind), line: clean(e.line).replace(/\n+/g, ' '), text: clean(e.text), rides: ridesOf(e.rides) };
+}
+
+/* the entry a name means: by its name first, then by one it goes by — {entry, ambiguous} */
+export function entryNamed(entries, name) {
+  const k = nameKey(name);
+  if (!k) return { entry: null, ambiguous: false };
+  const byName = entries.filter((e) => nameKey(e.name) === k);
+  if (byName.length === 1) return { entry: byName[0], ambiguous: false };
+  if (byName.length > 1) return { entry: null, ambiguous: true };
+  const byAka = entries.filter((e) => (e.aka || []).some((a) => nameKey(a) === k));
+  if (byAka.length === 1) return { entry: byAka[0], ambiguous: false };
+  return { entry: null, ambiguous: byAka.length > 1 };
+}
+
+/* another entry already called this, or going by it (renaming or adding one never makes two that answer to one name) */
+export function nameTaken(entries, name, butId = '') {
+  const k = nameKey(name);
+  return Boolean(k) && entries.some((e) => e.id !== butId && (nameKey(e.name) === k || (e.aka || []).some((a) => nameKey(a) === k)));
+}
+
+/* ------------------------------------------------------------ finding names */
+
+const esc = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/* (an underscore is no letter: _Rukia_ is Rukia in italics) */
+const EDGE_BEFORE = '(?<![\\p{L}\\p{N}])(?<![\\p{L}\\p{N}]-)';
+const EDGE_AFTER = '(?![\\p{L}\\p{N}])(?!-[\\p{L}\\p{N}])';
+/* a name is written with capitals when any letter of it is one */
+const cased = (s) => /\p{Lu}/u.test(s);
+/* a form as it is looked up again: the words as written for a cased name, folded for one in small letters */
+export const formKey = (s) => (cased(s) ? String(s).normalize('NFC') : String(s).normalize('NFC').toLowerCase());
+
+/* a person is found by a name of theirs alone too — "Rukia" for Rukia
+ * Kuchiki — never by a title or a joining word, and only by one of three
+ * letters or more written with a capital */
+const PART_STOP = new Set(['the', 'of', 'and', 'von', 'van', 'der', 'den', 'de', 'du', 'la', 'le', 'el', 'al', 'bin', 'ibn', 'mr', 'mrs', 'ms', 'miss', 'dr', 'sir', 'dame', 'lady', 'lord', 'captain', 'lieutenant', 'commander', 'general', 'colonel', 'major', 'sergeant', 'officer', 'detective', 'agent', 'king', 'queen', 'prince', 'princess', 'emperor', 'empress', 'duke', 'duchess', 'count', 'countess', 'baron', 'master', 'mistress', 'professor', 'doctor', 'saint', 'father', 'mother', 'sister', 'brother', 'aunt', 'uncle', 'old', 'young', 'little', 'big', 'great', 'head', 'chief', 'elder']);
+export function nameParts(name) {
+  const words = cleanName(name).split(/\s+/);
+  if (words.length < 2) return [];
+  return words.map((w) => w.replace(/^[^\p{L}]+|[^\p{L}'’-]+$/gu, '')).filter((w) => w.length >= 3 && cased(w[0]) && !PART_STOP.has(w.toLowerCase()));
+}
+
+/* Every name a set of entries and cards answers to, each once: [{form, refs}] —
+ * refs are 'e:<id>' (an entry) and 'c:<kind>:<id>' (a card of the notes).
+ * A card is found only by a name written with a capital — never by a
+ * description ("the girl", "the letter"). */
+export function nameForms(entries, cards = {}) {
+  const map = new Map();
+  const add = (form, ref) => {
+    const f = cleanName(form).normalize('NFC');
+    /* a name of one letter, or one that is only a number, is never looked for */
+    if (f.length < 2 || !/\p{L}/u.test(f)) return;
+    const key = formKey(f);
+    const row = map.get(key) || { form: f, refs: [] };
+    if (!row.refs.includes(ref)) row.refs.push(ref);
+    map.set(key, row);
+  };
+  for (const e of entries || []) {
+    if (!e || !cleanName(e.name)) continue;
+    const names = [e.name, ...(e.aka || [])];
+    for (const n of names) add(n, `e:${e.id}`);
+    if (kindOf(e.kind) === 'people') for (const n of names) for (const w of nameParts(n)) add(w, `e:${e.id}`);
+  }
+  for (const [kind, list] of Object.entries(cards || {})) {
+    for (const c of list || []) {
+      if (!c || !cleanName(c.name)) continue;
+      const names = [c.name, ...(c.aka || [])].map((n) => cleanName(n).replace(/^(?:the|a|an)\s+/i, '')).filter(cased);
+      for (const n of names) add(n, `c:${kind}:${c.id}`);
+      if (kind === 'people') for (const n of names) for (const w of nameParts(n)) add(w, `c:${kind}:${c.id}`);
+    }
+  }
+  return [...map.values()];
+}
+
+/* A finder for a set of forms: find(text) -> [{start, end, key}] in order,
+ * never overlapping — the longest name wins where two start together. */
+export function makeFinder(forms) {
+  const list = (forms || []).filter((f) => f && f.form);
+  const sig = list.map((f) => `${formKey(f.form)}=${f.refs.join(',')}`).sort().join('|');
+  const big = list.filter((f) => cased(f.form));
+  const small = list.filter((f) => !cased(f.form));
+  const alt = (arr, up) => [...new Set(arr.flatMap((f) => (up && f.form.toUpperCase() !== f.form ? [f.form, f.form.toUpperCase()] : [f.form])))]
+    .sort((a, b) => b.length - a.length).map(esc).join('|');
+  const reBig = big.length ? new RegExp(`${EDGE_BEFORE}(?:${alt(big, true)})${EDGE_AFTER}`, 'gu') : null;
+  const reSmall = small.length ? new RegExp(`${EDGE_BEFORE}(?:${alt(small, false)})${EDGE_AFTER}`, 'giu') : null;
+  const keyOf = new Map(list.map((f) => [formKey(f.form), f]));
+  /* a match in all capitals finds its cased form */
+  const upper = new Map(big.map((f) => [f.form.toUpperCase(), formKey(f.form)]));
+  const find = (text) => {
+    const t = String(text || '');
+    if (!t || (!reBig && !reSmall)) return [];
+    const hits = [];
+    for (const re of [reBig, reSmall]) {
+      if (!re) continue;
+      re.lastIndex = 0;
+      for (const m of t.matchAll(re)) {
+        const raw = m[0].normalize('NFC');
+        let key = re === reBig ? (keyOf.has(raw) ? raw : upper.get(raw)) : raw.toLowerCase();
+        if (!key || !keyOf.has(key)) key = formKey(raw);
+        if (!keyOf.has(key)) continue;
+        hits.push({ start: m.index, end: m.index + m[0].length, key });
+      }
+    }
+    hits.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+    const out = [];
+    let at = -1;
+    for (const x of hits) { if (x.start < at) continue; out.push(x); at = x.end; }
+    return out;
+  };
+  const refsOf = (key) => (keyOf.get(key) || { refs: [] }).refs;
+  return { sig, find, refsOf, size: list.length };
+}
+
+/* ------------------------------------------------------------ what rides */
+
+/* the words an entry rides as */
+export function entryWords(e) {
+  const head = `${e.name}${(e.aka || []).length ? ` (also ${e.aka.join(', ')})` : ''}${e.line ? ` — ${e.line}` : ''}`;
+  return e.text ? `${head}\n${e.text}` : head;
+}
+
+/* the share of the room the entries named here may take */
+export function bibShare(free) {
+  return Math.max(600, Math.min(16000, Math.floor(Math.max(0, free) * 0.12)));
+}
+
+/* every entry by its name and line (the partner's view of the whole), fitted to `budget` tokens */
+export function entryIndex(entries, budget = 4000) {
+  const rows = [];
+  let cost = 0;
+  let left = 0;
+  for (const e of entries || []) {
+    if (!cleanName(e.name)) continue;
+    const row = `- ${e.name}${(e.aka || []).length ? ` (also ${e.aka.join(', ')})` : ''}${e.line ? ` — ${e.line}` : ''}${e.rides === 'never' ? ' [only for me — the writer never reads it]' : e.rides === 'always' ? ' [the writer always reads it]' : ''}`;
+    const c = estimateTokens(row) + 1;
+    if (cost + c > budget) { left++; continue; }
+    rows.push(row);
+    cost += c;
+  }
+  return { text: rows.join('\n'), left };
+}
+
+/* --------------------------------------------- SillyTavern's lorebooks */
+
+/* A lorebook brought in (SillyTavern's World Info file, or the character
+ * book inside a character card): each entry's first key — or its title —
+ * its name, the other keys the names it goes by (a key written as a pattern
+ * is no name), its words, and whether it rides always (constant), never
+ * (switched off) or when named. [] when it holds none. */
+export function entriesFromLorebook(json) {
+  let data = json;
+  if (typeof data === 'string') { try { data = JSON.parse(data); } catch (_) { return []; } }
+  if (!data || typeof data !== 'object') return [];
+  const book = data.entries ? data : data.data && data.data.character_book ? data.data.character_book : data.character_book ? data.character_book : null;
+  if (!book || !book.entries) return [];
+  const rows = Array.isArray(book.entries) ? book.entries : Object.values(book.entries);
+  const out = [];
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    const keys = (Array.isArray(r.key) ? r.key : Array.isArray(r.keys) ? r.keys : typeof r.key === 'string' ? r.key.split(',') : [])
+      .map((k) => String(k || '').trim()).filter((k) => k && !/^\/.*\/[a-z]*$/i.test(k));
+    const title = cleanName(r.comment || r.name || '');
+    const name = cleanName(keys[0] || title);
+    const text = clean(r.content);
+    if (!name || !text) continue;
+    const off = r.disable === true || r.enabled === false;
+    const always = r.constant === true;
+    /* one this app took out: its kind and its line come back as they went (SillyTavern keeps fields it does not know) */
+    const kind = kindSaid(r.cozyKind) || 'lore';
+    const line = typeof r.cozyLine === 'string' ? clean(r.cozyLine).replace(/\n+/g, ' ') : '';
+    const body = line && text.startsWith(line) ? clean(text.slice(line.length)) : text;
+    out.push(tidyEntry(newEntry({ name, aka: [title, ...keys.slice(1)].filter((k) => k && nameKey(k) !== nameKey(name)), kind, line: line && body !== text ? line : '', text: line && body !== text ? body : text, rides: off ? 'never' : always ? 'always' : 'named' })));
+  }
+  return out;
+}
+
+/* The entries as a SillyTavern World Info file: its name and other names
+ * the keys, its line and words the content. */
+export function lorebookOf(entries, title = 'Bibliography') {
+  const out = { name: title, entries: {} };
+  (entries || []).forEach((e, uid) => {
+    out.entries[uid] = {
+      uid,
+      key: [e.name, ...(e.aka || [])],
+      keysecondary: [],
+      comment: e.name,
+      content: [e.line, e.text].filter((x) => String(x || '').trim()).join('\n'),
+      cozyKind: e.kind,
+      cozyLine: e.line || '',
+      constant: e.rides === 'always',
+      selective: false,
+      disable: e.rides === 'never',
+      order: 100,
+      position: 0,
+      addMemo: true,
+      excludeRecursion: false,
+      probability: 100,
+      useProbability: false,
+      depth: 4,
+      group: '',
+      displayIndex: uid,
+    };
+  });
+  return out;
+}
+
+/* ============================================ WHAT THE BOOK ESTABLISHES
+
+ * The helper fills the bibliography by itself as it reads each passage (the
+ * reading it makes for the notes — no ask of its own): the lasting facts the
+ * passage establishes about a name — who or what it is, how they look, where
+ * they come from, what they can do and how it works, a rank, what a word or a
+ * group is — each in a sentence, with the passage's own words that say it.
+ * Kept on the version of the passage that says it (`version.codex`, as the
+ * Timeline keeps its evidence), so a passage written again, taken out or
+ * another version picked takes its facts with it, and the arrows bring them
+ * back: the bibliography heals itself. A fact whose words are not in its
+ * passage, or about a name the passage never gives, is never kept. */
+
+export const CODEX_SCHEMA = 1;
+export const FACTS_PER_SOURCE = 12;
+/* words compared as a reader sees them: spacing, curly quotes and the shape of a dash aside */
+const loose = (t) => String(t || '').replace(/[‘’ʼ′]/g, "'").replace(/[“”„″]/g, '"').replace(/[‐-―−]/g, '-').replace(/…/g, '...').replace(/\s+/g, ' ').trim();
+export function quoteIn(hay, quote) { const q = loose(quote); return q.length >= 4 && loose(hay).includes(q); }
+
+/* the facts one source gives, held to its words: {schema, fp, facts, complete} */
+export function codexOf(rows, { text = '', whole = text } = {}) {
+  const out = { schema: CODEX_SCHEMA, fp: hashText(whole), facts: [], complete: Array.isArray(rows) };
+  if (!Array.isArray(rows)) return out;
+  const folded = foldedText(whole);
+  for (const r of rows.slice(0, FACTS_PER_SOURCE * 2)) {
+    if (!r || typeof r !== 'object' || Array.isArray(r)) { out.complete = false; continue; }
+    const name = cleanName(r.name).replace(/^(?:the|a|an)\s+(?=\p{Lu})/u, '');
+    const fact = typeof r.fact === 'string' ? r.fact.replace(/\s+/g, ' ').trim() : '';
+    const ev = typeof r.evidence === 'string' ? [r.evidence] : Array.isArray(r.evidence) ? r.evidence : [];
+    const quotes = [...new Set(ev.map((q) => String(q == null ? '' : q).trim()).filter(Boolean))];
+    const valid = name && fact && fact.length <= 400 && quotes.length && quotes.every((q) => q.length <= 600 && quoteIn(text, q) && quoteIn(whole, q)) && nameInText(folded, name);
+    if (!valid) { out.complete = false; continue; }
+    if (out.facts.length >= FACTS_PER_SOURCE) continue;
+    const id = 'cx-' + hashText(JSON.stringify([nameKey(name), fact, quotes]));
+    if (!out.facts.some((f) => f.id === id)) out.facts.push({ id, name, kind: kindSaid(r.kind) || 'lore', fact, evidence: quotes });
+  }
+  return out;
+}
+
+/* the parts of one passage read in parts, gathered */
+export function mergeCodex(before, next) {
+  if (!before || before.fp !== next.fp) return next;
+  const facts = [...before.facts];
+  for (const f of next.facts) if (!facts.some((x) => x.id === f.id) && facts.length < FACTS_PER_SOURCE * 3) facts.push(f);
+  return { ...next, complete: before.complete && next.complete, facts };
+}
+
+/* A version's facts carried to words made from its own — a name changed
+ * everywhere (`swap` changes the facts' words as the passage's were), a mend
+ * that only took off what was never the story: kept whole only when every
+ * fact's words still stand in the new words and its name with them; else
+ * none, and the passage is read for them again (bibDue) — never a fact kept
+ * whose words are gone. */
+export function carriedCodex(codex, text, swap = (x) => x) {
+  if (!codex || codex.schema !== CODEX_SCHEMA || !Array.isArray(codex.facts)) return null;
+  const folded = foldedText(text);
+  const facts = [];
+  for (const f of codex.facts) {
+    if (!f || typeof f.fact !== 'string' || typeof f.name !== 'string') return null;
+    const name = swap(f.name);
+    const fact = swap(f.fact);
+    const evidence = (Array.isArray(f.evidence) ? f.evidence : []).map((q) => swap(String(q)));
+    if (!evidence.length || !evidence.every((q) => quoteIn(text, q)) || !nameInText(folded, name)) return null;
+    facts.push({ ...f, id: 'cx-' + hashText(JSON.stringify([nameKey(name), fact, evidence])), name, fact, evidence });
+  }
+  return { ...codex, fp: hashText(text), facts };
+}
+
+/* What a reading of a changed passage gives, with what the version before it
+ * established that its new words still say (each fact whose words and name
+ * still stand in them) — an answer that tells only what the change adds never
+ * takes the rest away. */
+export function withCarriedFacts(codex, before, text) {
+  if (!codex || !before || !Array.isArray(before.facts)) return codex;
+  const folded = foldedText(text);
+  const facts = [...codex.facts];
+  for (const f of before.facts) {
+    if (!f || typeof f.fact !== 'string' || typeof f.name !== 'string' || facts.length >= FACTS_PER_SOURCE * 3) continue;
+    if (facts.some((x) => x.id === f.id || (x.fact === f.fact && nameKey(x.name) === nameKey(f.name)))) continue;
+    const evidence = Array.isArray(f.evidence) ? f.evidence : [];
+    if (evidence.length && evidence.every((q) => quoteIn(text, q)) && nameInText(folded, f.name)) facts.push(f);
+  }
+  return { ...codex, facts };
+}
+
+/* a source as an answer may say it — "Chapter Three, passage 4", "Chapter 3,
+ * Passage 4.", "chapter three passage 4", "Passage 4" — as one key */
+const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+function countOf(t) {
+  const s = String(t || '').trim();
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  let n = 0;
+  for (const w of s.replace(/-/g, ' ').split(/\s+/).filter((x) => x && x !== 'and')) {
+    const a = ONES.indexOf(w);
+    const b = TENS.indexOf(w);
+    if (a > 0) n += a;
+    else if (b > 1) n += b * 10;
+    else if (w === 'hundred' && n > 0) n *= 100;
+    else return 0;
+  }
+  return n;
+}
+export function sourceKey(s) {
+  const t = String(s || '').toLowerCase().replace(/[“”"']/g, '').replace(/[.\s]+$/, '').replace(/\s+/g, ' ').trim();
+  const m = /^chapter (.+?)[,:;]? passage (\d+)$/.exec(t);
+  if (m && countOf(m[1])) return `c${countOf(m[1])}p${parseInt(m[2], 10)}`;
+  const p = /^passage (\d+)$/.exec(t);
+  if (p) return `p${parseInt(p[1], 10)}`;
+  return t;
+}
+
+/* a version's facts, as they stand for its words now (null when it has none
+ * for them) — its words' print kept beside the words it was made of, so a
+ * long book is not printed again for every request */
+const prints = new WeakMap();
+const printOf = (v) => {
+  const t = String(v.text || '');
+  const kept = prints.get(v);
+  if (kept && kept.text === t) return kept.fp;
+  const fp = hashText(t);
+  prints.set(v, { text: t, fp });
+  return fp;
+};
+export function codexNow(v) {
+  const c = v && v.codex;
+  return c && c.schema === CODEX_SCHEMA && Array.isArray(c.facts) && c.fp === printOf(v) ? c : null;
+}
+
+/* A store step, replayable by identity over a newer save: laid on the
+ * version read only while it is the one on show and reads as it did. */
+export function codexStep(passageId, versionId, codex) {
+  return (chapter) => {
+    const p = (chapter.passages || []).find((x) => x.id === passageId);
+    const v = p && picked(p);
+    if (!v || v.id !== versionId || v.streaming || hashText(v.text || '') !== codex.fp) return false;
+    const next = !codex.complete && codexNow(v) ? mergeCodex(v.codex, codex) : codex;
+    v.codex = JSON.parse(JSON.stringify(next));
+    return true;
+  };
+}
+
+/* ------------------------------------------- the bibliography, whole */
+
+const bareKey = (name) => nameKey(String(name || '').replace(/^(?:the|a|an)\s+/i, ''));
+const CARD_KIND = { people: 'people', places: 'places', lore: 'things' };
+
+/* Every name of the bibliography, as one list: his entries, and the names
+ * the book establishes facts about — each with its facts in book order.
+ * [{ref, name, aka, kind, rides, line, text, entry, card, facts, first}]:
+ * ref 'e:<id>' for his entry (the book's facts about that name with it),
+ * 'c:<kind>:<id>' for a name the notes hold a card for, 'n:<name>' for one
+ * they don't. Never a model call. */
+/* Where a name the book tells of is kept — his entry, a card of the notes,
+ * or the name alone — depends only on the names the entries and the cards
+ * go by: worked out once for them and kept while they stand (every card was
+ * held against every name each time the bibliography was gathered — 1,500
+ * names and 400 cards took a second, and it is gathered for every page). */
+const PLACES = new Map();   /* names print -> Map(bare name -> {entryId} | {kind, id} | null) */
+function placesFor(entries, notes) {
+  const rows = [];
+  for (const e of entries) rows.push(`e${e.id}\u0001${e.name}\u0001${(e.aka || []).join('\u0002')}`);
+  for (const kind of ['people', 'places', 'lore']) for (const c of notes[kind] || []) rows.push(`${kind}${c.id}\u0001${c.name}\u0001${(c.aka || []).join('\u0002')}`);
+  const print = hashText(rows.join('\u0003'));
+  let map = PLACES.get(print);
+  if (!map) {
+    if (PLACES.size >= 4) PLACES.clear();
+    map = new Map();
+    PLACES.set(print, map);
+  }
+  return map;
+}
+
+/* A fact that says what an earlier one about the same name already says —
+ * the same words in the same order, but for how the name is written, an
+ * article, "is" or "was", and punctuation ("Rukia Kuchiki carries Sode no
+ * Shirayuki." after "Rukia carries Sode no Shirayuki"): said once, the
+ * earlier kept, with the later one's words beside it. Anything else is its
+ * own fact — a "no" or a "can't", the order of who did what to whom ("Aizen
+ * stabbed Ichigo" is not "Ichigo stabbed Aizen"), a pronoun, a number. */
+const FACT_SKIP = new Set(['a', 'an', 'the', 'is', 'are', 'was', 'were']);
+const factSeq = (t, own) => String(t || '').toLowerCase().replace(/[’ʼ]/g, "'").split(/[^\p{L}\p{N}']+/u)
+  .map((w) => w.replace(/^'+|'+$/g, '')).map((w) => (own.has(w.replace(/'s$/, '')) ? '' : w)).filter((w) => w && !FACT_SKIP.has(w)).join(' ');
+function repeatOf(kept, seq) {
+  if (!seq) return null;
+  return kept.find((k) => k.seq === seq) || null;
+}
+
+export function bibItems(novel, chapters = {}, { facts = true } = {}) {
+  const entries = entriesOf(novel);
+  const notes = (novel && novel.notes) || {};
+  const items = new Map();
+  for (const e of entries) {
+    items.set(`e:${e.id}`, { ref: `e:${e.id}`, name: e.name, aka: e.aka || [], kind: kindOf(e.kind), rides: ridesOf(e.rides), line: e.line || '', text: e.text || '', entry: e, card: null, facts: [], kinds: {} });
+  }
+  /* where the book says it: his entry first, then a card of the notes, then the name itself */
+  const placed = facts ? placesFor(entries, notes) : null;
+  const placeOf = new Map();
+  /* kept by the name as the book wrote it (never by the name without its article: "The Order" and "Order" are each placed as themselves) */
+  const placeFor = (name) => {
+    const k = nameKey(name);
+    if (placed.has(k)) return placed.get(k);
+    let at = null;
+    const bare = cleanName(name).replace(/^(?:the|a|an)\s+/i, '');
+    const m = entryNamed(entries, name);
+    const mb = !m.entry && !m.ambiguous && bare !== cleanName(name) ? entryNamed(entries, bare) : { entry: null };
+    if (m.entry || mb.entry) at = { entryId: (m.entry || mb.entry).id };
+    if (!at) {
+      for (const kind of ['people', 'places', 'lore']) {
+        const c = matchCard(notes[kind] || [], name, [], { kind, near: true, slip: false });
+        if (c.card) { at = { kind, id: c.card.id }; break; }
+        if (c.ambiguous) break;
+      }
+    }
+    placed.set(k, at);
+    return at;
+  };
+  const itemFor = (fact) => {
+    const k = bareKey(fact.name);
+    if (placeOf.has(k)) return placeOf.get(k);
+    const at = placeFor(fact.name);
+    let ref = '';
+    if (at && at.entryId && items.has(`e:${at.entryId}`)) ref = `e:${at.entryId}`;
+    else if (at && at.kind) {
+      const card = (notes[at.kind] || []).find((c) => c.id === at.id);
+      if (card) {
+        ref = `c:${at.kind}:${card.id}`;
+        if (!items.has(ref)) items.set(ref, { ref, name: card.name, aka: card.aka || [], kind: CARD_KIND[at.kind], rides: 'named', line: '', text: '', entry: null, card: { kind: at.kind, id: card.id, about: card.about || '' }, facts: [], kinds: {} });
+      }
+    }
+    if (!ref) {
+      ref = `n:${k}`;
+      if (!items.has(ref)) items.set(ref, { ref, name: cleanName(fact.name), aka: [], kind: fact.kind, rides: 'named', line: '', text: '', entry: null, card: null, facts: [], kinds: {} });
+    }
+    placeOf.set(k, ref);
+    return ref;
+  };
+  if (facts) {
+    const order = (novel && novel.order) || [];
+    const said = new Map();   /* ref -> [{words, fact}] */
+    order.forEach((cid, ci) => {
+      const ch = chapters[cid];
+      if (!ch) return;
+      let n = 0;
+      for (const p of ch.passages || []) {
+        if (p.by === 'break') continue;
+        n++;
+        const v = picked(p);
+        const c = codexNow(v);
+        if (!c) continue;
+        /* laid only as codexOf held them to these very words (codexStep): read as they are */
+        for (const f of c.facts) {
+          if (!f || typeof f.fact !== 'string' || !f.fact.trim() || typeof f.name !== 'string') continue;
+          const ref = itemFor(f);
+          const item = items.get(ref);
+          item.kinds[f.kind] = (item.kinds[f.kind] || 0) + 1;
+          if (!said.has(ref)) said.set(ref, []);
+          const kept = said.get(ref);
+          const own = new Set([item.name, ...(item.aka || []), f.name].flatMap((x) => String(x || '').toLowerCase().replace(/[’ʼ]/g, "'").split(/[^\p{L}\p{N}']+/u).map((w) => w.replace(/^'+|'+$/g, '').replace(/'s$/, ''))).filter(Boolean));
+          const seq = factSeq(f.fact, own);
+          const same = item.facts.find((x) => x.fact === f.fact);
+          const again = same ? { fact: same } : repeatOf(kept, seq);
+          if (again) { again.fact.more = [...(again.fact.more || []), ...(f.evidence || [])]; continue; }
+          /* name: as the book names it here — what rides of an entry he keeps for himself (ridingItems) */
+          const row = { id: `${p.id}:${v.id}:${f.id}`, name: f.name, fact: f.fact, evidence: f.evidence, chapterId: cid, passageId: p.id, versionId: v.id, chapterNumber: ci + 1, passageNumber: n, label: `${chapterLabel(novel, ch)}, passage ${n}` };
+          item.facts.push(row);
+          kept.push({ seq, fact: row });
+        }
+      }
+    });
+  }
+  const out = [];
+  for (const it of items.values()) {
+    if (!it.entry && !it.facts.length) continue;
+    /* a name the book alone tells of takes the kind it is most often said to be (a card of things worth remembering may be a group or lore) */
+    if (!it.entry && (!it.card || it.card.kind === 'lore')) {
+      const top = Object.entries(it.kinds).sort((a, b) => b[1] - a[1])[0];
+      if (top && ENTRY_KINDS.includes(top[0])) it.kind = top[0];
+    }
+    it.first = it.facts[0] || null;
+    if (!it.line) it.line = it.card && it.card.about ? firstSentence(it.card.about) : it.facts[0] ? it.facts[0].fact : '';
+    out.push(it);
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+/* the names a list of items answers to, for the finder: [{form, refs}] */
+export function itemForms(items) {
+  const map = new Map();
+  for (const it of items || []) {
+    const names = [it.name, ...(it.aka || [])];
+    const forms = [...names, ...(it.kind === 'people' ? names.flatMap(nameParts) : [])];
+    for (const n of forms) {
+      const f = cleanName(n).replace(/^(?:the|a|an)\s+(?=\p{Lu})/u, '').normalize('NFC');
+      if (f.length < 2 || !/\p{L}/u.test(f)) continue;
+      /* the book's own names are found only as names (with a capital); his entries also by a word in small letters */
+      if (!it.entry && !cased(f)) continue;
+      const key = formKey(f);
+      const row = map.get(key) || { form: f, refs: [] };
+      if (!row.refs.includes(it.ref)) row.refs.push(it.ref);
+      map.set(key, row);
+    }
+  }
+  return [...map.values()];
+}
+
+/* an item as it rides: its name and line, his words, and the book's facts —
+ * only those from passages not riding word for word (`skip`), or the ones
+ * given (`facts`) */
+const headOf = (it, lineHis = '') => `${it.name}${(it.aka || []).length ? ` (also ${it.aka.join(', ')})` : ''}${lineHis ? ` — ${lineHis}` : ''}`;
+const TOLD_HEAD = { people: 'What the book has told of them:', other: 'What the book has told of it:' };
+const toldHead = (it) => TOLD_HEAD[it.kind === 'people' ? 'people' : 'other'];
+const factLine = (f) => `- ${f.fact} (${chapterWord(f.label)})`;
+const chapterWord = (label) => String(label || '').replace(/, passage \d+$/, '').replace(/:.*$/, '');
+export function itemWords(it, { skip = null, facts = null } = {}) {
+  const told = facts || (it.facts || []).filter((f) => !(skip && skip.has(f.passageId)));
+  const his = it.entry ? (it.entry.text || '') : '';
+  const lineHis = it.entry ? (it.entry.line || '') : '';
+  if (!his && !lineHis && !told.length) return '';
+  const rows = [headOf(it, lineHis)];
+  if (his) rows.push(his);
+  if (told.length) rows.push(`${toldHead(it)}\n${told.map(factLine).join('\n')}`);
+  return rows.join('\n');
+}
+
+/* An entry he keeps for himself (never), for the writer, the narrator and
+ * the checker: his words are never theirs, nor which names he puts together
+ * under it — what the book itself says rides as if he had written no entry,
+ * each fact under the name the book gives it there, found by that name. */
+function asTheBookHasIt(it) {
+  const byName = new Map();
+  for (const f of it.facts || []) {
+    const name = cleanName(f.name || it.name);
+    const k = bareKey(name);
+    if (!byName.has(k)) byName.set(k, { ref: `${it.ref}#${k}`, name, aka: [], kind: it.kind, rides: 'named', line: '', text: '', entry: null, card: null, facts: [], kinds: {} });
+    byName.get(k).facts.push(f);
+  }
+  return [...byName.values()];
+}
+
+/* What rides of the bibliography, in order: the entries he set to ride
+ * always; then the names his own words name; then those named in the words
+ * right before the point, the nearest first — all of it fitted to `budget`
+ * tokens. His own words first, each entry whole or not at all, in that
+ * order, an entry that does not fit left for one that does; then the book's
+ * facts, a fact for each name in turn, earliest first — a name the book
+ * alone tells of taking room only with its first fact — so the one told of
+ * most never pushes out the others, nor is left out for having told so
+ * much. {items, words, cost, left} — left: those that found no room. */
+export function ridingItems(items, { his = '', near = '', budget = 4000, skip = null, purpose = 'write', factsMost = Infinity } = {}) {
+  const forPartner = purpose === 'partner';
+  const usable = forPartner ? items || [] : (items || []).flatMap((it) => (it.rides === 'never' ? asTheBookHasIt(it) : [it]));
+  const always = forPartner ? [] : usable.filter((it) => it.rides === 'always');
+  const finder = makeFinder(itemForms(usable));
+  const order = [];
+  const seen = new Set(always.map((it) => it.ref));
+  const take = (refs) => { for (const r of refs) if (!seen.has(r)) { seen.add(r); order.push(r); } };
+  const refsIn = (text, nearestFirst) => {
+    const hits = finder.find(text);
+    return (nearestFirst ? [...hits].reverse() : hits).flatMap((x) => finder.refsOf(x.key));
+  };
+  take(refsIn(his, false));
+  take(refsIn(near, true));
+  const byRef = new Map(usable.map((it) => [it.ref, it]));
+  const queue = [...always, ...order.map((r) => byRef.get(r)).filter(Boolean)];
+  /* each part costed as the very words that ride: its first line (with the other names), his words, the facts' heading, each fact */
+  const cost = (t) => estimateTokens(t) + 1;
+  const rows = [];
+  let spent = 0;
+  let left = 0;
+  for (const it of queue) {
+    const facts = (it.facts || []).filter((f) => !(skip && skip.has(f.passageId)));
+    const own = itemWords(it, { facts: [] });
+    if (!own && !facts.length) continue;
+    const row = { it, facts, own: Boolean(own), n: 0, on: false };
+    if (own) {
+      const c = cost(own) + 3;
+      if (spent + c > budget) { left++; continue; }
+      spent += c;
+      row.on = true;
+    }
+    rows.push(row);
+  }
+  /* (factsMost: what the facts may add past his words, at most) */
+  let factsSpent = 0;
+  for (let more = true; more;) {
+    more = false;
+    for (const x of rows) {
+      if (x.full || x.n >= x.facts.length) continue;
+      const c = cost(factLine(x.facts[x.n])) + (x.n ? 0 : cost(toldHead(x.it))) + (x.on ? 0 : cost(headOf(x.it)) + 3);
+      if (spent + c > budget || factsSpent + c > factsMost) { x.full = true; continue; }
+      spent += c;
+      factsSpent += c;
+      x.n++;
+      x.on = true;
+      more = true;
+    }
+  }
+  const out = [];
+  const words = [];
+  for (const x of rows) {
+    if (!x.on) { left++; continue; }
+    out.push(x.it);
+    words.push(itemWords(x.it, { facts: x.facts.slice(0, x.n) }));
+  }
+  return { items: out, words, cost: spent, left };
+}

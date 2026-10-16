@@ -9,8 +9,8 @@ import { onLearn, onKey, onIdentity } from './model/call.js';
 import { h, $, icon, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays, setText } from './ui/dom.js';
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
-import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound } from './ui/desk.js';
-import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn } from './ui/panes.js';
+import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound, whenOpen } from './ui/desk.js';
+import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn, showCard } from './ui/panes.js';
 import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './ui/look.js';
@@ -22,6 +22,7 @@ import { anyTalking, repairStaleTurns as talkRepair } from './novel/talk.js';
 import { startChecking, busyAny as checkingAny, keepGrades } from './novel/checker.js';
 import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
+import { initBibliography } from './ui/bibliography.js';
 import { mendBook } from './novel/mend.js';
 import { initBranches, openBranches } from './ui/branches.js';
 import { openConversation } from './novel/talk.js';
@@ -326,6 +327,8 @@ function bindChrome() {
   $('#searchBtn').addEventListener('click', () => openSearch());
   initChecks($('#checkBubble'), { openSettings });
   initSearch({ currentNovel: () => A.novelId, goChapter, goBook, openBook: (id) => openBook(id, { onGone: () => toShelf() }) });
+  /* the bibliography's cards go where the rest of the book goes: a passage, a card of the notes, every place a name stands */
+  initBibliography({ closeSide: () => closeRight(), showCard, whenOpen, openSearch: (query) => openSearch({ query }) });
   $('#partnerBtn').addEventListener('click', () => showSide('partner', { soon: true }));
   $('#moreBtn').addEventListener('click', (e) => moreMenu(e.currentTarget));
   /* a phone puts a hidden page away without warning: what waits is saved now */

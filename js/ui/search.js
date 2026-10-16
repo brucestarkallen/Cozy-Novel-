@@ -10,6 +10,7 @@ import * as talk from '../novel/talk.js';
 import { debounce } from '../util.js';
 import * as desk from './desk.js';
 import { showCard, showTurn } from './panes.js';
+import { showRef } from './bibliography.js';
 
 let hooks = {};
 const Q = { scope: 'book', query: '' };
@@ -36,9 +37,11 @@ async function bookOf(novelId, current) {
   return { novel, chapters, talk, plays, lost };
 }
 
-export function openSearch() {
+export function openSearch({ query = null } = {}) {
   const novelId = hooks.currentNovel();
   if (!novelId) return;
+  /* opened for words already chosen (a name's Every place): those words, in this book */
+  if (typeof query === 'string' && query.trim()) { Q.query = query.trim(); Q.scope = 'book'; }
   let ticket = 0, closed = false, focusTimer = null, later = null;
   const s = openSheet('Search', { onClose: () => {
     closed = true;
@@ -69,7 +72,7 @@ export function openSearch() {
     const q = input.value.trim();
     const scope = Q.scope;
     results.setAttribute('aria-busy', String(Boolean(q)));
-    if (!q) { results.replaceChildren(); say.textContent = scope === 'all' ? 'Type to search every book on the shelf.' : 'Type to search the whole book — its passages, chapter names, notes, what it’s about, the partner and the scenes.'; return; }
+    if (!q) { results.replaceChildren(); say.textContent = scope === 'all' ? 'Type to search every book on the shelf.' : 'Type to search the whole book — its passages, chapter names, notes, bibliography, what it’s about, the partner and the scenes.'; return; }
     let ids = [novelId];
     /* what could not be read is said — never taken for words that are not there (Cozy Tavern A8) */
     let unread = 0;
@@ -132,6 +135,7 @@ function go(f, q, sheet) {
     return;
   }
   if (f.where === 'note') return inBook(() => showCard(f.kind, f.cardId));
+  if (f.where === 'entry') return inBook(() => showRef(f.novelId, `e:${f.entryId}`));
   if (f.where === 'book') return inBook(() => hooks.openBook(f.novelId));
   if (f.where === 'talk') return inBook(async () => {
     /* in a conversation not open now: that one opens first */

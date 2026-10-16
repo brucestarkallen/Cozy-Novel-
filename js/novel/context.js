@@ -25,7 +25,8 @@ import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
 import { ownWordsFor } from './ownwords.js';
-import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook, bibPart } from './prompts.js';
+import { entriesOf, entryIndex, bibShare, bibItems, ridingItems } from './bibliography.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
@@ -398,6 +399,62 @@ export function narratorWords(instr) {
   return typeof instr.narrator === 'string' ? instr.narrator : DEFAULT_NARRATOR;
 }
 
+/* How far back before the point a name still counts as named here: the
+ * words right before it, as a reader holds them (SillyTavern's scan depth,
+ * for a book). */
+export const BIB_NEAR_WORDS = 2500;
+const lastWords = (text, n) => { const w = String(text || '').split(/\s+/); return w.length <= n ? String(text || '') : w.slice(-n).join(' '); };
+const firstWords = (text, n) => { const w = String(text || '').split(/\s+/); return w.length <= n ? String(text || '') : w.slice(0, n).join(' '); };
+/* Whether the helper fills the bibliography from the book by itself (Bibliography → Fill it from the book by itself) */
+export const bibAutoOn = (novel) => !(novel && novel.prefs && novel.prefs.bibAuto === 'off');
+
+/* The passages after the point being written: what the book establishes there
+ * has not happened yet for the writer or the narrator (never for the partner,
+ * who talks over the whole book). */
+export function passagesAfter(novel, chapters, chapterId, target = {}, purpose = 'write') {
+  const out = new Set();
+  if (purpose === 'partner' || !chapterId) return out;
+  const order = novel.order || [];
+  const at = order.indexOf(chapterId);
+  if (at < 0) return out;
+  for (const id of order.slice(at + 1)) for (const p of (chapters[id] || {}).passages || []) out.add(p.id);
+  const list = (chapters[chapterId] || {}).passages || [];
+  let from = list.length;
+  if (target.mark || target.before) { const i = list.findIndex((p) => p.id === (target.mark || target.before)); if (i >= 0) from = i; }
+  else if (target.through === '^') from = 0;
+  else if (target.through) { const i = list.findIndex((p) => p.id === target.through); if (i >= 0) from = i + 1; }
+  for (const p of list.slice(from)) out.add(p.id);
+  return out;
+}
+
+/* The bibliography as it rides for one of them (bibliography.js): {text,
+ * ids, left}. His entries named here — or set to ride always — and what the
+ * book has established about the names named here, only from passages not
+ * riding word for word and never from after the point (`skip`); `skipAll`:
+ * none of the book's facts (the first fitting, before it is known which
+ * chapters ride whole). The partner also sees every entry of his by its name
+ * and line. */
+export function bibliographyFor({ items, opened, purpose, request = '', moment = '', plan = '', turns = [], names = {}, free = 0, skip = null, skipAll = false, factsMost = Infinity }) {
+  if (!items || !items.length) return { text: '', ids: [], left: 0 };
+  const filled = items.map((it) => ({ ...it, ...(skipAll ? { facts: [] } : {}), ...(it.entry ? { entry: { ...it.entry, line: withMacros(it.entry.line || '', names), text: withMacros(it.entry.text || '', names) } } : {}) }));
+  const his = [request, moment, plan].filter(Boolean).join('\n');
+  const before = opened ? String(opened.before !== undefined ? opened.before : opened.text || '') : '';
+  const after = opened ? String(opened.after !== undefined ? opened.after : opened.afterText || '') : '';
+  const talk = (turns || []).slice(-8).map((t) => String(t.content || '')).join('\n\n');
+  /* nearest last: the talk of a scene or with the partner comes after the chapter's words */
+  const near = [lastWords(before, BIB_NEAR_WORDS), firstWords(after, 300), lastWords(talk, BIB_NEAR_WORDS)].filter((x) => x.trim()).join('\n\n');
+  const share = bibShare(free);
+  if (purpose === 'partner') {
+    const mine = filled.filter((it) => it.entry).map((it) => it.entry);
+    const index = mine.length ? entryIndex(mine, Math.floor(share / 3)) : { text: '', left: 0 };
+    const ride = ridingItems(filled, { his, near, budget: share - (mine.length ? Math.floor(share / 3) : 0), skip, purpose, factsMost });
+    const text = ride.words.length || index.text ? bibPart(ride.words, { index: index.text, indexLeft: index.left }) : '';
+    return { text, ids: ride.items.map((it) => it.ref), left: ride.left };
+  }
+  const ride = ridingItems(filled, { his, near, budget: share, skip, purpose, factsMost });
+  return { text: ride.words.length ? bibPart(ride.words) : '', ids: ride.items.map((it) => it.ref), left: ride.left };
+}
+
 /* Build what one of them reads. purpose: 'write' | 'partner' | 'play'.
  * target: {chapterId, before?, through?, mark?}. request: his request (the
  * last user message). turns: earlier messages (partner, play). moment: HIS
@@ -511,6 +568,15 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const kept = notesText(named, { fit: notesShare, focus: [chapter.id ? chapterText(chapter) : '', request, moment].filter(Boolean).join('\n'), shortIds });
   const notes = kept || (atPoint && atPoint.also.length) ? [rebuilt ? '' : notesBehind(novel, chapters, chapter, target, purpose, atPoint ? atPoint.also : []), kept ? runsOn : '', kept].filter(Boolean).join('\n\n') : '';
   const notesPart = notes ? `Who and what's in the story so far:\n\n${notes}` : '';
+  /* THE BIBLIOGRAPHY (bibliography.js): his entries for who and what is named
+   * here — his own words and the words right before the point — fitted to a
+   * share of the room; the partner sees every entry by its name and line too */
+  /* the book's facts ride whenever the helper has gathered them — Fill it from the book by itself only says whether it goes on gathering them (a portrait made short leaves its lasting details to them) */
+  const bibItemsNow = bibItems(named, chapters, { facts: true });
+  const bibArgs = { items: bibItemsNow, opened, purpose, request, moment, plan: planHere, turns, names, free: total - reserve - instructions - afterCost };
+  const afterPoint = passagesAfter(novel, chapters, chapter.id, target, purpose);
+  /* first fitted with his entries alone; the book's facts come once it is known which chapters ride word for word */
+  let bib = bibliographyFor({ ...bibArgs, skipAll: true });
   /* a room this app only guessed after a "too long" is never a reason to
    * refuse: the book fits it, and the page goes */
   const facts = learnedFacts(conn);
@@ -520,7 +586,7 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     reply: floor && floor >= reserve && floor > setReply ? 'thinking' : setReply ? 'his' : '', ...extra,
   });
   const over = least > total && !guessed ? overOf() : null;
-  const fixed = instructions + estimateTokens(about) + estimateTokens(opening) + estimateTokens(notesPart) + currentCost(current) + afterCost + 200;
+  let fixed = instructions + estimateTokens(about) + estimateTokens(opening) + estimateTokens(bib.text) + estimateTokens(notesPart) + currentCost(current) + afterCost + 200;
   let room = total - reserve - SAFETY - fixed;
   let cur = current;
   if (room < 0 && current) {
@@ -535,10 +601,55 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     cur = fitCurrent(novel, chapter, current, target, Math.max(1000, bookRoom - besides - 500), purpose);
     room = Math.max(0, bookRoom - currentCost(cur));
   }
-  const fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room), numbered: purpose === 'partner', plans: purpose === 'partner' });
+  let fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room), numbered: purpose === 'partner', plans: purpose === 'partner' });
+  /* the book's facts about the names named here — only from passages not riding word for word (the chapter open rides as
+   * itself), never from after the point; the room they take comes off the earlier chapters, which are fitted again */
+  if (bibItemsNow.some((it) => it.facts.length)) {
+    /* the chapter open rides as itself — but when it is told in part (its earliest stretches by their summaries, or
+     * its start left out), only the passages whose words are there whole */
+    const openWhole = [];
+    if (chapter.id) {
+      const told = cur === current ? null : [cur.text, cur.before, cur.after, cur.afterText].filter(Boolean).join('\n');
+      for (const p of chapter.passages || []) { const t = passageText(p).trim(); if (!told || !t || told.includes(t)) openWhole.push(p.id); }
+    }
+    /* the passages that ride word for word with this fitting (and those after the point, which have not happened yet) */
+    const wholeIn = (f) => {
+      const whole = new Set([...afterPoint, ...openWhole]);
+      for (const w of f.book.whole) for (const p of (chapters[w.id] || {}).passages || []) whole.add(p.id);
+      for (const x of f.book.summaries) {
+        if (!x.wholeFrom) continue;
+        const list = (chapters[x.id] || {}).passages || [];
+        const i = list.findIndex((p) => p.id === x.wholeFrom);
+        if (i >= 0) for (const p of list.slice(i)) whole.add(p.id);
+      }
+      return whole;
+    };
+    /* the room they take comes off the chapters before, which are fitted again — until what rides of the facts is what that fitting leaves in short */
+    const base = estimateTokens(bib.text);
+    /* the facts take at most half of what the book before has left; his entries ride as they did without them */
+    const factsMost = Math.floor(Math.max(0, room) / 2);
+    let held = 0;
+    let settled = null;
+    for (let round = 0; round < 4 && !settled; round++) {
+      const withFacts = bibliographyFor({ ...bibArgs, skip: wholeIn(fit), factsMost });
+      const extra = Math.max(0, estimateTokens(withFacts.text) - base);
+      if (extra <= held) { settled = withFacts; break; }
+      held = extra;
+      fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room - held), numbered: purpose === 'partner', plans: purpose === 'partner' });
+    }
+    if (!settled) {
+      /* still moving: the whole share held back, and what that fitting leaves in short */
+      held = factsMost + estimateTokens(bibPart(['']));
+      fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room - held), numbered: purpose === 'partner', plans: purpose === 'partner' });
+      const last = bibliographyFor({ ...bibArgs, skip: wholeIn(fit), factsMost });
+      if (estimateTokens(last.text) - base <= held) settled = last;
+    }
+    if (settled) { fixed += Math.max(0, estimateTokens(settled.text) - base); bib = settled; }
+    else fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room), numbered: purpose === 'partner', plans: purpose === 'partner' });
+  }
   const joinParts = (arr) => arr.filter((x) => String(x || '').trim()).join('\n\n\n');
   const stableBook = joinParts([about, earlierText(fit.book)]);
-  const moving = joinParts([notesPart, currentText(fit.book)]);
+  const moving = joinParts([bib.text, notesPart, currentText(fit.book)]);
   let system;
   let systemParts;
   const messages = [];
@@ -597,6 +708,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
       }),
       /* the cards shown by their first line (talk.js: never written whole from it) */
       shortCards: [...shortIds],
+      /* the bibliography's entries it read whole, and how many named ones the room left out */
+      entries: bib.ids, entriesLeft: bib.left,
       /* what goes whatever the book's earlier chapters, the answer's room, the chapter open (talk.js) */
       fixed, reserve, current: currentCost(current), chapterFit,
       /* chapters in the book's list that could not be read (the writer is told so in their place; writer.js tells him under the page) */
