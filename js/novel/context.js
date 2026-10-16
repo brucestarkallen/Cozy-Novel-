@@ -101,6 +101,26 @@ export function shortOf(chapter) {
   return `(not summarised yet — its opening and close)\n${excerpt(text)}`;
 }
 
+/* THE LEVEL BETWEEN (Summaryception's layers, Cozy Tavern's record: the finer
+ * lines ride while the room holds them, and only the oldest are folded into
+ * fewer): a long chapter that cannot ride whole is told by its stretches'
+ * summaries — one for every ~2,500 words — before it falls to its one
+ * summary, while the room holds them. Only when every stretch of it is summed
+ * up as its words read now; the partner sees which passages each stands for.
+ * '' when it has none. */
+export function stretchesOf(novel, chapter, numbered = false) {
+  const plan = stretchPlan(chapter, { closeLast: true });
+  if (plan.stretches.length < 2 || plan.open.length || plan.stretches.some((x) => !x.text)) return '';
+  const nums = passageNumbers(chapter);
+  const n = chapterNumber(novel, chapter.id);
+  const label = (x) => {
+    if (!numbered) return '';
+    const ns = x.ids.map((id) => nums.get(id)).filter(Boolean);
+    return ns.length ? `[${n}.${ns[0]}–${n}.${ns[ns.length - 1]}, in short]\n` : '';
+  };
+  return plan.stretches.map((x) => label(x) + x.text).join('\n\n');
+}
+
 /* A chapter with every passage numbered as the page numbers it ("2.3" is
  * passage 3 of Chapter Two; a scene break has no number) — for the partner,
  * who changes a passage by its number. */
@@ -243,9 +263,22 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
   let cost = sumWhole(k) + sumShort(k);
   /* even in short it does not all fit: the oldest go, and it says so */
   while (cost > left && omitted < k) { cost -= shortCost[omitted]; omitted++; }
+  /* the room left over lifts the chapters told in short, the newest first, to
+   * their stretches (stretchesOf) — never at the cost of a chapter told whole */
+  const finer = new Map();
+  for (let i = k - 1; i >= omitted && cost < left; i--) {
+    const id = earlier[i];
+    if (!chapters[id]) continue;
+    const text = stretchesOf(novel, ch(id), numbered);
+    if (!text || text === shortText(id)) continue;
+    const extra = estimateTokens(text) + 12 - shortCost[i];
+    if (extra <= 0 || cost + extra > left) continue;
+    finer.set(id, text);
+    cost += extra;
+  }
   const book = {
     omitted,
-    summaries: earlier.slice(omitted, k).map((id) => ({ id, label: labelOf(id), text: shortText(id) })),
+    summaries: earlier.slice(omitted, k).map((id) => ({ id, label: labelOf(id), text: finer.get(id) || shortText(id) })),
     whole: earlier.slice(k).map((id) => ({ id, label: labelOf(id), text: wholeOf(id) || '(nothing written in it yet)' })),
     current,
     later: laterRows,

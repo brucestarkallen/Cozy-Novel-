@@ -27,8 +27,8 @@ import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writ
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp } from './shape.js';
-import { foldedText, foldName, tokensMissing, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
-import { helperFrame, notesRequest, summaryRequest, stretchRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
+import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
+import { helperFrame, notesRequest, summaryRequest, stretchRequest, summaryAgainRequest, summarySize, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep } from './timeline.js';
@@ -1975,7 +1975,9 @@ async function stretchUp(novelId, conn) {
       setLight(novelId, 'reading', `Summing up part of ${label}…`);
       /* a stretch longer than the helper's model reads at once (one passage can be): in parts, each part's summary carried into the next */
       const before = k > 0 ? plan.stretches[k - 1].text : '';
-      const room = readingRoom(conn, estimateTokens(frame) + 700 + estimateTokens(known.join(', ')) + estimateTokens(before) + 1000);
+      /* what rides beside each part: the ask's own words as they are sent (the one before and the names known among them), and room for its parts' summary so far */
+      const ask = stretchRequest({ novel: namedBook(now, house), chapterLabel: label, text: '', words: st.words, before, known, part: 1, parts: 2 });
+      const room = readingRoom(conn, estimateTokens(frame) + estimateTokens(ask) + 1000);
       const partWords = Math.max(200, Math.floor((room * 0.75) / 1.4));
       const parts = countWords(text) > partWords ? partsOf(text, partWords) : [text];
       let summary = '';
@@ -1994,7 +1996,7 @@ async function stretchUp(novelId, conn) {
       }
       if (refused) { stretchTried.set(key, (stretchTried.get(key) || 0) + 1); continue; }
       if (!summary) continue;
-      const r = await keepHardTokens({ novelId, conn, frame, novel: now, label, text, summary, known: cardNames });
+      const r = await keepHardTokens({ novelId, conn, frame, novel: now, label, text, summary, known: cardNames, stretch: true });
       summary = r.summary || summary;
       await mustHold('helper', novelId);
       /* laid in only while the stretch reads as it did when asked */
@@ -2107,15 +2109,24 @@ async function summarise(novelId, conn) {
     const here = foldedText(text);
     const earlier = foldedText(order.slice(0, i).map((id) => { const x = store.peek('chapter', id); return x ? chapterText(x) : ''; }).join('\n\n'));
     const known = [...new Set(['people', 'places', 'lore'].flatMap((k) => ((now.notes || {})[k] || []).filter((x) => [x.name, ...(x.aka || [])].some((n) => n && nameInText(here, n, { words: false }) && nameInText(earlier, n, { words: false }))).map((x) => x.name)))];
-    const room = readingRoom(conn, estimateTokens(frame) + 700 + estimateTokens(known.join(', ')));
+    /* what rides beside each part: the ask's own words as they are sent (the names known among them; the summary so far rides in the room the reply and the margin leave) */
+    const ask = summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: '', needsName: true, words, part: 1, parts: 2, known });
+    const room = readingRoom(conn, estimateTokens(frame) + estimateTokens(ask));
     const partWords = Math.max(200, Math.floor((room * 0.75) / 1.4));
+    /* his own summary rides with the last part only: that part is kept short enough to hold it, beside the summary so far — never every part made small for it */
+    const hisRoom = his ? estimateTokens(summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: '', needsName: true, words, part: 1, parts: 2, known, his })) - estimateTokens(ask) + Math.ceil(summarySize(words) * 1.4) : 0;
+    const lastWords = Math.max(200, Math.floor(((room - hisRoom) * 0.75) / 1.4));
+    const withHisLast = (list) => {
+      if (!his || !list.length || countWords(list[list.length - 1]) <= lastWords) return list;
+      return [...list.slice(0, -1), ...partsOf(list[list.length - 1], lastWords)];
+    };
     /* a long chapter whose every stretch is summed up is summed up from them, with the words after its last stretch as they stand — the whole of it read, nothing squeezed away part by part */
     const sp = stretchPlan(c, { closeLast: !last });
     const openIds = new Set(sp.open);
     const tail = sp.open.length ? chapterText({ passages: (c.passages || []).filter((p) => openIds.has(p.id)) }) : '';
     const sums = sp.stretches.length && sp.stretches.every((x) => x.text) ? sp.stretches.map((x) => x.text).join('\n\n') : '';
-    const stretched = sums && estimateTokens(sums) + estimateTokens(tail) < room * 0.75 ? sums : '';
-    const parts = stretched ? [stretched] : words > partWords ? partsOf(text, partWords) : [text];
+    const stretched = sums && estimateTokens(sums) + estimateTokens(tail) < (room - hisRoom) * 0.75 ? sums : '';
+    const parts = stretched ? [stretched] : withHisLast(words > partWords ? partsOf(text, partWords) : [text]);
     let summary = '';
     let name = '';
     let setAsideNow = false;
@@ -2180,31 +2191,34 @@ async function tokensAgain(novelId, conn, c, fp) {
 }
 
 /* THE HARD TOKENS (Cozy Tavern M111, M208): a summary that left out a name or
- * a figure the chapter holds is asked once more, with each one where it
- * stands in the chapter. The second is kept only when it holds more of them,
- * reads as prose and is no thinner; otherwise the first stands — never a list
- * of words pasted in by the app. Returns {summary, again}: again — the ask
+ * a figure the chapter holds, or gives a figure it never does (its detail
+ * check: a wrong fact is not a missing one), is asked once more, with each
+ * one where it stands in the chapter. The second is kept only when it gets
+ * more of them right, reads as prose and is no thinner; otherwise the first
+ * stands — never a list of words pasted in by the app. Returns {summary, again}: again — the ask
  * failed for a passing fault (its model down, let go on its leash), so the
  * summary stands meanwhile and they are asked for once more later. */
-async function keepHardTokens({ novelId, conn, frame, novel, label, text, summary, known }) {
+async function keepHardTokens({ novelId, conn, frame, novel, label, text, summary, known, stretch = false }) {
   const miss = tokensMissing(text, summary, known);
-  const lost = miss.names.length + miss.figures.length;
+  /* and a figure it gives that its words never do (Cozy Tavern's detail check: a wrong fact is not a missing one) */
+  const wrong = figuresInvented(text, summary);
+  const lost = miss.names.length + miss.figures.length + wrong.length;
   if (!lost) return { summary, again: false };
   const lower = text.toLowerCase();
   const where = (t) => {
     const i = lower.indexOf(String(t).toLowerCase());
     return i < 0 ? '' : text.slice(Math.max(0, i - 120), i + String(t).length + 120).replace(/\s+/g, ' ').trim();
   };
-  const missing = [...miss.names.slice(0, 8).map((t) => ({ kind: 'name', token: t, where: where(t) })), ...miss.figures.slice(0, 8).map((t) => ({ kind: 'figure', token: t, where: where(t) }))];
+  const missing = [...miss.names.slice(0, 8).map((t) => ({ kind: 'name', token: t, where: where(t) })), ...miss.figures.slice(0, 8).map((t) => ({ kind: 'figure', token: t, where: where(t) })), ...wrong.slice(0, 8).map((t) => ({ kind: 'wrong', token: t }))];
   let got;
   try {
-    got = await helperJson(novelId, conn, frame, summaryAgainRequest({ novel, chapterLabel: label, summary, missing }), { want: (o) => Boolean(summaryWords(o.summary)) });
+    got = await helperJson(novelId, conn, frame, summaryAgainRequest({ novel, chapterLabel: label, summary, missing, stretch }), { want: (o) => Boolean(summaryWords(o.summary)) });
   } catch (e) { if (e && e.helperChanged) throw e; return { summary, again: true }; }
   if (!got || !got.ok) return { summary, again: Boolean(got && !got.unreadable && !got.permanent), error: got && got.error };
   const again = summaryWords(got.obj.summary);
   const left = tokensMissing(text, again, known);
   const sentences = again.split(/(?<=[.!?…])\s+/).filter((x) => x.trim());
-  if (again && left.names.length + left.figures.length < lost && again.length >= summary.length * 0.8 && !sentences.some(looksLikeTokenDump)) return { summary: again, again: false };
+  if (again && left.names.length + left.figures.length + figuresInvented(text, again).length < lost && again.length >= summary.length * 0.8 && !sentences.some(looksLikeTokenDump)) return { summary: again, again: false };
   return { summary, again: false };
 }
 

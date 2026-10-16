@@ -14,6 +14,8 @@ async def close(pg):
 async def settings(pg):
  await pg.evaluate("import('/js/ui/settings.js').then(s=>s.openSettings('look'))")
  await pg.get_by_label('Dialogue colour preset',exact=True).wait_for()
+ # open means marked open: the sheet's fields exist a frame before it is (dom.js openSheet adds .on in the next frame), and its backdrop is clear until then
+ await pg.wait_for_selector('.sheet.on .settings-sheet')
 async def pick(pg,label,value):
  el=pg.get_by_label(label,exact=True)
  await el.evaluate("(el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}))}",value)

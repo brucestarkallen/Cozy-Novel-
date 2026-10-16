@@ -326,6 +326,41 @@ export function tokensMissing(text, summary, knownNames = []) {
     figures: figures.filter((f) => !new RegExp(`(?<![\\d.,])${f.split(' ')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\d])`).test(keptRaw)),
   };
 }
+/* A FIGURE A SUMMARY GIVES THAT ITS WORDS NEVER DO (Cozy Tavern's detail
+ * check: a wrong fact is not a missing one — "seventeen" where the chapter
+ * says sixteen, "1847" where it says 1874). Counted by value, in digits or in
+ * words from ten to ninety-nine; a single digit is no figure, as above, and a
+ * chapter's own number ("Chapter Twelve") is not one of its figures. A
+ * hundred or a thousand written in words cannot be told by value here, so a
+ * figure of 100 or more is held to the words only when they write none. */
+const TENS_WORDS = { ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const ONES_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9 };
+const NUMBER_WORD = new RegExp(`(?<![\\p{L}\\p{N}'’-])(${Object.keys(TENS_WORDS).join('|')})(?:[-\\s](${Object.keys(ONES_WORDS).join('|')}))?(?![\\p{L}\\p{N}'’-])`, 'giu');
+const BIG_WORDS = /(?<![\p{L}])(hundred|thousand|million)s?(?![\p{L}])/iu;
+function figureValues(text) {
+  const t = String(text || '');
+  const out = new Map();
+  const ownNumber = (i) => /(?:chapter|part|book|volume)\s+$/i.test(t.slice(Math.max(0, i - 10), i));
+  for (const m of t.matchAll(FIGURE)) {
+    if (ownNumber(m.index)) continue;
+    const raw = String(m[1]);
+    const v = Number(/^\d{1,3}(?:\.\d{3})+$/.test(raw) ? raw.replace(/\./g, '') : raw.replace(/,/g, ''));
+    if (!Number.isFinite(v) || v < 10) continue;
+    if (!out.has(v)) out.set(v, (m[1] + (m[2] || '')).replace(/\s+/g, ' ').trim());
+  }
+  for (const m of t.matchAll(NUMBER_WORD)) {
+    if (ownNumber(m.index)) continue;
+    const tens = TENS_WORDS[m[1].toLowerCase()];
+    const v = tens + (tens >= 20 && m[2] ? ONES_WORDS[m[2].toLowerCase()] : 0);
+    if (!out.has(v)) out.set(v, (tens >= 20 && m[2] ? m[0] : m[1]).replace(/\s+/g, ' '));
+  }
+  return out;
+}
+export function figuresInvented(text, summary) {
+  const have = figureValues(text);
+  const bigInWords = BIG_WORDS.test(String(text || ''));
+  return [...figureValues(summary)].filter(([v]) => !have.has(v) && !(v >= 100 && bigInWords)).map(([, shown]) => shown);
+}
 /* a bare list of words is not a summary's sentence (Cozy Tavern M208): "also
  * named: Rachel, British, American" is the app talking nonsense to the writer */
 export function looksLikeTokenDump(text) {

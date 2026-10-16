@@ -1152,13 +1152,49 @@ export function keepRequest({ novel, keeps, bookText: text, notesFit = 0 }) {
   return parts.join('\n\n');
 }
 
+/* WHAT A SUMMARY KEEPS — Summaryception's hard-won list (Cozy Tavern's
+ * memory keeper, M34), said once for a chapter and a stretch alike, in a
+ * novelist's words: causes kept with what they led to; how a thing was done,
+ * never flattened (a grudging yes stays grudging, a quarrel left open stays
+ * open — what rides in place of a chapter must not soften it); everyone who
+ * acts by name; what two people are to each other and what moved it; what
+ * someone says of themselves; the small particulars that belong to people;
+ * first appearances described; who learns what; claims kept as claims; a
+ * belief shown false said so; the exact words that will matter; place, time
+ * and figures as given. And what to cut when it runs long: never these. */
+function summaryKeeps(unit, known, { closing = false, last = false } = {}) {
+  const rows = [
+    'what happens, in order, and why — keep each cause with what it led to',
+    `how it is done, where the ${unit} marks it — reluctantly, coldly, on impulse, against someone’s own will — never smoothed into a plain act: a grudging yes stays grudging, a forgiveness with conditions keeps them, a quarrel left open is said to be open`,
+    `who's in it and what changes for them, inside and out — each person who acts or speaks to the point by name, never folded into “the others”; where what two people are to each other shifts, the moment that shifted it`,
+    `anyone or anything appearing in the book for the first time, with how they're described${known.length ? ` (already known from earlier: ${known.join(', ')})` : ''}`,
+    'what someone says of themselves — what they want, a line they won’t cross, what they can do, how they know what they know — and one person’s sharp read of another',
+    `the small things that belong to a person or between two people — a habit, a ritual, a private joke, a telling gesture — where the ${unit} gives one`,
+    'who learns what — and who doesn\'t',
+    `what is only claimed, believed, imagined or planned, and by whom — never turn it into an established event; mark flashbacks and dreams${closing ? ', keeping the chapter’s actual closing situation clear' : ''}; where something believed before turns out false, or has changed, say so plainly`,
+    'anything set up for later — a promise, a secret, an object, a question left open — with the exact words, as a short quote, of any promise, oath or threat that will matter or a line someone will be held to or throw back, and both wordings where a line is misquoted or disputed',
+    `where it happens, and the day, date or time where the ${unit} gives one`,
+    `numbers, ages, amounts and distances exactly as the ${unit} gives them`,
+    ...(last ? ['where everyone stands at its last line'] : []),
+  ];
+  return rows.map((r, i) => `- ${r}${i === rows.length - 1 ? '.' : ';'}`).join('\n');
+}
+function summaryClose(unit, size) {
+  return `Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the ${unit} is dense: nothing that matters left out to keep it short. When it runs long, cut weather, atmosphere, reactions that change nothing and joining words — never a person, a cause, how a thing was done, a promise, a first description or a figure. Before you answer, read it against the words above: every figure as they give it — one they never give has no place in it — every cause with what it led to, nothing they do not say.`;
+}
+
+/* How long a summary runs: about a twelfth of its chapter (a stretch, an
+ * eighth of its ~2,500 words), at most 1,200 — the same measure for every
+ * length, with no step where a chapter of 10,001 words got almost twice the
+ * summary of one of 9,999. */
+export function summarySize(words) { return Math.max(120, Math.min(1200, Math.round((Number(words) || 0) / 12))); }
+export function stretchSize(words) { return Math.max(150, Math.min(700, Math.round((Number(words) || 0) / 8))); }
+
 /* A chapter summed up — whole, or (too long for the helper's model) in parts,
- * each part's summary carried into the next. What to keep is Summaryception's
- * hard-won list, for a novel: causes kept with what they led to, first
- * appearances described, who learns what, the exact words that will matter. */
+ * each part's summary carried into the next. */
 export function summaryRequest({ novel, chapterLabel, text, needsName, words, part = 0, parts = 0, soFar = '', known = [], his = '', stretched = false, tail = '' }) {
-  /* a long chapter keeps a longer summary: 450 words cannot carry 40,000 (it stands in for the chapter when the book is longer than a model holds) */
-  const size = Math.max(120, Math.min(words > 10000 ? 1200 : 450, Math.round(words / 12)));
+  /* a long chapter keeps a longer summary: it stands in for the chapter when the book is longer than a model holds */
+  const size = summarySize(words);
   const lines = [];
   if (stretched) {
     lines.push(`${chapterLabel} of ${titled(novel)} is a long chapter, kept in stretches. Here is every stretch of it, in order, summed up${tail ? ', and then its newest words as they stand' : ''}:`);
@@ -1169,15 +1205,8 @@ export function summaryRequest({ novel, chapterLabel, text, needsName, words, pa
   lines.push(fence(text));
   if (stretched && String(tail).trim()) lines.push(`Its newest words, after the last stretch:\n${fence(tail)}`);
   lines.push(`Summarise ${stretched ? 'the whole chapter from them' : part ? `the chapter so far — ${soFar ? 'the summary above and this part together' : 'this part'} —` : 'it'} for the book's notes, so the writer can carry on from it without the chapter itself:
-- what happens, in order, and why — keep each cause with what it led to;
-- who's in it and what changes for them, inside and out;
-- anyone or anything appearing in the book for the first time, with how they're described${known.length ? ` (already known from earlier: ${known.join(', ')})` : ''};
-- who learns what — and who doesn't;
-- what is only claimed, believed, imagined or planned, and by whom — never turn it into an established event; mark flashbacks and dreams, keeping the chapter’s actual closing situation clear;
-- anything set up for later — a promise, a secret, an object, a question left open — with the exact words of any promise, oath or threat that will matter (a short quote);
-- where it happens, and the day, date or time where the chapter gives one;
-- numbers, ages, amounts and distances exactly as the chapter gives them.
-${his ? `\nMy own summary of this chapter, from before its latest changes — my words are right wherever the chapter still says what they say, so keep them there:\n${fence(his)}\n` : ''}Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the chapter is dense: nothing that matters left out to keep it short.${needsName ? ' The chapter has no name yet, so give it a short one.' : ''}`);
+${summaryKeeps('chapter', known, { closing: true })}
+${his ? `\nMy own summary of this chapter, from before its latest changes — my words are right wherever the chapter still says what they say, so keep them there:\n${fence(his)}\n` : ''}${summaryClose('chapter', size)}${needsName ? ' The chapter has no name yet, so give it a short one.' : ''}`);
   lines.push(`Answer with one JSON object and nothing else: {"summary": "…"${needsName ? ', "name": "…"' : ''}}`);
   return lines.join('\n\n');
 }
@@ -1186,33 +1215,37 @@ ${his ? `\nMy own summary of this chapter, from before its latest changes — my
  * rides for it when the chapter does not fit word for word. The summary of
  * the stretch before it comes along, so it picks up where that one ends. */
 export function stretchRequest({ novel, chapterLabel, text, words, before = '', known = [], part = 0, parts = 0, soFar = '' }) {
-  const size = Math.max(150, Math.min(700, Math.round(words / 8)));
+  const size = stretchSize(words);
   return [
     `Here's a stretch of ${chapterLabel} of ${titled(novel)}. It's a long chapter, so it is kept in stretches like this one, and the writer carries on from their summaries where the chapter is too long to read whole.${part ? ` This stretch is long too, so it comes in ${parts} parts — this is part ${part}.` : ''}`,
     before ? `The stretch before this one, in short:\n${fence(before)}` : '',
     soFar ? `This stretch's parts before this one, in short:\n${fence(soFar)}` : '',
     fence(text),
     `Sum up ${part ? `this stretch so far — ${soFar ? 'the summary of its parts before and this part together' : 'this part'} —` : 'this stretch alone'} for the book's notes, picking up where the one before it ends:
-- what happens, in order, and why — keep each cause with what it led to;
-- who's in it and what changes for them, inside and out;
-- anyone or anything appearing in the book for the first time, with how they're described${known.length ? ` (already known from earlier: ${known.join(', ')})` : ''};
-- who learns what — and who doesn't;
-- what is only claimed, believed, imagined or planned, and by whom — never turn it into an established event; mark flashbacks and dreams;
-- anything set up for later — a promise, a secret, an object, a question left open — with the exact words of any promise, oath or threat that will matter (a short quote);
-- where it happens, and the day, date or time where the stretch gives one;
-- numbers, ages, amounts and distances exactly as given;
-- where everyone stands at its last line.
-Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the stretch is dense: nothing that matters left out to keep it short.`,
+${summaryKeeps('stretch', known, { last: true })}
+${summaryClose('stretch', size)}`,
     'Answer with one JSON object and nothing else: {"summary": "…"}',
   ].filter(Boolean).join('\n\n');
 }
 
-/* A summary that left out a name or a figure the chapter holds, asked once
- * more with each one where it stands (Cozy Tavern M111, M208): in the
- * summary's own sentences, never a list of words. */
-export function summaryAgainRequest({ novel, chapterLabel, summary, missing }) {
-  const lines = (missing || []).map((m) => `- ${m.kind === 'name' ? 'the name' : 'the figure'} ${m.token}${m.where ? ` — the chapter has: “…${m.where}…”` : ''}`);
-  return `Here's the summary of ${chapterLabel} of ${titled(novel)} as it stands:\n${fence(summary)}\n\nThese stand in the chapter and nowhere in the summary:\n${lines.join('\n')}\n\nWrite the summary again with every one of them a writer carrying the book on would need — who each one is, what each figure counts and why it matters — in the summary's own sentences, never as a list of words. Leave out any that is not a person, a place or a figure that matters, and keep everything the summary already holds.\n\nAnswer with one JSON object and nothing else: {"summary": "…"}`;
+/* A summary that left out a name or a figure its words hold, or gives a
+ * figure they never give (Cozy Tavern M111, M208, and its detail check: a
+ * wrong fact is not a missing one), asked once more with each one where it
+ * stands: in the summary's own sentences, never a list of words. */
+export function summaryAgainRequest({ novel, chapterLabel, summary, missing, stretch = false }) {
+  const unit = stretch ? 'stretch' : 'chapter';
+  const gone = (missing || []).filter((m) => m.kind !== 'wrong');
+  const wrong = (missing || []).filter((m) => m.kind === 'wrong');
+  const lines = gone.map((m) => `- ${m.kind === 'name' ? 'the name' : 'the figure'} ${m.token}${m.where ? ` — the ${unit} has: “…${m.where}…”` : ''}`);
+  const parts = [`Here's the summary of ${stretch ? `a stretch of ${chapterLabel}` : chapterLabel} of ${titled(novel)} as it stands:\n${fence(summary)}`];
+  if (lines.length) parts.push(`These stand in the ${unit} and nowhere in the summary:\n${lines.join('\n')}`);
+  if (wrong.length) parts.push(`These figures stand in the summary and nowhere in the ${unit}:\n${wrong.map((m) => `- ${m.token}`).join('\n')}`);
+  const asWritten = `in the summary's own sentences, never as a list of words`;
+  if (!wrong.length) parts.push(`Write the summary again with every one of them a writer carrying the book on would need — who each one is, what each figure counts and why it matters — ${asWritten}. Leave out any that is not a person, a place or a figure that matters, and keep everything the summary already holds.`);
+  else if (!lines.length) parts.push(`Write the summary again with each of those figures put as the ${unit} gives it — or left out, where the ${unit} gives none — and keep everything else the summary already holds.`);
+  else parts.push(`Write the summary again with every one it left out that a writer carrying the book on would need — who each one is, what each figure counts and why it matters — ${asWritten}, leaving out any that is not a person, a place or a figure that matters; put each figure the ${unit} never gives as the ${unit} gives it, or leave it out where the ${unit} gives none; and keep everything else the summary already holds.`);
+  parts.push('Answer with one JSON object and nothing else: {"summary": "…"}');
+  return parts.join('\n\n');
 }
 
 export const JSON_AGAIN = 'That answer could not be read as JSON. Answer again with only the JSON object — no other words, no code fence.';
