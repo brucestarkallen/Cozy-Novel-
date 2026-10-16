@@ -17,6 +17,7 @@
  */
 import { passageText, picked } from './shape.js';
 import { hashText, countWords } from '../util.js';
+import { sceneWords } from './prompts.js';
 
 export const STRETCH_WORDS = 2500;
 
@@ -44,7 +45,9 @@ export function stretchPlan(chapter, { size = STRETCH_WORDS, closeLast = false }
     const part = list.slice(i, to + 1);
     if (part.some(streamingOf)) break;
     const fp = stretchPrint(part);
-    out.push({ from: s.from, to: s.to, ids: part.map((p) => p.id), fp, words: part.reduce((a, p) => a + wordsOf(p), 0), text: s.fp === fp && String(s.text || '').trim() ? String(s.text).trim() : '', at: s.at || 0 });
+    const kept = s.fp === fp && String(s.text || '').trim();
+    /* its check (the summary check, archivist.js) goes with its summary while the summary stands */
+    out.push({ from: s.from, to: s.to, ids: part.map((p) => p.id), fp, words: part.reduce((a, p) => a + wordsOf(p), 0), text: kept ? String(s.text).trim() : '', at: s.at || 0, ...(kept && s.checked ? { checked: s.checked } : {}) });
     i = to + 1;
   }
   /* the rest laid anew: a stretch closes once it holds `size` words */
@@ -70,19 +73,41 @@ export function stretchPlan(chapter, { size = STRETCH_WORDS, closeLast = false }
 /* what the chapter keeps: every stretch's bounds, with its summary where it
  * has one — a summary that no longer fits its words is let go */
 export function keptStretches(plan) {
-  return plan.stretches.map((s) => ({ from: s.from, to: s.to, ...(s.text ? { fp: s.fp, text: s.text, at: s.at || Date.now() } : {}) }));
+  return plan.stretches.map((s) => ({ from: s.from, to: s.to, ...(s.text ? { fp: s.fp, text: s.text, at: s.at || Date.now(), ...(s.checked ? { checked: s.checked } : {}) } : {}) }));
 }
 
 /* the summary the helper wrote for one stretch, laid into the bounds as they
  * stand now — only while the stretch still reads as it did when asked */
-export function withStretch(chapter, stretch, text, at = Date.now(), opts = {}) {
+export function withStretch(chapter, stretch, text, at = Date.now(), opts = {}, checked = null) {
   const plan = stretchPlan(chapter, opts);
   const now = plan.stretches.find((s) => s.from === stretch.from && s.to === stretch.to);
   if (!now || now.fp !== stretch.fp) return null;
   now.text = String(text || '').trim();
   now.at = at;
+  /* new words are unchecked words; a check's own result comes with its mark */
+  if (checked) now.checked = checked; else delete now.checked;
   return keptStretches(plan);
 }
+
+/* A SCENE KEPT IN STRETCHES, as a long chapter is: its turns read as the
+ * scene's own transcript (talk.js transcriptOf — "Mara: …", "Narrator: …";
+ * never his lines to the narrator, nor the ways it offered), each turn a
+ * passage of a chapter-shaped record, so stretchPlan, keptStretches and
+ * withStretch keep a scene's stretches as they keep a chapter's. A turn
+ * whose words change changes its stretch's fingerprint, so a summary never
+ * stands for words that are not there. */
+export function sceneChapter(play) {
+  const who = String((play && play.who) || 'their character');
+  const passages = ((play && play.turns) || []).map((t) => {
+    const v = picked(t) || {};
+    const raw = String(v.text || '');
+    const words = (t.by === 'you' ? raw : sceneWords(raw)).trim();
+    const text = words ? `${t.by === 'you' ? who : 'Narrator'}: ${words}` : '';
+    return { id: t.id, by: t.by === 'you' ? 'you' : 'ai', versions: [{ id: 'v', text, ...(v.streaming ? { streaming: true } : {}) }] };
+  });
+  return { passages, stretches: (play && play.stretches) || [] };
+}
+export function scenePlan(play, opts = {}) { return stretchPlan(sceneChapter(play), opts); }
 
 /* a stretch read short where it has no summary yet: its opening and close */
 function excerpt(text, n = 700) {

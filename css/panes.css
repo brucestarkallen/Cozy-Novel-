@@ -149,3 +149,10 @@
 .pane .chlist .plan { display: block; margin-top: 7px; padding-left: 9px; border-left: 2px solid var(--accent); font-size: 12px; line-height: 1.5; color: var(--chrome-soft); font-style: italic;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .pane .chlist .plan[hidden] { display: none; }
+
+/* what rides in short, and what the check made of it (Its summary, The scene so far, in short) */
+.summary-sheet .summary-head { font: 600 15px/1.3 var(--display); margin: 20px 0 4px; color: var(--chrome-ink); }
+.summary-sheet .summary-stretch { margin-top: 6px; border-top: 1px solid var(--line, color-mix(in srgb, var(--chrome-soft) 22%, transparent)); }
+.summary-sheet .summary-stretch summary { font-size: 13px; color: var(--chrome-ink); padding: 9px 0; min-height: 24px; }
+.summary-sheet .summary-stretch > p.hint { margin: 2px 0 6px; font-size: 12.5px; }
+.summary-sheet .summary-stretch > p:not(.hint) { color: var(--chrome-ink); font-size: 14px; margin: 0 0 10px; }

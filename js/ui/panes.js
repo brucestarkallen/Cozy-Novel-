@@ -7,7 +7,9 @@ import * as writer from '../novel/writer.js';
 import * as archivist from '../novel/archivist.js';
 import * as talk from '../novel/talk.js';
 import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGrow, copyText, field, onBack, setText } from './dom.js';
-import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, newCard, NOTE_KINDS, turnSteps, hisStamp } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, chapterPrint, passageNumbers, newCard, NOTE_KINDS, turnSteps, hisStamp } from '../novel/shape.js';
+import { stretchPlan, scenePlan } from '../novel/stretches.js';
+import { checkedNow } from '../novel/summarycheck.js';
 import { numberWords, plural, timeAgo, nameKey, openOf } from '../util.js';
 import { showSent } from './sent.js';
 import { webUrl } from '../model/call.js';
@@ -310,7 +312,7 @@ function chapterMenu(anchor, id, i) {
     i > 0 ? { label: 'Move it earlier', hint: 'One place up the book.', run: () => { store.change('novel', P.novelId, novelSteps.moveChapter(id, i - 1), { now: true }); } } : null,
     i < n.order.length - 1 ? { label: 'Move it later', hint: 'One place down the book.', run: () => { store.change('novel', P.novelId, novelSteps.moveChapter(id, i + 1), { now: true }); } } : null,
     { label: 'Earlier copies of this chapter', hint: 'Bring the chapter back as it was at an earlier time.', run: () => earlierCopies(id) },
-    c && c.summary && c.summary.text ? { label: 'Its summary', hint: 'What rides for this chapter once the book is longer than the model holds.', run: () => { const s = openSheet(chapterLabel(n, c)); s.body.append(h('p', { style: { lineHeight: '1.6', whiteSpace: 'pre-wrap' } }, c.summary.text)); } } : null,
+    c && chapterWords(c) ? { label: 'Its summary', hint: 'What rides for this chapter once the book is longer than the model holds, and what the helper’s check made of it.', run: () => summarySheet(id) } : null,
     /* the story map: his plan for each chapter, the writer reading only the one it writes in */
     { label: c && String(c.plan || '').trim() ? 'Change what this chapter is for' : 'What this chapter is for', hint: 'Your plan for it. The writer reads it while writing in this chapter, never before; your partner sees the whole map.', run: async () => {
       const now = store.peek('chapter', id);
@@ -325,6 +327,70 @@ function chapterMenu(anchor, id, i) {
     '-',
     n.order.length > 1 ? { label: 'Remove the chapter', hint: 'To Recently deleted for thirty days.', danger: true, run: () => removeChapter(id) } : null,
   ]);
+}
+
+/* WHAT RIDES IN SHORT, AND WHAT THE CHECK MADE OF IT: a chapter's summary
+ * as it stands — or why there is none to send — with its check, and a long
+ * chapter's stretches, each in its fold (the level between: archivist.js,
+ * context.js stretchesOf). A scene's stretches the same (sceneShortSheet). */
+function checkWords(entry, unit) {
+  const k = entry && entry.checked;
+  if (!k || !checkedNow(entry)) return `Not checked yet — the helper holds it against the ${unit} next.`;
+  if (k.unread) return 'Its model would not check it. It is checked again once its words change.';
+  const fixes = (k.fixed || []).map((f) => `“${f.from}” → “${f.to}”`);
+  const adds = (k.added || []).map((a) => `“${a}”`);
+  if (!fixes.length && !adds.length) return `Checked against the ${unit} — it stood.`;
+  return `Checked against the ${unit}, and put right${fixes.length ? `: ${fixes.join('; ')}` : ''}${adds.length ? `${fixes.length ? '. Added' : ' — added'}: ${adds.join(' ')}` : ''}`;
+}
+const shortText = (text) => h('p', { style: { lineHeight: '1.6', whiteSpace: 'pre-wrap', margin: '6px 0 0' } }, text);
+function stretchFolds(rows, unit) {
+  const state = (st) => (!checkedNow(st) ? 'not checked yet' : st.checked.unread ? 'its model would not check it' : 'checked');
+  return rows.map((r) => h('details.pane-guide.summary-stretch', h('summary', r.text ? `${r.label} · ${state(r.st)}` : `${r.label} · not summed up yet`),
+    ...(r.text ? [h('p.hint', checkWords(r.st, unit)), shortText(r.text)] : [h('p.hint', 'The helper sums it up next.')])));
+}
+function summarySheet(chapterId) {
+  const n = store.peek('novel', P.novelId);
+  const c = store.peek('chapter', chapterId);
+  if (!n || !c) return;
+  const s = openSheet(chapterLabel(n, c));
+  s.box.classList.add('summary-sheet');
+  const sum = c.summary && String(c.summary.text || '').trim() ? c.summary : null;
+  const current = sum && (!sum.fp || sum.fp === chapterPrint(c));
+  const parts = [];
+  if (sum && sum.by === 'you' && current) parts.push(h('p.hint', 'Your own summary — the helper keeps your words and never changes them.'), shortText(sum.text));
+  else if (current) parts.push(h('p.hint', checkWords(sum, 'chapter')), shortText(sum.text));
+  else if (sum) parts.push(h('p.hint', 'Waiting for the chapter’s latest changes: the summary from before them is never sent. Until the helper sums it up again, the chapter rides by its unchanged stretches, or by its opening and close.'));
+  else parts.push(h('p.hint', 'Not summed up yet. The helper sums a chapter up once the writing has moved on from it, or after it has been quiet ten minutes; until then it rides by its stretches, or by its opening and close.'));
+  /* a long chapter's stretches: what rides for it while the room holds them, before its one summary */
+  const order = n.order || [];
+  const plan = stretchPlan(c, { closeLast: order.indexOf(chapterId) < order.length - 1 });
+  if (Array.isArray(c.stretches) && c.stretches.length && plan.stretches.length) {
+    const nums = passageNumbers(c);
+    const list = c.passages || [];
+    const rows = plan.stretches.map((st) => {
+      const ns = list.filter((p) => st.ids.includes(p.id)).map((p) => nums.get(p.id)).filter(Boolean);
+      return { st, text: st.text, label: ns.length ? `Passages ${ns[0]}–${ns[ns.length - 1]}` : 'A stretch' };
+    });
+    parts.push(h('h3.summary-head', 'Its stretches, in short'), h('p.hint', 'A long chapter is kept in stretches of about 2,500 words. When it cannot ride whole, it rides by these while the room holds them — before its one summary.'), ...stretchFolds(rows, 'chapter'));
+  }
+  s.body.append(...parts);
+}
+function sceneShortSheet(playId) {
+  const p = store.peek('play', playId);
+  if (!p) return;
+  const s = openSheet(`You play ${p.who} — in short`);
+  s.box.classList.add('summary-sheet');
+  const plan = scenePlan(p);
+  if (!Array.isArray(p.stretches) || !p.stretches.length) {
+    s.body.append(h('p.hint', 'Not needed yet: the narrator reads this scene whole. Once it grows long for the narrator’s room, the helper sums its earliest turns up in stretches, and those ride in their place — never just left out.'));
+    return;
+  }
+  const turns = p.turns || [];
+  const rows = plan.stretches.map((st) => {
+    const a = turns.findIndex((t) => t.id === st.from) + 1, b = turns.findIndex((t) => t.id === st.to) + 1;
+    return { st, text: st.text, label: `Turns ${a}–${b}` };
+  });
+  s.body.append(h('p.hint', 'Once the scene is longer than the narrator holds, its earliest turns ride as these — the fewest that fit.'), ...stretchFolds(rows, 'scene'));
 }
 
 async function removeChapter(id) {
@@ -1713,6 +1779,7 @@ function drawOnePlay(p) {
     h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: () => sceneFull() }, icon(full ? 'shrink' : 'expand', 18)),
     h('button.icon', { 'aria-label': 'More for this scene', onclick: (e) => menu(e.currentTarget, [
       { label: 'Turn it all into prose (from the start)', hint: 'The whole scene written into the chapter, not just what is new since last time.', run: () => toProse(store.peek('play', p.id) || p, true) },
+      { label: 'The scene so far, in short', hint: 'What rides for its earliest turns once the scene is longer than the narrator holds, and what the helper’s check made of it.', run: () => sceneShortSheet(p.id) },
       { label: 'Remove this scene', hint: 'To Recently deleted; prose already written from it stays.', danger: true, run: async () => {
         if (!(await confirmIt('Remove this scene?', 'It goes to Recently deleted (Settings → Backups) for thirty days. Anything already turned into prose stays in the book.', 'Remove it', { danger: true }))) return;
         talk.stopTalk('play', p.id);

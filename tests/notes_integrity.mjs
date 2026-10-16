@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timelineOf } from '../js/novel/timeline.js';
 import { estimateTokens } from '../js/util.js';
+import { checkSig } from '../js/novel/summarycheck.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.COZY_NOTES_PORT || 20550);
@@ -38,7 +39,8 @@ async function book(texts = ['Mara waits at the gate.']) {
   const { novel, chapter } = shape.newNovel({ title: 'Temporary notes book' });
   novel.auto = { about: false, style: false };
   for (const text of texts) chapter.passages.push(shape.newPassage('you', text));
-  chapter.summary = { text: 'Mara waits.', fp: shape.chapterPrint(chapter), at: Date.now() };
+  /* a summary that has had its check (2.11.3): a test of the notes counts the notes' readings, never the summary's one check */
+  chapter.summary = { text: 'Mara waits.', fp: shape.chapterPrint(chapter), at: Date.now(), checked: { sig: checkSig('Mara waits.'), at: Date.now() } };
   novel.memory.seen[chapter.id] = Object.fromEntries(chapter.passages.map(p => [p.id, helper.signature(shape.picked(p))]));
   novel.notes.people.push(shape.newCard('people', { name: 'Mara', about: 'The keeper.', now: 'At the gate.' }));
   await store.create('chapter', chapter.id, chapter);

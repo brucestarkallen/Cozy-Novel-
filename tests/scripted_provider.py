@@ -109,6 +109,9 @@ class H(BaseHTTPRequestHandler):
             elif "Check these passages from" in last_user:
                 # a checker that does as it is asked: nothing to fix — and, when the judge asks, every check of every passage passed
                 beh = {"text": json.dumps(default_check(last_user))}
+            elif "Its summary, as it stands" in last_user:
+                # the summary check (2.11.3) of a model that finds the summary stands
+                beh = {"text": json.dumps({"wrong": [], "missing": []})}
             elif "Which is the better page" in last_user:
                 beh = {"text": json.dumps({"better": "same", "why": "DEFAULT DUEL"})}
             elif "Update the notes" in last_user or "could not be read as JSON" in last_user or "cut off before it finished" in last_user:

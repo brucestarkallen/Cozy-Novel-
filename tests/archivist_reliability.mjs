@@ -34,6 +34,10 @@ async function reset(queue = []) {
   await realFetch(PROVIDER + '/script', { method: 'POST', body: JSON.stringify({ queue }) });
 }
 async function requests() { return (await (await realFetch(PROVIDER + '/requests')).json()).requests; }
+/* since 2.11.3 a new summary is held once against its words in the same run (the summary check): what a test asks
+ * about a summary is counted without those checks */
+const isCheckAsk = (x) => x.body.messages.some((m) => String(m.content || '').includes('Its summary, as it stands'));
+async function notChecks() { return (await requests()).filter((x) => !isCheckAsk(x)); }
 async function phone(kind, id) { return (await (await realFetch(`${BASE}/api/store/${kind}/${id}`)).json()).data; }
 function quiet() { for (const t of archivist.forTests().timers.values()) clearTimeout(t); archivist.forTests().timers.clear(); }
 async function test(name, fn) {
@@ -202,7 +206,10 @@ try {
     const running = archivist.run(b.novelId); await started();
     const newer = { text: 'A newer complete account of the storm and everyone present.', fp, at: Date.now() };
     setSummary(b, newer); await running;
-    assert.deepEqual(b.c().summary, newer);
+    /* the newer stands — and what the check after it marked is the newer's own words */
+    const { checked, ...kept } = b.c().summary;
+    assert.deepEqual(kept, newer);
+    assert.ok(!checked || checked.sig === (await import('../js/novel/summarycheck.js')).checkSig(newer.text));
   });
 
   await test('a repaired summary is cached and follows its version back without a model call', async () => {
@@ -226,8 +233,8 @@ try {
     store.change('chapter', b.chapterId, shape.chapterSteps.keepSummary({ text: short, fp, at: Date.now(), again: true }));
     await reset([reply(whole)]); await archivist.run(b.novelId);
     assert.equal(b.c().summary.text, whole); assert.equal(b.c().summary.again, undefined);
-    assert.equal((await requests()).length, 1);
-    assert.ok((await requests())[0].body.messages.at(-1).content.includes('nowhere in the summary'));
+    assert.equal((await notChecks()).length, 1);
+    assert.ok((await notChecks())[0].body.messages.at(-1).content.includes('nowhere in the summary'));
   });
 
   await test('numeric and truncated nested summaries are rejected and asked again', async () => {
@@ -235,7 +242,7 @@ try {
       const b = await book();
       await reset([bad, reply('The keeper watches the quiet water.')]); await archivist.run(b.novelId);
       assert.equal(b.c().summary.text, 'The keeper watches the quiet water.');
-      assert.equal((await requests()).length, 2);
+      assert.equal((await notChecks()).length, 2);
     }
   });
 

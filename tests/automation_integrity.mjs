@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkSig } from '../js/novel/summarycheck.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.COZY_AUTOMATION_PORT || 22150);
@@ -47,7 +48,8 @@ async function book(text = 'Mara tucked the blanket around the sleeping dragon.'
   const { novel, chapter } = shape.newNovel({ title: 'Temporary automatic work book' });
   novel.auto = { about: false, style: false };
   chapter.passages.push(shape.newPassage('ai', text, { how: 'write', ask: { direction: 'A quiet moment of kindness.', length: 'scene' } }));
-  chapter.summary = { text: 'Mara tends the sleeping dragon.', fp: shape.chapterPrint(chapter), at: Date.now() };
+  /* a summary that has had its check (2.11.3): a test of readings counts readings, never the summary's one check */
+  chapter.summary = { text: 'Mara tends the sleeping dragon.', fp: shape.chapterPrint(chapter), at: Date.now(), checked: { sig: checkSig('Mara tends the sleeping dragon.'), at: Date.now() } };
   novel.memory.seen[chapter.id] = Object.fromEntries(chapter.passages.map(p => [p.id, helper.signature(shape.picked(p))]));
   await store.create('chapter', chapter.id, chapter);
   await store.create('novel', novel.id, novel);

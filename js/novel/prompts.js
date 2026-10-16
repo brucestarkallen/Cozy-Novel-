@@ -1228,6 +1228,43 @@ ${summaryClose('stretch', size)}`,
   ].filter(Boolean).join('\n\n');
 }
 
+/* A stretch of a long scene (stretches.js scenePlan), summed up on its own:
+ * what the narrator reads in place of the scene's earliest turns once the
+ * scene is longer than it holds (talk.js turnsFor) — the same list as a
+ * chapter's, and his character's part told as he played it. */
+export function sceneStretchRequest({ novel, chapterLabel, who, text, words, before = '', known = [], part = 0, parts = 0, soFar = '' }) {
+  const size = stretchSize(words);
+  const me = String(who || 'my character');
+  return [
+    `Here's a stretch of a scene played from ${chapterLabel} of ${titled(novel)} — I play ${me}, and the narrator tells everyone and everything else. It's a long scene, so it is kept in stretches like this one, and the narrator carries on from their summaries where the scene is too long to read whole.${part ? ` This stretch is long too, so it comes in ${parts} parts — this is part ${part}.` : ''}`,
+    before ? `The stretch before this one, in short:\n${fence(before)}` : '',
+    soFar ? `This stretch's parts before this one, in short:\n${fence(soFar)}` : '',
+    fence(text),
+    `Sum up ${part ? `this stretch of the scene so far — ${soFar ? 'the summary of its parts before and this part together' : 'this part'} —` : 'this stretch of the scene alone'}, picking up where the one before it ends:
+${summaryKeeps('stretch', known, { last: true })}
+What ${me} says and does is told as I played it — never more of ${me}'s thoughts or choices than I gave.
+${summaryClose('stretch', size)}`,
+    'Answer with one JSON object and nothing else: {"summary": "…"}',
+  ].filter(Boolean).join('\n\n');
+}
+
+/* THE SUMMARY CHECK (Cozy Tavern's continuous audit and its keeper's detail
+ * check, for a book): a summary held once against the words it stands for.
+ * What it answers is taken only where the words prove it (summarycheck.js). */
+export function summaryCheckRequest({ novel, what, source, summary, part = 0, parts = 0, scene = false }) {
+  return [
+    `Here's ${what} of ${titled(novel)}:${part ? ` it is long, so it comes in ${parts} parts — this is part ${part}. Say only what this part shows, and never call wrong or missing what the summary tells of the parts you are not shown.` : ''}`,
+    fence(source),
+    `Its summary, as it stands — ${scene ? 'it is what the narrator reads in place of these turns once the scene is longer than it can read' : 'it is what the writer reads in place of these words once the book is longer than it can read'}:\n${fence(summary)}`,
+    `Check the summary against the words above, the way a careful editor checks a précis before it goes to print:
+- a fact it gets wrong: a name, a number, an age, a time, a place, who did or said what, who knows what, how something ended — or a softening: a grudging yes made a plain yes, a quarrel left open said to be settled, a hurt made milder than it is, a cost left out of what it cost;
+- something it leaves out that a writer carrying the book on would need and could not work out from the rest: a promise, an oath or a threat, a secret and who learned it, someone appearing for the first time and how they are described, a figure, what changed between two people and why, what someone says of themselves — never weather or atmosphere, never what it already says in other words.
+Answer with one JSON object and nothing else:
+{"wrong": [{"summary": "the fewest words of the summary that are wrong, copied exactly as they stand in it", "words": "what belongs there instead, copied exactly as the words above give it"}], "missing": [{"after": "the words of the summary it belongs after, copied exactly", "add": "one plain sentence to add, as the summary would say it", "words": "the words above it rests on, copied exactly"}]}
+Each list stays empty when there is nothing for it — {"wrong": [], "missing": []} when the summary stands. Never call wrong what only says the same thing in other words.`,
+  ].join('\n\n');
+}
+
 /* A summary that left out a name or a figure its words hold, or gives a
  * figure they never give (Cozy Tavern M111, M208, and its detail check: a
  * wrong fact is not a missing one), asked once more with each one where it

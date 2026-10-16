@@ -74,6 +74,10 @@ const { picked } = shape;
 async function script(queue) { await realFetch(PROVIDER + '/script', { method: 'POST', body: JSON.stringify({ queue }) }); }
 async function reset() { await realFetch(PROVIDER + '/reset'); }
 async function requests() { return (await (await realFetch(PROVIDER + '/requests')).json()).requests; }
+/* since 2.11.3 every new summary is held once against its words in the same run (the summary check): a count of
+ * what the helper asked about a summary leaves those checks out, and the checks are counted by themselves */
+const isCheckAsk = (x) => x.body.messages.some((m) => String(m.content || '').includes('Its summary, as it stands'));
+async function notChecks() { return (await requests()).filter((x) => !isCheckAsk(x)); }
 async function onPhone(kind, id) { return (await (await realFetch(`${BASE}/api/store/${kind}/${id}`)).json()).data; }
 
 const CONN = { id: 'c-w', name: 'Scripted', url: PROVIDER + '/v1', model: 'scripted', key: 'test-key' };
@@ -1542,7 +1546,7 @@ await test('a summary: an empty answer is asked again; one he wrote through the 
   await script([{ text: '{"summary": ""}' }, { text: '{"summary": "HELPER SUMMARY."}' }]);
   await archivist.run(b.novelId);
   assert.equal(b.ch().summary.text, 'HELPER SUMMARY.');
-  assert.equal((await requests()).length, 2, 'the empty one asked again');
+  assert.equal((await notChecks()).length, 2, 'the empty one asked again');
   /* he corrects it through the partner */
   const made = changes.makeChange(b.novelId, { summary: 1, text: 'HIS SUMMARY.', why: 'his' });
   assert.equal(made.status, 'made');
@@ -6212,7 +6216,7 @@ await test('a summary’s names and figures asked for while its model is down: t
   await archivist.run(b.novelId);
   assert.equal(b.ch(0).summary.text, 'Mara Venn tends the lamp at Crane Point through a long storm while Corvin waits below with 40 men.');
   assert.equal(b.ch(0).summary.again, undefined);
-  assert.equal((await requests()).length, 1, 'only the names and figures asked for, not the whole summary again');
+  assert.equal((await notChecks()).length, 1, 'only the names and figures asked for, not the whole summary again');
   await putAway(b);
 });
 
@@ -8729,7 +8733,8 @@ await test('the chapter still being written, once quiet, is summed up from its s
   assert.equal(asks.filter((m) => m.includes('Sum up this stretch alone')).length, 2, 'two stretches, the newest words still open');
   const sum = asks.find((m) => m.includes('Here is every stretch of it, in order, summed up, and then its newest words as they stand'));
   assert.ok(sum && sum.includes('stretch one.') && sum.includes('stretch two.') && sum.includes('Its newest words, after the last stretch:') && sum.includes('v6x0') && !sum.includes('v0x0'), (sum || asks.join('\n---\n')).slice(0, 900));
-  assert.equal(asks.length, 3, 'nothing else asked');
+  assert.equal(asks.filter((m) => !m.includes('Its summary, as it stands')).length, 3, 'nothing else asked');
+  assert.equal(asks.filter((m) => m.includes('Its summary, as it stands')).length, 3, 'and each summary checked once: the two stretches and the chapter');
   await store.flush();
   assert.equal((await onPhone('chapter', b.ids[0])).summary.text, 'the chapter so far, from its stretches and its newest words.');
   await setHouse();
@@ -9003,7 +9008,7 @@ await test('a summary that gives a figure its chapter never does — seventeen w
   await archivist.run(b.novelId);
   await store.flush();
   assert.equal((await onPhone('chapter', b.ids[0])).summary.text, 'Jovan, 17, watches the gate fall while Mara Venn counts the riders at the ford.');
-  const asked = (await requests()).map((r) => String(r.body.messages.at(-1).content));
+  const asked = (await notChecks()).map((r) => String(r.body.messages.at(-1).content));
   assert.equal(asked.filter((m) => m.includes('nowhere in the chapter')).length, 1, 'asked once more, never a third time');
   assert.equal(asked.length, 2, asked.map((m) => m.slice(0, 120)).join('\n---\n'));
   await putAway(b);
@@ -9111,6 +9116,217 @@ await test('the level between goes to the newest chapter told in short first, an
   /* asked twice, told the same: the start of the request stays the same page after page */
   assert.equal(sent(9000), sent(9000));
   assert.equal(longs.length, 3);
+});
+
+heading('the summary check, and a long scene in short (2.11.3)');
+
+const summaryCheckMod = await import(path.join(ROOT, 'js/novel/summarycheck.js'));
+const NOTHING_WRONG = { text: '{"wrong": [], "missing": []}' };
+const checkAsks = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Its summary, as it stands'));
+const GATE = 'Jovan was sixteen the winter the gate fell. Mara refused the ring, coldly, and Tom swore he would come back for it before the thaw.';
+
+/* his question: with a quick, fast model as the helper, what makes sure a summary is right? Cozy Tavern's continuous audit and its keeper's detail check */
+await test('the summary check: a summary is held once against its chapter, and a wrong fact is put right only where the summary holds the wrong words and the chapter the right ones — what it left out added only where the chapter says it', async () => {
+  let b = await makeBook([[GATE], ['Chapter two words.']], { manual: true });
+  markAllSeen(b);
+  await setHouse({ context: 200000 });
+  await script([{ text: JSON.stringify({ summary: 'Jovan, sixteen, watches the gate fall. Mara accepts the ring.', name: 'The Gate' }) },
+    { text: JSON.stringify({ wrong: [{ summary: 'accepts the ring', words: 'refused the ring' }], missing: [{ after: 'Mara accepts the ring.', add: 'Tom swears he will come back for the ring before the thaw.', words: 'swore he would come back for it before the thaw' }] }) }]);
+  await archivist.run(b.novelId);
+  const asks = await checkAsks();
+  assert.equal(asks.length, 1, 'held against its chapter once');
+  assert.ok(asks[0].includes(GATE) && asks[0].includes('Mara accepts the ring.') && asks[0].includes('a grudging yes made a plain yes'), asks[0].slice(0, 600));
+  await store.flush();
+  let s = (await onPhone('chapter', b.ids[0])).summary;
+  assert.equal(s.text, 'Jovan, sixteen, watches the gate fall. Mara refused the ring. Tom swears he will come back for the ring before the thaw.');
+  assert.deepEqual(s.checked.fixed, [{ from: 'accepts the ring', to: 'refused the ring' }]);
+  assert.deepEqual(s.checked.added, ['Tom swears he will come back for the ring before the thaw.']);
+  assert.ok(summaryCheckMod.checkedNow(s), 'the mark is on the words it made');
+  /* checked once: the next run asks nothing */
+  await reset();
+  await archivist.run(b.novelId);
+  assert.equal((await requests()).length, 0, 'never checked twice');
+  await putAway(b);
+  /* a check that says what the chapter does not: nothing of it is taken, and the summary is marked as checked all the same */
+  b = await makeBook([[GATE], ['Chapter two words.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  await script([{ text: JSON.stringify({ summary: 'Jovan, sixteen, watches the gate fall. Mara refused the ring.', name: 'The Gate' }) },
+    { text: JSON.stringify({ wrong: [{ summary: 'refused the ring', words: 'threw the ring into the sea' }, { summary: 'not in it at all', words: 'the gate' }], missing: [{ add: 'Rhea saw all of it from the tower.', words: 'Mara refused the ring' }, { add: 'Tom waited 40 days.', words: 'swore he would come back' }] }) }]);
+  await archivist.run(b.novelId);
+  await store.flush();
+  s = (await onPhone('chapter', b.ids[0])).summary;
+  assert.equal(s.text, 'Jovan, sixteen, watches the gate fall. Mara refused the ring.', 'the summary keeps its words');
+  assert.ok(summaryCheckMod.checkedNow(s) && !s.checked.fixed && !s.checked.added, JSON.stringify(s.checked));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the summary check’s own rule: one bad addition is refused alone and the good mends stand; mends that would leave the summary with fewer of the chapter’s names are all refused', () => {
+  const r = summaryCheckMod.applyCheck('Jovan watches the gate fall. Mara accepts the ring.', { wrong: [{ summary: 'accepts the ring', words: 'refused the ring' }], missing: [{ add: 'Tom waited 40 days by the gate.', words: 'Tom swore he would come back' }] }, GATE);
+  assert.equal(r.text, 'Jovan watches the gate fall. Mara refused the ring.');
+  assert.ok(r.refused.some((w) => w.includes('a figure the words never give')), r.refused.join(' | '));
+  /* a "mend" that drops a name the chapter holds: nothing of that answer is taken */
+  const s = summaryCheckMod.applyCheck('Mara refused the ring; Tom swore to come back.', { wrong: [{ summary: 'Mara refused the ring; Tom swore', words: 'swore' }] }, GATE);
+  assert.equal(s.text, 'Mara refused the ring; Tom swore to come back.');
+  assert.equal(s.fixed.length, 0);
+  /* …and one that keeps its length but loses a name it gave */
+  const u = summaryCheckMod.applyCheck('Mara refused the ring and Tom swore to come back before the thaw.', { wrong: [{ summary: 'Tom swore to come back', words: 'he would come back' }] }, GATE);
+  assert.equal(u.text, 'Mara refused the ring and Tom swore to come back before the thaw.', 'Tom is never mended out of it');
+});
+
+await test('the summary check never touches his own summary, and checks a summary again only when its words change', async () => {
+  const b = await makeBook([[GATE], ['Chapter two words.']], { manual: true });
+  markAllSeen(b);
+  const fp = shape.chapterPrint(b.ch());
+  store.change('chapter', b.ids[0], shape.chapterSteps.setSummary({ text: 'MY OWN: Mara says no to the ring.', by: 'you', fp, at: 1 }), { now: true });
+  await setHouse({ context: 200000 });
+  await archivist.run(b.novelId);
+  assert.equal((await checkAsks()).length, 0, 'his own words are never checked');
+  /* the helper's, checked; then its words changed by the partner's change — checked again */
+  store.change('chapter', b.ids[0], shape.chapterSteps.setSummary({ text: 'Mara says no to the ring.', fp, at: 2 }), { now: true });
+  await reset();
+  await script([NOTHING_WRONG]);
+  await archivist.run(b.novelId);
+  assert.equal((await checkAsks()).length, 1);
+  store.change('chapter', b.ids[0], (c) => { c.summary.text = 'Mara says no to the ring, coldly.'; }, { now: true });
+  await reset();
+  await script([NOTHING_WRONG]);
+  await archivist.run(b.novelId);
+  assert.equal((await checkAsks()).length, 1, 'new words, checked again');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('summaries kept before the check are checked too — a few a run, the book’s stretches and chapters oldest first — and the helper comes back for the rest by itself', async () => {
+  const words = (n, tag) => Array.from({ length: n }, (_, i) => `${tag}${i % 50}`).join(' ') + '.';
+  const b = await makeBook([Array.from({ length: 9 }, (_, i) => words(1000, `q${i}x`)), ['The next chapter.']], { manual: true });
+  markAllSeen(b);
+  const c = b.ch();
+  const plan = stretchesMod.stretchPlan(c, { closeLast: true });
+  plan.stretches.forEach((st, k) => { st.text = `OLD STRETCH ${k + 1}, from q${k * 2}x1.`; st.at = 1; });
+  store.change('chapter', b.ids[0], (x) => { x.stretches = stretchesMod.keptStretches(plan); x.summary = { text: 'OLD CHAPTER SUMMARY.', fp: shape.chapterPrint(x), at: 1 }; }, { now: true });
+  await setHouse({ context: 200000 });
+  await script(Array.from({ length: 10 }, () => NOTHING_WRONG));
+  await archivist.run(b.novelId);
+  let asks = await checkAsks();
+  assert.equal(asks.length, archivist.CHECKS_PER_RUN, `${asks.length} checks in the first run`);
+  assert.ok(asks[0].includes('OLD STRETCH 1,') && asks[0].includes('q0x0') && !asks[0].includes('q4x0'), 'the first stretch first, against its own words');
+  await reset();
+  await script(Array.from({ length: 10 }, () => NOTHING_WRONG));
+  await archivist.run(b.novelId);
+  asks = await checkAsks();
+  assert.equal(asks.length, plan.stretches.length + 1 - archivist.CHECKS_PER_RUN, 'the rest the next run');
+  assert.ok(asks.at(-1).includes('OLD CHAPTER SUMMARY.'), 'the chapter’s own summary after its stretches');
+  await store.flush();
+  const kept = await onPhone('chapter', b.ids[0]);
+  assert.ok(kept.stretches.every((x) => summaryCheckMod.checkedNow(x)) && summaryCheckMod.checkedNow(kept.summary), 'every one marked');
+  await reset();
+  await archivist.run(b.novelId);
+  assert.equal((await checkAsks()).length, 0, 'and nothing asked again');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a summary its model will not check is asked on two runs, then passed by with its mark saying so — never asked on every run', async () => {
+  const b = await makeBook([[GATE], ['Chapter two words.']], { manual: true });
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], (x) => { x.summary = { text: 'Mara refused the ring.', fp: shape.chapterPrint(x), at: 1 }; }, { now: true });
+  await setHouse({ context: 200000 });
+  const asked = [];
+  for (let run = 0; run < 3; run++) {
+    await reset();
+    await script(Array.from({ length: 6 }, (_, i) => (i % 3 === 2 ? { text: '{"ok": true}' } : { text: 'I would rather not.' })));
+    await archivist.run(b.novelId);
+    asked.push((await checkAsks()).length);
+  }
+  assert.ok(asked[0] > 0 && asked[1] > 0 && asked[2] === 0, `asked on the first two runs, not the third: ${asked}`);
+  await store.flush();
+  const s = (await onPhone('chapter', b.ids[0])).summary;
+  assert.ok(s.checked && s.checked.unread && s.text === 'Mara refused the ring.', JSON.stringify(s));
+  await setHouse();
+  await putAway(b);
+});
+
+/* his question: a scene played long — "just in case, isn't it needed?" */
+function longScene(n = 60, words = 100) {
+  const turns = [];
+  for (let i = 0; i < n; i++) {
+    const tag = `T${i + 1}X`;
+    turns.push(shape.newTurn(i % 2 ? 'ai' : 'you', `${tag} ` + Array.from({ length: words }, (_, k) => `${tag.toLowerCase()}w${k % 20}`).join(' ') + '.'));
+  }
+  return { id: 'pl-long', novelId: 'n', chapterId: 'c', who: 'Mara', turns };
+}
+await test('a long scene: its earliest turns ride as the summaries of their stretches — the fewest that fit — never just left out; without them, what is left out is said', () => {
+  const p = longScene();
+  const plan = stretchesMod.scenePlan(p);
+  assert.ok(plan.stretches.length >= 2, `${plan.stretches.length} stretches`);
+  plan.stretches.forEach((st, k) => { st.text = `SCENE STRETCH ${k + 1}: Mara and the narrator, in short.`; st.at = 1; });
+  p.stretches = stretchesMod.keptStretches(plan);
+  const conn = { ...CONN, context: 16000 };
+  const all = (out) => out.map((m) => m.content).join('\n');
+  const got = talk.turnsFor(p, { conn });
+  const t = all(got);
+  assert.ok(got[0].role === 'user' && got[0].content.startsWith(talk.SCENE_SHORT), got[0].content.slice(0, 120));
+  const shown = [...t.matchAll(/SCENE STRETCH (\d+):/g)].map((m) => +m[1]);
+  assert.ok(shown.length >= 1 && shown.every((x, i) => x === i + 1), `its earliest stretches, in order: ${shown}`);
+  const lastIn = plan.stretches[shown.length - 1];
+  const after = p.turns.findIndex((x) => x.id === lastIn.to) + 1;
+  assert.ok(!t.includes('T1X ') && t.includes(`T${after + 1}X `) && t.includes(`T${p.turns.length}X `), 'the turns it stands for not sent, every turn after it whole');
+  assert.ok(!/left out here/.test(t), 'nothing left out');
+  assert.ok(util.estimateTokens(t) <= 16000 * 0.25 + 50, `it fits the narrator's share: ${util.estimateTokens(t)}`);
+  /* no summaries kept: as before, what is left out is said */
+  const bare = all(talk.turnsFor({ ...p, stretches: [] }, { conn }));
+  assert.ok(bare.includes('(The earliest turns of this scene are left out here, to save room.)') && !bare.includes(talk.SCENE_SHORT));
+  /* a turn changed inside the first stretch: its summary no longer stands, and none after it is used out of order */
+  const changed = structuredClone(p);
+  changed.turns[1].versions[0].text += ' CHANGED.';
+  const c = all(talk.turnsFor(changed, { conn }));
+  assert.ok(!c.includes('SCENE STRETCH') && c.includes('(The earliest turns of this scene are left out here, to save room.)'), 'a summary of words that changed is never sent');
+  /* a turn asked again at the end of the second stretch, on a narrator with less room: only the stretches before it, never one that holds it */
+  const endOfSecond = p.turns.findIndex((x) => x.id === plan.stretches[1].to);
+  const again = all(talk.turnsFor(p, { conn: { ...CONN, context: 12000 }, upto: p.turns[endOfSecond].id }));
+  assert.ok(again.includes('SCENE STRETCH 1:') && !again.includes('SCENE STRETCH 2:') && !again.includes(`T${endOfSecond + 1}X `), 'never a summary of the turn being answered again');
+});
+
+await test('the helper sums a long scene up in stretches — as its transcript, the one before carried in — only once it grows long for the narrator, and checks each summary', async () => {
+  const b = await makeBook([['The lamp was cold.']], { manual: true });
+  markAllSeen(b);
+  /* a narrator with room for it: a scene of thirty turns — a stretch already closed in it — is read whole, nothing summed up */
+  await setHouse({ context: 64000 }, CRAFTS_OFF);
+  const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+  const add = (turns) => { for (const x of turns) store.change('play', playId, shape.turnSteps.addTurn(x), { now: true }); };
+  add(longScene(30, 100).turns);
+  assert.ok(stretchesMod.scenePlan(store.peek('play', playId)).stretches.length >= 1, 'a stretch of it closed');
+  await reset();
+  await archivist.run(b.novelId);
+  const sceneAsks = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Sum up this stretch of the scene alone'));
+  assert.equal((await sceneAsks()).length, 0, 'a scene the narrator holds well is read whole: nothing summed up');
+  /* the narrator's room smaller, the scene longer: summed up */
+  await setHouse({ context: 16000 }, CRAFTS_OFF);
+  add(longScene(60, 100).turns.slice(30));
+  await reset();
+  await script([{ text: '{"summary": "the first stretch of the scene."}' }, { text: '{"summary": "the second stretch of the scene."}' }, NOTHING_WRONG, NOTHING_WRONG]);
+  await archivist.run(b.novelId);
+  const asks = await sceneAsks();
+  assert.ok(asks.length >= 1, 'summed up');
+  assert.ok(asks[0].includes('I play Mara') && asks[0].includes('Mara: T1X') && asks[0].includes('Narrator: T2X') && asks[0].includes('never more of Mara'), asks[0].slice(0, 700));
+  if (asks[1]) assert.ok(asks[1].includes('The stretch before this one, in short:') && asks[1].includes('the first stretch of the scene.'), 'the one before carried in');
+  await store.flush();
+  const p = await onPhone('play', playId);
+  assert.equal(p.stretches[0].text, 'the first stretch of the scene.');
+  const checks = await checkAsks();
+  assert.ok(checks.length >= 1 && checks[0].includes('the narrator reads in place of these turns') && checks[0].includes('Mara: T1X'), 'checked against its turns');
+  assert.ok(summaryCheckMod.checkedNow(p.stretches[0]), 'and marked');
+  /* the narrator's next request: the scene told from these */
+  await reset();
+  await script([{ text: 'The narrator goes on.' }]);
+  const said = await talk.playSay({ playId, text: 'I LIGHT THE LAMP.' });
+  assert.equal(said.ok, true, JSON.stringify(said));
+  const sent = (await requests())[0].body.messages.map((m) => String(m.content)).join('\n');
+  assert.ok(sent.includes(talk.SCENE_SHORT) && sent.includes('the first stretch of the scene.') && sent.includes('I LIGHT THE LAMP.') && !sent.includes('left out here'), 'the narrator reads the scene so far in short');
+  await setHouse();
+  await putAway(b);
 });
 
 /* last of all: it lets go of every record this page holds, as a page does when a copy comes back */

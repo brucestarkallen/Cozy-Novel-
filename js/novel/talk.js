@@ -30,6 +30,7 @@ import { listModules } from './modules.js';
 import { nameKey } from '../util.js';
 import * as archivist from './archivist.js';
 import { convSteps, conversationsOf, freeName, openName, cleanConvName, markedName } from './conversations.js';
+import { scenePlan } from './stretches.js';
 
 const running = new Map();        /* 'talk/<id>' | 'play/<id>' -> job */
 const jobFns = new Set();
@@ -54,7 +55,11 @@ function bookNow(novelId) {
 
 /* the conversation so far, newest kept whole and oldest let go once it would
  * take more than a quarter of the room. after: only the turns after that one
- * (a scene already written into the book rides there, as the book). */
+ * (a scene already written into the book rides there, as the book). A long
+ * scene's earliest turns ride as the summaries of their stretches (archivist
+ * sceneStretchUp) before any is let go: the fewest summed up that fit. */
+export const SCENE_SHORT = 'The scene so far, in short — its earliest turns, summed up:';
+export const SCENE_ON = 'Then, turn by turn:';
 export function turnsFor(record, { upto = null, conn, openWith = '', after = null } = {}) {
   const out = [];
   const list = record.turns || [];
@@ -73,10 +78,10 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
     if (!text && !tell) continue;
     if (t.by === 'you') {
       const mine = [text, tell].filter(Boolean).join('\n\n');
-      out.push({ role: 'user', content: told ? `${told}\n\n${mine}` : mine });
+      out.push({ role: 'user', content: told ? `${told}\n\n${mine}` : mine, turn: t.id });
       told = '';
     } else {
-      out.push({ role: 'assistant', content: text });
+      out.push({ role: 'assistant', content: text, turn: t.id });
       told = outcomeWords(v.changes);
     }
   }
@@ -87,8 +92,40 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
   }
   const cap = Math.floor(contextOf(conn) * 0.25);
   let total = out.reduce((a, m) => a + estimateTokens(m.content), 0);
+  /* a long scene: its earliest stretches by their summaries — summed up as their turns read now, from the first turn sent, before the point answered — the fewest that fit */
+  let short = '';
+  if (scene && total > cap && Array.isArray(record.stretches) && record.stretches.length) {
+    const at = new Map(list.map((t, k) => [t.id, k]));
+    const end = upto && at.has(upto) ? at.get(upto) : list.length;
+    const usable = [];
+    for (const s of scenePlan(record).stretches) {
+      if (at.get(s.from) < from) continue;
+      if (!s.text || at.get(s.to) >= end) break;
+      if (!usable.length && at.get(s.from) !== from && list.slice(from, at.get(s.from)).some((t) => out.some((m) => m.turn === t.id))) break;
+      usable.push(s);
+    }
+    for (let k = 1; k <= usable.length; k++) {
+      const last = at.get(usable[k - 1].to);
+      const rest = out.filter((m) => at.get(m.turn) > last);
+      const rows = usable.slice(0, k).map((s) => s.text).join('\n\n');
+      const cost = estimateTokens(rows) + 20 + rest.reduce((a, m) => a + estimateTokens(m.content), 0);
+      if (cost <= cap || k === usable.length) {
+        short = rows;
+        out.splice(0, out.length - rest.length);
+        total = cost;
+        break;
+      }
+    }
+  }
   let dropped = 0;
   while (out.length > 2 && total > cap) { total -= estimateTokens(out[0].content); out.shift(); dropped++; }
+  /* the scene so far in short opens it — with his first turn after it, or as his message before the narrator's — and says what after it is left out */
+  if (short) {
+    const head = `${SCENE_SHORT}\n\n${short}${dropped ? '\n\n(Some turns after these are left out here, to save room.)' : ''}`;
+    if (out.length && out[0].role === 'user') out[0] = { ...out[0], content: `${head}\n\n${SCENE_ON}\n\n${out[0].content}` };
+    else out.unshift({ role: 'user', content: head });
+    return out.map(({ turn, ...m }) => m);
+  }
   /* a conversation opens with his turn: the narrator's opening is answered to
    * the words that asked for it, and anything else that lost its question goes */
   if (out.length && out[0].role !== 'user') {
@@ -97,7 +134,7 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
   }
   /* the oldest talk let go for room is said, never silently missing (Cozy Tavern's M265) */
   if (dropped && out.length && out[0].role === 'user') out[0] = { ...out[0], content: `${scene ? '(The earliest turns of this scene are left out here, to save room.)' : '(The earliest part of our talk is left out here, to save room.)'}\n\n${out[0].content}` };
-  return out;
+  return out.map(({ turn, ...m }) => m);
 }
 
 /* His last few turns, in his own words only — his moves and his lines to the
