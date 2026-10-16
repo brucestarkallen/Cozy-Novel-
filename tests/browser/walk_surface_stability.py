@@ -23,7 +23,7 @@ async def frames(pg, count=3):
 
 
 async def show(pg, tab):
-    await pg.evaluate("async tab=>(await import('/js/ui/panes.js')).showSide(tab)", tab)
+    await H.panes_call(pg, 'showSide', [tab])
     await frames(pg)
 
 

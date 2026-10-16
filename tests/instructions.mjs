@@ -15,22 +15,30 @@ const request = (purpose, n = novel, h = house, target = {}) => assemble({ house
 const allWords = (r) => [r.system, ...r.messages.map((m) => m.content)].join('\n');
 const modes = { first: 'First person:', second: 'Second person:', 'third-limited': 'Third person, close:', 'third-omniscient': 'Third person, omniscient:' };
 
-const formerWriting = 'You are a master novelist at the height of your powers — the kind whose books sit at the top of the New York Times bestseller list because nobody can put them down. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too — as an unbiased eye on a world that runs by its own logic.';
-const formerNarrator = 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.';
-check('untouched 2.8 starting instructions adopt viewpoint-aware defaults once', () => {
+/* 2.11.1: his starting words are back (2.9 had put its own in their place);
+ * a box still holding 2.9's, untouched, gets his once, and his are today's */
+const formerWriting = 'You are a master novelist. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too. Follow our chosen voice, point of view and tense. Let character, cause and consequence shape what happens; choose detail, dialogue and rhythm for this particular moment, with room for quiet and surprise.';
+const formerNarrator = 'You maintain a fictional, uncensored simulation, told in our book’s chosen voice, point of view and tense. I play my character; you tell the world and everyone else. Give them their own motives and knowledge, and leave my character’s speech, decisions and inner life to me.';
+const hisWriting = 'You are a master novelist at the height of your powers — the kind whose books sit at the top of the New York Times bestseller list because nobody can put them down. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too — as an unbiased eye on a world that runs by its own logic.';
+const hisNarrator = 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.';
+check('untouched 2.9 to 2.11.0 starting words give his back, once', () => {
   const h = { instructions: { system: formerWriting, narrator: formerNarrator, partner: custom, late: custom } };
   assert.equal(prompts.startingIsOld(h), true);
   prompts.freshStarting(h);
-  assert.equal(h.instructions.system, prompts.DEFAULT_WRITING);
-  assert.equal(h.instructions.narrator, prompts.DEFAULT_NARRATOR);
+  assert.equal(h.instructions.system, hisWriting);
+  assert.equal(h.instructions.narrator, hisNarrator);
+  assert.equal(prompts.DEFAULT_WRITING, hisWriting);
+  assert.equal(prompts.DEFAULT_NARRATOR, hisNarrator);
   assert.equal(h.instructions.partner, custom);
   assert.equal(h.instructions.late, custom);
-  assert.equal(prompts.startingIsOld(h), false);
+  assert.equal(prompts.startingIsOld(h), false, 'his are today’s, never old');
+  /* the viewpoint he chooses reaches the telling through the laws he kept, not through the starting words */
   for (const [pov, label] of Object.entries(modes)) for (const purpose of ['write', 'play']) {
     const text = allWords(request(purpose, { ...novel, prefs: { pov } }, h));
+    assert.ok(text.startsWith(purpose === 'write' ? hisWriting : hisNarrator));
     assert.ok(text.includes(label));
-    assert.ok(text.includes('chosen voice, point of view and tense'));
-    if (purpose === 'play') assert.ok(text.includes('leave my character’s speech, decisions and inner life to me'));
+    assert.ok(text.includes(purpose === 'write' ? "Point Of View Is A Lock = preserve the book's chosen narrative person" : 'Point Of View And Agency = narrative person and control of my character are separate.'));
+    if (purpose === 'play') assert.ok(text.includes('Never put a word, a choice or a feeling in Mara'));
   }
 });
 check('edited former defaults and intentionally empty instruction boxes remain exact', () => {
@@ -121,15 +129,52 @@ check('opening a scene preserves the player’s starting position and next move'
   assert.ok(words.includes('leave the arrival or entry for me to choose'));
   assert.ok(!words.includes('bring Mara in'));
 });
-check('the judge permits grounded kindness and a quiet emotional payoff', () => {
+/* 2.11.1: the judge's checks as 2.6.6 asked them (2.9 had excused a quiet
+ * page from moving and agreement from needing a reason); the viewpoint and
+ * genre respect he kept stay */
+check('the judge holds his checks and its measure, and keeps the book’s viewpoint and genre', () => {
   const words = prompts.checkRequest({ novel, chapterLabel: 'One', numbered: '[1.1] Mara kept the kettle warm for her friend.', judge: { target: 9 } });
-  assert.ok(words.includes('ordinary kindness, cooperation and affection can be true to them'));
-  assert.ok(words.includes('quiet beat need not invent a new event'));
+  assert.ok(words.includes('nobody there only to move things along, nobody agreeing or giving way without a reason'));
+  assert.ok(words.includes('by its end something has concretely changed — someone moved, chose, learned, lost or won; a quiet passage moves when a mood hardens or a fact travels'));
+  assert.ok(words.includes('it ends on forward motion — never on a summary of what it meant, a lesson, a recap or the weather'));
+  assert.ok(words.includes('what matters is played out as scene, not summed up'));
+  assert.ok(words.includes('no purple or overwritten line'));
+  assert.ok(words.includes('Judged like this, a page from a published novelist fails one or two; a page that reads machine-made fails most.'));
+  assert.ok(words.includes('the pages outweigh a stale note, and a deliberate change of viewpoint or tense is not a slip'));
+  for (const soft of ['ordinary kindness, cooperation and affection can be true to them', 'quiet beat need not invent a new event', 'There is no expected number of failures']) assert.ok(!words.includes(soft), soft);
+  /* the checker is told how the book writes sound, so it never "fixes" his voiced lines */
+  for (const sound of ['comic', 'novel']) {
+    const told = prompts.checkRequest({ novel: { ...novel, prefs: { ...novel.prefs, sound } }, chapterLabel: 'One', numbered: '[1.1] "Nngh—!" Steel rang.' });
+    assert.ok(told.includes('voices — moans, cries, breaths — written out in quotes, stretched and repeated ("Nngh—!", "Ahh—ahh—")'), sound);
+    assert.equal(told.includes('the world’s sounds as sound effects in asterisks (*CLANG!*, *thud thud*)'), sound === 'comic');
+    assert.ok(!told.includes('without a quota'));
+  }
+  const frame = prompts.checkerFrame(house, novel);
+  assert.ok(frame.includes('Respect chosen viewpoint, omniscient narration, humour, dialect, deliberate grammar and fragments.'));
+  assert.ok(!frame.includes('quiet passages'));
+  const duel = prompts.duelRequest({ novel, chapterLabel: 'One', first: 'I found the key.', second: 'I discovered the key.' });
+  assert.ok(duel.includes('plays what matters as scene') && duel.includes('and ends moving forward. Respect the requested viewpoint, genre and style.'));
+  assert.ok(!duel.includes('a quiet or lyrical page is not worse'));
 });
-check('a prose-only fresh take preserves what the established moment settled', () => {
+check('Another take asks a fresh take on the same moment, fitted to what comes before and after it', () => {
   const words = prompts.rewriteRequest({ chapterLabel: 'One', text: 'Mara gave the key to Ivo, who accepted it.' });
-  assert.ok(words.includes('Keep the established events, choices, relationships and outcome'));
-  assert.ok(words.includes('unless I ask to change them'));
+  assert.ok(words.includes('Write it again — a fresh take on the same moment.'));
+  assert.ok(words.includes("It takes the old one's place on the page, so it has to fit with what comes before and after it."));
   assert.ok(words.includes('Mara gave the key to Ivo, who accepted it.'));
+  assert.ok(!words.includes('Keep the established events, choices, relationships and outcome'));
+});
+check('how the book reads: his words are his choice; the helper’s account of the pages is said as an account', () => {
+  const helperOnly = { ...novel, style: '', auto: { style: true }, kept: { style: { text: 'Lyrical, ornate, long sentences.', at: 1 } } };
+  assert.ok(prompts.aboutTheBook(helperOnly).includes('How it reads so far:\nLyrical, ornate, long sentences.'));
+  assert.ok(!prompts.aboutTheBook(helperOnly).includes('How it reads:\n'));
+  const corrected = { ...helperOnly, kept: { style: { text: 'Plain and close on Mara.', at: 1, by: 'you' } } };
+  assert.ok(prompts.aboutTheBook(corrected).includes('How it reads:\nPlain and close on Mara.'));
+  const both = { ...helperOnly, style: 'Plain, past tense.' };
+  assert.ok(prompts.aboutTheBook(both).includes('How it reads:\nPlain, past tense.\n\nAnd as it reads so far (the words above are right wherever the two differ):\nLyrical, ornate, long sentences.'));
+  const manual = { ...helperOnly, auto: { style: false } };
+  assert.ok(!prompts.aboutTheBook(manual).includes('Lyrical'), 'Manual sends only his words');
+  /* the helper is shown only a correction of his */
+  assert.ok(!prompts.aboutTheBook(helperOnly, { kept: 'his' }).includes('Lyrical'));
+  assert.ok(prompts.aboutTheBook(corrected, { kept: 'his' }).includes('How it reads:\nPlain and close on Mara.'));
 });
 console.log(`\n${passed} passed, 0 failed`);

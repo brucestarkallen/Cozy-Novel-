@@ -107,8 +107,7 @@ async def submit_branch(pg, name, source):
 
 
 async def open_turn(pg, kind, rid, tid):
-    await pg.evaluate("async a => (await import('/js/ui/panes.js')).showTurn(a.kind, a.rid, a.tid)",
-                      {'kind': kind, 'rid': rid, 'tid': tid})
+    await H.panes_call(pg, 'showTurn', [kind, rid, tid])
     turn = pg.locator(f'.turn[data-id="{tid}"]')
     await turn.wait_for()
     await turn.get_by_role('button', name='More for this answer', exact=True).click()

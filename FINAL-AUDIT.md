@@ -20,6 +20,8 @@ stand-in providers; existing books, credentials and paid models are untouched.
 
 ## Writing quality
 
+*2.11.1: superseded. His V177 laws are back in both crafts, with the judge's checks, the contest's board, the sound laws, the starting words and Another take as 2.6.6 had them; what 2.11.1 kept from this section is the scene opening, the player's decisions, feelings and private history, and the point-of-view choices. HISTORY.md, 2.11.1, says which.*
+
 The default crafts no longer force jealousy, hostility, escalating opponents,
 universal sound barriers or ignorance despite established expertise. Disagreement,
 inference and conflict follow the people and the world. Existing secrets and

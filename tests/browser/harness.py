@@ -46,6 +46,22 @@ async def new_book(pg, title='The Lantern Keeper', brief='A lighthouse keeper on
     await pg.fill('.sheet textarea',brief)
     await pg.click('text=Open the book')
     await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
+async def panes_call(pg, name, args=()):
+    """A pane opened from a walk (js/ui/panes.js showTurn, showSide): started in
+    the page and waited on through a flag, never by holding the page's own
+    promise open across the redraw it starts. Chromium's inspector holds that
+    promise weakly; on a big page a garbage collection during the redraw
+    "collects" it, and Playwright reports "Execution context was destroyed"
+    with no navigation at all (walk_performance_panes, 2.11.1)."""
+    await pg.evaluate("""([name, args]) => {
+      window.__paneCall = null;
+      import('/js/ui/panes.js').then((p) => { p[name](...args); window.__paneCall = 'ok'; },
+        (e) => { window.__paneCall = 'error: ' + ((e && e.message) || e); });
+    }""", [name, list(args)])
+    await pg.wait_for_function("window.__paneCall !== null")
+    said = await pg.evaluate("window.__paneCall")
+    if said != 'ok':
+        raise RuntimeError(f'{name} failed in the page: {said}')
 async def add_conn(pg, model='fake-writer'):
     if 'Choose a writer' not in await pg.inner_text('#writerBtn'):
         await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')

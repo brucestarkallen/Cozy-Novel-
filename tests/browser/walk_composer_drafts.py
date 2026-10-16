@@ -29,7 +29,7 @@ async def partner(pg):
 
 
 async def scene(pg, pid):
-    await pg.evaluate("async id=>(await import('/js/ui/panes.js')).showTurn('play',id,'none')", pid)
+    await H.panes_call(pg, 'showTurn', ['play', pid, 'none'])
     await pg.locator('#sideFoot textarea').first.wait_for()
 
 

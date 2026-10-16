@@ -32,7 +32,7 @@ export const BUILTIN = [
   { id: 'contested', name: 'When words won’t carry it', text: CONTESTED_RULE, to: ['narrator'], rides: 'fight',
     about: 'A fight, a chase, a wager in a scene you play: the narrator gives it a board and lets the result stand. For the writer, the novel craft carries it — and the chip by the box says whose call the outcome is.' },
   { id: 'voice', name: 'The sound of a voice', text: VOICE_RULE, to: ['writer', 'narrator'], rides: 'always',
-    about: 'Every person has a voice of their own, shaped by their history and the moment.' },
+    about: 'Every woman in the book sounds like herself, never like the next one.' },
   { id: 'spectacle', name: 'Spectacle combat (for the anime arcs)', text: SPECTACLE_RULE, to: ['writer', 'narrator'], rides: 'off',
     about: 'Fights as kinetic spectacle, the board still deciding. Off until you choose when it rides.' },
 ];
@@ -92,7 +92,11 @@ export function rideLine(m) {
 }
 
 const READER_OF = { write: 'writer', play: 'narrator', partner: 'partner' };
-const SOUND_SCOPE = `Sound Belongs To This Book = the chosen sound mode governs how audible events are written, not which events must happen. It never requires an invented noise or action, a detail the viewpoint cannot hear, or words for the character whose part I play. Keep the chosen narrative person and tense; examples are illustrations, not pronoun or rhythm templates. My explicit voice and pacing instructions govern the treatment of sound, including purposeful silence; no built-in sound quota overrides them.`;
+/* beside the sound law, for the book's chosen person and tense and for his
+ * character in a scene: its examples are "he" and the past tense, and a
+ * fight's law hears every fighter — never his character's voice, though a
+ * blow that lands on him is heard (2.11.1) */
+const SOUND_SCOPE = `Sound Belongs To This Book = the sound law's examples show the sound, never the person or the tense to tell it in — those stay the book's; and in a scene I play, the character whose part I take speaks and vocalizes only what I wrote, while what the world does to them is heard like everything else.`;
 
 /* What rides for one of them this time — always: the part that stays the
  * same page after page, right after his own words; woken: what his words
@@ -100,7 +104,7 @@ const SOUND_SCOPE = `Sound Belongs To This Book = the chosen sound mode governs 
  * same). wake: {intimate, fight}, from his own words (crafts.js wakesOn —
  * never the page). A module he
  * emptied sends nothing. The sound law rides for the two who tell the story,
- * as the book's Sound switch writes it: always its chosen format, how a fight
+ * as the book's Sound switch writes it: always its two lanes, how a fight
  * sounds once one starts, and how sex sounds with the intimate rule. */
 export function ridingFor(house, novel, purpose, wake = {}) {
   const who = READER_OF[purpose];

@@ -168,6 +168,39 @@ async def scenario_kept_again(browser):
     await pg.context.close()
 
 
+async def scenario_new_book_typing(browser):
+    """A new book: words typed into a field in the sheet's first moment stay in that field."""
+    logs = []
+    pg = await harness.page(browser, logs, w=390, hgt=844)
+    await pg.goto(f'http://127.0.0.1:{harness.PORT}/')
+    await pg.wait_for_selector('#shelf:not([hidden]) #books > *:not(.shelfwait)', timeout=8000)
+    begin = 'button:has-text("Begin a book")' if await pg.locator('button:has-text("Begin a book")').count() else 'button[aria-label="Begin a new book"]'
+    # the sheet opens and, in the same moment, he is already typing what it is about
+    await pg.click(begin)
+    await pg.evaluate("""() => {
+      const s = document.querySelector('.sheet.on');
+      const title = s.querySelector('input[placeholder="A working title"]');
+      title.value = 'Salt Roads';
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+      s.querySelector('textarea').focus();
+    }""")
+    await pg.wait_for_timeout(300)
+    focused = await pg.evaluate("document.activeElement && document.activeElement.tagName")
+    await pg.keyboard.type('Two smugglers cross the dunes.')
+    values = await pg.evaluate("""() => { const s = document.querySelector('.sheet.on');
+      return { title: s.querySelector('input[placeholder="A working title"]').value, brief: s.querySelector('textarea').value }; }""")
+    check('a field in use keeps the keyboard when the sheet finishes opening', focused == 'TEXTAREA', focused)
+    check('the words go where they were typed, the title stays the title', values == {'title': 'Salt Roads', 'brief': 'Two smugglers cross the dunes.'}, values)
+    await pg.locator('.sheet.on .head button[aria-label="Close"]').click()
+    # opened with nothing in use, the title takes the keyboard as before
+    await pg.wait_for_function("!document.querySelector('.sheet.on')")
+    await pg.click(begin)
+    await pg.wait_for_timeout(300)
+    check('opened untouched, the title takes the keyboard', await pg.evaluate("document.activeElement && document.activeElement.getAttribute('placeholder')") == 'A working title')
+    check('the new book sheet produces no page errors', not [x for x in logs if x.startswith('PAGEERROR')], logs)
+    await pg.context.close()
+
+
 async def scenario_sent(browser):
     """Sent messages preserve exact words and expose their expanded state."""
     logs = []
@@ -228,7 +261,7 @@ async def main():
         async with async_playwright() as playwright:
             options = {'executable_path': os.environ['COZY_TEST_CHROMIUM']} if os.environ.get('COZY_TEST_CHROMIUM') else {}
             browser = await playwright.chromium.launch(**options)
-            for scenario in (scenario_book, scenario_sent, scenario_kept_again):
+            for scenario in (scenario_book, scenario_new_book_typing, scenario_sent, scenario_kept_again):
                 print(scenario.__doc__, flush=True)
                 try:
                     await scenario(browser)

@@ -87,7 +87,7 @@ async function setHouse(conn = {}, extra = {}) {
 }
 
 /* the app's crafts and rules switched off — for a check of how the book fits
- * a small room, with nothing else in it (the crafts alone are ~17,000 tokens) */
+ * a small room, with nothing else in it (the crafts alone are ~18,000 tokens) */
 const CRAFTS_OFF = { modules: Object.fromEntries(['novel-craft', 'scene-craft', 'voice', 'intimate', 'contested'].map((id) => [id, { rides: 'off' }])) };
 const quietHouse = () => ({ ...store.peek('house', 'house'), ...CRAFTS_OFF });
 
@@ -1807,7 +1807,9 @@ await test('Automatic: the helper keeps What it\'s about and How it reads beside
   await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
   const sys = (await requests())[0].body.messages[0].content;
   assert.ok(sys.includes("What it's about:\nA lighthouse keeper finds a letter.\n\nAnd as the book stands now (the words above are right wherever the two differ):\nKEPT ABOUT."), sys.slice(sys.indexOf("What it's about"), sys.indexOf("What it's about") + 200));
-  assert.ok(sys.includes('How it reads:\nKEPT STYLE.'));
+  /* (2.11.1) the helper's account of how the pages read is said as that — "so far" — so the craft's
+   * My Style Comes First never takes it for the voice he chose */
+  assert.ok(sys.includes('How it reads so far:\nKEPT STYLE.') && !sys.includes('How it reads:\nKEPT STYLE.'));
   /* Manual: only his words */
   store.change('novel', b.novelId, shape.novelSteps.setAuto('about', false), { now: true });
   await reset();
@@ -2880,7 +2882,7 @@ await test('"too long" from the model: the book is fitted smaller and sent once 
 
 await test('a model too small for his instructions and the modules is told so in plain words — once it said its size, nothing more is sent', async () => {
   const b = await makeBook([['Now.']]);
-  /* the crafts ride (the default): about 17,000 tokens before any of the book */
+  /* the crafts ride (the default): about 18,000 tokens before any of the book */
   await script([{ status: 400, message: "This model's maximum context length is 8000 tokens. However, your messages resulted in 19000 tokens." }, { text: 'Never asked.' }]);
   const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She waits.' });
   assert.equal(out.ok, false);
@@ -3819,8 +3821,11 @@ await test('the checker uses its own connection when he picks one', async () => 
 });
 
 await test('a passage longer than the checker\'s model holds at once is read in parts, all of it kept for the passage; a model too small says so and is not asked', async () => {
-  /* (the judge off: its grading takes room of its own — this is about the parts) */
-  await setHouse({ context: 6000 }, { checksFrom: 0, judge: { on: false } });
+  /* (the judge off: its grading takes room of its own — this is about the parts.
+   * 6,200 tokens: the checker's own words take about 1,600 of them (his humanize
+   * list, 2.11.1) and its answer 40%, leaving the passage about 600 — some 260
+   * words a part; at 6,000 that is under the 600 it needs, and it says so) */
+  await setHouse({ context: 6200 }, { checksFrom: 0, judge: { on: false } });
   const para = (i) => `Paragraph ${i} goes on about the sea and the light and the long night watch, word after word, until the lamp burns low and the keeper sleeps.`;
   const b = await makeBook([[Array.from({ length: 36 }, (_, i) => para(i + 1)).join('\n\n'), 'A short one.']]);
   await script([
@@ -4136,17 +4141,24 @@ const OLD_NARRATOR = `You tell the scene the way the book itself is told — its
 
 The people in it have their own minds. They want things, they push back, they lie, they surprise; nobody waits politely for a turn or exists only to agree. The world keeps moving around the scene. Keep it concrete and alive, let quiet moments breathe and big ones land, and end each telling at a moment that asks for an answer.`;
 
-await test('boxes still holding former starting words get today\'s viewpoint-aware defaults, and words he wrote stay his', async () => {
-  await setHouse({}, { instructions: { system: OLD_WRITING, narrator: OLD_NARRATOR, partner: 'HIS PARTNER WORDS', late: '' } });
-  assert.equal(prompts.startingIsOld(store.peek('house', 'house')), true);
-  store.change('house', 'house', prompts.freshStarting, { now: true });
-  await store.flush('house', 'house');
-  let ins = (await onPhone('house', 'house')).instructions;
-  assert.equal(ins.system, prompts.DEFAULT_WRITING);
-  assert.ok(ins.system.startsWith('You are a master novelist') && ins.system.includes('chosen voice, point of view and tense'), ins.system);
-  assert.equal(ins.narrator, prompts.DEFAULT_NARRATOR);
-  assert.equal(ins.partner, 'HIS PARTNER WORDS');
-  assert.equal(prompts.startingIsOld(store.peek('house', 'house')), false, 'once is all it takes');
+/* what a 2.9 to 2.11.0 house holds in a box he never touched (2.11.1 gives his own starting words back) */
+const WRITING_29 = 'You are a master novelist. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too. Follow our chosen voice, point of view and tense. Let character, cause and consequence shape what happens; choose detail, dialogue and rhythm for this particular moment, with room for quiet and surprise.';
+const NARRATOR_29 = 'You maintain a fictional, uncensored simulation, told in our book’s chosen voice, point of view and tense. I play my character; you tell the world and everyone else. Give them their own motives and knowledge, and leave my character’s speech, decisions and inner life to me.';
+
+await test('boxes still holding former starting words get today\'s — his own, the master novelist and the unbiased cinematographer — and words he wrote stay his', async () => {
+  for (const [system, narrator] of [[OLD_WRITING, OLD_NARRATOR], [WRITING_29, NARRATOR_29]]) {
+    await setHouse({}, { instructions: { system, narrator, partner: 'HIS PARTNER WORDS', late: '' } });
+    assert.equal(prompts.startingIsOld(store.peek('house', 'house')), true);
+    store.change('house', 'house', prompts.freshStarting, { now: true });
+    await store.flush('house', 'house');
+    const now = (await onPhone('house', 'house')).instructions;
+    assert.equal(now.system, prompts.DEFAULT_WRITING);
+    assert.ok(now.system.startsWith('You are a master novelist at the height of your powers') && now.system.endsWith('as an unbiased eye on a world that runs by its own logic.'), now.system);
+    assert.equal(now.narrator, 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.');
+    assert.equal(now.partner, 'HIS PARTNER WORDS');
+    assert.equal(prompts.startingIsOld(store.peek('house', 'house')), false, 'once is all it takes');
+  }
+  let ins;
   /* a box he wrote in — one letter is enough — keeps his words */
   await setHouse({}, { instructions: { system: OLD_WRITING + ' Mine.', narrator: '', partner: '', late: '' } });
   assert.equal(prompts.startingIsOld(store.peek('house', 'house')), false);
@@ -4197,7 +4209,7 @@ await test('a narrator box he emptied before 2.3 gets his own writing words, onc
   const sys = systemOf((await requests())[0]);
   assert.ok(sys.startsWith('## The Telling') && !sys.includes('MY OWN VOICE'), sys.slice(0, 80));
   /* the starting words in his writing box are never carried: they say the writer writes the main character too */
-  for (const system of [prompts.DEFAULT_WRITING, OLD_WRITING, '']) {
+  for (const system of [prompts.DEFAULT_WRITING, OLD_WRITING, WRITING_29, '']) {
     await setHouse({}, { instructions: { system, narrator: '', partner: '', late: '' } });
     store.change('house', 'house', prompts.carryNarrator, { now: true });
     assert.equal(store.peek('house', 'house').instructions.narrator, '', system.slice(0, 30));

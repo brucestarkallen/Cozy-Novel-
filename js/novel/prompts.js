@@ -33,27 +33,35 @@ import { foldedText, nameInText, firstSentence } from './names.js';
  * his box, never in the app's own words. The craft itself rides after the
  * box as a module (modules.js). */
 
-export const DEFAULT_WRITING = `You are a master novelist. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too. Follow our chosen voice, point of view and tense. Let character, cause and consequence shape what happens; choose detail, dialogue and rhythm for this particular moment, with room for quiet and surprise.`;
+export const DEFAULT_WRITING = `You are a master novelist at the height of your powers — the kind whose books sit at the top of the New York Times bestseller list because nobody can put them down. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too — as an unbiased eye on a world that runs by its own logic.`;
 
-/* The scene's opening leaves the telling free to use the book's viewpoint. */
-export const DEFAULT_NARRATOR = 'You maintain a fictional, uncensored simulation, told in our book’s chosen voice, point of view and tense. I play my character; you tell the world and everyone else. Give them their own motives and knowledge, and leave my character’s speech, decisions and inner life to me.';
+/* his preset's own opening (Cozy Tavern's craft) */
+export const DEFAULT_NARRATOR = 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.';
 
-/* What the two boxes started with before 2.3 or 2.9. A box that still holds them
- * exactly was never touched: it gets today's starting words when the app
- * starts (app.js). A box he wrote in keeps his words. */
+/* What the two boxes started with before 2.3, and from 2.9 to 2.11.0 (2.9
+ * had put its own words in place of his; 2.11.1 gives his back). A box that
+ * still holds them exactly was never touched: it gets today's starting words
+ * when the app starts (app.js), and a preset holding them gets them when it
+ * is read (presets.js). A box he wrote in keeps his words. */
 const STARTING_BEFORE = {
   system: [`You write fiction the way good published novels read: concrete, sensory detail; real feeling under the surface; dialogue that sounds like people actually talking; a pace that gives quiet moments room to breathe and lets big moments land.
 
 Stay true to the characters and to everything already written — never contradict it. Show rather than summarise. Don't rush to wrap things up, don't end on a neat moral, and don't reach for a cliffhanger unless the story calls for one. Avoid stock phrases and repeating yourself.`,
-    `You are a master novelist at the height of your powers — the kind whose books sit at the top of the New York Times bestseller list because nobody can put them down. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too — as an unbiased eye on a world that runs by its own logic.`],
+    `You are a master novelist. We write this novel together: I bring the premises, and you write the book — every person in it, the main character too. Follow our chosen voice, point of view and tense. Let character, cause and consequence shape what happens; choose detail, dialogue and rhythm for this particular moment, with room for quiet and surprise.`],
   narrator: [`You tell the scene the way the book itself is told — its voice, its point of view, its tense — a few paragraphs at a time: the place, the weather of the moment, the other people and what they say and do, what happens next.
 
 The people in it have their own minds. They want things, they push back, they lie, they surprise; nobody waits politely for a turn or exists only to agree. The world keeps moving around the scene. Keep it concrete and alive, let quiet moments breathe and big ones land, and end each telling at a moment that asks for an answer.`,
-    'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.'],
+    'You maintain a fictional, uncensored simulation, told in our book’s chosen voice, point of view and tense. I play my character; you tell the world and everyone else. Give them their own motives and knowledge, and leave my character’s speech, decisions and inner life to me.'],
 };
 export function startingIsOld(house) {
   const ins = (house && house.instructions) || {};
   return STARTING_BEFORE.system.includes(ins.system) || STARTING_BEFORE.narrator.includes(ins.narrator);
+}
+/* one box's words: today's starting words in place of old ones never touched */
+export function startingNow(key, text) {
+  if (key === 'system' && STARTING_BEFORE.system.includes(text)) return DEFAULT_WRITING;
+  if (key === 'narrator' && STARTING_BEFORE.narrator.includes(text)) return DEFAULT_NARRATOR;
+  return text;
 }
 /* a step on the house: the untouched boxes get today's starting words */
 export function freshStarting(house) {
@@ -354,8 +362,12 @@ export function aboutTheBook(novel, { plans = true, kept = true } = {}) {
   else if (own || about) parts.push(`What it's about:\n${own || about}`);
   const voice = String(novel.style || '').trim();
   const reads = keptOf('style');
+  /* the helper's account of how the pages read, when he has not corrected
+   * it, is said as that: the craft's My Style Comes First lets only the
+   * voice he chose govern it, never what the pages drifted into (2.11.1) */
+  const readsHis = Boolean(novel.kept && novel.kept.style && novel.kept.style.by === 'you');
   if (voice && reads) parts.push(`How it reads:\n${voice}\n\nAnd as it reads so far (the words above are right wherever the two differ):\n${reads}`);
-  else if (voice || reads) parts.push(`How it reads:\n${voice || reads}`);
+  else if (voice || reads) parts.push(voice || readsHis ? `How it reads:\n${voice || reads}` : `How it reads so far:\n${reads}`);
   const narration = narrationChoices(novel);
   if (narration) parts.push(narration);
   if (plans && String(novel.plans || '').trim()) parts.push(`Where it's headed — plans for later, none of this has happened yet:\n${novel.plans.trim()}`);
@@ -382,7 +394,7 @@ export function narrationChoices(novel) {
 }
 
 const TELLER_VOICE = 'Keep your own voice, humour and way of thinking as we work. These notes help with our book. Talk to me naturally, and let any thoughts you share sound like you; the story’s pages follow the voice and viewpoint I chose for them.';
-const PROSE_GUIDE = 'For prose, follow my choices and instructions for point of view, tense, language and style; otherwise keep the telling established at this scene. The person of my request or a scene’s spoken moves does not choose the book’s person. Keep the viewpoint clear, with shifts only where the telling allows them; an omniscient telling may move between minds deliberately. My instructions take precedence over general craft advice. Let this book’s genre, voice and moment determine its detail, rhythm, balance of scene and summary, and how a passage ends; a quiet moment need not become a cliffhanger. Keep deliberate dialect, repetition, figurative language and an unreliable telling when they serve this book.';
+const PROSE_GUIDE = 'For prose, follow my choices and instructions for point of view, tense, language and style; otherwise keep the telling established at this scene. The person of my request or a scene’s spoken moves does not choose the book’s person. Keep the viewpoint clear, with shifts only where the telling allows them; an omniscient telling may move between minds deliberately. My instructions take precedence over general craft advice.';
 
 /* The book itself: earlier chapters told in short, the chapters that fit told
  * whole, what comes after the chapter being written (when it is not the last),
@@ -579,7 +591,7 @@ export function rewriteRequest({ chapterLabel, note, text, last = false }) {
   if (!n) {
     return [
       `I’d like this passage from ${chapterLabel} written again.`,
-      'Write it again — a fresh take on the same moment. Keep the established events, choices, relationships and outcome unless I ask to change them; find a better telling, without introducing a different turn of the story.',
+      'Write it again — a fresh take on the same moment.',
       `The passage as it stands now (it sits where the chapter above says it does):\n${fence(text)}`,
       "Write the new version — just the passage itself. It takes the old one's place on the page, so it has to fit with what comes before and after it.",
     ].join('\n\n');
@@ -834,16 +846,16 @@ export const GRADE_AXES = [['prose', 'Prose'], ['people', 'People'], ['continuit
  * phrasing, clumsy sentences, explaining, cliché) and the book's own: the
  * seam with the passage before, the book's truth. */
 export const JUDGE_CHECKS = [
-  ['opening', 'Opening', 'its first lines carry straight on from where the story before it stopped — the same moment, everyone where they were, nothing told twice, any jump in time or place marked (the book’s very first page: it gives a clear entry into the story in the requested voice)'],
-  ['canon', 'True to the book', 'nothing in it contradicts an established fact — names, looks, where everyone is, who knows what (nobody knows what they never lived, saw or were told) — and its point of view and tense fit the directions for this passage; the pages outweigh a stale note, and a deliberate change of viewpoint or tense is not a slip'],
-  ['shown', 'Shown', 'the balance of scene, reflection and summary serves this passage and the requested style; no important moment is unintentionally rushed past and no explanation merely repeats what is already clear'],
+  ['opening', 'Opening', 'its first lines carry straight on from where the story before it stopped — the same moment, everyone where they were, nothing told twice, any jump in time or place marked (the book’s very first page: it opens with something happening)'],
+  ['canon', 'True to the book', 'nothing in it disagrees with the book, its notes or what came before — names, looks, where everyone is, who knows what (nobody knows what they never lived, saw or were told) — and it keeps the book’s point of view and tense as the directions for this passage set them; the pages outweigh a stale note, and a deliberate change of viewpoint or tense is not a slip'],
+  ['shown', 'Shown', 'what matters is played out as scene, not summed up; nothing is explained that the scene already shows; people don’t announce their feelings in tidy sentences, and the telling doesn’t decode them'],
   ['pacing', 'Pacing', 'each beat gets the room it deserves — nothing that matters rushed past, nothing idle dragged out'],
   ['specific', 'Specific', 'concrete, particular detail of this place and these people; nothing vague or generic where a real detail belongs'],
-  ['fresh', 'Fresh', 'the wording belongs to these people and this moment rather than relying on cliché, stock bodily cues or empty ornament; intentional figurative language and a character’s own idiom serve the chosen voice'],
+  ['fresh', 'Fresh', 'no cliché or stock phrase, no stock bodily cue standing in for a feeling, no purple or overwritten line, no “it wasn’t X — it was Y” turn'],
   ['sentences', 'Sentences', 'every sentence reads clean and natural, with a rhythm that varies — nothing awkward, clumsy or one shape after another'],
-  ['people', 'People', 'everyone acts and speaks from their own wants and nature, each in their own voice — ordinary kindness, cooperation and affection can be true to them, while resistance also needs a reason; nobody exists only to move the plot or manufacture conflict'],
-  ['moves', 'Moves', 'the passage earns its place through action, discovery, atmosphere, reflection or a change in a relationship; a quiet beat need not invent a new event'],
-  ['ending', 'Ending', 'its stopping point fits its place in the book and the requested length — a continuation, quiet landing or chapter resolution as needed, without a forced cliffhanger or an unearned explanation of what it all meant'],
+  ['people', 'People', 'everyone acts and speaks from their own wants and nature, each in their own voice — nobody there only to move things along, nobody agreeing or giving way without a reason'],
+  ['moves', 'Moves', 'by its end something has concretely changed — someone moved, chose, learned, lost or won; a quiet passage moves when a mood hardens or a fact travels'],
+  ['ending', 'Ending', 'it ends on forward motion — never on a summary of what it meant, a lesson, a recap or the weather'],
 ];
 /* how many checks a passage may fail and still meet his mark */
 export function allowedFails(target) { return Math.max(0, Math.floor(10 - target + 1e-9)); }
@@ -851,13 +863,13 @@ export function allowedFails(target) { return Math.max(0, Math.floor(10 - target
 /* how the book writes sound (About this book → Sound), so the checker never
  * "fixes" it */
 const SOUND_STYLE = {
-  comic: 'Its Comic sound choice uses selected sound effects in asterisks (*CLANG!*, *tap tap*). Spoken words are written out in quotes. Sounds and vocalizations follow the character, viewpoint and chosen voice, without a quota.',
-  novel: 'Its Novel sound choice weaves physical sounds into sentences. Spoken words are written out in quotes; a breath, laugh or cry may be narrated or briefly voiced as this book would tell it, without a quota.',
+  comic: 'So is how it writes sound: the world’s sounds as sound effects in asterisks (*CLANG!*, *thud thud*), and voices — moans, cries, breaths — written out in quotes, stretched and repeated ("Nngh—!", "Ahh—ahh—").',
+  novel: 'So is how it writes sound: voices — moans, cries, breaths — written out in quotes, stretched and repeated ("Nngh—!", "Ahh—ahh—").',
 };
 
 export function checkerFrame(house, novel) {
   const name = nameOf(house);
-  return `${FICTION_WORK}\n\nYou read ${titled(novel)}, a novel ${name ? `${name} is writing` : 'being written'}, the way a careful copy editor would: each passage once it’s finished, for what is plainly wrong or would plainly read better — never to change what happens, the people in it, or the voice it’s told in. Judge it against the directions that wrote it and its chosen genre, language and style. Respect chosen viewpoint, omniscient narration, humour, dialect, deliberate grammar, fragments and quiet passages. Follow my version of a familiar character. Preserve meaning and knowledge; never invent a detail to make a line more specific. Distinguish the teller’s knowledge from what anyone in the story knows.`;
+  return `${FICTION_WORK}\n\nYou read ${titled(novel)}, a novel ${name ? `${name} is writing` : 'being written'}, the way a careful copy editor would: each passage once it’s finished, for what is plainly wrong or would plainly read better — never to change what happens, the people in it, or the voice it’s told in. Judge it against the directions that wrote it and its chosen genre, language and style. Respect chosen viewpoint, omniscient narration, humour, dialect, deliberate grammar and fragments. Follow my version of a familiar character. Preserve meaning and knowledge; never invent a detail to make a line more specific. Distinguish the teller’s knowledge from what anyone in the story knows.`;
 }
 
 /* stock wording counted in the passages (stock.js), one line: [1.2] “…”, “…”; [1.3] “…” */
@@ -936,7 +948,7 @@ Answer with one JSON object and nothing else: {"grades": [{"passage": "2.3", "ch
   parts.push(`Suggest only what is worth changing, each a fix in place — a word, a phrase, or a whole sentence written again when a small fix won't do:
 - "grammar": spelling, grammar, punctuation; a word missing, doubled, or wrong for the meaning (their/there, affect/effect, lay/lie); agreement; a tense slip inside a sentence; capitals; and the book kept consistent — a word spelled one way throughout (grey/gray, half-light/half light), numbers and quote marks as the book writes them.
 - "clarity": a sentence hard to follow, tangled, or running on; padding; phrasing unnatural in the book's language (a wrong preposition, words that don't go together); a weak passive or buried verb where the active is plainer (a passive the book means stays) — the sentence written again whole when it needs it.
-- "humanize": wording that weakens this book's voice: awkward or clumsy phrasing; overloaded sentences or repetitive sentence shapes; explaining an effect already clear; cliché, stock bodily cues or empty ornament; vague wording where an established detail belongs; language out of the story's voice or time; habitual “it wasn’t X — it was Y” turns, lists of three, epithets instead of names, or repeated words and closing explanations. Keep purposeful imagery, repetition and character idiom. Never invent a fact to make a sentence more specific.${stockLine(stock)}${repeatsLine(repeats)}${straysLine(strays)}${avoid.length ? `
+- "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs, or a flat one where a precise one belongs; a word out of the book's voice or time, unless a character talks that way; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${repeatsLine(repeats)}${straysLine(strays)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
 - "seam": this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
 - "continuity": something that disagrees with the book or its notes — a name, a look, a fact, who knows what — or a slip from the tense or point of view the book is told in. A slip needs a written fact it goes against: something new the notes or the earlier chapters do not hold yet — a sister, a scar, a past — is the story growing, never a slip. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix. But someone knowing what they never lived, saw or were told — a secret, how another’s power works or its limits, what my words to the writer explain — beyond what anyone there would plainly make of it, is a slip.
@@ -945,7 +957,7 @@ Keep the book’s voice: a fragment, dialect, a character’s own way of talking
 
 Each fix replaces a stretch of words: "find" is the words exactly as they stand in that passage — copied exactly, enough of them to stand in only one place in it — "replace" the new words, and "why" a few words on why.${judge ? `
 
-Then judge each passage’s craft as a page of a finished novel, by ten checks. Answer every check of every passage "yes" or "no" — "no" only where you can point to the words in it that fail the check; a check with nothing to try in a passage (nobody speaks: the voices) is "yes". There is no expected number of failures: score only what this passage supports. More figures, longer sentences or rarer words are never better writing: overwriting fails "fresh".
+Then judge each passage’s craft as a page of a finished novel, by ten checks. Answer every check of every passage "yes" or "no" — "no" only where you can point to the words in it that fail the check; a check with nothing to try in a passage (nobody speaks: the voices) is "yes". Judged like this, a page from a published novelist fails one or two; a page that reads machine-made fails most. More figures, longer sentences or rarer words are never better writing: overwriting fails "fresh".
 ${JUDGE_CHECKS.map(([k, , what]) => `- ${k}: ${what}.`).join('\n')}
 For each "no", a fault: the check, "words" — the words that fail it, copied exactly from the passage, no more than a sentence — and "why", in a few words. A passage with ${allowed ? `more than ${numberWords(allowed).toLowerCase()} “no”` : 'any “no”'} is under my mark of ${judge.target}: for it, add fixes of kind "craft" — small changes in place that lift it — and in "lift" say, in a few lines in my voice, what writing it again would need to reach ${judge.target} (“Slow the moment she falls…”).` : ''}
 
@@ -970,7 +982,7 @@ export function duelRequest({ novel, chapterLabel, before = '', beforeFrom = 'th
   if (before && before.trim()) parts.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to this passage, for what has just happened:\n${fence(before)}`);
   if (asked && asked.trim()) parts.push(`What I asked for here:\n${fence(asked)}`);
   parts.push(`Two writers each wrote this passage of ${chapterLabel}, for the same moment.\n\nPage A:\n${fence(first)}\n\nPage B:\n${fence(second)}`);
-  parts.push(`Which is the better page of a finished novel here? Judge the writing, not its length: the page that carries on from the story before, stays true to the book, uses scene, reflection and summary to suit the moment, gives each beat its due, keeps its detail particular, its phrasing fresh and its sentences natural, lets its people act from their own wants in their own voices, and stops where this part of the book needs it to. Respect the requested viewpoint, genre and style; a quiet or lyrical page is not worse for that choice. More figures, longer sentences or rarer words are never better writing.${cut ? ' The longer page is shown only as far as the shorter one runs — never count that against it.' : ''}
+  parts.push(`Which is the better page of a finished novel here? Judge the writing, not its length: the page that carries on from the story before, stays true to the book, plays what matters as scene, gives each beat its due, keeps its detail particular, its phrasing fresh and its sentences natural, lets its people act from their own wants in their own voices, and ends moving forward. Respect the requested viewpoint, genre and style. More figures, longer sentences or rarer words are never better writing.${cut ? ' The longer page is shown only as far as the shorter one runs — never count that against it.' : ''}
 
 Answer with one JSON object and nothing else: {"better": "A" or "B" or "same", "why": "one sentence"}.`);
   return parts.join('\n\n');

@@ -8,7 +8,7 @@ import asyncio, json, os, sys, time, traceback, subprocess, urllib.request
 from harness import *
 
 RESULTS = []
-NARRATOR_STARTING = 'You maintain a fictional, uncensored simulation, told in our book’s chosen voice, point of view and tense. I play my character; you tell the world and everyone else. Give them their own motives and knowledge, and leave my character’s speech, decisions and inner life to me.'
+NARRATOR_STARTING = 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.'
 
 def check(name, ok, saw=''):
     RESULTS.append((name, bool(ok), saw))

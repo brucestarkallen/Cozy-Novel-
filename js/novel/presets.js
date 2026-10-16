@@ -16,7 +16,7 @@
  * saved or used. Pure: no store, no screen — store.js plays the steps.
  */
 
-import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from './prompts.js';
+import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingNow } from './prompts.js';
 import { cleanOwn } from './ownwords.js';
 
 /* the boxes a preset holds, by their keys in house.instructions */
@@ -54,13 +54,16 @@ export function startingVoice(name = '') {
 }
 
 /* A voice read from a file or the house: only what a preset holds, each in
- * its own shape. null when it holds none of it. */
+ * its own shape. null when it holds none of it. A box saved with starting
+ * words of before, never touched, reads as today's — as the house's own
+ * boxes do when the app starts (prompts.js startingNow): a preset saved on
+ * 2.9 to 2.11.0 put back never brings 2.9's words in place of his. */
 export function cleanVoice(v) {
   if (!v || typeof v !== 'object') return null;
   const src = v.boxes && typeof v.boxes === 'object' ? v.boxes : {};
   const boxes = {};
   let any = false;
-  for (const k of VOICE_BOXES) { if (typeof src[k] === 'string') { boxes[k] = src[k]; any = true; } else boxes[k] = ''; }
+  for (const k of VOICE_BOXES) { if (typeof src[k] === 'string') { boxes[k] = startingNow(k, src[k]); any = true; } else boxes[k] = ''; }
   if (!any) return null;
   return { boxes, name: typeof v.name === 'string' ? v.name.trim().slice(0, 60) : '', ...(Array.isArray(v.own) ? { own: cleanOwn(v.own) } : {}) };
 }

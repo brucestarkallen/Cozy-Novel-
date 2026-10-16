@@ -247,7 +247,10 @@ function newBook() {
   const begin = h('button.btn.primary', { onclick: go }, 'Open the book');
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); go(); } });
   s.body.append(field('Title', title), field('What it’s about', brief), field('How it reads', style), h('div.btnrow', begin));
-  setTimeout(() => title.focus(), 80);
+  /* the title takes the keyboard as the sheet opens — never from a field
+   * already in use (typed into in its first moment, the words went to the
+   * title: "The Other BookA lighthouse keeper…") */
+  setTimeout(() => { if (!s.body.contains(document.activeElement)) title.focus(); }, 80);
 }
 
 /* ---------------------------------------------------------- bringing in */

@@ -65,7 +65,8 @@ can run again. Termux must be running for requests and saves to reach the server
 - Preserve the generating instructions through edits and fixes. “Go on” keeps
   rewrite directions and the played scene's transcript instead of inventing a
   new outcome after a cut-off conversion.
-- Reconcile the default crafts with first, second, limited third and omniscient
+- *(2.11.1: the crafts are his V177 laws again; the point-of-view laws below are
+  kept beside them — HISTORY.md, 2.11.1.)* Reconcile the default crafts with first, second, limited third and omniscient
   narration. Remove conflicting quotas and blanket stylistic prohibitions that
   flatten lyrical, quiet, comic or reflective writing. Preserve chosen voice,
   continuity, character knowledge and scene agency.
@@ -98,7 +99,7 @@ focused notes-integrity checks, 20 helper-reliability checks, and 13 browser
 checks for note edits, save conflicts and reload recovery. The full count is
 recorded in the notes audit.
 
-The 2.9.1 persona follow-up checks writer, scene and partner identities separately,
+*(2.11.1: the persona checks stand; the softened crafts this paragraph describes are his V177 laws again — HISTORY.md, 2.11.1.)* The 2.9.1 persona follow-up checks writer, scene and partner identities separately,
 including rewrites, continuation, scene conversion, partner follow-ups and visible
 thinking. App-added wording asks for the voice and humour described in the user's
 instructions without assigning another identity. Default crafts allow deliberate
