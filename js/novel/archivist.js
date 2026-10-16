@@ -2762,10 +2762,12 @@ async function auditNotes(novelId, conn) {
   /* the chapters it reads only in short or not at all, and whether the end of the book is among them (Cozy Tavern M453/M403) */
   const order = novel.order || [];
   const shortIds = new Set([...order.slice(0, fit.book.omitted), ...fit.book.summaries.map((x) => x.id)]);
-  const unseen = partial ? foldedText(order.filter((id) => shortIds.has(id)).map((id) => chapterText(chapters[id] || { passages: [] })).join('\n\n')) : null;
+  /* a chapter told partly whole (context.js partlyWhole): only its part in short is unseen, and its end is read word for word */
+  const wholeFrom = new Map(fit.book.summaries.filter((x) => x.wholeFrom).map((x) => [x.id, x.wholeFrom]));
+  const unseen = partial ? foldedText(order.filter((id) => shortIds.has(id)).map((id) => chapterText(chapters[id] || { passages: [] }, { upto: wholeFrom.get(id) || null })).join('\n\n')) : null;
   let endId = '';
   for (const id of order) if (chapters[id] && chapterText(chapters[id]).trim()) endId = id;
-  const endShort = Boolean(endId) && shortIds.has(endId);
+  const endShort = Boolean(endId) && shortIds.has(endId) && !wholeFrom.has(endId);
   const endList = endId ? ((chapters[endId] || {}).passages || []).filter((p) => p.by !== 'break') : [];
   const endPid = endList.length ? endList[endList.length - 1].id : '';
   const gen = (novel.memory || {}).reread || 0;

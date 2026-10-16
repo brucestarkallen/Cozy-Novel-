@@ -370,7 +370,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           }
           /* the chapters it asked for give way to a smaller room, like the book */
           const least = a.stats.least - extra.tokens;
-          seen = new Set([...(a.stats.wholeIds || []), ...(extra.whole || [])]);
+          seen = new Set([...(a.stats.wholeIds || []), ...(a.stats.wholePassages || []), ...(extra.whole || [])]);
           shortCards = new Set((a.stats.shortCards || []).filter((x) => !cardsRead.has(x)));
           leftOut = a.stats.omitted || 0;
           return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: replyRoom(c, kind, length), refuse: a.refuse, least };

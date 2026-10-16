@@ -9074,32 +9074,49 @@ const sentOf = (a) => a.system + '\n' + a.messages.map((m) => m.content).join('\
 await test('the level between: a long chapter that cannot ride whole rides by its stretches’ summaries while the room holds them, and by its one summary only past that', () => {
   const { novel, chapters, longs, now } = longChapterBook(1);
   const at = (room, purpose = 'write') => sentOf(context.assemble({ house: quietHouse(), novel, chapters, conn: { ...CONN, context: room, maxTokens: 1000 }, ...(purpose === 'partner' ? { purpose, turns: [] } : {}), target: { chapterId: now.id }, request: 'Go on.' }));
-  const level = (t) => (t.includes('WORDS1X40 happened') ? 'whole' : t.includes('C1 STRETCH 1:') ? 'stretches' : t.includes('C1 ONE SUMMARY') ? 'summary' : 'none');
+  /* 2.11.5: between whole and its stretches, the newest chapter in short may ride partly whole — its earliest stretches in short, the rest word for word */
+  const level = (t) => (t.includes('WORDS1X1 happened') && t.includes('WORDS1X40 happened') ? 'whole' : t.includes('C1 STRETCH 1:') && t.includes('The rest of it, word for word:') ? 'partly' : t.includes('C1 STRETCH 1:') ? 'stretches' : t.includes('C1 ONE SUMMARY') ? 'summary' : 'none');
   const stretches = stretchesMod.stretchPlan(longs[0], { closeLast: true }).stretches.length;
   assert.ok(stretches >= 4, `${stretches} stretches`);
   assert.equal(level(at(60000)), 'whole', 'room for its words: whole');
-  const mid = at(12000);
+  /* as the room shrinks: whole, then partly whole, then its stretches, then its one summary — never back */
+  const rank = { none: 0, summary: 1, stretches: 2, partly: 3, whole: 4 };
+  const seen = [];
+  let stretchRoom = 0;
+  for (let room = 60000; room >= 3000; room -= 500) {
+    const l = level(at(room));
+    if (!seen.length || seen.at(-1) !== l) seen.push(l);
+    if (l === 'stretches' && !stretchRoom) stretchRoom = room;
+  }
+  /* (on the very smallest model even its one summary goes, and that is said) */
+  assert.deepEqual(seen.filter((l) => l !== 'none'), ['whole', 'partly', 'stretches', 'summary'], seen.join(' → '));
+  assert.ok(!seen.includes('none') || seen.at(-1) === 'none', seen.join(' → '));
+  assert.ok(seen.every((l, i) => !i || rank[l] < rank[seen[i - 1]]));
+  const part = at(20000);
+  if (level(part) === 'partly') assert.ok(part.indexOf('C1 STRETCH 1:') < part.indexOf('The rest of it, word for word:') && part.includes('WORDS1X40 happened') && !part.includes('C1 ONE SUMMARY'), 'its earliest stretches in short, then its last words whole');
+  const mid = at(stretchRoom);
   assert.equal(level(mid), 'stretches', 'no room for its words, room for its stretches: by them');
   assert.ok(Array.from({ length: stretches }, (_, k) => `C1 STRETCH ${k + 1}:`).every((w) => mid.includes(w)) && !mid.includes('C1 ONE SUMMARY'), 'every stretch, in order, and never its summary beside them');
   assert.ok(mid.indexOf('C1 STRETCH 1:') < mid.indexOf(`C1 STRETCH ${stretches}:`), 'in order');
   assert.equal(level(at(4000)), 'summary', 'no room for its stretches: its one summary');
-  /* the partner sees which passages each stretch stands for */
-  const p = at(12000, 'partner');
+  /* the partner sees which passages each stretch stands for (its own room: the partner's request carries more beside the book) */
+  let p = '';
+  for (let room = 60000; room >= 3000 && !p.includes('C1 STRETCH 1:'); room -= 500) p = at(room, 'partner');
   assert.ok(/\[1\.1–1\.\d+, in short\]\nC1 STRETCH 1:/.test(p), 'the partner knows which passages a stretch stands for');
   /* a stretch not summed up as its words read now: never half by stretches — its one summary */
   const gap = structuredClone(longs[0]);
   gap.stretches = gap.stretches.map((x, k) => (k === 1 ? { from: x.from, to: x.to } : x));
-  const g = sentOf(context.assemble({ house: quietHouse(), novel, chapters: { ...chapters, [gap.id]: gap }, conn: { ...CONN, context: 12000, maxTokens: 1000 }, target: { chapterId: now.id }, request: 'Go on.' }));
-  assert.equal(level(g), 'summary', 'a gap among its stretches: its one summary');
+  const g = sentOf(context.assemble({ house: quietHouse(), novel, chapters: { ...chapters, [gap.id]: gap }, conn: { ...CONN, context: stretchRoom, maxTokens: 1000 }, target: { chapterId: now.id }, request: 'Go on.' }));
+  assert.equal(level(g), 'summary', 'a gap among its stretches: its one summary, never partly by stretches');
 });
 
 await test('the level between goes to the newest chapter told in short first, and never at the cost of a chapter told whole', () => {
   const { novel, chapters, longs, now } = longChapterBook(3);
   const sent = (room, book = chapters) => sentOf(context.assemble({ house: quietHouse(), novel, chapters: book, conn: { ...CONN, context: room, maxTokens: 1000 }, target: { chapterId: now.id }, request: 'Go on.' }));
-  const level = (t, j) => (t.includes(`WORDS${j}X40 happened`) ? 'whole' : t.includes(`C${j} STRETCH 1:`) ? 'stretches' : t.includes(`C${j} ONE SUMMARY`) ? 'summary' : 'none');
+  const level = (t, j) => (t.includes(`WORDS${j}X1 happened`) && t.includes(`WORDS${j}X40 happened`) ? 'whole' : t.includes(`C${j} STRETCH 1:`) && t.includes(`WORDS${j}X40 happened`) ? 'partly' : t.includes(`C${j} STRETCH 1:`) ? 'stretches' : t.includes(`C${j} ONE SUMMARY`) ? 'summary' : 'none');
   /* the same book with no stretches kept: what the room told whole before the level between */
   const bare = Object.fromEntries(Object.entries(chapters).map(([id, c]) => [id, { ...c, stretches: [] }]));
-  const rank = { none: 0, summary: 1, stretches: 2, whole: 3 };
+  const rank = { none: 0, summary: 1, stretches: 2, partly: 3, whole: 4 };
   const patterns = new Set();
   for (const room of [...Array.from({ length: 78 }, (_, i) => 3000 + i * 1000), 200000]) {
     const t = sent(room);
@@ -9353,8 +9370,11 @@ await test('a chapter past 14,400 words is kept in stretches whatever the writer
   /* the level between is there for it once the book outgrows the room: by its stretches, not its 1,250-word summary */
   const novel = b.novel();
   const chapters = { [b.ids[0]]: b.ch(0), [b.ids[1]]: b.ch(1) };
-  const fit = context.fitBook({ novel, chapters, chapterId: b.ids[1], current: null, room: 6000 });
+  const fit = context.fitBook({ novel, chapters, chapterId: b.ids[1], current: null, room: 1500 });
   assert.ok(fit.book.summaries.length === 1 && fit.book.summaries[0].text.includes('long stretch 1.') && fit.book.summaries[0].text.includes('long stretch 5.'), JSON.stringify(fit.book.summaries).slice(0, 300));
+  /* with more room left, the rest of it word for word after its earliest stretches (2.11.5) */
+  const more = context.fitBook({ novel, chapters, chapterId: b.ids[1], current: null, room: 6000 }).book.summaries[0].text;
+  assert.ok(more.startsWith('long stretch 1.') && more.includes('The rest of it, word for word:') && more.includes('L14x49.') && !more.includes('long stretch 5.'), more.slice(0, 200));
   await putAway(b);
   /* 12,000 words on the same models: its one summary holds it at a twelfth — no stretches */
   b = await makeBook([Array.from({ length: 12 }, (_, i) => words(1000, `S${i}x`)), ['The next chapter.']], { manual: true });
@@ -9362,6 +9382,106 @@ await test('a chapter past 14,400 words is kept in stretches whatever the writer
   await reset();
   await archivist.run(b.novelId);
   assert.equal((await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Sum up this stretch alone')).length, 0);
+  await setHouse();
+  await putAway(b);
+});
+
+heading('the newest chapter in short, partly whole (2.11.5)');
+
+/* his question: what happens on a 200k model? Chapter one of 100k beside a chapter two of 80k went by its stretches' summaries alone (11k tokens) and left some 80k of the room unused */
+await test('when the chapter before cannot ride whole, the room left takes as much of its end word for word as fits — its earliest stretches in short, cut at a stretch’s edge — and the request uses the room it has', () => {
+  const { novel, chapters, longs, now } = longChapterBook(1);
+  const c1 = longs[0];
+  const plan = stretchesMod.stretchPlan(c1, { closeLast: true });
+  const make = (room) => context.assemble({ house: quietHouse(), novel, chapters, conn: { ...CONN, context: room, maxTokens: 1000 }, target: { chapterId: now.id }, request: 'Go on.' });
+  let found = null;
+  for (let room = 40000; room >= 4000 && !found; room -= 500) {
+    const a = make(room);
+    const t = sentOf(a);
+    if (t.includes('The rest of it, word for word:') && !t.includes('WORDS1X1 happened')) found = { room, a, t };
+  }
+  assert.ok(found, 'a room where chapter one rides partly whole');
+  const { room, a, t } = found;
+  const inShort = [...t.matchAll(/C1 STRETCH (\d+):/g)].map((m) => +m[1]);
+  assert.ok(inShort.length >= 1 && inShort.every((x, i) => x === i + 1) && inShort.length < plan.stretches.length, `its earliest stretches in short, in order: ${inShort}`);
+  const whole = [...t.slice(t.indexOf('The rest of it, word for word:')).matchAll(/WORDS1X(\d+) happened/g)].map((m) => +m[1]);
+  const edge = c1.passages.findIndex((p) => p.id === plan.stretches[inShort.length].from) + 1;
+  assert.equal(Math.min(...whole), edge, 'the words kept whole start at a stretch’s edge');
+  assert.equal(Math.max(...whole), 40, 'to its last passage');
+  assert.ok(!t.includes(`C1 STRETCH ${inShort.length + 1}:`) && !t.includes('C1 ONE SUMMARY'), 'nothing told twice');
+  assert.ok(a.stats.tokens > (room - 1000) * 0.75, `the room is used: ${a.stats.tokens} of ${room}`);
+  /* asked twice, told the same */
+  assert.equal(sentOf(make(room)), t);
+  /* the partner sees which passages its summaries stand for */
+  let p = '';
+  for (let r = 40000; r >= 4000 && !p.includes('The rest of it, word for word:'); r -= 500) p = sentOf(context.assemble({ house: quietHouse(), novel, chapters, conn: { ...CONN, context: r, maxTokens: 1000 }, purpose: 'partner', turns: [], target: { chapterId: now.id }, request: 'Hi' }));
+  assert.ok(p.includes('The rest of it, word for word:'), 'a room where the partner has it partly whole');
+  assert.ok(/\[1\.1–1\.\d+, in short\]\nC1 STRETCH 1:/.test(p) && /\[1\.\d+\] Chapter 1 passage/.test(p) && p.includes('[1.40] Chapter 1 passage 40'), 'numbered for the partner');
+});
+
+/* a book whose one long chapter is kept in stretches, every one summed up and checked: on a helper too small for its words it rides partly whole */
+async function partlyBook() {
+  const para = (i) => `Mara walked passage ${i} of the long hall and counted its lamps. WORDSP${i} happened here. `.repeat(16).trim();
+  /* an anvil rings in its first passage only, a kettle sings in its last only */
+  const b = await makeBook([Array.from({ length: 40 }, (_, i) => para(i + 1) + (i === 0 ? ' An anvil rang.' : i === 39 ? ' A kettle sang.' : '')), ['The second chapter, open now.']], { manual: true });
+  store.change('chapter', b.ids[0], (c) => {
+    const plan = stretchesMod.stretchPlan(c, { closeLast: true });
+    plan.stretches.forEach((x, k) => { x.text = `P STRETCH ${k + 1}: Mara walked the hall.`; x.at = 1; x.checked = { sig: summaryCheckMod.checkSig(x.text), at: 2 }; });
+    c.stretches = stretchesMod.keptStretches(plan);
+  }, { now: true });
+  return b;
+}
+
+/* the audit and the partner are handed the same fit: the part told word for word is read as words, the part in short as a telling */
+await test('the notes’ check given the end of the book partly whole reads its end word for word: it may say where someone is now, and is never told the end is only in short', async () => {
+  await reset();
+  const b = await partlyBook();
+  store.change('novel', b.novelId, (n) => { n.order = [b.ids[0]]; }, { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', shape.newCard('people', { name: 'Mara', about: 'Walks the hall.', now: 'At the gate.' })), { now: true });
+  for (const name of ['the old anvil', 'the old kettle']) store.change('novel', b.novelId, shape.novelSteps.putNote('lore', shape.newCard('lore', { name, about: 'It is in the hall.' })), { now: true });
+  markAllSeen(b);
+  await setHouse({ context: 14000 }, { checksFrom: 0, judge: { on: false } });
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ people: [{ name: 'Mara', now: 'At the far end of the hall.' }], gone: [{ kind: 'lore', name: 'the old anvil', why: 'x' }, { kind: 'lore', name: 'the old kettle', why: 'x' }], verdict: 'Moved.' }) }]);
+  await archivist.run(b.novelId);
+  const audit = (await requests()).map((x) => x.body.messages.at(-1).content).find((c) => c.includes(prompts.AUDIT_ASK));
+  assert.ok(audit, archivist.lightOf(b.novelId).words + ' ' + JSON.stringify((await requests()).map((x) => x.body.messages.at(-1).content.slice(0, 120))) + JSON.stringify((b.novel().memory || {}).audit || null));
+  assert.ok(audit.includes('P STRETCH 1:') && audit.includes('The rest of it, word for word:') && audit.includes('WORDSP40 happened'), 'the end chapter rides partly whole, its end word for word');
+  assert.ok(!audit.includes('given here only in short'), 'never told the end is only in short');
+  assert.equal(b.novel().notes.people[0].now, 'At the far end of the hall.', 'where she is now, read from the end of the book');
+  /* what it read word for word it may judge; what it read only in short may still tell of a thing */
+  assert.deepEqual(b.novel().notes.lore.map((c) => c.name), ['the old anvil'], 'the kettle, told of only in the words it read, may go; the anvil, in the part in short, stays');
+  /* the same book with its stretches not summed up: the end in short, and where she is now stays */
+  store.change('novel', b.novelId, shape.novelSteps.putNote('people', { ...b.novel().notes.people[0], now: 'At the gate.' }), { now: true });
+  store.change('chapter', b.ids[0], (c) => { c.stretches = []; c.summary = { text: 'MARA WALKED THE HALL.', fp: shape.chapterPrint(c), at: 1, by: 'you' }; }, { now: true });
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ people: [{ name: 'Mara', now: 'At the far end of the hall.' }], verdict: 'Moved.' }) }]);
+  await archivist.run(b.novelId);
+  const inShort = (await requests()).map((x) => x.body.messages.at(-1).content).find((c) => c.includes(prompts.AUDIT_ASK));
+  assert.ok(inShort && inShort.includes('given here only in short') && !inShort.includes('The rest of it, word for word:'), (inShort || '').slice(0, 300));
+  assert.equal(b.novel().notes.people[0].now, 'At the gate.');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the partner may write anew a passage it had word for word in a chapter told partly whole — never one it had only in short', async () => {
+  await reset();
+  const b = await partlyBook();
+  await setHouse({ context: 14000 }, CRAFTS_OFF);
+  const a = context.assemble({ house: quietHouse(), novel: b.novel(), chapters: Object.fromEntries(b.ids.map((id, i) => [id, b.ch(i)])), conn: { ...CONN, context: 14000 }, purpose: 'partner', turns: [], target: { chapterId: b.ids[1] }, request: 'x' });
+  const t = sentOf(a);
+  assert.ok(t.includes('The rest of it, word for word:') && t.includes('[1.40]'), 'chapter one rides partly whole for the partner ' + JSON.stringify({ tokens: a.stats.tokens, room: a.stats.room, short: a.stats.short, whole: a.stats.whole, fixed: a.stats.fixed, s: t.includes('P STRETCH 1'), w: t.includes('WORDSP1 ') }));
+  assert.ok(a.stats.wholePassages.includes(b.ch(0).passages[39].id) && !a.stats.wholePassages.includes(b.ch(0).passages[0].id));
+  await script([{ text: '<changes>[{"passage": "1.40", "text": "THE LAST PASSAGE, ANEW."}, {"passage": "1.1", "text": "THE FIRST PASSAGE, ANEW."}]</changes>\nDone.' }, { text: 'Fine.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[1], text: 'Rewrite them.' });
+  const v = picked(store.peek('talk', b.novelId).turns.at(-1));
+  const last = v.changes.find((c) => c.op && c.op.passage === '1.40');
+  const first = v.changes.find((c) => c.op && c.op.passage === '1.1');
+  assert.equal(last && last.status, 'made', JSON.stringify(v.changes));
+  assert.equal(picked(b.ch(0).passages[39]).text, 'THE LAST PASSAGE, ANEW.');
+  assert.ok(first && first.status === 'refused' && /only in short/.test(first.said), JSON.stringify(v.changes));
+  assert.notEqual(picked(b.ch(0).passages[0]).text, 'THE FIRST PASSAGE, ANEW.');
   await setHouse();
   await putAway(b);
 });

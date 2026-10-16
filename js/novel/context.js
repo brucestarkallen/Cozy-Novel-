@@ -121,6 +121,39 @@ export function stretchesOf(novel, chapter, numbered = false) {
   return plan.stretches.map((x) => label(x) + x.text).join('\n\n');
 }
 
+/* THE NEWEST CHAPTER IN SHORT, PARTLY WHOLE (Cozy Tavern's window: the
+ * newest pages ride word for word wherever a chapter ends): when the chapter
+ * just before the ones told whole cannot ride whole but the room left holds
+ * more than its stretches' summaries, its earliest stretches ride by their
+ * summaries and the rest of it word for word — the most of it whole that
+ * fits, cut at a stretch's edge, so the start of the request stays the same
+ * page after page until a whole stretch has to go. Only when every stretch
+ * is summed up as its words read now. null when it does not fit or has no
+ * stretches. */
+export function partlyWhole(novel, chapter, keep, numbered = false) {
+  const plan = stretchPlan(chapter, { closeLast: true });
+  if (plan.stretches.length < 2 || plan.open.length || plan.stretches.some((x) => !x.text)) return null;
+  const list = chapter.passages || [];
+  const ix = new Map(list.map((p, k) => [p.id, k]));
+  const nums = passageNumbers(chapter);
+  const n = chapterNumber(novel, chapter.id);
+  const label = (x) => {
+    if (!numbered) return '';
+    const ns = x.ids.map((id) => nums.get(id)).filter(Boolean);
+    return ns.length ? `[${n}.${ns[0]}–${n}.${ns[ns.length - 1]}, in short]\n` : '';
+  };
+  const join = numbered ? (arr) => numberedText(novel, chapter, arr) : (arr) => arr.map(passageText).filter((x) => x.trim()).join('\n\n');
+  /* at least one stretch in short, at least one word for word: the fewest in short that fit */
+  for (let c = 1; c < plan.stretches.length; c++) {
+    const rows = plan.stretches.slice(0, c).map((x) => label(x) + x.text).join('\n\n');
+    const whole = join(list.slice(ix.get(plan.stretches[c].from)));
+    const text = `${rows}\n\nThe rest of it, word for word:\n\n${whole}`;
+    const cost = estimateTokens(text) + 12;
+    if (cost <= keep) return { text, cost, inShort: c, from: plan.stretches[c].from };
+  }
+  return null;
+}
+
 /* A chapter with every passage numbered as the page numbers it ("2.3" is
  * passage 3 of Chapter Two; a scene break has no number) — for the partner,
  * who changes a passage by its number. */
@@ -276,9 +309,18 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
     finer.set(id, text);
     cost += extra;
   }
+  /* what room is still left goes to the newest chapter told in short: as much of it word for word as fits (partlyWhole) —
+   * the passage its words start from said with it (wholeFrom), so a reader of the fit knows its end is there word for word */
+  const wholeFrom = new Map();
+  if (k - 1 >= omitted && cost < left && chapters[earlier[k - 1]]) {
+    const id = earlier[k - 1];
+    const now = finer.has(id) ? estimateTokens(finer.get(id)) + 12 : shortCost[k - 1];
+    const part = partlyWhole(novel, ch(id), left - cost + now, numbered);
+    if (part && part.cost > now) { finer.set(id, part.text); wholeFrom.set(id, part.from); cost += part.cost - now; }
+  }
   const book = {
     omitted,
-    summaries: earlier.slice(omitted, k).map((id) => ({ id, label: labelOf(id), text: finer.get(id) || shortText(id) })),
+    summaries: earlier.slice(omitted, k).map((id) => ({ id, label: labelOf(id), text: finer.get(id) || shortText(id), ...(wholeFrom.has(id) ? { wholeFrom: wholeFrom.get(id) } : {}) })),
     whole: earlier.slice(k).map((id) => ({ id, label: labelOf(id), text: wholeOf(id) || '(nothing written in it yet)' })),
     current,
     later: laterRows,
@@ -547,6 +589,12 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     stats: { tokens, room: total, whole: fit.whole + (chapter.id ? 1 : 0), short: fit.short, omitted: fit.book.omitted, modules: ride.names, over: tooBig, least,
       /* the chapters it was given whole — the one open (unless told in part) and the earlier ones that fit (talk.js: never a passage written anew in one it only had in short) */
       wholeIds: [...fit.book.whole.map((w) => w.id), ...(chapter.id && cur === current ? [chapter.id] : [])],
+      /* the passages of a chapter told partly whole (partlyWhole) that it had word for word: those may be written anew */
+      wholePassages: fit.book.summaries.filter((x) => x.wholeFrom).flatMap((x) => {
+        const list = (chapters[x.id] || {}).passages || [];
+        const i = list.findIndex((p) => p.id === x.wholeFrom);
+        return i < 0 ? [] : list.slice(i).map((p) => p.id);
+      }),
       /* the cards shown by their first line (talk.js: never written whole from it) */
       shortCards: [...shortIds],
       /* what goes whatever the book's earlier chapters, the answer's room, the chapter open (talk.js) */

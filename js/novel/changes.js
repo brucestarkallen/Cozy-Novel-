@@ -880,8 +880,9 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     const v = picked(passage) || {};
     if (v.streaming) return refuse('that passage is being written just now');
     /* a passage taken out or written anew in a chapter it only had in short is
-     * never guessed at: it reads the chapter whole first (Cozy Tavern's M61 v2.80) */
-    if (seen && !seen.has(chapter.id) && (truthOf(op.remove) === true || (op.text !== undefined && op.find === undefined))) return refuse(`Chapter ${numberWords(spot0.ci)} was only in short in what it had — read it whole first`);
+     * never guessed at: it reads the chapter whole first (Cozy Tavern's M61 v2.80) —
+     * a passage it had word for word in a chapter told partly whole is seen (seen holds its id) */
+    if (seen && !seen.has(chapter.id) && !seen.has(passage.id) && (truthOf(op.remove) === true || (op.text !== undefined && op.find === undefined))) return refuse(`Chapter ${numberWords(spot0.ci)} was only in short in what it had — read it whole first`);
     /* taken out of the chapter, with its Undo; what only it put in the notes goes too */
     if (truthOf(op.remove) === true) {
       const i = chapter.passages.indexOf(passage);
