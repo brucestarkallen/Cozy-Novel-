@@ -134,7 +134,7 @@ async def scenario_worlds(browser):
     await appearance(pg)
     check('appearance offers both illustrated worlds and Original Study', await pg.locator('.swatch[data-world]').count() == 3 and
           'Academy of Ink' in await pg.locator('.swatch[data-world="academy"]').inner_text() and
-          'Tokyo Afterglow' in await pg.locator('.swatch[data-world="tokyo"]').inner_text() and
+          'Neon Tokyo' in await pg.locator('.swatch[data-world="tokyo"]').inner_text() and
           'Original Study' in await pg.locator('.swatch[data-world="study"]').inner_text())
     check('light is a separate choice with Day and Night labels',
           await pg.locator('.mode-choice[data-mode="light"]').inner_text() == 'Day' and
@@ -158,7 +158,8 @@ async def scenario_worlds(browser):
                 check(f'{world} {mode} shows the original photographic room', await pg.locator('.world-scene[data-world="study"] .study-picture img').is_visible())
             else:
                 check(f'{world} {mode} uses vector artwork without photographs',
-                      await pg.locator('.room svg.world-art').count() == 1 and await pg.locator('.room svg image, .room picture, .room img').count() == 0)
+                      await pg.locator('.room .world-art').count() == 1 and await pg.locator('.room .world-art svg').count() >= 1 and
+                      await pg.locator('.room svg image, .room picture, .room img').count() == 0)
             ratios = await pg.evaluate(CONTRAST)
             check(f'{world} {mode} keeps story and controls readable at AA', all(r >= 4.5 for r in ratios.values()), ratios)
             for width in (360, 1280):
@@ -194,7 +195,7 @@ async def scenario_worlds(browser):
         await pg.emulate_media(reduced_motion='reduce')
         await pg.wait_for_timeout(100)
         check(f'{world} respects reduced motion even when animation is enabled', await running_room_animations(pg) == 0)
-        scene_art = '.study-picture img' if world == 'study' else 'svg.world-art'
+        scene_art = '.study-picture img' if world == 'study' else '.world-art'
         check(f'{world} reduced motion keeps the chosen scene visible', await pg.locator(f'.world-scene[data-world="{world}"] {scene_art}').is_visible())
         await pg.emulate_media(reduced_motion='no-preference')
         check(f'{world} reduced motion does not overwrite the manual preference', (await state(pg))['motion'] == 'on')
@@ -211,6 +212,60 @@ async def scenario_worlds(browser):
     check('worlds load without any external network request', not remote_requests, remote_requests)
     check('no model is called while changing the room', not H.reqs(), H.reqs())
     check('world controls raise no browser exceptions', not [line for line in logs if line.startswith('PAGEERROR')], logs)
+    await pg.context.close()
+
+
+async def scenario_neon(browser):
+    """Neon Tokyo: one rain-wet street that covers every screen shape, its lights
+    moved by the compositor alone, and a chapter's heading lit once when it opens."""
+    logs = []
+    pg = await H.page(browser, logs)
+    await H.new_book(pg, 'A Lit Street', 'A courier crosses the city at night.')
+    await pg.emulate_media(reduced_motion='no-preference')
+    await pg.evaluate("async()=>(await import('/js/ui/look.js')).applyLook({theme:'tokyo',mode:'dark',motion:'on'})")
+    await pg.wait_for_selector('.world-scene[data-world="tokyo"] .neon-stage')
+    parts = await pg.evaluate("""() => { const s = document.querySelector('.neon-stage');
+      return Object.fromEntries(['.neon-back', '.neon-front', '.neon-train', '.neon-flicker', '.neon-rain-far', '.neon-rain-near', '.neon-mote']
+        .map(q => [q, s.querySelectorAll(q).length])); }""")
+    check('Neon Tokyo mounts its street, the last train, a stuttering sign, two depths of rain and drifting lights', all(parts.values()), parts)
+    for width, height in ((320, 640), (412, 915), (853, 1280), (1280, 800), (1920, 1080)):
+        await pg.set_viewport_size({'width': width, 'height': height})
+        await pg.wait_for_timeout(80)
+        box = await pg.evaluate("""() => { const r = document.querySelector('.neon-stage').getBoundingClientRect();
+          return { cover: r.left <= .5 && r.top <= .5 && r.right >= innerWidth - .5 && r.bottom >= innerHeight - .5,
+                   wide: document.documentElement.scrollWidth <= innerWidth, r: [r.left, r.top, r.right, r.bottom].map(Math.round) }; }""")
+        check(f'the street covers the whole screen at {width}×{height}, nothing to scroll sideways', box['cover'] and box['wide'], box)
+    moving = await pg.evaluate("""() => { const all = document.querySelector('.room').getAnimations({subtree: true});
+      const props = new Set(all.flatMap(a => a.effect.getKeyframes().flatMap(k => Object.keys(k))));
+      ['offset', 'easing', 'composite', 'computedOffset'].forEach(k => props.delete(k));
+      return { running: all.filter(a => a.playState === 'running').length, props: [...props] }; }""")
+    check('its lights move, and only by transform or opacity — nothing laid out or repainted for them',
+          moving['running'] >= 5 and set(moving['props']) <= {'transform', 'opacity'}, moving)
+    await pg.evaluate("async()=>(await import('/js/ui/look.js')).applyLook({theme:'tokyo',mode:'light',motion:'on'})")
+    await pg.wait_for_timeout(80)
+    day = await pg.evaluate("""() => ({ train: getComputedStyle(document.querySelector('.neon-train')).display,
+      flicker: getComputedStyle(document.querySelector('.neon-flicker')).animationName, back: getComputedStyle(document.querySelector('.world-scene')).backgroundColor })""")
+    check('by day the signs are off: no train, no stutter, a pale sky', day['train'] == 'none' and day['flicker'] == 'none' and day['back'] != 'rgb(5, 4, 26)', day)
+    await pg.evaluate("async()=>(await import('/js/ui/look.js')).applyLook({theme:'tokyo',mode:'dark',motion:'on'})")
+
+    # A chapter opened lights its heading once; a redraw of the same chapter never does it again.
+    await pg.set_viewport_size({'width': 412, 'height': 915})
+    lit = await pg.evaluate("""() => { const h = document.querySelector('.chapterhead');
+      return { lighting: h.classList.contains('lighting'), lit: h.dataset.lit || '', chapter: (location.hash.split('/')[3] || '') ,
+        names: document.querySelector('#chapname').getAnimations().map(a => a.animationName) }; }""")
+    check('opening a chapter lights its heading', lit['lighting'] and lit['lit'] and 'neon-on' in lit['names'], lit)
+    await pg.wait_for_timeout(1100)
+    await pg.evaluate("import('/js/ui/desk.js').then(d => d.drawHead())")
+    await pg.fill('#direction', 'The courier stops under the sign.')
+    await pg.click('#mineBtn')
+    await pg.wait_for_selector('#passages .passage')
+    again = await pg.evaluate("() => document.querySelector('#chapname').getAnimations().filter(a => a.playState === 'running').length")
+    check('drawing the same chapter again never lights it twice', again == 0, again)
+    await pg.evaluate("async()=>(await import('/js/ui/look.js')).applyLook({theme:'tokyo',mode:'dark',motion:'off'})")
+    await pg.wait_for_timeout(80)
+    still = await pg.evaluate("() => document.querySelector('.room').getAnimations({subtree:true}).filter(a => a.playState === 'running').length")
+    check('Pause holds the whole street still', still == 0, still)
+    check('Neon Tokyo raises no browser exceptions', not [line for line in logs if line.startswith('PAGEERROR')], logs)
     await pg.context.close()
 
 
@@ -353,7 +408,7 @@ async def scenario_foldable(browser):
         await close_settings(pg)
         for width, height in ((768, 864), (360, 874)):
             await pg.set_viewport_size({'width': width, 'height': height})
-        check(f'{world} replaces the photograph with one illustrated scene', await pg.locator('.room svg.world-art').count() == 1 and
+        check(f'{world} replaces the photograph with one illustrated scene', await pg.locator('.room .world-art').count() == 1 and await pg.locator('.room .world-art svg').count() >= 1 and
               await pg.locator('.room picture, .room img').count() == 0 and (await state(pg))['world'] == world)
         check(f'{world} fold and unfold requests no photographic assets', not photos(requests[request_start:]), photos(requests[request_start:]))
         check(f'{world} after Original Study preserves the draft and writing choices', await pg.input_value('#direction') == draft and
@@ -431,7 +486,7 @@ async def main():
         async with async_playwright() as p:
             launch = {'executable_path': os.environ['COZY_TEST_CHROMIUM']} if os.environ.get('COZY_TEST_CHROMIUM') else {}
             browser = await p.chromium.launch(**launch)
-            for scenario in (scenario_worlds, scenario_legacy, scenario_foldable, scenario_concurrent_choices):
+            for scenario in (scenario_worlds, scenario_neon, scenario_legacy, scenario_foldable, scenario_concurrent_choices):
                 try:
                     await scenario(browser)
                 except Exception:

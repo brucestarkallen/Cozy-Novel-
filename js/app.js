@@ -301,7 +301,7 @@ function bindChrome() {
   $('#modeToggle').addEventListener('click', () => changeRoom({ mode: resolveLook(store.peek('house', 'house')?.look).mode === 'dark' ? 'light' : 'dark' }));
   $('#motionToggle').addEventListener('click', () => changeRoom({ motion: resolveLook(store.peek('house', 'house')?.look).motion === 'on' ? 'off' : 'on' }));
   initDesk({
-    wrap: $('#pageWrap'), passages: $('#passages'), end: $('#pageEnd'), chapnum: $('#chapnum'), chapname: $('#chapname'),
+    wrap: $('#pageWrap'), passages: $('#passages'), end: $('#pageEnd'), chapnum: $('#chapnum'), chapname: $('#chapname'), chapterhead: document.querySelector('.chapterhead'),
     direction: $('#direction'), writeBtn: $('#writeBtn'), mineBtn: $('#mineBtn'), ideasBtn: $('#ideasBtn'), lengthBtn: $('#lengthBtn'), outcomeBtn: $('#outcomeBtn'), writerBtn: $('#writerBtn'),
     followBtn: $('#followBtn'), selBar: $('#selBar'), selWhat: $('#selWhat'), selClear: $('#selClear'),
   }, {
@@ -317,11 +317,16 @@ function bindChrome() {
   $('#bookTitle').addEventListener('click', () => toggleLeft());
   $('#chaptersClose').addEventListener('click', () => closeLeft());
   $('#sideClose').addEventListener('click', () => closeRight());
-  $('#notesBtn').addEventListener('click', () => showSide('notes'));
+  $('#notesBtn').addEventListener('click', () => showSide('notes', { soon: true }));
+  /* his length goal, a quarter at a time */
+  writer.onMilestone(({ reached, words, goal }) => {
+    const said = ['', 'A quarter of the way', 'Halfway there', 'Three quarters of the way', 'You reached your goal'][reached];
+    if (said) toast(`${said} — ${words.toLocaleString()} of ${goal.toLocaleString()} words.${reached === 4 ? ' The ending is yours to write.' : ''}`, 6000);
+  });
   $('#searchBtn').addEventListener('click', () => openSearch());
   initChecks($('#checkBubble'), { openSettings });
   initSearch({ currentNovel: () => A.novelId, goChapter, goBook, openBook: (id) => openBook(id, { onGone: () => toShelf() }) });
-  $('#partnerBtn').addEventListener('click', () => showSide('partner'));
+  $('#partnerBtn').addEventListener('click', () => showSide('partner', { soon: true }));
   $('#moreBtn').addEventListener('click', (e) => moreMenu(e.currentTarget));
   /* a phone puts a hidden page away without warning: what waits is saved now */
   document.addEventListener('visibilitychange', () => {
@@ -382,7 +387,7 @@ function moreMenu(anchor) {
     { label: 'Full screen', hint: 'The page and the box, nothing above them.', run: fullPage },
     { label: 'Reading mode', hint: 'Only the page, for reading.', run: readingMode },
     '-',
-    { label: 'Your writing room', hint: 'Academy of Ink, Tokyo Afterglow or the Original Study, with light and movement your way.', run: () => openSettings('look') },
+    { label: 'Your writing room', hint: 'Academy of Ink, Neon Tokyo or the Original Study, with light and movement your way.', run: () => openSettings('look') },
     { label: 'Settings', hint: 'Connections, who does what, your instructions and presets, how it looks, backups.', run: () => openSettings() },
   ]);
 }

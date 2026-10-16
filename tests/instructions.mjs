@@ -53,7 +53,8 @@ for (const [pov, label] of Object.entries(modes)) for (const tense of ['past', '
       const text = allWords(r);
       assert.ok(text.includes(label));
       assert.ok(text.includes(`Narrative tense: ${tense}.`));
-      assert.ok(text.includes('explicit writing instructions and directions for a particular passage come first'));
+      /* 2.11 said it in plain words; the same rule: his instructions and what he asks for in a passage come first */
+      assert.ok(text.includes('My own writing instructions, and anything I ask for in a particular passage, come first.'));
       if (purpose === 'play') assert.ok(text.includes('Never put a word, a choice or a feeling in Mara'));
     }
     for (const r of [

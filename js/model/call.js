@@ -254,7 +254,7 @@ export function webUrl(url) { return typeof url === 'string' && /^https?:\/\/[^\
  * of JSON (the phone's server answers every refusal so); a provider that
  * ignored "stream" is read whole; an error in the middle of a stream is an
  * error, never a finished answer. */
-export async function readReply(wire, res, { onText, onThinking, onNote, until, raw: asIs = false, onChunk = null } = {}) {
+export async function readReply(wire, res, { onText, onThinking, onNote, until, raw: asIs = false, onChunk = null, signal = null } = {}) {
   const reader = res && res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
   const whole = (data) => {
     if (data && data.error) {
@@ -352,8 +352,21 @@ export async function readReply(wire, res, { onText, onThinking, onNote, until, 
    * at once, rather than read to the provider's end (Tavern M585) — the phone's
    * server hangs up on the provider when the page does */
   let letGo = '';
+  /* Stop (his, or the reply no longer having a place to land) ends the reading at
+   * once: a read waiting when the line was let go after its last words had come
+   * could wait for ever (Node's fetch never settles it), and the reply with it */
+  const stopped = () => { const e = new Error('stopped'); e.name = 'AbortError'; return e; };
+  const onStop = signal ? new Promise((_, reject) => {
+    const go = () => { try { const p = reader.cancel(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch (_) { /* closed */ } reject(stopped()); };
+    if (signal.aborted) go(); else signal.addEventListener('abort', go, { once: true });
+  }) : null;
+  if (onStop) onStop.catch(() => {});
   for (;;) {
-    const { done, value } = await reader.read();
+    if (signal && signal.aborted) throw stopped();
+    const reading = reader.read();
+    /* a read let go by Stop may still fail afterwards: heard, never an unhandled rejection */
+    if (onStop) reading.catch(() => {});
+    const { done, value } = await (onStop ? Promise.race([reading, onStop]) : reading);
     if (done) break;
     /* anything at all heard from the provider (a keep-alive too): it is there */
     if (onChunk) onChunk();
@@ -519,7 +532,8 @@ function sleep(ms, signal) {
  * error, status, stopped, sent, thinkTokens, hiddenThought}. Never throws. */
 export async function ask(conn, opts = {}) {
   if (!conn || !String(conn.url || '').trim() || !String(conn.model || '').trim()) {
-    return { ok: false, text: '', thinking: '', notes: [], error: 'no connection is chosen for this yet — pick one in Settings → Connections' };
+    /* not a passing fault: nothing to wait out until the connection changes (what the app writes by itself never tries it again every few minutes) */
+    return { ok: false, text: '', thinking: '', notes: [], error: 'no connection is chosen for this yet — pick one in Settings → Connections', permanent: true };
   }
   const stream = opts.stream !== false;
   const notes = [];
@@ -542,7 +556,7 @@ export async function ask(conn, opts = {}) {
     const shape = shapeOf(conn);
     /* a request the builder knows cannot fit this model (its room, as a
      * lesson may just have taught it) is never sent: the builder's reason is */
-    if (shape && shape.refuse) return { ok: false, text: '', thinking: '', notes, error: shape.refuse, status: lastStatus || 0 };
+    if (shape && shape.refuse) return { ok: false, text: '', thinking: '', notes, error: shape.refuse, status: lastStatus || 0, permanent: true };
     const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined, noStructured: flags.noStructured, noSearch: Boolean(opts.noSearch) });
     if (req.prefill && req.prefill.note && !notes.includes(req.prefill.note)) notes.push(req.prefill.note);
     /* (said once: after the refusal's own lesson, the same is not said again) */
@@ -639,17 +653,18 @@ export async function ask(conn, opts = {}) {
     const giveWay = opts.worker && leash ? () => { if (!leash.signal.aborted) { leashed = 'gaveway'; leash.abort(); } } : null;
     if (giveWay) { const k = connKey(conn); if (!workersOn.has(k)) workersOn.set(k, new Set()); workersOn.get(k).add(giveWay); }
     try {
+      const lineSignal = leash ? anySignal([opts.signal, leash.signal]) : opts.signal;
       const res = await fetch('/api/call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream }),
-        signal: leash ? anySignal([opts.signal, leash.signal]) : opts.signal,
+        signal: lineSignal,
       });
       heardAt = Date.now();
       if (!res.ok) {
         out = { finish: 'error', error: res.status === 403 ? 'the phone’s server turned the call away' : `the phone’s server answered ${res.status}`, status: 0, text: '', thinking: '' };
       } else {
-        out = await readReply(req.wire, res, { onText: onWords, onThinking: emitThinking, onNote: (n) => { if (!notes.includes(n)) notes.push(n); }, until: decoder ? until : null, raw: Boolean(decoder), onChunk: () => { heardAt = Date.now(); } });
+        out = await readReply(req.wire, res, { onText: onWords, onThinking: emitThinking, onNote: (n) => { if (!notes.includes(n)) notes.push(n); }, until: decoder ? until : null, raw: Boolean(decoder), onChunk: () => { heardAt = Date.now(); }, signal: lineSignal || null });
         if (decoder && onWords.end) onWords.end();
       }
     } catch (e) {

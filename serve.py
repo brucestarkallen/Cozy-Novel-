@@ -48,7 +48,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.10.6"
+VERSION = "2.11.0"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -833,11 +833,21 @@ def replace_library(snap, by=""):
 GENERATION = HOME / "generation"
 
 
+_last_generation = [0]
+
+
 def generation():
+    """The library's number. A file that cannot be read just now never reads
+    as 0 (every open page would take every answer for an old one): the last
+    number read stands."""
     try:
-        return int(GENERATION.read_text(encoding="utf-8").strip() or 0)
+        n = int(GENERATION.read_text(encoding="utf-8").strip() or 0)
+    except FileNotFoundError:
+        return _last_generation[0]
     except (OSError, ValueError):
-        return 0
+        return _last_generation[0]
+    _last_generation[0] = n
+    return n
 
 
 def set_generation(n):
@@ -980,9 +990,18 @@ def recover_branches():
         if not BRANCHES.is_dir():
             return
         for path in sorted(BRANCHES.glob("*.json")):
-            receipt = json.loads(path.read_text(encoding="utf-8"))
-            if receipt.get("state") == "building":
-                _undo_branch(receipt, path)
+            # one unreadable receipt never keeps the server from starting: it is
+            # set aside beside the others, with what went wrong said in the log
+            try:
+                receipt = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(receipt, dict) and receipt.get("state") == "building":
+                    _undo_branch(receipt, path)
+            except (OSError, ValueError) as e:
+                print(f"A branch left half made could not be cleared ({path.name}: {e}); it is kept as {path.name}.unreadable")
+                try:
+                    path.replace(path.with_name(path.name + ".unreadable"))
+                except OSError:
+                    pass
 
 
 def create_branch(spec, by=""):

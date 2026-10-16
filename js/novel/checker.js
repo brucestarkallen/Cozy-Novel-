@@ -70,10 +70,10 @@ export function checkerConn(house) {
  * he has now, not a connection captured before he changed it. */
 function checkerChoice(conn) {
   const id = conn.id;
-  const print = archivist.connPrint(conn);
+  const print = archivist.choicePrint(conn);
   const current = () => {
     const now = checkerConn(store.peek('house', 'house') || {});
-    return Boolean(now && now.id === id && archivist.connPrint(now) === print);
+    return Boolean(now && now.id === id && archivist.choicePrint(now) === print);
   };
   return { current, beforeAsk: () => {
     if (current()) return;

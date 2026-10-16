@@ -144,3 +144,8 @@
 @media (prefers-reduced-motion: reduce) {
   .pane .notecard { transition: none; }
 }
+
+/* the story map: his plan for a chapter, under its name */
+.pane .chlist .plan { display: block; margin-top: 7px; padding-left: 9px; border-left: 2px solid var(--accent); font-size: 12px; line-height: 1.5; color: var(--chrome-soft); font-style: italic;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.pane .chlist .plan[hidden] { display: none; }

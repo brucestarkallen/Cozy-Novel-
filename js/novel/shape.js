@@ -612,6 +612,10 @@ export const chapterSteps = {
    * fingerprint): a version brought back brings its summary back too */
   clearSummaries: () => (c) => { c.summaries = []; },
   dropSummary: (fp) => (c) => { c.summaries = (c.summaries || []).filter((x) => x.fp !== fp); },
+  /* his plan for the chapter (the story map): empty takes it away */
+  setPlan: (text) => (c) => { const t = String(text || '').trim(); if (t) c.plan = String(text).replace(/\s+$/, ''); else delete c.plan; },
+  /* the chapter's stretches (stretches.js): their bounds, and each one's summary while it fits its words */
+  setStretches: (list) => (c) => { if (Array.isArray(list) && list.length) c.stretches = JSON.parse(JSON.stringify(list)); else delete c.stretches; },
   keepSummary: (entry) => (c) => {
     const list = (c.summaries = (c.summaries || []).filter((x) => x.fp !== entry.fp));
     list.push(JSON.parse(JSON.stringify(entry)));

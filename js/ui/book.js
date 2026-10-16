@@ -224,6 +224,27 @@ export function openBook(novelId, { onGone, onClose } = {}) {
   const plans = h('textarea', { placeholder: 'What you mean to happen later — the writer reads it as plans, never as things that already happened.' });
   plans.value = n.plans || '';
   plans.addEventListener('input', later(() => save('plans', plans.value)));
+  /* THE STORY MAP (prompts.js planWords/endingWords): how it ends — his partner plans with it, the writer reads it only in the chapter he marks the last */
+  const ending = h('textarea', { placeholder: 'How you mean the book to end. Your partner plans with it; the writer reads it only in the chapter you mark as the last, so nothing before it is pulled toward the end.' });
+  ending.value = n.ending || '';
+  ending.addEventListener('input', later(() => save('ending', ending.value)));
+  /* how long he means it to be: words, shown against what is written */
+  const goal = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'e.g. 90,000', value: n.meta.goal ? Number(n.meta.goal).toLocaleString() : '' });
+  const goalSay = h('em');
+  const drawGoal = () => {
+    const now = store.peek('novel', novelId) || n;
+    const want = Number(now.meta.goal) || 0, have = now.meta.words || 0;
+    goalSay.textContent = want ? `${have.toLocaleString()} of ${want.toLocaleString()} words — ${Math.min(100, Math.floor((have / want) * 100))}% of the way.` : 'Leave empty for no goal. With one, the chapters list shows how far the book has come.';
+  };
+  goal.addEventListener('input', later(() => {
+    /* "90000", "90,000", "90.000", "90 000" or "90k" */
+    let said = String(goal.value).trim().toLowerCase().replace(/[\s,_']/g, '');
+    if (/^\d{1,3}(\.\d{3})+$/.test(said)) said = said.replace(/\./g, '');
+    const v = Math.round((parseFloat(said) || 0) * (/k$/.test(said) ? 1000 : 1));
+    save('meta', { goal: v > 0 ? v : 0 });
+    drawGoal();
+  }));
+  drawGoal();
   /* words brought from SillyTavern say {{char}} and {{user}}: who {{char}} is, asked once — every model reads the names, never the marks */
   const charName = h('input', { type: 'text', value: n.meta.char || '', placeholder: 'e.g. Rias' });
   charName.addEventListener('input', later(() => save('meta', { char: charName.value.trim() })));
@@ -242,10 +263,12 @@ export function openBook(novelId, { onGone, onClose } = {}) {
     narration,
     h('div.field.book-sound', h('span', 'Sound'), sound, soundSay),
     h('section.book-plans', field('Where it’s headed', plans)),
+    h('section.book-ending', field('How it ends', ending)),
+    h('label.field.book-goal', h('span', 'How long you mean it to be, in words'), goal, goalSay),
     charField,
     h('p.say.book-wordcount', `${plural(n.meta.words || 0, 'word')} · ${plural((n.order || []).length, 'chapter')}`));
   /* what the helper keeps arrives while the sheet is open */
-  off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); drawNarration(); drawSound(); drawChar(); });
+  off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); drawNarration(); drawSound(); drawChar(); drawGoal(); });
 
   /* what the first Cozy Novel held that has no place of its own here, word for word */
   const kept = (n.migrated && Array.isArray(n.migrated.kept)) ? n.migrated.kept : [];

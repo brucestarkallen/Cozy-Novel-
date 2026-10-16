@@ -20,7 +20,7 @@ async def pick(pg,label,value):
 async def main():
  with H.Env():
   async with async_playwright() as p:
-   browser=await p.chromium.launch(executable_path='/usr/bin/chromium')
+   browser=await p.chromium.launch(executable_path=(os.environ.get('COZY_TEST_CHROMIUM') or None))
    try:
     logs=[];pg=await H.page(browser,logs,w=412,hgt=915)
     await H.new_book(pg,'Colours at midnight')

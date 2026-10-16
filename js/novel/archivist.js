@@ -28,10 +28,11 @@ import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp } from './shape.js';
 import { foldedText, foldName, tokensMissing, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
-import { helperFrame, notesRequest, summaryRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
+import { helperFrame, notesRequest, summaryRequest, stretchRequest, summaryAgainRequest, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook } from './context.js';
 import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep } from './timeline.js';
+import { stretchPlan, keptStretches, withStretch } from './stretches.js';
 
 const lights = new Map();          /* novelId -> {state, words, at} */
 const timers = new Map();
@@ -1179,11 +1180,17 @@ export function connPrint(conn) {
   const L = (conn && conn.learned) || {};
   return conn ? hashText(JSON.stringify([conn.url, conn.model, conn.key, conn.shape, conn.maxTokens, conn.context, conn.thinking, L.context, L.maxOut, L.drop, L.completionField])) : '';
 }
+/* who does it, as he chose it: his own settings only — a lesson the model
+ * teaches about itself on the way (its room, a dial it refuses) is the same
+ * choice, and never stops a reading or a checking in the middle */
+export function choicePrint(conn) {
+  return conn ? hashText(JSON.stringify([conn.id, conn.url, conn.model, conn.key, conn.shape, conn.maxTokens, conn.context, conn.thinking])) : '';
+}
 /* A completed reading can stand, but changing who reads must stop its next
  * request, including a JSON retry or a probe within the same stage. */
 function requireHelper(novelId, conn) {
   const current = connFor(store.peek('house', 'house') || {}, 'helper');
-  if (!store.peek('novel', novelId) || !current || `${current.id}:${connPrint(current)}` !== (helperPrints.get(novelId) || `${conn.id}:${connPrint(conn)}`)) {
+  if (!store.peek('novel', novelId) || !current || choicePrint(current) !== (helperPrints.get(novelId) || choicePrint(conn))) {
     const e = new Error('who keeps the notes changed');
     e.helperChanged = true;
     throw e;
@@ -1204,7 +1211,7 @@ export async function run(novelId) {
   const house = store.peek('house', 'house') || {};
   const chosen = connFor(house, 'helper');
   const conn = chosen ? clone(chosen) : null;
-  const print = conn ? `${conn.id}:${connPrint(conn)}` : '';
+  const print = conn ? choicePrint(conn) : '';
   const novel = store.peek('novel', novelId);
   if (!novel) return;
   if (!conn) { setLight(novelId, 'off', 'No helper is chosen, so the notes are not being kept. Choose one in Settings → Connections (it can be the same as the writer).'); return; }
@@ -1225,6 +1232,7 @@ export async function run(novelId) {
       const print = connPrint(conn);
       for (const x of asideNow(store.peek('novel', novelId))) if (x.conn && x.conn !== print && !x.out) unsetAside(novelId, x.key);
       await readChanges(novelId, conn);
+      await stretchUp(novelId, conn);
       await summarise(novelId, conn);
       await keepTheBook(novelId, conn);
       await auditNotes(novelId, conn);
@@ -1509,7 +1517,7 @@ async function readChanges(novelId, conn) {
     /* Every tiny passage still has a source label and prose around it.
      * Count that cost in the batch too: hundreds of one-line passages
      * cannot share the room of a single passage with the same word count. */
-    const sourceWords = Math.ceil(estimateTokens(`Passage source passage_12345678901234567890\nThis part of ${label} was changed. It used to read:\n"""\n\n"""\nIt now reads:\n"""\n\n"""`) / 1.4);
+    const sourceWords = Math.ceil(estimateTokens(`Passage source Passage 1234\nThis part of ${label} was changed. It used to read:\n"""\n\n"""\nIt now reads:\n"""\n\n"""`) / 1.4);
     const beforeChars = Math.max(0, Math.min(60000, Math.floor(room * 0.3 * 3.2)));
     /* a part written into the middle of a chapter: the chapter goes on after it, already read */
     const lastChanged = changes.length ? Math.max(...changes.map((c) => chapter.passages.findIndex((p) => p.id === c.pid))) : -1;
@@ -1611,6 +1619,9 @@ async function readChanges(novelId, conn) {
       const shortIds = new Map();
       const askedNotes = clone(now.notes || {});
       const askedWords = wordsNow(now);
+      /* each passage named as the page names it ("Passage 4"), never by the app's own id */
+      const pageNums = chapter ? passageNumbers(store.peek('chapter', chapter.id) || chapter) : new Map();
+      for (const c of B.items) c.source = c.pid ? `Passage ${pageNums.get(c.pid) || '—'}` : '';
       const request = notesRequest({
         novel: namedBook(now, house),
         chapterLabel: label,
@@ -1707,7 +1718,8 @@ async function readChanges(novelId, conn) {
        * are read. A missing list is a gap, never "nothing happened". */
       for (const c of B.items) {
         if (c.oldOnly) continue;
-        const rows = Array.isArray(got.obj.timeline) ? got.obj.timeline.filter(r => r && r.source === c.pid) : [];
+        const said = (r) => String(r.source || '').trim().replace(/[.\s]+$/, '').toLowerCase();
+        const rows = Array.isArray(got.obj.timeline) ? got.obj.timeline.filter(r => r && c.source && (said(r) === c.source.toLowerCase() || r.source === c.pid)) : [];
         const source = { text: c.text, whole: c.whole !== undefined ? c.whole : c.text };
         const notes = store.peek('novel', novelId).notes;
         let history = rows.length ? null : continuityOf(undefined, notes, source);
@@ -1910,6 +1922,96 @@ function pruneReadings(novelId) {
   if (more.length) store.change('novel', novelId, novelSteps.dropReadings(more));
 }
 
+/* THE CHAPTER SO FAR (stretches.js): a chapter long enough that a model
+ * reading it beside everything else might have to cut it is kept in
+ * stretches, each summed up once it is finished — the oldest first, the
+ * stretch before it carried in so each picks up where the last ends. Past a
+ * third of the smallest room of those who read the open chapter (the writer,
+ * the narrator on the writer's connection, the partner on its own). A
+ * stretch its model will not sum up is passed by after a second try, until
+ * its words change. */
+function wantsStretches(house, tokens) {
+  const rooms = ['writer', 'partner'].map((r) => connFor(house, r)).filter(Boolean).map((x) => contextOf(x));
+  const room = rooms.length ? Math.min(...rooms) : 32000;
+  return tokens > Math.max(3500, Math.floor(room / 3));
+}
+const stretchTried = new Map();   /* chapter:fingerprint -> refused runs */
+async function stretchUp(novelId, conn) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return;
+  const house = store.peek('house', 'house') || {};
+  const order = [...(novel.order || [])];
+  for (let i = 0; i < order.length; i++) {
+    const c = store.peek('chapter', order[i]);
+    if (!c || (c.passages || []).some((p) => (picked(p) || {}).streaming)) continue;
+    if (!wantsStretches(house, estimateTokens(chapterText(c)))) continue;
+    /* a chapter the writing has moved past: its last words make a stretch too */
+    const opts = { closeLast: i < order.length - 1 };
+    const plan = stretchPlan(c, opts);
+    const kept = keptStretches(plan);
+    if (JSON.stringify(kept) !== JSON.stringify(c.stretches || [])) store.change('chapter', c.id, chapterSteps.setStretches(kept));
+    const now = store.peek('novel', novelId);
+    const label = chapterLabel(now, c, { withName: true });
+    const frame = helperFrame(house, now);
+    const cardNames = ['people', 'places', 'lore'].flatMap((k) => ((now.notes || {})[k] || []).flatMap((x) => [x.name, ...(x.aka || [])])).filter(Boolean);
+    const list = c.passages || [];
+    /* the chapters before this one, folded once for the chapter (only when a stretch is asked) */
+    let earlierBook = null;
+    for (let k = 0; k < plan.stretches.length; k++) {
+      const st = plan.stretches[k];
+      if (st.text) continue;
+      const key = `${c.id}:${st.fp}`;
+      if ((stretchTried.get(key) || 0) >= 2) continue;
+      const a = list.findIndex((p) => p.id === st.from), b = list.findIndex((p) => p.id === st.to);
+      if (a < 0 || b < a) continue;
+      const text = chapterText({ passages: list.slice(a, b + 1) });
+      if (!text.trim()) continue;
+      /* who and what this stretch names that the book already knew before it */
+      const here = foldedText(text);
+      if (earlierBook === null) earlierBook = foldedText(order.slice(0, i).map((id) => { const x = store.peek('chapter', id); return x ? chapterText(x) : ''; }).join('\n\n'));
+      const earlierHere = foldedText(chapterText({ passages: list.slice(0, a) }));
+      const knewOf = (n) => nameInText(earlierHere, n, { words: false }) || nameInText(earlierBook, n, { words: false });
+      const known = [...new Set(['people', 'places', 'lore'].flatMap((kind) => ((now.notes || {})[kind] || []).filter((x) => [x.name, ...(x.aka || [])].some((n) => n && nameInText(here, n, { words: false }) && knewOf(n))).map((x) => x.name)))];
+      setLight(novelId, 'reading', `Summing up part of ${label}…`);
+      /* a stretch longer than the helper's model reads at once (one passage can be): in parts, each part's summary carried into the next */
+      const before = k > 0 ? plan.stretches[k - 1].text : '';
+      const room = readingRoom(conn, estimateTokens(frame) + 700 + estimateTokens(known.join(', ')) + estimateTokens(before) + 1000);
+      const partWords = Math.max(200, Math.floor((room * 0.75) / 1.4));
+      const parts = countWords(text) > partWords ? partsOf(text, partWords) : [text];
+      let summary = '';
+      let refused = false;
+      for (let q = 0; q < parts.length; q++) {
+        const got = await helperJson(novelId, conn, frame, stretchRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[q], words: st.words, before: q === 0 ? before : '', known,
+          part: parts.length > 1 ? q + 1 : 0, parts: parts.length, soFar: summary }), { want: (o) => Boolean(summaryWords(o.summary)) });
+        if (!got.ok) {
+          if (got.leashed) throw failed(got);
+          const fault = await helperFault(novelId, conn, got);
+          if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
+          refused = true;
+          break;
+        }
+        summary = summaryWords(got.obj.summary) || summary;
+      }
+      if (refused) { stretchTried.set(key, (stretchTried.get(key) || 0) + 1); continue; }
+      if (!summary) continue;
+      const r = await keepHardTokens({ novelId, conn, frame, novel: now, label, text, summary, known: cardNames });
+      summary = r.summary || summary;
+      await mustHold('helper', novelId);
+      /* laid in only while the stretch reads as it did when asked */
+      let laid = false;
+      store.change('chapter', c.id, (ch) => {
+        const next = withStretch(ch, st, summary, Date.now(), opts);
+        if (!next) return false;
+        ch.stretches = next;
+        laid = true;
+        return true;
+      });
+      if (laid) { plan.stretches[k].text = summary; stretchTried.delete(key); }
+      await store.flush('chapter', c.id);
+    }
+  }
+}
+
 /* A chapter's summary is kept current once the writing has moved past it, or
  * once it has been quiet a while. A chapter longer than the helper's model
  * holds is summed up in parts, each part's summary carried into the next. */
@@ -2007,7 +2109,13 @@ async function summarise(novelId, conn) {
     const known = [...new Set(['people', 'places', 'lore'].flatMap((k) => ((now.notes || {})[k] || []).filter((x) => [x.name, ...(x.aka || [])].some((n) => n && nameInText(here, n, { words: false }) && nameInText(earlier, n, { words: false }))).map((x) => x.name)))];
     const room = readingRoom(conn, estimateTokens(frame) + 700 + estimateTokens(known.join(', ')));
     const partWords = Math.max(200, Math.floor((room * 0.75) / 1.4));
-    const parts = words > partWords ? partsOf(text, partWords) : [text];
+    /* a long chapter whose every stretch is summed up is summed up from them, with the words after its last stretch as they stand — the whole of it read, nothing squeezed away part by part */
+    const sp = stretchPlan(c, { closeLast: !last });
+    const openIds = new Set(sp.open);
+    const tail = sp.open.length ? chapterText({ passages: (c.passages || []).filter((p) => openIds.has(p.id)) }) : '';
+    const sums = sp.stretches.length && sp.stretches.every((x) => x.text) ? sp.stretches.map((x) => x.text).join('\n\n') : '';
+    const stretched = sums && estimateTokens(sums) + estimateTokens(tail) < room * 0.75 ? sums : '';
+    const parts = stretched ? [stretched] : words > partWords ? partsOf(text, partWords) : [text];
     let summary = '';
     let name = '';
     let setAsideNow = false;
@@ -2015,7 +2123,7 @@ async function summarise(novelId, conn) {
       const lastPart = k === parts.length - 1;
       /* a summary with words in it, or none (an empty one is asked again — M681) */
       const got = await helperJson(novelId, conn, frame, summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[k], needsName: lastPart && !c.name && c.nameBy !== 'you', words,
-        part: parts.length > 1 ? k + 1 : 0, parts: parts.length, soFar: summary, known, his: lastPart ? his : '' }), { want: (o) => Boolean(summaryWords(o.summary)) });
+        part: parts.length > 1 ? k + 1 : 0, parts: parts.length, soFar: summary, known, his: lastPart ? his : '', stretched: parts[0] === stretched && Boolean(stretched), tail: stretched ? tail : '' }), { want: (o) => Boolean(summaryWords(o.summary)) });
       if (!(await summaryStillCurrent(novelId, c.id, stamp))) { setAsideNow = true; break; }
       if (!got.ok) {
         if (got.leashed) throw failed(got);

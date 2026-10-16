@@ -106,6 +106,7 @@ def main():
     run_launcher()
     run_pages_leave()
     run_gone_and_restore()
+    run_left_half_made()
     shutil.rmtree(home, ignore_errors=True)
     print("\nserver: %d passed, %d failed" % (len(passed), len(failed)))
     sys.exit(1 if failed else 0)
@@ -644,6 +645,50 @@ def run_pages_leave():
         log = srv.stdout.read().decode()
         shutil.rmtree(home, ignore_errors=True)
     check("and writes nothing about the pages that left into its log", "Traceback" not in log and "Error" not in log, log[-1500:])
+
+
+
+def run_left_half_made():
+    """A branch receipt that cannot be read never keeps the server from
+    starting: it is set aside, the readable ones are still put right. And a
+    library number that cannot be read just now never reads as 0."""
+    print("what a stop left half made")
+    home = Path(tempfile.mkdtemp(prefix="cozynovel-home-"))
+    port = PORT + 17
+    ops = home / "branch-operations"
+    ops.mkdir(parents=True)
+    (ops / "a-garbled.json").write_text("{not json", encoding="utf-8")
+    (ops / "b-odd.json").write_text(json.dumps({"state": "building", "novelId": "n-odd", "targets": "not a list"}), encoding="utf-8")
+    (ops / "c-half.json").write_text(json.dumps({"state": "building", "novelId": "n-half", "targets": [["novel", "n-half"]]}), encoding="utf-8")
+    (home / "store" / "novel").mkdir(parents=True)
+    (home / "store" / "novel" / "n-half.json").write_text(json.dumps({"rev": 1, "at": 1, "data": {"id": "n-half", "title": "Half made"}}), encoding="utf-8")
+    (home / "store" / "novel" / "n-kept.json").write_text(json.dumps({"rev": 1, "at": 1, "data": {"id": "n-kept", "title": "His book"}}), encoding="utf-8")
+    (home / "generation").write_text("7", encoding="utf-8")
+    srv = None
+    try:
+        srv = start(home, port=port)
+        page = Page(port)
+        st, out = page.ask("GET", "/api/version")
+        check("the server starts past a receipt it cannot read", st == 200 and isinstance(out, dict), (st, out))
+        check("the unreadable receipts are set aside, said as such", (ops / "a-garbled.json.unreadable").exists() and (ops / "b-odd.json.unreadable").exists()
+              and not (ops / "a-garbled.json").exists() and not (ops / "b-odd.json").exists(), sorted(x.name for x in ops.iterdir()))
+        check("the readable one is still put right: its half-made book is gone, its receipt cleared",
+              not (home / "store" / "novel" / "n-half.json").exists() and not (ops / "c-half.json").exists(), sorted(x.name for x in ops.iterdir()))
+        st, out = page.ask("GET", "/api/store/novel/n-kept")
+        check("and his own book is untouched", st == 200 and (out or {}).get("data", {}).get("title") == "His book", (st, out))
+        st, out = page.ask("GET", "/api/version")
+        check("the library's number is read", out.get("generation") == 7, out)
+        (home / "generation").unlink()
+        (home / "generation").mkdir()
+        st, out = page.ask("GET", "/api/version")
+        check("a number that cannot be read just now keeps the last one read, never 0", out.get("generation") == 7, out)
+    finally:
+        if srv:
+            srv.terminate()
+            log = srv.stdout.read().decode()
+            check("the log says which receipt was set aside, with no traceback",
+                  "a-garbled.json" in log and "b-odd.json" in log and "Traceback" not in log, log[-1500:])
+        shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":

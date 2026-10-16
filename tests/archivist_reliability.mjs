@@ -110,7 +110,13 @@ try {
     const calls = (await requests()).filter((r) => r.body.messages.at(-1).content.includes("for the book's notes"));
     assert.ok(calls.length > 1, 'a single paragraph still takes several bounded requests');
     for (const call of calls) assert.ok(util.estimateTokens(call.body.messages.map((m) => m.content).join('\n')) + (call.body.max_tokens || 0) < 12000);
-    assert.ok(calls[1].body.messages.at(-1).content.includes('The summary of the parts before it'));
+    /* 2.11: a chapter longer than the writer reads beside the book is kept in stretches; this paragraph is one stretch, read in parts, each carrying the summary so far — and the chapter's summary is made from it */
+    const last = (r) => r.body.messages.at(-1).content;
+    const parts = calls.filter((r) => last(r).startsWith("Here's a stretch of"));
+    assert.ok(parts.length > 1 && parts.slice(1).every((r) => last(r).includes("This stretch's parts before this one") && last(r).includes('The keeper watched the quiet water beside the lamp.')), 'the stretch in parts, the summary carried forward');
+    const fenced = (r) => [...last(r).matchAll(/"{3}\n([\s\S]*?)\n"{3}/g)].map((m) => m[1]).at(-1);
+    assert.equal(parts.map(fenced).join(' ').replace(/\s+/g, ' ').trim(), b.c().passages[0].versions[0].text.replace(/\s+/g, ' ').trim(), 'every word of the paragraph read');
+    assert.ok(calls.some((r) => last(r).includes('Here is every stretch of it')), 'the chapter summed up from its stretch');
     assert.equal((await phone('chapter', b.chapterId)).summary.text, 'The keeper watched the quiet water beside the lamp.');
     await house();
   });
@@ -311,7 +317,11 @@ try {
       quiet(); await reset([update, invalid, invalid]); await archivist.run(b.novelId);
       assert.deepEqual(b.n().notes, b.before, 'earlier removal parts never remain as half-built notes');
       assert.equal(b.n().memory.inParts, null);
-      assert.equal((await requests()).length, 4, 'later parts are not sent after this refusal');
+      /* the reading's own requests: summing up the chapter's stretch (2.11) is a job of its own, after the reading */
+      const all = await requests();
+      const stretchAt = all.findIndex((r) => r.body.messages.some((m) => typeof m.content === 'string' && m.content.startsWith("Here's a stretch of")));
+      const reading = stretchAt < 0 ? all : all.slice(0, stretchAt);
+      assert.equal(reading.length, 4, 'later parts are not sent after this refusal');
     }
     assert.ok(b.n().memory.aside[b.pid], 'the whole passage remains visibly unread');
     assert.equal(readings.readingOf(b.n(), b.pid, b.sig), null, 'no completed reading is invented');

@@ -145,7 +145,7 @@ async def scenario(browser):
 async def main():
     with Env():
         async with async_playwright() as p:
-            browser = await p.chromium.launch(executable_path=os.environ.get('COZY_TEST_CHROMIUM', '/usr/bin/chromium'))
+            browser = await p.chromium.launch(executable_path=(os.environ.get('COZY_TEST_CHROMIUM') or None))
             try:
                 await scenario(browser)
             except Exception:

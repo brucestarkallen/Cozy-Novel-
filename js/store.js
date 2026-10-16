@@ -216,7 +216,8 @@ export async function open(kind, id, { fresh = false } = {}) {
       const epoch = libraryEpoch;
       try {
         const { status: code, data } = await api('GET', `/api/store/${kind}/${id}`);
-        if (epoch !== libraryEpoch || oldGeneration(data) || (data && knowGeneration(data.generation))) continue;
+        if (epoch !== libraryEpoch || (data && knowGeneration(data.generation))) continue;
+        if (oldGeneration(data)) { await sleep(300); continue; }
         if (code === 200 && data && data.data === null) { r.loaded = true; r.data = null; r.rev = 0; r.baseJson = null; setOffline(false); return null; }
         if (code === 200 && data && data.data) {
           if (!r.pending.length || !r.loaded) {
@@ -522,7 +523,20 @@ function knowGeneration(next) {
   libraryReplaced();
   return true;
 }
-const oldGeneration = (data) => data && Number.isFinite(data.generation) && generation !== null && data.generation < generation;
+/* An answer from before the library was last brought back is turned away —
+ * but a phone whose own number went backwards (its data folder put back by
+ * hand) would be turned away for ever, every save refused and a read asked
+ * again in a tight loop: after three such answers in a row the phone's
+ * number is taken as it stands (nothing waiting is thrown away for it). */
+let staleRun = 0;
+const oldGeneration = (data) => {
+  const old = Boolean(data && Number.isFinite(data.generation) && generation !== null && data.generation < generation);
+  if (!old) { if (data && Number.isFinite(data.generation)) staleRun = 0; return false; }
+  if (++staleRun < 3) return true;
+  staleRun = 0;
+  generation = data.generation;
+  return false;
+};
 
 function onNews(raw) {
   let ev;

@@ -922,6 +922,12 @@ export function buildRequest(conn, opts = {}) {
     if (limit) body[hostIsOpenAI(conn.url) || (facts0 && facts0.completionField) ? 'max_completion_tokens' : 'max_tokens'] = limit;
   }
 
+  /* a reply begun with words that end in a space or a line break is refused by
+   * some houses (Claude's: "final assistant content cannot end with trailing
+   * whitespace") — never sent so, as his prefill never is; nothing he can see changes */
+  const tail = body.messages && body.messages[body.messages.length - 1];
+  if (tail && tail.role === 'assistant' && typeof tail.content === 'string' && /\s$/.test(tail.content)) tail.content = tail.content.replace(/\s+$/, '');
+
   /* only what he set */
   if (Number.isFinite(conn.temperature)) body.temperature = conn.temperature;
   if (Number.isFinite(conn.topP)) body.top_p = conn.topP;

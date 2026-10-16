@@ -208,20 +208,28 @@ try {
     assert.equal(store.peek('play', playId).after, null);
     assert.equal(talk.mendScene(playId), false);
   });
-  await test('a missing chapter stops new prose before adding an empty passage or asking a provider', async () => {
+  /* 2.11: a chapter the phone answers it no longer holds (its record gone, the book's list still naming it) is not part of
+   * the book — it used to stop every page for good, "open the book again" changing nothing (tests/app.mjs). A chapter the
+   * phone could not be asked about still stops the page, before anything is added or asked. */
+  const unreadable = async (fn) => {
+    const before = globalThis.fetch;
+    globalThis.fetch = (url, init) => (String(url).includes('/api/store/chapter/unreadable-') ? Promise.resolve(new Response(JSON.stringify({ error: 'the phone could not read it' }), { status: 500 })) : before(url, init));
+    try { return await fn(); } finally { globalThis.fetch = before; }
+  };
+  await test('a chapter that cannot be read stops new prose before adding an empty passage or asking a provider', async () => {
     const b = await makeBook(['Mara enters the garden.']);
-    store.change('novel', b.novelId, n => n.order.unshift('missing-chapter'));
+    store.change('novel', b.novelId, n => n.order.unshift('unreadable-chapter'));
     await script([{ text: 'Prose written without the missing chapter.' }]);
-    const out = await writer.writeNext({ ...b, direction: 'Continue the story.' });
+    const out = await unreadable(() => writer.writeNext({ ...b, direction: 'Continue the story.' }));
     assert.equal(out.ok, false);
     assert.match(out.error, /chapter.*could not be read/i);
     assert.equal((await requests()).length, 0);
     assert.equal(b.chapter().passages.length, 1);
   });
-  await test('every rewrite and scene conversion refuses a missing chapter without altering existing versions', async () => {
+  await test('every rewrite and scene conversion refuses a chapter that cannot be read without altering existing versions', async () => {
     const b = await makeBook(['Mara enters the garden.']);
     const passage = b.chapter().passages[0];
-    store.change('novel', b.novelId, n => n.order.push('missing-later-chapter'));
+    store.change('novel', b.novelId, n => n.order.push('unreadable-later-chapter'));
     const actions = [
       () => writer.anotherTake({ ...b, passageId: passage.id }),
       () => writer.rewrite({ ...b, passageId: passage.id, note: 'Make the hesitation tender.' }),
@@ -229,7 +237,7 @@ try {
       () => writer.goOn({ ...b, passageId: passage.id }),
       () => writer.playToProse({ ...b, play: { who: 'Mara', after: passage.id }, transcript: 'Narrator: Jun offers his umbrella.' }),
     ];
-    for (const action of actions) assert.equal((await action()).ok, false);
+    for (const action of actions) assert.equal((await unreadable(action)).ok, false);
     assert.equal((await requests()).length, 0);
     assert.equal(b.chapter().passages.length, 1);
     assert.equal(b.chapter().passages[0].versions.length, 1);

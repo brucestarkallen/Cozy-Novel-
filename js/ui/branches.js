@@ -82,13 +82,14 @@ export function openBranches(novelId, { before = null } = {}) {
   const s = openSheet('Branches of this story', { small: true, onClose: () => { alive = false; } });
   s.wrap.classList.add('branch-sheet');
   s.body.append(h('p.say', 'Try another path through the story. Each book keeps its own pages and notes.'),
-    h('button.btn', { onclick: () => openBranch({ novelId }, { before }) }, 'Branch the whole book'));
+    h('button.btn', { onclick: () => openBranch({ novelId }, { before }) }, 'Branch the whole book'),
+    h('p.say.quiet', 'A second book with every page, the notes, your partner and the scenes as they stand — this one stays as it is.'));
   const chapterId = hooks.chapter?.(novelId) || n.prefs?.at || n.order?.at(-1);
   const chapter = store.peek('chapter', chapterId);
   if (chapter) s.body.append(h('button.btn.quiet', { onclick: () => {
     const now = store.peek('chapter', chapterId);
     openBranch({ novelId, chapterId, through: now?.passages?.at(-1)?.id || '^' }, { before });
-  } }, 'Branch through this chapter'), h('p.say', 'Or use a passage’s ⋯ menu to begin exactly where you choose.'));
+  } }, 'Branch through this chapter'), h('p.say.quiet', 'A second book that ends where this chapter ends, its notes as they stood there.'), h('p.say', 'Or use a passage’s ⋯ menu to begin exactly where you choose.'));
   const family = h('div.branch-family', { 'aria-live': 'polite' });
   s.body.append(h('details.branch-details', { open: true }, h('summary', 'Open another branch'), family));
   const failure = h('p.branch-status', { role: 'alert', hidden: true });
@@ -116,7 +117,7 @@ export function openBranches(novelId, { before = null } = {}) {
       family.replaceChildren();
       if (n.branch?.fromId) {
         const source = rows.find(row => row.id === n.branch.fromId);
-        if (source) family.append(h('button.btn.quiet.branch-source', { onclick: () => open(source.id, n.branch.point?.chapterId, { source: n.branch.point }) }, 'Open where this branch began'));
+        if (source) family.append(h('button.btn.quiet.branch-source', { onclick: () => open(source.id, n.branch.point?.chapterId, { source: n.branch.point }) }, 'Open where this branch began'), h('p.say.quiet', 'The book it came from, at the passage it parted.'));
         else family.append(h('p.say', 'The book this branch began from is no longer on the shelf.'));
       }
       const list = h('ul.branch-list');

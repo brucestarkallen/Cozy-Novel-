@@ -25,10 +25,11 @@ import { estimateTokens } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
 import { ownWordsFor } from './ownwords.js';
-import { aboutTheBook, notesText, earlierText, currentText, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook } from './prompts.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
+import { stretchPlan, soFarText } from './stretches.js';
 
 export const SAFETY = 1500;
 /* the least an answer is given before a request is refused as too big, when he set no Longest reply (Cozy Tavern M752) */
@@ -74,13 +75,29 @@ function excerpt(text, n = 900) {
   return `${t.slice(0, n).trim()}\n[…]\n${t.slice(-n).trim()}`;
 }
 
-/* A stale summary can preserve an event deleted from the book. Until the
- * helper catches up, use the current chapter’s words, clearly excerpted. */
+/* A chapter told in short: its summary, while it fits the chapter's words.
+ * A summary from before a change can hold an event since taken out, so it
+ * never rides (2.10): a long chapter rides by its stretches instead — each
+ * whose words are unchanged by its own summary, one that changed or was never
+ * summed up by its opening and close — and any other by its current opening
+ * and close, until the helper writes the summary again. */
+function stretchedShort(chapter) {
+  const plan = stretchPlan(chapter, { closeLast: true });
+  if (plan.stretches.length < 2 || !plan.stretches.some((x) => x.text)) return '';
+  const list = chapter.passages || [];
+  const ix = new Map(list.map((p, k) => [p.id, k]));
+  return plan.stretches.map((x) => x.text
+    || `(not summed up as it reads now — its opening and close)\n${excerpt(chapterText({ passages: list.slice(ix.get(x.from), ix.get(x.to) + 1) }), 600)}`).join('\n\n');
+}
 export function shortOf(chapter) {
   const s = chapter && chapter.summary;
   const text = chapterText(chapter);
   if (!text.trim()) return '(nothing written in it yet)';
-  if (s && s.text) return s.fp && s.fp !== chapterPrint(chapter) ? `(The summary is waiting for the chapter’s latest changes — its current opening and close follow instead.)\n${excerpt(text)}` : s.text.trim();
+  const has = Boolean(s && String(s.text || '').trim());
+  if (has && (!s.fp || s.fp === chapterPrint(chapter))) return s.text.trim();
+  const stretched = stretchedShort(chapter);
+  if (stretched) return stretched;
+  if (has) return `(The summary is waiting for the chapter’s latest changes — its current opening and close follow instead.)\n${excerpt(text)}`;
   return `(not summarised yet — its opening and close)\n${excerpt(text)}`;
 }
 
@@ -141,7 +158,8 @@ export function trimCurrent(current, keep) {
   const preShare = budget - postShare;
   const out = { ...current };
   const preChars = Math.floor(preShare * 3.2);
-  if (pre.length > preChars) {
+  /* the words before the point already fitted by the chapter so far (fitCurrent) are left as they are */
+  if (pre.length > preChars && !current.fitted) {
     const head = pre.slice(0, 1200).replace(/\s+\S*$/, '');
     const tail = pre.slice(-Math.max(1000, preChars - head.length - 120)).replace(/^\S*\s+/, '');
     out[preKey] = `(The start of this chapter is left out here to save room. It opens:)\n${head}\n[…]\n${tail}`;
@@ -153,11 +171,47 @@ export function trimCurrent(current, keep) {
   return out;
 }
 
-const currentCost = (c) => (c ? estimateTokens([c.text, c.before, c.after, c.afterText].filter(Boolean).join('\n')) : 0);
+/* The chapter open, fitted to `keep` tokens: what leads up to the point —
+ * its earliest stretches by their summaries (stretches.js), from where it
+ * fits on word for word; what follows the point keeps its start
+ * (trimCurrent). The partner sees each summed-up stretch's passage numbers. */
+function fitCurrent(novel, chapter, current, target, keep, purpose) {
+  const list = chapter.passages || [];
+  const at = (id) => list.findIndex((p) => p.id === id);
+  let upto = list.length;
+  if (target.mark) upto = Math.max(0, at(target.mark));
+  else if (target.before && at(target.before) >= 0) upto = at(target.before);
+  else if (target.through) upto = target.through === '^' ? 0 : at(target.through) >= 0 ? at(target.through) + 1 : list.length;
+  const preKey = current.marker ? 'before' : 'text';
+  const postKey = current.marker ? 'after' : 'afterText';
+  const postShare = Math.min(estimateTokens(String(current[postKey] || '')), Math.floor(keep * 0.3));
+  const numbered = purpose === 'partner';
+  const join = numbered ? (arr) => numberedText(novel, chapter, arr) : (arr) => arr.map(passageText).filter((t) => t.trim()).join('\n\n');
+  const nums = passageNumbers(chapter);
+  const n = chapterNumber(novel, chapter.id);
+  const label = numbered ? (a, b) => {
+    const ns = list.slice(a, b + 1).map((p) => nums.get(p.id)).filter(Boolean);
+    return ns.length ? `[${n}.${ns[0]}–${n}.${ns[ns.length - 1]}, in short]` : '';
+  } : () => '';
+  const soFar = soFarText(chapter, { upto, keep: Math.max(600, keep - postShare), estimate: estimateTokens, join, label });
+  return trimCurrent(soFar ? { ...current, [preKey]: soFar, fitted: true } : current, keep);
+}
+
+/* what the chapters before the open one cost told in short, and what comes after it (capped as fitBook caps it) */
+function shortBookCost(novel, chapters, chapterId) {
+  const order = novel.order || [];
+  const at = order.indexOf(chapterId);
+  const cost = (id) => estimateTokens(chapters[id] ? shortOf(chapters[id]) : '') + 12;
+  const earlier = (at > 0 ? order.slice(0, at) : []).reduce((a, id) => a + cost(id), 0);
+  const later = (at >= 0 ? order.slice(at + 1) : []).reduce((a, id) => a + cost(id), 0);
+  return { earlier, later };
+}
+
+const currentCost = (c) => (c ? estimateTokens([c.text, c.before, c.after, c.afterText, c.plan, c.ending].filter(Boolean).join('\n')) : 0);
 
 /* Fit the book into what is left of the room. numbered: every passage of a
  * chapter told whole carries its number (the partner's view). */
-export function fitBook({ novel, chapters, chapterId, current, room, numbered = false }) {
+export function fitBook({ novel, chapters, chapterId, current, room, numbered = false, plans = false }) {
   const order = novel.order || [];
   const at = order.indexOf(chapterId);
   const earlier = at > 0 ? order.slice(0, at) : at < 0 ? order.slice() : [];
@@ -170,7 +224,9 @@ export function fitBook({ novel, chapters, chapterId, current, room, numbered = 
   const wholeCost = earlier.map((id) => estimateTokens(wholeOf(id)) + 12);
   const shortText = (id) => (!chapters[id] ? UNREAD : shortOf(ch(id)));
   const shortCost = earlier.map((id) => estimateTokens(shortText(id)) + 12);
-  const laterRows = later.map((id) => ({ label: labelOf(id), text: shortText(id) }));
+  /* the partner plans with him: a later chapter's plan rides beside it (the writer never reads ahead in the map) */
+  const planOf = (id) => (plans && chapters[id] && String(chapters[id].plan || '').trim() ? `\nPlanned: ${String(chapters[id].plan).trim()}` : '');
+  const laterRows = later.map((id) => ({ label: labelOf(id), text: shortText(id) + planOf(id) }));
   let laterCost = laterRows.reduce((a, r) => a + estimateTokens(r.text) + 12, 0);
   let laterOmitted = 0;
   while (laterRows.length && laterCost > room * 0.25) { const r = laterRows.pop(); laterCost -= estimateTokens(r.text) + 12; laterOmitted++; }
@@ -289,7 +345,12 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const instr = (house && house.instructions) || {};
   const notesAs = notesAsOf(house);
   const chapter = chapters[target.chapterId] || chapters[(novel.order || [])[novel.order.length - 1]] || { id: '', passages: [] };
-  const current = chapter.id ? currentPart(novel, chapter, target, purpose, notesAs) : null;
+  const opened = chapter.id ? currentPart(novel, chapter, target, purpose, notesAs) : null;
+  /* the story map: this chapter's plan, and in the book's last chapter how it ends with what is still open (prompts.js) */
+  const planHere = String(chapter.plan || '').trim();
+  const lastHere = Boolean(chapter.id) && (novel.prefs || {}).endsAt === chapter.id && (purpose === 'write' || purpose === 'play');
+  const current = opened ? { ...opened, ...(planHere ? { plan: withMacros(planHere, macroNames(house, purpose, play)) } : {}),
+    ...(lastHere ? { ending: endingWords(withMacros(String(novel.ending || ''), macroNames(house, purpose, play)), ((novel.notes || {}).threads || []).filter((t) => t.open !== false)) } : {}) } : null;
   const label = chapter.id ? chapterLabel(novel, chapter) : 'the first chapter';
   let own = '';
   let frame = '';
@@ -311,7 +372,9 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const runsOn = atPoint && atPoint.later && !atPoint.clean ? notesRunOn(novel, chapters) : '';
   /* the book's own words with {{user}} and {{char}} filled, never sent raw */
   const named = namedBook(notesNow, house);
-  const about = aboutTheBook(named, { plans: true });
+  /* how he means it to end: the partner's to plan with, always; the writer's only in the last chapter (above) */
+  const endingNote = purpose === 'partner' && String(named.ending || '').trim() ? `How I mean the book to end (between us — the writer is told it only in the book's last chapter):\n${String(named.ending).trim()}` : '';
+  const about = [aboutTheBook(named, { plans: true }), endingNote].filter(Boolean).join('\n\n');
   /* the modules (modules.js): the ones that always ride, and the ones his words woke */
   const ride = ridingFor(house, novel, purpose, wakesOn(moment));
   /* his words and the modules with the names in them — never {{user}} or {{char}} (Tavern M361) */
@@ -387,11 +450,17 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   let cur = current;
   if (room < 0 && current) {
     /* the chapter alone is longer than the room left: it is told in part —
-     * every part of it, before and after the point being written */
-    cur = trimCurrent(current, currentCost(current) + room - 500);
-    room = 0;
+     * its earliest stretches by their summaries, the newest words whole —
+     * and the chapters before it keep their summaries beside it (up to a
+     * third of the room): they used to be dropped whole, "left out here to
+     * save room", the moment the open chapter outgrew the model */
+    const bookRoom = room + currentCost(current);
+    const need = shortBookCost(novel, chapters, chapter.id);
+    const besides = Math.min(need.earlier + Math.min(need.later, Math.floor(bookRoom * 0.25)), Math.floor(bookRoom * 0.35));
+    cur = fitCurrent(novel, chapter, current, target, Math.max(1000, bookRoom - besides - 500), purpose);
+    room = Math.max(0, bookRoom - currentCost(cur));
   }
-  const fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room), numbered: purpose === 'partner' });
+  const fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room), numbered: purpose === 'partner', plans: purpose === 'partner' });
   const joinParts = (arr) => arr.filter((x) => String(x || '').trim()).join('\n\n\n');
   const stableBook = joinParts([about, earlierText(fit.book)]);
   const moving = joinParts([notesPart, currentText(fit.book)]);
@@ -430,6 +499,14 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
    * about, the notes, the chapter open in part — not even the answer's floor
    * is left (Cozy Tavern M752) */
   const tooBig = over || (!guessed && total - tokens < needed ? overOf({ book: Math.max(0, tokens - (instructions + 200) - afterCost), about: estimateTokens(about) }) : null);
+  /* how the chapter open was told, each side of the point (writer.js says it under the page) */
+  const sideOf = (key) => String(((cur || {})[key]) || '');
+  const preK = current && current.marker ? 'before' : 'text', postK = current && current.marker ? 'after' : 'afterText';
+  const pre = sideOf(preK);
+  const chapterFit = !current || cur === current ? { before: 'whole', after: 'whole' } : {
+    before: pre === String(current[preK] || '') ? 'whole' : !cur.fitted || !pre.includes('The chapter so far, in short:') ? 'cut' : /left out here to save room/.test(pre) ? 'stretches-cut' : 'stretches',
+    after: sideOf(postK) === String(current[postK] || '') ? 'whole' : 'cut',
+  };
   return {
     system,
     systemParts,
@@ -440,7 +517,9 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
       /* the cards shown by their first line (talk.js: never written whole from it) */
       shortCards: [...shortIds],
       /* what goes whatever the book's earlier chapters, the answer's room, the chapter open (talk.js) */
-      fixed, reserve, current: currentCost(current) },
+      fixed, reserve, current: currentCost(current), chapterFit,
+      /* chapters in the book's list that could not be read (the writer is told so in their place; writer.js tells him under the page) */
+      unreadChapters: (novel.order || []).filter((id) => !chapters[id]).length },
     /* a model whose room cannot hold what has to go with the least of the
      * book is never sent this: the reason, in plain words (call.js) */
     refuse: tooBig ? tooSmallWords(tooBig) : '',

@@ -1,159 +1,127 @@
-/* Hand-drawn Tokyo apartment. These colors belong to the scenery alone. */
+/* Neon Tokyo — the street canyon's own colours (js/ui/worlds/tokyo.js).
+ * Night: tubes lit, rain catching them. Day: the same street after the rain,
+ * the signs switched off and the sky gone pale. */
 .world-scene[data-world="tokyo"] {
-  --tokyo-wall-top: #171424;
-  --tokyo-wall-bottom: #272034;
-  --tokyo-ceiling: #14121f;
-  --tokyo-floor: #201b2a;
-  --tokyo-room-line: #4a3b55;
-  --tokyo-sky-top: #17132c;
-  --tokyo-sky-mid: #3b2464;
-  --tokyo-horizon: #795298;
-  --tokyo-mist: #b982de;
-  --tokyo-cloud: #b5abd4;
-  --tokyo-moon: #d3bfe0;
-  --tokyo-building-far: #3e2d5c;
-  --tokyo-building-mid: #2b2044;
-  --tokyo-building-front: #21192f;
-  --tokyo-city-line: #8b66a6;
-  --tokyo-window-dim: #87639e;
-  --tokyo-window-lit: #d38cf4;
-  --tokyo-window-warm: #e3b2bc;
-  --tokyo-tower-deck: #64386f;
-  --tokyo-sign: #4b2566;
-  --tokyo-near-haze: #9157ac;
-  --tokyo-rain: #c6c2e0;
-  --tokyo-frame-shadow: #11131e;
-  --tokyo-frame: #1b1b29;
-  --tokyo-frame-light: #5b4e6b;
-  --tokyo-hardware: #b29ba1;
-  --tokyo-sill: #3b3046;
-  --tokyo-fabric: #352a49;
-  --tokyo-fabric-fold: #221d32;
-  --tokyo-fabric-line: #746080;
-  --tokyo-wood-top: #504051;
-  --tokyo-wood-bottom: #2d2434;
-  --tokyo-wood-grain: #96747c;
-  --tokyo-print: #30283e;
-  --tokyo-print-moon: #b9a1b9;
-  --tokyo-print-hill: #66516d;
-  --tokyo-print-fore: #473d58;
-  --tokyo-book-purple: #685179;
-  --tokyo-book-blue: #4c6675;
-  --tokyo-book-rose: #8e5e76;
-  --tokyo-book-cream: #a79589;
-  --tokyo-book-line: #b0a0ab;
-  --tokyo-pot: #735868;
-  --tokyo-pot-line: #a37e87;
-  --tokyo-pot-dark: #312b38;
-  --tokyo-leaf: #3e5960;
-  --tokyo-leaf-line: #7a9b92;
-  --tokyo-stem: #71877d;
-  --tokyo-cabinet-dark: #181720;
-  --tokyo-record-line: #6d596d;
-  --tokyo-speaker: #302a3b;
-  --tokyo-turntable: #51414f;
-  --tokyo-record: #191a25;
-  --tokyo-lamp-metal: #5b4e61;
-  --tokyo-lamp-light: #ffd0a2;
-  --tokyo-journal: #d5bfae;
-  --tokyo-journal-line: #937776;
-  --tokyo-pen: #29303b;
-  --tokyo-cup-shadow: #1f1b28;
-  --tokyo-ceramic: #b48b9a;
-  --tokyo-cup-rim: #dfbbc2;
-  --tokyo-tea: #60414b;
-  --tokyo-steam: #d8bfd3;
-  --tokyo-chair: #4d3656;
+  --neon-magenta: #ff2e97;
+  --neon-cyan: #22e4ff;
+  --neon-amber: #ffb44a;
+  --neon-violet: #7b4dff;
+  --neon-core: #fff4fb;
+  --neon-halo: .24;
+  --neon-halo-2: .5;
+  --neon-glow: .55;
+  --neon-pool: .5;
+  --neon-sky-top: #05041a;
+  --neon-sky-mid: #160b3c;
+  --neon-horizon: #4b1263;
+  --neon-sky-low: #12082a;
+  --neon-moon: #ffd7f0;
+  --neon-far: #1d0f45;
+  --neon-window-far: #ffc8f0;
+  --neon-rail: #0d0726;
+  --neon-street-far: #1a0b33;
+  --neon-street-near: #06040f;
+  --neon-lane: #ffd7f0;
+  --neon-wall-near: #0b0718;
+  --neon-wall-far: #1c0f3a;
+  --neon-window-dark: #171032;
+  --neon-window-amber: #ffbe6b;
+  --neon-window-cyan: #63eaff;
+  --neon-window-rose: #ff6fc8;
+  --neon-floor-line: #241848;
+  --neon-steel: #2e2357;
+  --neon-wire: #1e1240;
+  --neon-sign-back: #0d0820;
+  --neon-rain: rgba(190, 220, 255, .5);
+  background: #05041a;
 }
 :root[data-mode="light"] .world-scene[data-world="tokyo"] {
-  --tokyo-wall-top: #d2c5d8;
-  --tokyo-wall-bottom: #bdaec9;
-  --tokyo-ceiling: #e2d8e5;
-  --tokyo-floor: #baa8bb;
-  --tokyo-room-line: #a391ad;
-  --tokyo-sky-top: #b7b6d8;
-  --tokyo-sky-mid: #d1bedc;
-  --tokyo-horizon: #e9cbd6;
-  --tokyo-mist: #f8deeb;
-  --tokyo-cloud: #f7eff8;
-  --tokyo-moon: #f9e8e9;
-  --tokyo-building-far: #aaa3c5;
-  --tokyo-building-mid: #8a83aa;
-  --tokyo-building-front: #716888;
-  --tokyo-city-line: #c1b0d1;
-  --tokyo-window-dim: #b0a1bd;
-  --tokyo-window-lit: #debbd2;
-  --tokyo-window-warm: #e5c8b6;
-  --tokyo-tower-deck: #af879f;
-  --tokyo-sign: #7a5a89;
-  --tokyo-near-haze: #e4bfd7;
-  --tokyo-rain: #f8f2ff;
-  --tokyo-frame-shadow: #8d7c99;
-  --tokyo-frame: #a18da9;
-  --tokyo-frame-light: #d9c8df;
-  --tokyo-hardware: #a47f83;
-  --tokyo-sill: #b39bad;
-  --tokyo-fabric: #b2a1c4;
-  --tokyo-fabric-fold: #c7b8d4;
-  --tokyo-fabric-line: #8e7d9d;
-  --tokyo-wood-top: #c09aa9;
-  --tokyo-wood-bottom: #997889;
-  --tokyo-wood-grain: #e1bec5;
-  --tokyo-print: #dacadd;
-  --tokyo-print-moon: #f4e1cb;
-  --tokyo-print-hill: #a991b5;
-  --tokyo-print-fore: #8d81a3;
-  --tokyo-book-purple: #9478ab;
-  --tokyo-book-blue: #789aa5;
-  --tokyo-book-rose: #be8b9e;
-  --tokyo-book-cream: #e0cfba;
-  --tokyo-book-line: #e4ced8;
-  --tokyo-pot: #c28f9d;
-  --tokyo-pot-line: #e4bbc4;
-  --tokyo-pot-dark: #7c6778;
-  --tokyo-leaf: #71999a;
-  --tokyo-leaf-line: #b3cebe;
-  --tokyo-stem: #547d76;
-  --tokyo-cabinet-dark: #79677e;
-  --tokyo-record-line: #c4abc0;
-  --tokyo-speaker: #9a859c;
-  --tokyo-turntable: #c3a2b0;
-  --tokyo-record: #574d65;
-  --tokyo-lamp-metal: #9d809c;
-  --tokyo-lamp-light: #ffe5bd;
-  --tokyo-journal: #f3e2d0;
-  --tokyo-journal-line: #b79b9b;
-  --tokyo-pen: #5a5677;
-  --tokyo-cup-shadow: #997f96;
-  --tokyo-ceramic: #e4b2c0;
-  --tokyo-cup-rim: #ffe0e3;
-  --tokyo-tea: #9c7078;
-  --tokyo-steam: #fff4f7;
-  --tokyo-chair: #a88bb1;
+  --neon-magenta: #d83a8f;
+  --neon-cyan: #2d9fb8;
+  --neon-amber: #c98a3a;
+  --neon-violet: #9b84d6;
+  --neon-core: #f4eef8;
+  --neon-halo: 0;
+  --neon-halo-2: .12;
+  --neon-glow: .18;
+  --neon-pool: .14;
+  --neon-sky-top: #c9c3e8;
+  --neon-sky-mid: #e6d6ee;
+  --neon-horizon: #ffd6dc;
+  --neon-sky-low: #e5dcec;
+  --neon-moon: #ffffff;
+  --neon-far: #b1a6cf;
+  --neon-window-far: #f6eefa;
+  --neon-rail: #8f83b0;
+  --neon-street-far: #b7aacb;
+  --neon-street-near: #8d80a5;
+  --neon-lane: #f7f0ff;
+  --neon-wall-near: #6e6489;
+  --neon-wall-far: #a397bf;
+  --neon-window-dark: #5f5680;
+  --neon-window-amber: #d8c4b8;
+  --neon-window-cyan: #b9d6e2;
+  --neon-window-rose: #d9bdd2;
+  --neon-floor-line: #8579a5;
+  --neon-steel: #776b98;
+  --neon-wire: #6d628c;
+  --neon-sign-back: #4b4168;
+  --neon-rain: rgba(255, 255, 255, .55);
+  background: #c9c3e8;
 }
-.tokyo-art { display: block; width: 100%; height: 100%; }
-.tokyo-art .tokyo-rain,
-.tokyo-art .tokyo-clouds,
-.tokyo-art .tokyo-neon,
-.tokyo-art .tokyo-steam,
-.tokyo-art .tokyo-train { animation-play-state: paused; }
-:root[data-world="tokyo"] .tokyo-art .tokyo-rain { animation: tokyo-rainfall 9s linear infinite; }
-:root[data-world="tokyo"] .tokyo-art .tokyo-clouds { animation: tokyo-cloud-drift 38s ease-in-out infinite alternate; }
-:root[data-world="tokyo"] .tokyo-art .tokyo-neon { animation: tokyo-neon-breathe 11s ease-in-out infinite alternate; }
-:root[data-world="tokyo"] .tokyo-art .tokyo-steam { animation: tokyo-tea-steam 6s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
-:root[data-world="tokyo"] .tokyo-art .tokyo-train { animation: tokyo-last-train 46s linear infinite; }
-@keyframes tokyo-rainfall { from { transform: translate(39.504px,-185.848px); } to { transform: translate(0,0); } }
-@keyframes tokyo-cloud-drift { from { transform: translate(-22px,-8px); opacity: .7; } to { transform: translate(22px,8px); opacity: 1; } }
-@keyframes tokyo-neon-breathe { from { opacity: .72; } to { opacity: 1; } }
-@keyframes tokyo-tea-steam { 0%,100% { transform: translate(0,0) scaleX(.95); opacity: .34; } 50% { transform: translate(3px,-8px) scaleX(1.12); opacity: .66; } }
-@keyframes tokyo-last-train { from { transform: translateX(-480px); opacity: 0; } 12%,75% { opacity: .6; } to { transform: translateX(1000px); opacity: 0; } }
-:root[data-motion="off"] .tokyo-art *,
-.world-scene[data-world="tokyo"][hidden] .tokyo-art * { animation: none !important; }
-@media (prefers-reduced-motion: reduce) { .tokyo-art * { animation: none !important; } }
 
-/* Keep the desk and the tower in the portrait view rather than cropping to an empty pane. */
-@media (max-width: 680px) {
-  .tokyo-art { width: calc(100% + 66vh); max-width: none; transform: translateX(-66vh); }
+/* The drawing keeps its own shape (9 × 16) and covers the screen: the
+ * moving layers are placed in the drawing's own measures and stay on it. */
+.world-scene[data-world="tokyo"] .neon-stage {
+  position: absolute; left: 50%; top: 50%; width: max(100vw, calc(100lvh * 900 / 1600)); height: auto; aspect-ratio: 900 / 1600;
+  transform: translate(-50%, -50%); overflow: hidden;
 }
-:root[data-mode="light"] .tokyo-art .tokyo-city-glow { opacity: .35; }
-:root[data-mode="light"] .tokyo-art .tokyo-interior-neon { opacity: .22; }
+.neon-stage > svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.neon-stage svg text { paint-order: stroke; }
+
+/* the last train, between the far city and the street */
+.neon-train { position: absolute; left: 0; top: 51.3%; width: 100%; height: .5%; will-change: transform; animation: neon-train 23s linear infinite; }
+.neon-train i { position: absolute; top: 0; width: 6%; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--neon-amber), #fff1d6); box-shadow: 0 0 6px var(--neon-amber); }
+.neon-train i:nth-child(1) { left: 0; } .neon-train i:nth-child(2) { left: 6.6%; } .neon-train i:nth-child(3) { left: 13.2%; } .neon-train i:nth-child(4) { left: 19.8%; }
+@keyframes neon-train { 0%, 55% { transform: translateX(-30%); opacity: 0; } 58% { opacity: 1; } 92% { opacity: 1; } 96%, 100% { transform: translateX(110%); opacity: 0; } }
+
+/* the sign that stutters now and then */
+.neon-flicker { position: absolute; will-change: opacity; animation: neon-stutter 9s linear infinite; }
+.neon-flicker svg { display: block; width: 100%; height: 100%; }
+@keyframes neon-stutter {
+  0%, 61%, 63.5%, 66%, 100% { opacity: 1; }
+  62% { opacity: .25; } 64.5% { opacity: .55; } 65% { opacity: .2; }
+}
+
+/* rain in two depths: tiled streaks moved down by the compositor */
+.neon-rain { position: absolute; left: -10%; right: -10%; top: -20%; height: 140%; will-change: transform; pointer-events: none; }
+.neon-rain-far {
+  background-image: repeating-linear-gradient(100deg, transparent 0 14px, var(--neon-rain) 14px 15px, transparent 15px 61px);
+  -webkit-mask-image: repeating-linear-gradient(180deg, #000 0 22px, transparent 22px 71px); mask-image: repeating-linear-gradient(180deg, #000 0 22px, transparent 22px 71px);
+  opacity: .32; animation: neon-rain-far 1.9s linear infinite;
+}
+.neon-rain-near {
+  background-image: repeating-linear-gradient(103deg, transparent 0 40px, var(--neon-rain) 40px 41.5px, transparent 41.5px 127px);
+  -webkit-mask-image: repeating-linear-gradient(180deg, #000 0 46px, transparent 46px 163px); mask-image: repeating-linear-gradient(180deg, #000 0 46px, transparent 46px 163px);
+  opacity: .5; animation: neon-rain-near 1.05s linear infinite;
+}
+@keyframes neon-rain-far { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-12px, 71px, 0); } }
+@keyframes neon-rain-near { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-38px, 163px, 0); } }
+:root[data-mode="light"] .neon-rain-far { opacity: .18; }
+:root[data-mode="light"] .neon-rain-near { opacity: .26; }
+
+/* light drifting up from the street */
+.neon-motes { position: absolute; inset: 0; }
+/* sized by --s, never scaled in the keyframes: keyframes with plain values only, so the compositor runs them without the page restyling each frame */
+.neon-mote { position: absolute; left: var(--x); bottom: 6%; width: calc(9px * var(--s)); height: calc(9px * var(--s)); border-radius: 50%; will-change: transform, opacity;
+  background: radial-gradient(circle, var(--neon-core) 0, var(--neon-magenta) 35%, transparent 70%); opacity: 0;
+  animation: neon-mote 21s linear infinite; animation-delay: var(--d); }
+.neon-mote:nth-child(3n) { background: radial-gradient(circle, var(--neon-core) 0, var(--neon-cyan) 35%, transparent 70%); }
+@keyframes neon-mote { 0% { transform: translate3d(0, 0, 0); opacity: 0; } 12% { opacity: .7; } 70% { opacity: .35; } 100% { transform: translate3d(14px, -78vh, 0); opacity: 0; } }
+:root[data-mode="light"] .neon-train, :root[data-mode="light"] .neon-motes { display: none; }
+:root[data-mode="light"] .neon-flicker { animation: none; opacity: .6; }
+
+/* still: paused, reduced motion, a resting tab, a hidden room */
+:root[data-motion="off"] .tokyo-art *, :root[data-motion="off"] .tokyo-art,
+.world-scene[data-world="tokyo"][hidden] .tokyo-art * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .tokyo-art, .tokyo-art * { animation: none !important; } }

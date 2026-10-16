@@ -212,7 +212,7 @@ async def main(args):
     TRACE_DIR=args.trace_dir
     with H.Env():
         async with async_playwright() as p:
-            browser=await p.chromium.launch(executable_path=os.environ.get('COZY_TEST_CHROMIUM','/usr/bin/chromium'),headless=True,args=['--no-sandbox'])
+            browser=await p.chromium.launch(executable_path=(os.environ.get('COZY_TEST_CHROMIUM') or None),headless=True,args=['--no-sandbox'])
             output={'app':str(pathlib.Path(H.APP).resolve()),'cpu_throttle':args.cpu,'seconds':args.seconds,'repeats':args.repeats,'browser':browser.version,'note':'Headless Chromium rAF is normally 60 Hz; these are controlled diagnostics, not a physical phone or 120 Hz claim.','cases':[]}
             try:
                 for repeat in range(args.repeats):

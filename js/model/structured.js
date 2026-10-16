@@ -299,11 +299,17 @@ export function makeStructuredDecoder({ hidden = null, holdMax = 6000 } = {}) {
       if (mode === 'seek' && seekBuf.trim()) {
         let got = '';
         try {
-          const j = JSON.parse(seekBuf);
+          /* the object whole — or, when a few words trail after it ({"content":"…"} then "Done."), the object they follow */
+          let j;
+          let after = '';
+          try { j = JSON.parse(seekBuf); } catch (_) { const head = firstObject(seekBuf); j = head ? JSON.parse(head) : null; after = head ? seekBuf.replace(/^\s+/, '').slice(head.length) : ''; }
           if (j && typeof j === 'object') {
             if (typeof j.response === 'string') got = j.response;
             else got = Object.values(j).filter((v) => typeof v === 'string').sort((a, b) => b.length - a.length)[0] || '';
           }
+          /* more words after the object than in it: those are the model's words too — everything as it came */
+          const count = (x) => (String(x).match(/\S+/g) || []).length;
+          if (got && after.trim() && count(after) > count(got)) got = '';
         } catch (err) { got = ''; }
         words += got || seekBuf;
         seekBuf = '';
@@ -317,6 +323,20 @@ export function makeStructuredDecoder({ hidden = null, holdMax = 6000 } = {}) {
     closed() { return mode === 'done'; }, /* M585: the answer's text is complete — nothing after it is ever words */
     wordsSoFar() { return words.length; },
   };
+}
+
+/* the first whole JSON object a text opens with ('' when it never closes) */
+function firstObject(text) {
+  const t = String(text || '').replace(/^\s+/, '');
+  let depth = 0, quoted = false, escaped = false;
+  for (let i = 0; i < t.length; i += 1) {
+    const ch = t[i];
+    if (quoted) { if (escaped) escaped = false; else if (ch === '\\') escaped = true; else if (ch === '"') quoted = false; continue; }
+    if (ch === '"') quoted = true;
+    else if (ch === '{' || ch === '[') depth += 1;
+    else if ((ch === '}' || ch === ']') && --depth === 0) return t.slice(0, i + 1);
+  }
+  return '';
 }
 
 /* a whole answer at once (a house that did not stream, or a final check): the words of {"response":"…"}, else the text */

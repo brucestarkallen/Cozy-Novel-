@@ -194,7 +194,9 @@ try {
     assert.equal(out.events.length, 2); assert.deepEqual(out.events.map(e => e.passageId), ps.slice(0, 2).map(p => p.id));
     assert.equal(out.coverage.read, 3); assert.equal(out.coverage.complete, true);
     const calls = await requests(); assert.equal(calls.length, 2, 'normal batched reading plus the newest passage; no extra history request');
-    assert.ok(calls[0].body.messages.at(-1).content.includes(`source ${ps[0].id}`));
+    /* 2.11: each source is named as the page names it, never by the app's own id (a machine word in what is sent);
+     * an answer that still names the id lands, as this one does */
+    assert.ok(calls[0].body.messages.at(-1).content.includes('Passage 1\nNew in Chapter') && !calls[0].body.messages.at(-1).content.includes(ps[0].id));
     const saved = (await (await realFetch(`${BASE}/api/store/chapter/${b.cid}`)).json()).data;
     assert.equal(shape.picked(saved.passages[0]).continuity.events.length, 1, 'evidence is durable on its source version');
     historyOf(b); historyOf(b); assert.equal((await requests()).length, 2, 'opening the view asks nothing');

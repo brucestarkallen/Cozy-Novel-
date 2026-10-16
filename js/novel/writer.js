@@ -13,7 +13,7 @@
 import * as store from '../store.js';
 import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
-import { newId, countWords } from '../util.js';
+import { newId, countWords, numberWords } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
@@ -129,7 +129,12 @@ async function bookOf(novelId) {
   try {
     const opened = await store.open('novel', novelId);
     if (!opened) return { error: 'that book is not on the shelf any more' };
-    await Promise.allSettled((opened.order || []).map((id) => store.open('chapter', id)));
+    const ids = [...(opened.order || [])];
+    const tried = await Promise.allSettled(ids.map((id) => store.open('chapter', id)));
+    /* the phone answered that it holds no such chapter (its record gone while
+     * the book's list still names it): not part of the book, never a reason
+     * to refuse the page; one the phone could not be asked about is */
+    const gone = new Set(ids.filter((id, k) => tried[k].status === 'fulfilled' && !tried[k].value));
     /* The book can change while its chapters open. Work from its current
      * order, and never write across a chapter whose words could not load. */
     const novel = store.peek('novel', novelId);
@@ -137,9 +142,11 @@ async function bookOf(novelId) {
     const chapters = {};
     for (const id of novel.order || []) {
       const chapter = store.peek('chapter', id);
-      if (!chapter) return { error: 'a chapter could not be read — open the book again before asking for more writing' };
+      if (!chapter && gone.has(id)) continue;
+      if (!chapter) return { error: 'a chapter could not be read just now — the phone did not answer; ask again in a moment' };
       chapters[id] = chapter;
     }
+    /* the book's list as the page shows it, so every chapter keeps its number; the one not there is told as such where it stands (context.js) */
     return { novel, chapters };
   } catch (e) {
     return { error: `the book could not be opened: ${(e && e.message) || String(e)}` };
@@ -150,11 +157,24 @@ export async function recount(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return;
   const chapters = {};
-  for (const id of novel.order || []) { const c = store.peek('chapter', id); if (c) chapters[id] = c; }
-  if (Object.keys(chapters).length !== (novel.order || []).length) return;
+  /* every chapter in hand first — one the phone answered it no longer holds counts no words, never stops the count for good */
+  for (const id of novel.order || []) { const c = store.peek('chapter', id); if (c === undefined) return; if (c) chapters[id] = c; }
   const { words, chapters: n } = countBook(novel, chapters);
   if (novel.meta.words !== words || novel.meta.chapters !== n) store.change('novel', novelId, novelSteps.counts(words, n));
+  /* his length goal, a quarter at a time: each quarter of a goal is said once (app.js) — words taken out and
+   * written again never say it twice; a new goal counts its quarters afresh */
+  const goal = Number(novel.meta.goal) || 0;
+  if (goal > 0) {
+    const reached = Math.min(4, Math.floor((words / goal) * 4));
+    const mark = novel.meta.reached && typeof novel.meta.reached === 'object' && novel.meta.reached.goal === goal ? Number(novel.meta.reached.n) || 0 : 0;
+    if (reached > mark) {
+      store.change('novel', novelId, novelSteps.setMeta({ reached: { goal, n: reached } }));
+      for (const fn of milestoneFns) { try { fn({ novelId, reached, words, goal }); } catch (_) { /* a notice only */ } }
+    }
+  }
 }
+const milestoneFns = new Set();
+export function onMilestone(fn) { milestoneFns.add(fn); return () => milestoneFns.delete(fn); }
 
 function keepSent(novelId, key, sent, extra) {
   if (!sent) return;
@@ -379,8 +399,14 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
      * M117, M469) — the answer is what came before */
     const leak = stripControlLeak(finalWords(out, text), { asked: build.request || '' });
     const notes = [...(out.notes || [])];
-    /* the chapter open told in part to fit its model's room: he is told too, not only the writer */
-    if (told && build.target && build.target.chapterId && Array.isArray(told.wholeIds) && !told.wholeIds.includes(build.target.chapterId)) notes.push('This chapter was longer than the writer’s room, so it was sent its opening and the words right before this point, with the middle left out.');
+    /* the chapter open told in part to fit its model's room: he is told too, not only the writer — what was told how */
+    const fitHow = told && told.chapterFit;
+    if (fitHow && fitHow.before === 'stretches') notes.push('This chapter is longer than the writer’s room: its earlier stretches were sent by their summaries, and the words leading up to this point word for word.');
+    else if (fitHow && fitHow.before === 'stretches-cut') notes.push('This chapter is longer than the writer’s room even by its stretches’ summaries: the summaries and the words right before this point were sent, and some of the words between them left out.');
+    else if (fitHow && fitHow.before === 'cut') notes.push('This chapter is longer than the writer’s room, so it was sent its opening and the words right before this point, with the middle left out.');
+    if (fitHow && fitHow.after === 'cut') notes.push('What follows this point in the chapter was sent only in part, to fit the writer’s room.');
+    /* a chapter the book's list names that the phone no longer holds: written without it, never silently */
+    if (told && told.unreadChapters > 0) notes.push(`${told.unreadChapters === 1 ? 'One chapter' : `${numberWords(told.unreadChapters)} chapters`} in the book’s list ${told.unreadChapters === 1 ? 'is' : 'are'} not on the phone, so the writer was told ${told.unreadChapters === 1 ? 'it' : 'they'} could not be read.`);
     if (told && told.omitted > 0) notes.push(leftOutWords(told.omitted));
     if (leak.leaked) notes.push(leak.ranPast ? 'The writer ran past the end of its answer and began writing your next request — the words before that were kept.' : 'The words before the provider’s leak were kept.');
     let answer = mode === 'append' ? unfence(leak.text).replace(/\s+$/, '') : tidyAnswer(leak.text);
@@ -780,8 +806,11 @@ export async function goOn({ novelId, chapterId, passageId }) {
   const origin = requestOf(p, v);
   const settled = origin.how === 'rewrite' || origin.how === 'play';
   const asked = settled ? '' : origin.ask.direction || '';
-  const change = [origin.how === 'rewrite' ? origin.ask.note : '', ...origin.notes].filter((x) => String(x || '').trim()).join('\n');
-  const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail, direction: asked, change,
+  /* his rewrite's note is a change that is now what happens; a note some words were written again with (his, or the
+   * checker's own "Write it again without …") is about how they are told — it holds as the passage goes on, never as an event */
+  const change = origin.how === 'rewrite' ? String(origin.ask.note || '').trim() : '';
+  const held = (origin.notes || []).map((x) => String(x || '').trim()).filter((x) => x && x !== change);
+  const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail, direction: asked, change, held,
     ...(origin.how === 'play' ? { transcript: origin.ask.transcript || '', who: origin.ask.who || '' } : {}), outcome: settled ? '' : outcomeOf(book.novel) });
   return runVersion({ novelId, chapterId, passageId, versionId: v.id, original, mode: 'append', how: 'go on', length: origin.ask.length || 'scene',
     splice: (answer) => ({ text: original.text + joinOn(original.text, answer) }),

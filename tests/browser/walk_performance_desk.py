@@ -215,7 +215,7 @@ async def scenario_branch_stream(browser):
 async def main():
     with H.Env():
         async with async_playwright() as pw:
-            browser=await pw.chromium.launch(executable_path=os.environ.get('COZY_TEST_CHROMIUM','/usr/bin/chromium'))
+            browser=await pw.chromium.launch(executable_path=(os.environ.get('COZY_TEST_CHROMIUM') or None))
             try:
                 await scenario(browser)
                 await scenario_branch_stream(browser)

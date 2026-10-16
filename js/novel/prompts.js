@@ -157,7 +157,7 @@ export function withMacros(text, names) {
 const MACRO = /\{\{\s*(?:user|char)\s*\}\}|<(?:USER|BOT)>/i;
 export function bookHasMacro(novel) {
   const n = novel || {};
-  return MACRO.test(JSON.stringify([n.brief, n.style, n.plans, n.kept, n.notes]));
+  return MACRO.test(JSON.stringify([n.brief, n.style, n.plans, n.ending, n.kept, n.notes]));
 }
 export function bookNames(house, novel) {
   return { user: nameOf(house) || 'me', char: String((novel && novel.meta && novel.meta.char) || '').trim() || 'the other main character' };
@@ -206,7 +206,7 @@ export function namedBook(novel, house) {
   };
   return {
     ...novel,
-    brief: fill(novel.brief), style: fill(novel.style), plans: fill(novel.plans),
+    brief: fill(novel.brief), style: fill(novel.style), plans: fill(novel.plans), ...(typeof novel.ending === 'string' ? { ending: fill(novel.ending) } : {}),
     ...(novel.kept ? { kept: Object.fromEntries(Object.entries(novel.kept).map(([k, v]) => [k, v && typeof v === 'object' ? { ...v, text: fill(v.text) } : v])) } : {}),
     ...(novel.notes ? { notes: Object.fromEntries(Object.entries(novel.notes).map(([k, list]) => [k, Array.isArray(list) ? list.map(card) : list])) } : {}),
   };
@@ -377,7 +377,7 @@ export function narrationChoices(novel) {
   if (!person && tense === 'auto') return '';
   return ['My choices for the book’s prose:', person,
     tense !== 'auto' ? `Narrative tense: ${tense}. Dialogue, quoted writing and memories keep the tense their meaning needs.` : '',
-    'My own explicit writing instructions and directions for a particular passage come first. Otherwise these choices guide new prose, ahead of an older passage or the helper’s description of how it reads. A choice does not change what already happened or make older writing a mistake. Unset choices follow my instructions and the established telling.',
+    'My own writing instructions, and anything I ask for in a particular passage, come first. Otherwise these choices guide new prose, ahead of how older pages read and of what “How it reads” says. A choice does not change what already happened or make older writing a mistake. Whatever I left unchosen follows my instructions and the way the book is already told.',
   ].filter(Boolean).join('\n');
 }
 
@@ -406,13 +406,34 @@ export function currentText(book) {
     if (c.marker) body = [c.before, c.marker, c.after].filter((x) => String(x || '').trim()).join('\n\n');
     parts.push(`${c.label}${c.note ? ` (${c.note})` : ''}\n\n${body.trim() || '(nothing written in it yet)'}`);
     if (c.afterText && !c.marker) parts.push(`What comes right after it in the chapter (already written — keep it consistent):\n\n${c.afterText}`);
+    if (c.plan) parts.push(planWords(c.plan));
+    if (c.ending) parts.push(c.ending);
   }
   if (book.later.length || book.laterOmitted) {
     const rows = book.later.map((s) => `${s.label}\n${s.text}`).join('\n\n');
     const more = book.laterOmitted ? `(${book.laterOmitted === 1 ? 'One more chapter comes' : `${numberWords(book.laterOmitted)} more chapters come`} after ${book.later.length ? 'these' : 'this one'}; ${book.laterOmitted === 1 ? 'it is' : 'they are'} left out here to save room.)` : '';
-    parts.push(['What comes later in the book (already written):', rows, more].filter(Boolean).join('\n\n'));
+    /* "already written" only when it is: a chapter made ahead for its plan has no words yet */
+    const written = book.later.every((s) => !String(s.text || '').startsWith('(nothing written in it yet)'));
+    parts.push([`What comes later in the book${written ? ' (already written)' : ''}:`, rows, more].filter(Boolean).join('\n\n'));
   }
   return parts.join('\n\n\n');
+}
+/* THE STORY MAP. His plan for a chapter rides with that chapter only —
+ * never with the chapters before it (a plan read early is a plan rushed or
+ * hinted at). In his voice, said to be where it is going, not what happened. */
+export function planWords(plan) {
+  return `What I mean this chapter to do — my plan for it. None of it has happened unless the pages above say so; it comes about at the story's own pace, the way the people in it would get there, never forced and never all at once:\n${String(plan).trim()}`;
+}
+/* the book's last chapter: how he means it to end, and what is still open in the notes */
+export function endingWords(ending, open = []) {
+  const e = String(ending || '').trim();
+  const rows = open.map((t) => `- ${String(t.name || '').trim()}${t.about ? ` — ${firstSentence(String(t.about)).slice(0, 200)}` : ''}`).filter((r) => r.length > 2);
+  return [
+    'This is the book’s last chapter.',
+    e ? `How I mean the book to end:\n${e}` : '',
+    rows.length ? `Threads still open in the notes:\n${rows.join('\n')}` : '',
+    'Bring the book home across this chapter: what is still open finds its answer the way this story would answer it, in its own time — not all at once, and never by saying so.',
+  ].filter(Boolean).join('\n\n');
 }
 export function bookText(book) {
   return [earlierText(book), currentText(book)].filter((x) => x.trim()).join('\n\n\n');
@@ -593,15 +614,19 @@ export function selectionRequest({ chapterLabel, note, marked }) {
  * words, so its continuation can be joined exactly where the passage stops —
  * even in the middle of a word (writer.js joinOn). */
 /* direction: what he asked for in the passage; change: the change a rewrite
- * of it carried; outcome: who decides how it turns out — '' when nobody is
- * to be told (a rewrite, a scene written into prose, a passage between two) */
-export function goOnRequest({ chapterLabel, between = false, tail = '', direction = '', change = '', outcome = 'writer', transcript = '', who = '' }) {
+ * of it carried; held: the notes some of its words were written again with —
+ * about how those words are told, never what happens; outcome: who decides how
+ * it turns out — '' when nobody is to be told (a rewrite, a scene written into
+ * prose, a passage between two) */
+export function goOnRequest({ chapterLabel, between = false, tail = '', direction = '', change = '', held = [], outcome = 'writer', transcript = '', who = '' }) {
   const d = String(direction || '').trim();
   const c = String(change || '').trim();
+  const h = (held || []).map((x) => String(x || '').trim()).filter(Boolean);
   return [
     `${between ? 'A passage' : 'The last passage'} of ${chapterLabel} stopped partway through${tail ? `. It stops here:\n${fence(`…${tail}`)}` : '.'}`,
     d ? `What I asked for in it: ${d}` : '',
     c ? `It was written again with a change, which is now what happens: ${c}` : '',
+    h.length ? `Some of its words were written again with ${h.length === 1 ? 'this note' : 'these notes'} — what ${h.length === 1 ? 'it asks' : 'they ask'} holds for the rest of it too:\n${h.map((x) => `- ${x}`).join('\n')}` : '',
     transcript ? `This passage is a scene being written into prose. The played scene${who ? `, with me taking ${who}’s part` : ''}:\n${fence(transcript)}\nFinish only what remains of this scene after the prose already written. Keep its events and dialogue, without repeating the converted part or inventing a different outcome. My spoken moves do not change the book’s point of view.` : '',
     d || c ? YOURS_ONLY : '',
     `Carry on from exactly where it stops. Begin by repeating its last few words exactly as they stand${tail ? '' : ' (from the start of its last sentence)'}, then go on — the repeated words are taken off again and what follows is joined straight on, so don't start over or retell anything.${between ? ' What comes after the passage is already written, so bring it to where that picks up.' : ''}`,
@@ -660,6 +685,7 @@ ${CHANGES_OPEN}[
   {"rename": {"from": "Name Surname", "to": "Surname Name"}, "why": "…"},
   {"chapter": 2, "name": "its new name", "why": "…"},
   {"summary": 2, "text": "…", "why": "…"},
+  {"plan": 4, "text": "what Chapter Four is for", "why": "…"},
   {"book": "about", "find": "…", "replace": "…", "why": "…"},
   {"note": "people", "name": "…", "about": "…", "ties": "…", "now": "…", "newName": "…", "why": "…"},
   {"note": "places", "name": "…", "remove": true, "why": "…"},
@@ -667,7 +693,7 @@ ${CHANGES_OPEN}[
 ]${CHANGES_CLOSE}
 
 - "2.3" is passage 3 of Chapter Two, as on the page. Quote "find" exactly — enough to be found in one place only. A passage written anew is a new version. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
-- "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary.
+- "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary. "plan": what a chapter is for — my plan for it, which the writer reads only while writing in that chapter; the number after the last chapter makes a new, empty chapter to hold it, so a few in a row map the chapters ahead.
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
 - To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - A passage you write is the book: in it, people know only what they have lived, seen or been told — what we say here stays ours unless I ask for it on the page.
@@ -1021,8 +1047,8 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   if (before && before.trim()) parts.push(`${chapterLabel}, up to the new part (for context — already in the notes):\n${fence(before)}`);
   for (const c of changes) {
     if (c.oldOnly) parts.push(`This is part of the previous version of a passage in ${chapterLabel} that is being replaced. These words no longer happen as written; take back only what these words alone established. The replacement follows in later parts of this same reading, so do not guess it or treat the chapter as finished:\n${fence(c.old)}`);
-    else if (c.old) parts.push(`${c.pid ? `Passage source ${c.pid}\n` : ''}This part of ${chapterLabel} was changed. It used to read:\n${fence(c.old)}\nIt now reads:\n${fence(c.text)}`);
-    else parts.push(`${c.pid ? `Passage source ${c.pid}\n` : ''}New in ${chapterLabel}:\n${fence(c.text)}`);
+    else if (c.old) parts.push(`${c.source ? `${c.source}\n` : ''}This part of ${chapterLabel} was changed. It used to read:\n${fence(c.old)}\nIt now reads:\n${fence(c.text)}`);
+    else parts.push(`${c.source ? `${c.source}\n` : ''}New in ${chapterLabel}:\n${fence(c.text)}`);
   }
   for (const r of removed) parts.push(`This part was taken out of ${chapterLabel}, so it no longer happens in the book:\n${fence(r)}`);
   for (const r of removedChapters) parts.push(`A whole chapter was taken out of the book, so none of it happens any more. It held:\n${fence(r)}`);
@@ -1118,15 +1144,19 @@ export function keepRequest({ novel, keeps, bookText: text, notesFit = 0 }) {
  * each part's summary carried into the next. What to keep is Summaryception's
  * hard-won list, for a novel: causes kept with what they led to, first
  * appearances described, who learns what, the exact words that will matter. */
-export function summaryRequest({ novel, chapterLabel, text, needsName, words, part = 0, parts = 0, soFar = '', known = [], his = '' }) {
-  const size = Math.max(120, Math.min(450, Math.round(words / 12)));
+export function summaryRequest({ novel, chapterLabel, text, needsName, words, part = 0, parts = 0, soFar = '', known = [], his = '', stretched = false, tail = '' }) {
+  /* a long chapter keeps a longer summary: 450 words cannot carry 40,000 (it stands in for the chapter when the book is longer than a model holds) */
+  const size = Math.max(120, Math.min(words > 10000 ? 1200 : 450, Math.round(words / 12)));
   const lines = [];
-  if (part) {
+  if (stretched) {
+    lines.push(`${chapterLabel} of ${titled(novel)} is a long chapter, kept in stretches. Here is every stretch of it, in order, summed up${tail ? ', and then its newest words as they stand' : ''}:`);
+  } else if (part) {
     lines.push(`Here's part ${part} of ${parts} of ${chapterLabel} of ${titled(novel)}:`);
     if (soFar) lines.push(`The summary of the parts before it:\n${fence(soFar)}`);
   } else lines.push(`Here's ${chapterLabel} of ${titled(novel)}:`);
   lines.push(fence(text));
-  lines.push(`Summarise ${part ? `the chapter so far — ${soFar ? 'the summary above and this part together' : 'this part'} —` : 'it'} for the book's notes, so the writer can carry on from it without the chapter itself:
+  if (stretched && String(tail).trim()) lines.push(`Its newest words, after the last stretch:\n${fence(tail)}`);
+  lines.push(`Summarise ${stretched ? 'the whole chapter from them' : part ? `the chapter so far — ${soFar ? 'the summary above and this part together' : 'this part'} —` : 'it'} for the book's notes, so the writer can carry on from it without the chapter itself:
 - what happens, in order, and why — keep each cause with what it led to;
 - who's in it and what changes for them, inside and out;
 - anyone or anything appearing in the book for the first time, with how they're described${known.length ? ` (already known from earlier: ${known.join(', ')})` : ''};
@@ -1138,6 +1168,31 @@ export function summaryRequest({ novel, chapterLabel, text, needsName, words, pa
 ${his ? `\nMy own summary of this chapter, from before its latest changes — my words are right wherever the chapter still says what they say, so keep them there:\n${fence(his)}\n` : ''}Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the chapter is dense: nothing that matters left out to keep it short.${needsName ? ' The chapter has no name yet, so give it a short one.' : ''}`);
   lines.push(`Answer with one JSON object and nothing else: {"summary": "…"${needsName ? ', "name": "…"' : ''}}`);
   return lines.join('\n\n');
+}
+
+/* A stretch of a long chapter (stretches.js), summed up on its own — what
+ * rides for it when the chapter does not fit word for word. The summary of
+ * the stretch before it comes along, so it picks up where that one ends. */
+export function stretchRequest({ novel, chapterLabel, text, words, before = '', known = [], part = 0, parts = 0, soFar = '' }) {
+  const size = Math.max(150, Math.min(700, Math.round(words / 8)));
+  return [
+    `Here's a stretch of ${chapterLabel} of ${titled(novel)}. It's a long chapter, so it is kept in stretches like this one, and the writer carries on from their summaries where the chapter is too long to read whole.${part ? ` This stretch is long too, so it comes in ${parts} parts — this is part ${part}.` : ''}`,
+    before ? `The stretch before this one, in short:\n${fence(before)}` : '',
+    soFar ? `This stretch's parts before this one, in short:\n${fence(soFar)}` : '',
+    fence(text),
+    `Sum up ${part ? `this stretch so far — ${soFar ? 'the summary of its parts before and this part together' : 'this part'} —` : 'this stretch alone'} for the book's notes, picking up where the one before it ends:
+- what happens, in order, and why — keep each cause with what it led to;
+- who's in it and what changes for them, inside and out;
+- anyone or anything appearing in the book for the first time, with how they're described${known.length ? ` (already known from earlier: ${known.join(', ')})` : ''};
+- who learns what — and who doesn't;
+- what is only claimed, believed, imagined or planned, and by whom — never turn it into an established event; mark flashbacks and dreams;
+- anything set up for later — a promise, a secret, an object, a question left open — with the exact words of any promise, oath or threat that will matter (a short quote);
+- where it happens, and the day, date or time where the stretch gives one;
+- numbers, ages, amounts and distances exactly as given;
+- where everyone stands at its last line.
+Use names rather than "he" or "she" wherever it could be unclear. Nothing invented, nothing softened. Plain prose, about ${size} words — longer when the stretch is dense: nothing that matters left out to keep it short.`,
+    'Answer with one JSON object and nothing else: {"summary": "…"}',
+  ].filter(Boolean).join('\n\n');
 }
 
 /* A summary that left out a name or a figure the chapter holds, asked once

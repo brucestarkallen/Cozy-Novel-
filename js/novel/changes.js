@@ -15,7 +15,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, keptTail, writtenWith } from './shape.js';
+import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, keptTail, writtenWith } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
@@ -161,6 +161,7 @@ export function editableOf(op) {
   if (o.rename && typeof o.rename === 'object') { add('to', 'The name it becomes', 1); return out; }
   if (o.module !== undefined) { add('replace', 'The new words'); add('text', 'The module’s words, whole', 10); return out; }
   if (o.summary !== undefined) { add('text', 'The summary', 6); return out; }
+  if (o.plan !== undefined) { add('text', 'What the chapter is for', 6); return out; }
   if (o.note !== undefined) { add('newName', 'Its new name', 1); add('about', 'Who or what it is'); add('ties', 'With others'); add('now', 'Right now'); return out; }
   if (o.chapter !== undefined && o.passage === undefined) { add('name', 'The chapter’s new name', 1); return out; }
   add('replace', 'The new words');
@@ -212,7 +213,7 @@ export function whereOf(novel, op, numbers) {
     const hit = m && numbers.passages.get(`${parseInt(m[1], 10)}.${parseInt(m[2], 10)}`);
     return hit ? { ...hit } : null;
   }
-  const ref = o.summary !== undefined ? o.summary : o.chapter;
+  const ref = o.summary !== undefined ? o.summary : o.plan !== undefined ? o.plan : o.chapter;
   if (ref === undefined) return null;
   const n = chapterNumber(ref);
   const id = n && numbers.chapters.get(n);
@@ -293,7 +294,7 @@ export function labelNow(novelId, change) {
   }
   const n = (novel.order || []).indexOf(w.chapterId) + 1;
   if (!n) return label;
-  return c.op.summary !== undefined ? `Chapter ${numberWords(n)}’s summary` : `Chapter ${numberWords(n)}’s name`;
+  return c.op.summary !== undefined ? `Chapter ${numberWords(n)}’s summary` : c.op.plan !== undefined ? `What Chapter ${numberWords(n)} is for` : `Chapter ${numberWords(n)}’s name`;
 }
 
 export function labelOf(op) {
@@ -301,6 +302,7 @@ export function labelOf(op) {
   if (op.replace_all !== undefined) return `“${String(op.find || '').slice(0, 40)}” across ${rangeWords(op.chapters !== undefined ? op.chapters : op.range)}`;
   if (op.module !== undefined) return `The module “${String(op.module || '').trim()}”`;
   if (op.summary !== undefined) return `Chapter ${numberWords(chapterNumber(op.summary) || 0)}’s summary`;
+  if (op.plan !== undefined) return `What Chapter ${numberWords(chapterNumber(op.plan) || 0)} is for`;
   if (op.passage !== undefined) {
     const m = PASSAGE_REF.exec(String(op.passage));
     return m ? `Chapter ${numberWords(parseInt(m[1], 10))}, passage ${parseInt(m[2], 10)}` : `Passage ${op.passage}`;
@@ -844,6 +846,32 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     return { ...base, status: 'made', undo: { what: 'summary', chapterId, before: was, after: clone(after), keptBefore }, before: old, after: next };
   }
 
+  /* THE STORY MAP: what a chapter is for — his plan from then on. The chapter
+   * after the last can be planned too: it is made, empty, to hold the plan
+   * (Undo takes it out again while nothing is written in it). */
+  if (op.plan !== undefined) {
+    const next = text(op.text);
+    if (!next.trim() || !archivist.cleanText(next)) return refuse(next ? `it gave no words for the plan — “${clipped(next)}” is none` : 'a plan needs words');
+    const n = chapterNumber(op.plan);
+    const order = novel.order || [];
+    if (!(where && where.chapterId) && n === order.length + 1) {
+      if (dry) return { ...base, status: 'made', before: '', after: next };
+      const fresh = newChapter(novelId);
+      fresh.plan = next;
+      /* the chapter is on the page at once; its save goes on its way (a failed one is the store's to try again, never an unheard rejection) */
+      Promise.resolve(store.create('chapter', fresh.id, fresh)).catch(() => {});
+      put('novel', novelId, novelSteps.addChapter(fresh.id, order[order.length - 1] || null), { now: true });
+      return { ...base, status: 'made', label: `What Chapter ${numberWords(n)} is for (a new chapter)`, undo: { what: 'plan', chapterId: fresh.id, before: '', after: next, made: true }, before: '', after: next };
+    }
+    const spot0 = chapterAt(novel, op.plan, { where, numbers });
+    if (spot0.why) return refuse(spot0.why);
+    const { chapter, chapterId } = spot0;
+    const old = String(chapter.plan || '');
+    if (next === old) return refuse('it would change nothing');
+    put('chapter', chapterId, chapterSteps.setPlan(next), { now: true });
+    return { ...base, status: 'made', undo: { what: 'plan', chapterId, before: old, after: next }, before: old, after: next };
+  }
+
   if (op.passage !== undefined) {
     const spot0 = passageAt(novel, op.passage, { where, numbers });
     if (spot0.why) return refuse(spot0.why);
@@ -1155,6 +1183,20 @@ export function undoChange(novelId, change) {
     store.change('house', 'house', moduleSteps.set(u.id, { text: u.before }), { now: true });
     return { ok: true };
   }
+  if (u.what === 'plan') {
+    const c = store.peek('chapter', u.chapterId);
+    if (!c) return { ok: false, said: 'that chapter is not there any more' };
+    if (String(c.plan || '') !== u.after) return { ok: false, said: 'the plan has been changed since' };
+    /* a chapter made to hold the plan goes again, while nothing is written in it */
+    if (u.made) {
+      if ((c.passages || []).some((p) => String((picked(p) || {}).text || '').trim())) return { ok: false, said: 'the chapter made for it has words in it now' };
+      const n = store.peek('novel', c.novelId);
+      if (n) store.change('novel', n.id, novelSteps.removeChapter(u.chapterId), { now: true });
+      return { ok: true };
+    }
+    store.change('chapter', u.chapterId, chapterSteps.setPlan(u.before), { now: true });
+    return { ok: true };
+  }
   if (u.what === 'summary') {
     const c = store.peek('chapter', u.chapterId);
     if (!c) return { ok: false, said: 'that chapter is not there any more' };
@@ -1232,6 +1274,7 @@ export function targetOf(op, where = null) {
   if (o.note !== undefined) return `n:${o.note}:${nameKey(archivist.cleanName(o.name) || o.name)}`;
   if (o.module !== undefined) return `m:${nameKey(o.module)}`;
   if (o.summary !== undefined) return where && where.chapterId ? `s#${where.chapterId}` : `s:${chapterNumber(o.summary) || 0}`;
+  if (o.plan !== undefined) return where && where.chapterId ? `pl#${where.chapterId}` : `pl:${chapterNumber(o.plan) || 0}`;
   if (o.book !== undefined) return `b:${o.book}`;
   if (o.chapter !== undefined) return where && where.chapterId ? `c#${where.chapterId}` : `c:${chapterNumber(o.chapter) || 0}`;
   return '';
@@ -1264,7 +1307,7 @@ function moduleNamed(rows, name) {
 /* Follow makeChange's routing: extra fields a model supplied must not turn
  * a whole edit into a quote or addition that the applying branch ignores. */
 function scopeOf(op) {
-  return ['module', 'summary', 'passage', 'chapter', 'book', 'note'].find((key) => op[key] !== undefined);
+  return ['module', 'summary', 'plan', 'passage', 'chapter', 'book', 'note'].find((key) => op[key] !== undefined);
 }
 function quotedChange(op, scope = scopeOf(op)) {
   return op.find !== undefined && (['module', 'summary', 'book'].includes(scope)
@@ -1283,7 +1326,7 @@ export function snapshotForChanges(novelId) {
   for (const chapterId of novel.order || []) {
     const chapter = store.peek('chapter', chapterId);
     if (!chapter) continue;
-    snapshot.chapters[chapterId] = { name: hashText(String(chapter.name || '')), summary: hashText(String((chapter.summary && chapter.summary.text) || '')) };
+    snapshot.chapters[chapterId] = { name: hashText(String(chapter.name || '')), summary: hashText(String((chapter.summary && chapter.summary.text) || '')), plan: hashText(String(chapter.plan || '')) };
     for (const passage of chapter.passages || []) {
       const v = picked(passage);
       if (v) snapshot.passages[passage.id] = `${v.id}:${hashText(String(v.text || ''))}`;
@@ -1311,11 +1354,11 @@ export function changedSinceSnapshot(novelId, op, snapshot, { where = null, numb
     const id = (where && where.passageId) || (spot.passage && spot.passage.id);
     before = id && snapshot.passages[id];
     now = baseOf(novelId, { passage: o.passage }, where);
-  } else if (scope === 'summary' || scope === 'chapter') {
+  } else if (scope === 'summary' || scope === 'chapter' || scope === 'plan') {
     const spot = chapterAt(novel, o[scope], { where, numbers });
     const id = (where && where.chapterId) || spot.chapterId;
     const row = id && snapshot.chapters[id];
-    before = row && row[scope === 'summary' ? 'summary' : 'name'];
+    before = row && row[scope === 'summary' ? 'summary' : scope === 'plan' ? 'plan' : 'name'];
     now = baseOf(novelId, { [scope]: o[scope] }, where);
   } else if (scope === 'book') {
     before = snapshot.book[o.book];
@@ -1350,6 +1393,7 @@ export function baseOf(novelId, op, where = null) {
     }
     if (o.book !== undefined) { const f = BOOK_FIELDS[o.book]; return f ? hashText(String(((f === 'title' || f === 'subtitle') ? novel.meta[f] : novel[f]) || '')) : ''; }
     if (o.summary !== undefined) { const c = chapterAt(novel, o.summary, { where }).chapter; return c ? hashText(String((c.summary && c.summary.text) || '')) : ''; }
+    if (o.plan !== undefined) { const c = chapterAt(novel, o.plan, { where }).chapter; return c ? hashText(String(c.plan || '')) : ''; }
     if (o.chapter !== undefined) { const c = chapterAt(novel, o.chapter, { where }).chapter; return c ? hashText(String(c.name || '')) : ''; }
     if (o.module !== undefined) { const m = moduleNamed(listModules(store.peek('house', 'house') || {}), o.module); return m ? hashText(String(m.text || '')) : ''; }
   } catch (_) { /* nothing to print */ }
@@ -1386,6 +1430,7 @@ export function wordsNow(novelId, change) {
   try {
     if (o.book !== undefined && o.add === undefined) { const f = BOOK_FIELDS[o.book]; return f ? String(((f === 'title' || f === 'subtitle') ? novel.meta[f] : novel[f]) || '') : ''; }
     if (o.summary !== undefined) { const x = chapterAt(novel, o.summary, { where: c.where || null }).chapter; return x ? String((x.summary && x.summary.text) || '') : ''; }
+    if (o.plan !== undefined) { const x = chapterAt(novel, o.plan, { where: c.where || null }).chapter; return x ? String(x.plan || '') : ''; }
     if (o.chapter !== undefined && o.passage === undefined) { const x = chapterAt(novel, o.chapter, { where: c.where || null }).chapter; return x ? String(x.name || '') : ''; }
     if (o.note !== undefined && o.about !== undefined) { const m = matchCard((novel.notes || {})[o.note] || [], archivist.cleanName(o.name), [], { kind: o.note, near: false }); return m.card ? String(m.card.about || '') : ''; }
   } catch (_) { /* nothing to show */ }

@@ -107,13 +107,15 @@ export function findIn(text, query, { max = 200, words = false, whole = false } 
   const src = String(text || '');
   const T = words ? foldWords(src) : fold(src);
   const out = [];
-  for (let at = T.s.indexOf(q); at >= 0 && out.length < max; at = T.s.indexOf(q, at + q.length)) {
+  /* a place turned away (part of another word) moves on one letter, so a real one overlapping it is still found */
+  for (let at = T.s.indexOf(q); at >= 0 && out.length < max; ) {
     if (whole && (joinedWord([...T.s.slice(Math.max(0, at - 2), at)].at(-1) || '', [...q.slice(0, 2)][0]) ||
-      joinedWord([...q.slice(-2)].at(-1), [...T.s.slice(at + q.length, at + q.length + 2)][0] || ''))) continue;
+      joinedWord([...q.slice(-2)].at(-1), [...T.s.slice(at + q.length, at + q.length + 2)][0] || ''))) { at = T.s.indexOf(q, at + 1); continue; }
     const start = T.map[at];
     const last = T.map[at + q.length - 1];
     const c = src.charCodeAt(last);
     out.push({ start, end: last + (c >= 0xd800 && c <= 0xdbff ? 2 : 1) });
+    at = T.s.indexOf(q, at + q.length);
   }
   return out;
 }

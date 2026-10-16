@@ -36,7 +36,6 @@ function compositeMotion(art) {
   const moving = art.querySelectorAll([
     '.academy-cloud', '.academy-ivy', '.academy-quill', '.academy-ink-ribbon',
     '.academy-ink-sparks', '.academy-flame', '.academy-candle-glow',
-    '.tokyo-rain', '.tokyo-clouds', '.tokyo-neon', '.tokyo-steam', '.tokyo-train',
   ].join(','));
   const shapes = [...moving].map(node => ({ node, bounds: node.getBBox() }));
   for (const { node, bounds: b } of shapes) {

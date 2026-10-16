@@ -216,6 +216,13 @@ export function drawHead() {
   const label = `Chapter ${numberWords(num)}`;
   if (ui.chapnum.textContent !== label) ui.chapnum.textContent = label;
   if (document.activeElement !== ui.chapname && ui.chapname.textContent !== (c.name || '')) ui.chapname.textContent = c.name || '';
+  /* a chapter opened: its heading comes on once, the way the room lights it (css: .lighting) — never on a redraw of the same one */
+  if (ui.chapterhead && ui.chapterhead.dataset.lit !== c.id) {
+    ui.chapterhead.dataset.lit = c.id;
+    ui.chapterhead.classList.remove('lighting');
+    void ui.chapterhead.offsetWidth;
+    ui.chapterhead.classList.add('lighting');
+  }
   hooks.drawBar && hooks.drawBar();
 }
 
@@ -1117,6 +1124,7 @@ function initScroller() {
     try { SC.thumb.setPointerCapture(e.pointerId); } catch (_) { /* fine */ }
     SC.drag = { offset: e.clientY - SC.thumb.getBoundingClientRect().top };
     SC.bar.classList.add('drag', 'on');
+    SC.tip.style.transform = SC.thumb.style.transform;
   });
   SC.thumb.addEventListener('pointermove', (e) => {
     if (!SC.drag) return;
@@ -1181,7 +1189,8 @@ function placeScroller() {
   const top = Math.round((max > 0 ? ui.wrap.scrollTop / max : 0) * Math.max(0, SC.bar.clientHeight - SC.thumb.offsetHeight));
   const move = `translateY(${top}px)`;
   if (SC.thumb.style.transform !== move) SC.thumb.style.transform = move;
-  if (SC.tip.style.transform !== move) SC.tip.style.transform = move;
+  /* the tip shows only while he drags the thumb */
+  if (SC.drag && SC.tip.style.transform !== move) SC.tip.style.transform = move;
   /* touched only when they change: this runs every frame while the page streams */
   const say = `Passage ${n} of ${total}`;
   if (SC.said === say) return;
@@ -1217,7 +1226,8 @@ function toPassage(step) {
 function onScroll() {
   placeScrollerSoon();
   if (Date.now() - (SC.self || 0) > 200) wake();
-  if (!busy()) ui.followBtn.hidden = true;
+  /* written only when it changes: an attribute set on every frame of a fling invalidates the page's styles each time */
+  if (!busy() && !ui.followBtn.hidden) ui.followBtn.hidden = true;
   rememberScroll();
 }
 /* where the page stands when it is with the newest words: the end of the

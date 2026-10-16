@@ -405,7 +405,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 }
 .pane.left { left: 0; transform: translate3d(-102%, 0, 0); }
 .pane.right { right: 0; transform: translate3d(102%, 0, 0); }
-.pane.open { transform: translate3d(0, 0, 0); visibility: visible; transition: transform .22s var(--ease), visibility 0s; }
+.pane.open { transform: translate3d(0, 0, 0); visibility: visible; transition: transform .26s cubic-bezier(.16, 1, .3, 1), visibility 0s; }
 .scrim { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .25s; }
 .scrim.on { opacity: 1; pointer-events: auto; }
 @media (min-width: 1180px) {
@@ -527,8 +527,9 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
   box-shadow: var(--shadow); transform: translate3d(0,0,0);
   border: 1px solid var(--line); border-bottom: 0;
 }
-.sheet.on > .box { animation: sheet-in .2s var(--ease) both; }
-@keyframes sheet-in { from { transform: translate3d(0,12px,0); } to { transform: translate3d(0,0,0); } }
+.sheet.on > .box { animation: sheet-in .28s cubic-bezier(.16, 1, .3, 1) both; }
+/* rises from below and settles — the panel stays solid and its height steady all the way (the room never shows through it) */
+@keyframes sheet-in { from { transform: translate3d(0, 48px, 0); } to { transform: translate3d(0,0,0); } }
 @keyframes sheet-out { from { transform: translate3d(0,0,0); opacity: 1; } to { transform: translate3d(0,12px,0); opacity: 0; } }
 @keyframes sheet-dim-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sheet-dim-out { from { opacity: 1; } to { opacity: 0; } }
@@ -614,7 +615,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .menu-pop {
   position: fixed; z-index: 60; min-width: 220px; max-width: min(92vw, 340px); padding: 6px;
   background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); border-radius: 14px;
-  box-shadow: var(--shadow); animation: pop .14s var(--ease);
+  box-shadow: var(--shadow); animation: pop .18s cubic-bezier(.16, 1, .3, 1) both; transform-origin: top right;
 }
 .menu-pop button { display: flex; width: 100%; align-items: center; gap: 10px; text-align: left; padding: 11px 12px; border-radius: 10px; font-size: 14.5px; }
 .menu-pop button:hover, .menu-pop button:focus-visible { background: rgba(255,255,255,.07); }
@@ -622,7 +623,8 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .menu-pop button[aria-checked="true"]::after { content: '\2713'; margin-left: auto; color: var(--accent); }
 .menu-pop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 6px; }
 .menu-pop .label { padding: 8px 12px 4px; font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--chrome-soft); }
-@keyframes pop { from { transform: translateY(-4px); } }
+/* a menu opens from where it was asked for: a small scale and lift, on the compositor — solid all the way, the room never showing through it */
+@keyframes pop { from { transform: translate3d(0, -6px, 0) scale(.96); } to { transform: none; } }
 
 /* notices */
 .toast {

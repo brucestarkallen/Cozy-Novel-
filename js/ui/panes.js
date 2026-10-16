@@ -150,7 +150,11 @@ export function closeLeft(fromBack = false) {
   P.release.left = null;
   if (hadFocus && !ui.left.classList.contains('dock')) document.getElementById('bookTitle')?.focus({ preventScroll: true });
 }
-export function showSide(tab) {
+/* soon: from his tap on Notes, Partner or Scenes — the drawer begins to slide
+ * at once and what is in it is drawn on the frame after: the slide runs on the
+ * compositor, so building a long notebook no longer holds its first frame back */
+let sideSoon = 0;
+export function showSide(tab, { soon = false } = {}) {
   P.side = tab;
   if (wide()) {
     if (ui.right.classList.contains('dock') && ui.right.dataset.tab === tab) {
@@ -166,11 +170,18 @@ export function showSide(tab) {
     return;
   }
   closeLeft();
-  if (!P.rightOpen) {
+  const opening = !P.rightOpen;
+  if (opening) {
     P.rightOpen = true;
     ui.right.classList.add('open');
     ui.scrim.classList.add('on');
     P.release.right = onBack(() => closeRight(true));
+  }
+  if (soon && opening && typeof requestAnimationFrame === 'function') {
+    for (const b of ui.tabs.querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.tab === P.side));
+    cancelAnimationFrame(sideSoon);
+    sideSoon = requestAnimationFrame(() => { sideSoon = requestAnimationFrame(() => { sideSoon = 0; drawSide(); }); });
+    return;
   }
   drawSide();
 }
@@ -250,7 +261,12 @@ function drawChapters() {
     li.classList.toggle('on', id === P.chapterId);
     const go = li.querySelector('.go');
     if (id === P.chapterId) go.setAttribute('aria-current', 'page'); else go.removeAttribute('aria-current');
-    setText(li.querySelector('.n'), `Chapter ${numberWords(i + 1)}`);
+    setText(li.querySelector('.n'), `Chapter ${numberWords(i + 1)}${(n.prefs || {}).endsAt === id ? ' · the last' : ''}`);
+    /* his plan for it, under its name (the story map) */
+    let plan = li.querySelector('.plan');
+    if (!plan) { plan = h('span.plan'); li.querySelector('.go').append(plan); }
+    setText(plan, String(c?.plan || '').trim() ? `Planned: ${String(c.plan).trim().replace(/\s+/g, ' ').slice(0, 160)}${String(c.plan).trim().length > 160 ? '…' : ''}` : '');
+    plan.hidden = !plan.textContent;
     const name = li.querySelector('.nm');
     setText(name, c?.name || (words ? openingOf(c) : 'Not begun'));
     name.style.fontStyle = c?.name ? '' : 'italic';
@@ -264,7 +280,10 @@ function drawChapters() {
   for (const li of rows.values()) li.remove();
   if (active?.isConnected && list.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true });
   const words = n.order.reduce((a, id) => a + chapterWords(store.peek('chapter', id) || { passages: [] }), 0);
-  setText(ui.leftBody.querySelector('.chapter-total'), `${plural(n.order.length, 'chapter')} · ${plural(words, 'word')} in all`);
+  const goal = Number((n.meta || {}).goal) || 0;
+  setText(ui.leftBody.querySelector('.chapter-total'), goal
+    ? `${plural(n.order.length, 'chapter')} · ${words.toLocaleString()} of ${goal.toLocaleString()} words — ${Math.min(100, Math.floor((words / goal) * 100))}% of the way`
+    : `${plural(n.order.length, 'chapter')} · ${plural(words, 'word')} in all`);
   setText(ui.leftTitle, 'Chapters');
 }
 
@@ -292,6 +311,17 @@ function chapterMenu(anchor, id, i) {
     i < n.order.length - 1 ? { label: 'Move it later', hint: 'One place down the book.', run: () => { store.change('novel', P.novelId, novelSteps.moveChapter(id, i + 1), { now: true }); } } : null,
     { label: 'Earlier copies of this chapter', hint: 'Bring the chapter back as it was at an earlier time.', run: () => earlierCopies(id) },
     c && c.summary && c.summary.text ? { label: 'Its summary', hint: 'What rides for this chapter once the book is longer than the model holds.', run: () => { const s = openSheet(chapterLabel(n, c)); s.body.append(h('p', { style: { lineHeight: '1.6', whiteSpace: 'pre-wrap' } }, c.summary.text)); } } : null,
+    /* the story map: his plan for each chapter, the writer reading only the one it writes in */
+    { label: c && String(c.plan || '').trim() ? 'Change what this chapter is for' : 'What this chapter is for', hint: 'Your plan for it. The writer reads it while writing in this chapter, never before; your partner sees the whole map.', run: async () => {
+      const now = store.peek('chapter', id);
+      const text = await askText(`What ${chapterLabel(n, now || c, { withName: false })} is for`, { multiline: true, value: (now && now.plan) || '', placeholder: 'What happens in it, where it leaves everyone — as loose or as exact as you like.', yes: 'Keep it',
+        words: 'Your plan for this chapter. The writer reads it only while writing here, as where the chapter is going — never as something that already happened.' });
+      if (text === null) return;
+      store.change('chapter', id, chapterSteps.setPlan(text), { now: true });
+    } },
+    (n.prefs || {}).endsAt === id
+      ? { label: 'Not the last chapter after all', hint: 'The writer stops being told how the book ends here.', run: () => { store.change('novel', P.novelId, novelSteps.setPref('endsAt', ''), { now: true }); } }
+      : { label: 'Make it the last chapter', hint: 'The writer is told how the book ends and what is still open in the notes — and brings it home here.', run: () => { store.change('novel', P.novelId, novelSteps.setPref('endsAt', id), { now: true }); toast('This is the last chapter now — the writer brings the book home here.'); } },
     '-',
     n.order.length > 1 ? { label: 'Remove the chapter', hint: 'To Recently deleted for thirty days.', danger: true, run: () => removeChapter(id) } : null,
   ]);
@@ -1085,6 +1115,8 @@ const QUICK = [
     ask: 'Be my editor for the chapter open now. Read it whole and tell me honestly how the telling works: where it drags or rushes, where a scene lands or falls flat, the voice, the dialogue, anything unclear or that rings false — each by its passage number, with what would make it better. Say what works and why, too. No changes unless I ask for them.' },
   { label: 'What the next chapter should do', hint: 'Where the book stands and what the next chapter needs to carry.',
     ask: 'Tell me where the book stands now — what is set up and unresolved, what each of the main people wants, what the reader is waiting for — and what the next chapter should do to carry it. A short, honest answer.' },
+  { label: 'Map the chapters to the end', hint: 'Plans the chapters still to come, one by one, to the ending you have in mind — each a plan you can change, new chapters made to hold them, with Undo.',
+    ask: 'Map the rest of the book with me: from where it stands now to the end I have in mind, the chapters it still needs — each chapter’s plan in a few lines (what happens, what it turns, where it leaves everyone), pacing it so nothing is rushed and every open thread is paid off. Make each one a plan for its chapter, new chapters after the last one where they are needed, and tell me the shape of it in a few lines.' },
 ];
 function quickAsks(anchor, ta, send) {
   menu(anchor, [{ label: 'Quick asks', header: true }, ...QUICK.map((q) => ({ label: q.label, hint: q.hint, run: () => {
