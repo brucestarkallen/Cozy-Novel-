@@ -109,6 +109,8 @@ def answer_for(body):
         if "CUT CHANGES" in last_user:
             # a reply that runs out of room inside its changes block
             return '<changes>[{"passage": "1.1", "text": "A whole new passage that goes on and on' + CUT_MARK
+        if "HAND IT TO THE WRITER" in last_user:
+            return '<changes>[{"passage": "1.1", "rewrite": "A fiercer storm; keep the sea as it is.", "why": "the storm is too tame"}]</changes>\n\nHanded to the writer with my note.'
         if "TAKE OUT THE PASSAGE" in last_user:
             return '<changes>[{"passage": "1.1", "remove": true, "why": "too quiet"}]</changes>\n\nIt can go.'
         if "TWO CHANGES" in last_user:

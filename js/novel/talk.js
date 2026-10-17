@@ -18,7 +18,7 @@ import { wireOf } from '../model/providers.js';
 import { estimateTokens } from '../util.js';
 import { assemble, requiredLength, SAFETY, partnerReply, PARTNER_FLOOR } from './context.js';
 import { contextOf } from '../model/providers.js';
-import { connFor, connName, recount } from './writer.js';
+import { connFor, connName, recount, rewrite as writerRewrite, busy as writerBusy } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, NOTE_KINDS, matchCard } from './shape.js';
 import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN } from './prompts.js';
@@ -730,7 +730,85 @@ function settleChanges(novelId, turnId, versionId, text, house, before = [], see
   /* an older answer's change still waiting for the same thing, written whole, is set aside by this one (M397) */
   if (wait) asideOlder(novelId, turnId, changes.filter((c) => c.status === 'waiting'));
   if (changes.some((c) => c.status === 'made')) afterChanges(novelId);
+  startRewrites(novelId, turnId, versionId, changes.filter((c) => c.status === 'writing').map((c) => c.id));
   return changes;
+}
+
+/* THE WRITER WRITES IT AGAIN (2.12.9). A rewrite the partner asked for
+ * ({"passage": "1.1", "rewrite": "…"}) goes to the writer as his own Rewrite
+ * would — his model, his instructions, its craft — one passage after another,
+ * behind whatever the writer is writing already; the card follows it: being
+ * written, then written (with Undo, as a passage written anew), or why not.
+ * One window's chain per book; a window closed mid-way is put right at open
+ * (settleWriting). */
+const rewriting = new Map();   /* novelId -> the chain of rewrites on their way */
+function startRewrites(novelId, turnId, versionId, changeIds) {
+  if (!changeIds.length) return;
+  const run = async () => {
+    for (const changeId of changeIds) {
+      const c = changeAt(novelId, turnId, versionId, changeId);
+      if (!c || c.status !== 'writing' || !c.rewrite) continue;
+      /* his own page first: a rewrite waits until the writer is free */
+      while (writerBusy(novelId)) await new Promise((r) => setTimeout(r, 500));
+      if (!changeAt(novelId, turnId, versionId, changeId)) continue;
+      let out;
+      try { out = await writerRewrite({ novelId, chapterId: c.rewrite.chapterId, passageId: c.rewrite.passageId, note: c.rewrite.note }); } catch (e) { out = { ok: false, error: (e && e.message) || String(e) }; }
+      const now = changeAt(novelId, turnId, versionId, changeId);
+      if (!now || now.status !== 'writing') continue;
+      if (out && out.ok && out.versionId) {
+        const ch = store.peek('chapter', c.rewrite.chapterId);
+        const p = ch && (ch.passages || []).find((x) => x.id === c.rewrite.passageId);
+        const v = p && (p.versions || []).find((x) => x.id === out.versionId);
+        patchChange(novelId, turnId, versionId, changeId, { status: 'made', undo: { what: 'passage', chapterId: c.rewrite.chapterId, passageId: c.rewrite.passageId, versionId: out.versionId, from: out.from }, after: String((v && v.text) || ''), said: cutShort(v || out) });
+        afterChanges(novelId);
+      } else patchChange(novelId, turnId, versionId, changeId, { status: 'refused', said: (out && (out.error || (out.stopped ? 'the writer was stopped' : ''))) || 'the writer could not write it' });
+    }
+  };
+  const prior = rewriting.get(novelId) || Promise.resolve();
+  /* the chain done, what another window left being written is looked at (settleWriting waits for the chain) */
+  const next = prior.then(run, run).finally(() => { if (rewriting.get(novelId) === next) { rewriting.delete(novelId); settleWriting(novelId); } });
+  rewriting.set(novelId, next);
+}
+/* a version the writer left cut, said on the card */
+const cutShort = (v) => (v && v.cut ? `cut short${v.cutWhy ? ` — ${v.cutWhy}` : ''}` : '');
+function changeAt(novelId, turnId, versionId, changeId) {
+  const rec = store.peek('talk', novelId);
+  const t = rec && (rec.turns || []).find((x) => x.id === turnId);
+  const v = t && (t.versions || []).find((x) => x.id === versionId);
+  return ((v && v.changes) || []).find((c) => c.id === changeId) || null;
+}
+function patchChange(novelId, turnId, versionId, changeId, patch) {
+  store.change('talk', novelId, (d) => {
+    const t = (d.turns || []).find((x) => x.id === turnId);
+    const v = t && (t.versions || []).find((x) => x.id === versionId);
+    if (!v) return;
+    v.changes = (v.changes || []).map((c) => (c.id === changeId ? { ...c, ...patch } : c));
+  }, { now: true });
+}
+/* a rewrite left being written by a window that closed (the chapter put right
+ * first — writer.repairStale marks what it left cut, or takes an empty version
+ * out): made, when its version is there with words — cut short, said so; nothing
+ * there and nothing streaming, said; still streaming in another window, left.
+ * Never while this window's own chain runs: those are its to settle. */
+export function settleWriting(novelId) {
+  const rec = store.peek('talk', novelId);
+  if (!rec || rewriting.has(novelId)) return 0;
+  let n = 0;
+  for (const t of rec.turns || []) {
+    for (const v of t.versions || []) {
+      for (const c of v.changes || []) {
+        if (c.status !== 'writing' || !c.rewrite) continue;
+        const ch = store.peek('chapter', c.rewrite.chapterId);
+        const p = ch && (ch.passages || []).find((x) => x.id === c.rewrite.passageId);
+        const done = p && (p.versions || []).find((x) => x.how === 'rewrite' && x.from === c.rewrite.from && x.ask && x.ask.note === c.rewrite.note && !x.streaming && String(x.text || '').trim());
+        if (done) patchChange(novelId, t.id, v.id, c.id, { status: 'made', undo: { what: 'passage', chapterId: c.rewrite.chapterId, passageId: c.rewrite.passageId, versionId: done.id, from: c.rewrite.from }, after: String(done.text || ''), said: cutShort(done) });
+        else if (!(p && (p.versions || []).some((x) => x.streaming))) patchChange(novelId, t.id, v.id, c.id, { status: 'refused', said: 'the writer was interrupted before it was written — ask again' });
+        else continue;
+        n++;
+      }
+    }
+  }
+  return n;
 }
 
 /* a missed change made in a later round of the same answer: the miss no longer stands */
@@ -770,7 +848,7 @@ function asideOlder(novelId, turnId, fresh) {
     for (const v of t.versions || []) {
       const list = v.changes || [];
       if (!list.some((c) => c.status === 'waiting' && !c.copied && targetOf(c.op, c.where) && clash(c))) continue;
-      const next = list.map((c) => (c.status === 'waiting' && !c.copied && targetOf(c.op, c.where) && clash(c) ? { ...c, status: 'skipped', said: 'a newer answer changes the same', aside: true } : c));
+      const next = list.map((c) => (c.status === 'waiting' && !c.copied && targetOf(c.op, c.where) && clash(c) ? { ...c, status: 'skipped', said: 'replaced by a newer answer’s change to the same', aside: true } : c));
       store.change('talk', novelId, turnSteps.setVersion(t.id, v.id, { changes: next }), { now: true });
     }
   }
@@ -857,7 +935,37 @@ export function undoOneChange(novelId, turnId, versionId, changeId) { return set
 export function skipChange(novelId, turnId, versionId, changeId) { return settleOne(novelId, turnId, versionId, changeId, 'skip'); }
 /* Edit by hand: a waiting change made with his words in place of its own (changes.js editableOf) */
 export function applyEdited(novelId, turnId, versionId, changeId, patch) { return settleOne(novelId, turnId, versionId, changeId, 'apply', patch); }
-/* every change of one answer at once: Apply all, Leave all, Undo all (the newest made first) */
+/* EVERYTHING WAITING IN THE CONVERSATION (2.12.9). Set to wait, the partner's
+ * changes gather answer by answer — seven in one, six in the next — and he
+ * asked, rightly, what he was meant to press. One answer: the conversation's
+ * own Apply all, in the partner's foot, which makes every change still
+ * waiting in it, the oldest answer first and each answer in its order (a
+ * newer answer that writes the same thing whole has set the older one aside
+ * already — asideOlder — so one proposal stands for a thing). Leave all leaves
+ * them all. The buttons under one answer say their own scope — Apply these 6. */
+export function waitingAll(novelId) {
+  const rec = store.peek('talk', novelId);
+  const out = [];
+  for (const t of (rec && rec.turns) || []) {
+    if (t.by !== 'ai') continue;
+    const v = picked(t);
+    for (const c of (v && v.changes) || []) if (c.status === 'waiting' && !c.copied && !c.superseded) out.push({ turnId: t.id, versionId: v.id, change: c, stale: Boolean(waitingWhy(novelId, c)) });
+  }
+  return out;
+}
+export function settleWaiting(novelId, how) {
+  const out = { done: 0, failed: [], partly: [] };
+  const seen = new Set();
+  for (const w of waitingAll(novelId)) {
+    const key = `${w.turnId}/${w.versionId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const r = settleAll(novelId, w.turnId, w.versionId, how);
+    out.done += r.done; out.failed.push(...r.failed); out.partly.push(...r.partly);
+  }
+  return out;
+}
+/* every change of one answer at once: Apply these, Leave these, Undo these (the newest made first) */
 export function settleAll(novelId, turnId, versionId, how) {
   const rec = store.peek('talk', novelId);
   const t = rec && (rec.turns || []).find((x) => x.id === turnId);
@@ -942,6 +1050,7 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
       : next.status === 'undone' && x.status === 'waiting' && x.rebased && x.rebased.by === c.id ? unbased(x) : x));
   write(changes);
   if (next.status === 'made' || next.status === 'undone') afterChanges(novelId);
+  if (next.status === 'writing') startRewrites(novelId, turnId, versionId, [next.id]);
   if (how === 'undo') return { ok: true, said: next.undoneSaid || '', partly: Boolean(next.undoneSaid), change: next };
   return { ok: next.status !== 'refused', said: next.said, change: next };
 }
@@ -1329,6 +1438,7 @@ export async function playAgain({ playId, turnId }) {
 export async function repairStaleTurns(kind, id) {
   const rec = store.peek(kind, id);
   if (!rec) return 0;
+  if (kind === 'talk') settleWriting(id);
   const job = running.get(`${kind}/${id}`);
   const tabs = await store.liveTabs();
   let fixed = 0;

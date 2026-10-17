@@ -173,6 +173,7 @@ export function editableOf(op) {
   if (o.note !== undefined) { add('newName', 'Its new name', 1); add('about', 'Who or what it is'); add('ties', 'With others'); add('now', 'Right now'); return out; }
   if (o.entry !== undefined) { add('newName', 'Its new name', 1); add('line', 'In a line', 2); add('text', 'The entry', 8); add('add', 'The paragraph it adds', 4); return out; }
   if (o.chapter !== undefined && o.passage === undefined) { add('name', 'The chapter’s new name', 1); return out; }
+  if (o.passage !== undefined && o.rewrite !== undefined) { add('rewrite', 'What the writer is to change', 5); return out; }
   add('replace', 'The new words');
   add('text', o.passage !== undefined ? 'The passage, written anew' : 'The words, whole', 10);
   add('add', 'The paragraph it adds', 4);
@@ -261,6 +262,19 @@ function passageAt(novel, ref, { where = null, numbers = null } = {}) {
   const p = (chapter.passages || []).find((x) => nums.get(x.id) === pn);
   if (!p) return { why: `Chapter ${numberWords(ci)} has no passage ${pn}` };
   return { chapter, passage: p, ci, pn };
+}
+/* the one passage of the chapter named where some words stand — or null (none, or more than one) */
+function passageByWords(novel, ref, find) {
+  const m = PASSAGE_REF.exec(String(ref || ''));
+  if (!m || !String(find || '').trim()) return null;
+  const ci = parseInt(m[1], 10);
+  const chapterId = (novel.order || [])[ci - 1];
+  const chapter = chapterId && store.peek('chapter', chapterId);
+  if (!chapter) return null;
+  const nums = passageNumbers(chapter);
+  const hits = (chapter.passages || []).filter((p) => p.by !== 'break' && !locate(String((picked(p) || {}).text || ''), find).why);
+  if (hits.length !== 1) return null;
+  return { chapter, passage: hits[0], ci, pn: nums.get(hits[0].id) };
 }
 /* a chapter by its number as the partner writes it — 3, "3", "Chapter
  * Three", "three" (read as the read block reads it: Cozy Tavern's M61
@@ -958,12 +972,37 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
   }
 
   if (op.passage !== undefined) {
-    const spot0 = passageAt(novel, op.passage, { where, numbers });
+    let spot0 = passageAt(novel, op.passage, { where, numbers });
+    /* THE WORDS ARE THE KEY, THE NUMBER A HINT (2.12.9): a passage may hold a
+     * whole chapter, and a partner counting paragraphs names "1.2" for words
+     * that stand in 1.1 — the app can find them, so it does: words to change
+     * that stand in exactly one passage of the chapter named are changed
+     * there, and the card says where. Never for a passage taken out or
+     * written whole (those name a passage, not words). */
+    let relocated = '';
+    if (op.find !== undefined && truthOf(op.remove) !== true && op.rewrite === undefined) {
+      const named = spot0.why ? null : spot0;
+      const there = named && !locate(String((picked(named.passage) || {}).text || ''), op.find).why;
+      if (!there) {
+        const alt = passageByWords(novel, op.passage, op.find);
+        if (alt) { relocated = `the words stand in passage ${alt.pn}${named ? `, not ${named.pn}` : ''}`; spot0 = alt; }
+      }
+    }
     if (spot0.why) return refuse(spot0.why);
     const { chapter, passage } = spot0;
     if (passage.by === 'break') return refuse('that is a scene break');
     const v = picked(passage) || {};
     if (v.streaming) return refuse('that passage is being written just now');
+    /* WRITTEN AGAIN BY THE WRITER (2.12.9): the partner's note goes to the
+     * writer — his model, his instructions, its craft — as a Rewrite of that
+     * passage, a new version he can undo; the partner's own prose for a page
+     * only when he asks for its words ("text"). Started by talk.js once the
+     * change is kept (status 'writing'); dry: looked at only. */
+    if (op.rewrite !== undefined) {
+      const note = text(op.rewrite);
+      if (!hasWords(note)) return refuse('it gave no note for the writer');
+      return { ...base, status: 'writing', rewrite: { chapterId: chapter.id, passageId: passage.id, from: v.id, note }, before: String(v.text || ''), said: 'the writer is writing it again' };
+    }
     /* a passage taken out or written anew in a chapter it only had in short is
      * never guessed at: it reads the chapter whole first (Cozy Tavern's M61 v2.80) —
      * a passage it had word for word in a chapter told partly whole is seen (seen holds its id) */
@@ -1030,7 +1069,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     const was = countWords(old);
     const now = countWords(next);
     const shrunk = anew && was > 60 && now < was / 2 ? `it is ${now.toLocaleString()} words now, from ${was.toLocaleString()}` : '';
-    const said = [shrunk, stands, mended].filter(Boolean).join('; ');
+    const said = [relocated, shrunk, stands, mended].filter(Boolean).join('; ');
     const undo = anew ? { what: 'passage', chapterId: chapter.id, passageId: passage.id, versionId: version.id, from: v.id } : { what: 'words', chapterId: chapter.id, passageId: passage.id, versionId: v.id, before: old, after: next };
     return { ...base, status: 'made', undo, before: old, after: next, ...(said ? { said } : {}) };
   }
@@ -1575,7 +1614,7 @@ function wholeCardBase(novelId, op) {
  * (Cozy Tavern's M602). */
 export function driftOf(novelId, change) {
   const c = change || {};
-  if (!c.base || !c.op || quotedChange(c.op)) return '';
+  if (!c.base || !c.op || quotedChange(c.op) || c.op.rewrite !== undefined) return '';
   const legacy = c.op.note !== undefined && c.base !== 'none' && !/^[fw]:/.test(c.base);
   const now = legacy ? wholeCardBase(novelId, c.op) : baseOf(novelId, c.op, c.where || null);
   return now && now !== c.base ? 'it has changed since this was offered — ask again for this one' : '';
@@ -1609,6 +1648,7 @@ export function changeShort(c) {
     return ` (“${clipQ(o.find)}” → ${String(to == null ? '' : to).trim() ? `“${clipQ(to)}”` : 'taken out'})`;
   }
   if (o.passage !== undefined && o.remove !== undefined) return ' (taken out)';
+  if (o.passage !== undefined && o.rewrite !== undefined) return ` (written again by the writer from your note: “${clipQ(o.rewrite)}”)`;
   if (o.passage !== undefined && o.text !== undefined) return ' (written anew)';
   return '';
 }
@@ -1640,6 +1680,7 @@ export function outcomeWords(changes, novelId = null) {
     if (c.status === 'made' && c.edited) { const gone = novelId ? madeGone(novelId, c) : ''; return gone ? `${c.label} — made, in my own words instead of yours, but ${gone}` : `${c.label} — made, in my own words instead of yours (the book as it reads now has them)`; }
     if (c.status === 'made') { const gone = novelId ? madeGone(novelId, c) : ''; return `${what} — made${c.said && c.op && c.op.passage !== undefined ? ` (${c.said})` : ''}${gone ? `, but ${gone}` : ''}`; }
     if (c.status === 'undone') return `${what} — I undid it`;
+    if (c.status === 'writing') return `${what} — the writer is writing it now`;
     if (c.status === 'waiting') return `${what} — waiting for me to apply it`;
     if (c.status === 'skipped') return `${what} — ${c.aside ? 'set aside for a newer answer’s change to the same' : 'I left it'}`;
     return `${what} — couldn’t be made (${c.said || 'no reason given'})`;
@@ -1658,6 +1699,7 @@ export function sinceWords(novelId, c) {
   if (now === 'made') return `${what} — I applied it: the book has it now`;
   if (now === 'gone') return `${what} — made, but ${madeGone(novelId, c)}`;
   if (now === 'undone') return `${what} — I undid it: the book no longer has it`;
+  if (now === 'writing') return `${what} — the writer is still writing it`;
   if (now === 'waiting') return `${what} — still waiting for me to apply it`;
   if (now === 'skipped') return `${what} — I left it`;
   return `${what} — couldn’t be made (${c.said || 'no reason given'})`;

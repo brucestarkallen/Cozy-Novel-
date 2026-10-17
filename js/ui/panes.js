@@ -82,6 +82,7 @@ export function openPanes(novelId, chapterId) {
   drawChapters();
   drawSide();
   drawLight();
+  watchTalk(novelId);
 }
 
 let chFrame = 0;
@@ -538,6 +539,23 @@ function drawLight() {
   ui.light.dataset.state = l.state;
   ui.light.title = `Notes — ${l.words}`;
   ui.light.setAttribute('aria-label', `Notes — ${l.words}`);
+}
+/* the talk record at hand as the book opens — read, never made — so the Partner
+ * button's count is right before the pane is opened; one subscription per book
+ * open, shared with the pane (drawPartner) */
+function watchTalk(novelId) {
+  if (P.offs.talkSub) { drawWaiting(); return; }
+  P.offs.talkSub = true;
+  P.offs.push(store.subscribe('talk', novelId, () => { drawWaiting(); if (P.side === 'partner' && !drawnAlready('talk', novelId)) drawPartnerSoon(); }));
+  store.open('talk', novelId).then(() => { if (P.novelId === novelId) drawWaiting(); }).catch(() => {});
+}
+/* the Partner button carries how many of its changes wait for him (2.12.9), so he knows without opening it */
+function drawWaiting() {
+  const btn = document.getElementById('partnerBtn');
+  if (!btn || !P.novelId) return;
+  const n = store.peek('talk', P.novelId) ? talk.waitingAll(P.novelId).length : 0;
+  if (n) { btn.dataset.waiting = String(n); btn.title = `Partner — ${plural(n, 'change')} waiting for you`; btn.setAttribute('aria-label', btn.title); }
+  else if (btn.dataset.waiting) { delete btn.dataset.waiting; btn.title = 'Partner'; btn.setAttribute('aria-label', 'Partner'); }
 }
 
 /* --------------------------------------------------------------- side */
@@ -1222,7 +1240,7 @@ async function drawPartner() {
   if (t) talk.repairStaleTurns('talk', novelId);
   /* the book's scenes at hand, so a rename everywhere reaches them */
   talk.loadPlays(novelId).catch(() => {});
-  if (!P.offs.talkSub) { P.offs.push(store.subscribe('talk', novelId, () => { if (P.side === 'partner' && !drawnAlready('talk', novelId)) drawPartnerSoon(); })); P.offs.talkSub = true; }
+  watchTalk(novelId);
   const priorTop = ui.rightBody.querySelector('.conversation-heading');
   const headingSignature = JSON.stringify([talk.partnerConversations(novelId).open.name, fullKind(), talk.talkBusy('talk', novelId), !t?.turns?.length && !t?.named]);
   const heading = priorTop?._headingSignature === headingSignature ? priorTop : conversationRow(novelId, t);
@@ -1239,6 +1257,7 @@ async function drawPartner() {
   keepChildren(ui.rightBody, [heading, box]);
   const working = talk.talkBusy('talk', novelId);
   if (ui.rightFoot.dataset.for === draftKey && ui.rightFoot.querySelector('textarea')) {
+    waitBar(novelId);
     refreshComposer(draftKey, novelId);
     const send = ui.rightFoot.querySelector('[data-composer-send]');
     const label = working ? 'Stop' : 'Send';
@@ -1269,6 +1288,7 @@ async function drawPartner() {
   ui.rightFoot.hidden = false;
   const quick = h('button.btn.quiet.small', { 'aria-label': 'Quick asks', title: 'Quick asks — ready-made requests for your partner', disabled: working, onclick: (e) => quickAsks(e.currentTarget, ta, send) }, icon('more', 16), 'Quick asks');
   ui.rightFoot.append(ta, h('div.crow', h('button.btn.quiet.small', { 'data-start-over': '', hidden: !turns.length, title: 'This conversation’s talk goes and it begins again — the changes it made stay in the book. With Undo.', disabled: working, onclick: clearTalk }, 'Start over'), h('span.grow'), quick, send));
+  waitBar(novelId);
   autoGrow(ta, 0.3);
   restoreTyped(draftKey, novelId);
   rememberDrawn('talk', novelId, t);
@@ -1561,6 +1581,7 @@ function whatChanged(novelId, c) {
   if (op.passage !== undefined && op.remove === true) return 'taken out of the chapter';
   if (op.remove === true) return 'taken out of the notes';
   if (op.find !== undefined) return h('span', h('del', clip(op.find, 90)), ' → ', h('ins', clip(op.replace !== undefined ? op.replace : op.text, 90) || '(taken out)'), reach);
+  if (op.passage !== undefined && op.rewrite !== undefined) return h('span', 'to the writer, to write it again: ', h('i', clip(op.rewrite, 300)));
   if (op.passage !== undefined && op.text !== undefined) return `written anew (${plural(countWordsLoose(op.text), 'word')})`;
   if (op.module !== undefined && op.text !== undefined) return `its words, whole (${plural(countWordsLoose(op.text), 'word')})`;
   if (op.summary !== undefined) return h('span', ...over(), h('ins', clip(op.text, 140)));
@@ -1589,10 +1610,10 @@ function changeList(novelId, turn, v) {
   for (const c of v.changes) {
     /* a miss it put right in a later round of the same answer is not shown as a miss (M683) */
     if (c.superseded) continue;
-    const mark = { made: '✓', waiting: '•', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
+    const mark = { made: '✓', waiting: '•', writing: '…', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
     /* a waiting one that could not land now (its words gone, its thing changed since): said, with no Apply (M224) */
     const stale = c.status === 'waiting' && !c.copied ? talk.waitingWhy(novelId, c) : '';
-    const state = { made: c.edited ? 'made with your words' : c.with ? c.said : (c.said && c.op && (c.op.find !== undefined || c.op.text !== undefined) ? c.said : ''), waiting: stale ? `can’t be made now — ${stale}` : c.group ? 'waiting for Apply — made together with the others of its kind here' : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'left — a newer answer changes the same' : 'left as it was' }[c.status] || '';
+    const state = { made: c.op && c.op.rewrite !== undefined ? `written again by the writer from ${c.edited ? 'your' : 'its'} note${c.said ? ` — ${c.said}` : ''} — one arrow away from the words before` : c.edited ? 'made with your words' : c.with ? c.said : (c.said && c.op && (c.op.find !== undefined || c.op.text !== undefined) ? c.said : ''), writing: 'the writer is writing it again — it streams on the page', waiting: stale ? `can’t be made now — ${stale}` : c.group ? 'waiting for Apply — made together with the others of its kind here' : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'replaced by a newer answer’s change to the same' : 'left as it was' }[c.status] || '';
     const row = h('div.change.' + c.status,
       h('div.chead', h('b', `${mark} ${labelNow(novelId, c)}`), state ? h('small', state) : null),
       c.status !== 'refused' ? h('div.cwhat', whatChanged(novelId, c)) : (c.op && c.op.find !== undefined ? h('div.cwhat', 'It looked for: ', h('del', clip(c.op.find, 140))) : null),
@@ -1621,9 +1642,30 @@ function changeList(novelId, turn, v) {
   const live = v.changes.filter((c) => !c.copied);
   const waiting = live.filter((c) => c.status === 'waiting');
   const made = live.filter((c) => c.status === 'made');
-  if (waiting.length > 1) box.append(h('div.cbtns', h('button.go', { title: 'Every change waiting here, made in the book.', onclick: all('apply') }, 'Apply all'), h('button', { title: 'Leave the book as it is for every change waiting here.', onclick: all('skip') }, 'Leave all')));
-  if (made.length > 1) box.append(h('div.cbtns', h('button', { title: 'Every change this answer made, put back — the newest first; one changed since stays.', onclick: all('undo') }, 'Undo all')));
+  /* this answer's own: named by their scope — the conversation's Apply all, for everything waiting in every answer, is in the foot (waitBar) */
+  if (waiting.length > 1) box.append(h('div.cbtns', h('button.go', { title: `The ${waiting.length} changes waiting in this answer, made in the book. Apply all, below the talk, makes everything waiting in every answer.`, onclick: all('apply') }, `Apply these ${waiting.length}`), h('button', { title: `Leave the book as it is for the ${waiting.length} changes waiting in this answer.`, onclick: all('skip') }, `Leave these ${waiting.length}`)));
+  if (made.length > 1) box.append(h('div.cbtns', h('button', { title: `The ${made.length} changes this answer made, put back — the newest first; one changed since stays.`, onclick: all('undo') }, `Undo these ${made.length}`)));
   return box;
+}
+
+/* WHAT WAITS IN THE WHOLE CONVERSATION, under the talk and above his box:
+ * "6 changes waiting", Apply all, Leave all (talk.js settleWaiting). One
+ * place, one button, however many answers the changes came in (2.12.9). */
+function waitBar(novelId) {
+  const all = talk.waitingAll(novelId);
+  const can = all.filter((w) => !w.stale);
+  let bar = ui.rightFoot.querySelector('.waitbar');
+  if (!all.length) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = h('div.waitbar', h('span.waitcount'), h('span.grow'),
+      h('button.btn.primary.small', { 'data-apply-all': '', title: 'Every change still waiting in this conversation, from every answer, made in the book — the oldest answer first, each in its order. One that can’t be made now says why and stays.', onclick: async () => { const out = talk.settleWaiting(novelId, 'apply'); if (out.failed.length) toast(`${plural(out.failed.length, 'change')} couldn’t: ${out.failed[0]}.`, 6000); drawSideSoon(); } }, 'Apply all'),
+      h('button.btn.quiet.small', { 'data-leave-all': '', title: 'Leave the book as it is for every change still waiting in this conversation.', onclick: async () => { talk.settleWaiting(novelId, 'skip'); drawSideSoon(); } }, 'Leave all'));
+    ui.rightFoot.prepend(bar);
+  }
+  const answers = new Set(all.map((w) => w.turnId)).size;
+  setText(bar.querySelector('.waitcount'), `${plural(all.length, 'change')} waiting${answers > 1 ? ` from ${plural(answers, 'answer')}` : ''}${can.length < all.length ? ` — ${all.length - can.length} can’t be made now` : ''}`);
+  bar.querySelector('[data-apply-all]').disabled = !can.length;
+  bar.querySelector('[data-apply-all]').textContent = can.length && can.length < all.length ? `Apply all ${can.length}` : 'Apply all';
 }
 
 /* Edit by hand (Cozy Tavern's card editor): the words a waiting change would

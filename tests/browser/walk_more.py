@@ -1276,7 +1276,7 @@ async def scenario_partner_said(b):
     check('no errors on the page', not errs, errs[:3])
 
 async def scenario_partner(b):
-    """the partner as Cozy Tavern's housekeeper: Edit by hand, Apply all, Undo all, What it said whole, conversations, Branch from here, Edit and ask again, Start over, full screen, Critique"""
+    """the partner as Cozy Tavern's housekeeper: Edit by hand, the conversation's Apply all, an answer's Undo these, What it said whole, conversations, Branch from here, Edit and ask again, Start over, full screen, Critique"""
     logs = []
     pg = await page(b, logs)
     await new_book(pg, title='The Housekeeper')
@@ -1294,13 +1294,22 @@ async def scenario_partner(b):
     await pg.wait_for_selector('#sideBody .change.waiting', timeout=8000)
     await pg.wait_for_timeout(500)
     check('one box to ask the partner, however often its talk is drawn again', await pg.locator('#sideFoot textarea').count() == 1 and await pg.locator('#sideFoot button:has-text("Send")').count() == 1, await pg.locator('#sideFoot textarea').count())
-    check('waiting changes: Apply, Edit by hand, Leave it — and Apply all, Leave all', await pg.locator('#sideBody .change.waiting button:has-text("Edit by hand")').count() == 2 and await pg.locator('#sideBody button:has-text("Apply all")').count() == 1 and await pg.locator('#sideBody button:has-text("Leave all")').count() == 1)
-    await pg.click('#sideBody button:has-text("Apply all")'); await pg.wait_for_timeout(500)
+    check('waiting changes: Apply, Edit by hand, Leave it — this answer\'s Apply these 2 / Leave these 2 — and the conversation\'s one bar above the box: 2 changes waiting, Apply all, Leave all; the Partner button counts them', await pg.locator('#sideBody .change.waiting button:has-text("Edit by hand")').count() == 2 and await pg.locator('#sideBody button:has-text("Apply these 2")').count() == 1 and await pg.locator('#sideBody button:has-text("Leave these 2")').count() == 1
+          and await pg.locator('#sideFoot .waitbar').count() == 1 and '2 changes waiting' in await pg.inner_text('#sideFoot .waitbar') and await pg.locator('#sideFoot .waitbar button:has-text("Apply all")').count() == 1 and await pg.locator('#sideFoot .waitbar button:has-text("Leave all")').count() == 1
+          and await pg.get_attribute('#partnerBtn', 'data-waiting') == '2', (await pg.inner_text('#sideFoot'), await pg.get_attribute('#partnerBtn', 'data-waiting')))
+    # the page opened afresh: the count is on the Partner button before the pane is opened (panes.js watchTalk)
+    await settled_reload(pg); await pg.wait_for_selector('#desk:not([hidden])', timeout=8000)
+    await pg.wait_for_function("document.getElementById('partnerBtn') && document.getElementById('partnerBtn').dataset.waiting === '2'", timeout=8000)
+    check('opened afresh, the Partner button counts the 2 waiting before the pane is opened', await pg.get_attribute('#partnerBtn', 'data-waiting') == '2', await pg.get_attribute('#partnerBtn', 'data-waiting'))
+    if await pg.locator('#sideFoot .waitbar').count() == 0:
+        await pg.click('#partnerBtn')
+    await pg.wait_for_selector('#sideFoot .waitbar', timeout=8000); await pg.wait_for_timeout(300)
+    await pg.click('#sideFoot .waitbar button:has-text("Apply all")'); await pg.wait_for_timeout(500)
     p1 = await pg.evaluate(first_words)
-    check('Apply all makes every one', p1.strip() == 'Rain lashed the glass. The sea was black.', p1)
-    await pg.click('#sideBody button:has-text("Undo all")'); await pg.wait_for_timeout(600)
+    check('Apply all makes every one; the bar goes, the count with it', p1.strip() == 'Rain lashed the glass. The sea was black.' and await pg.locator('#sideFoot .waitbar').count() == 0 and await pg.get_attribute('#partnerBtn', 'data-waiting') is None, p1)
+    await pg.click('#sideBody button:has-text("Undo these 2")'); await pg.wait_for_timeout(600)
     p1 = await pg.evaluate(first_words)
-    check('Undo all puts every one back', p1.strip() == 'Rain hammered the glass. The sea was grey.' and await pg.locator('#sideBody .change.undone').count() == 2, p1)
+    check('Undo these 2 puts every one back', p1.strip() == 'Rain hammered the glass. The sea was grey.' and await pg.locator('#sideBody .change.undone').count() == 2, p1)
     await pg.click('#sideBody .turn.ai .tmore'); await pg.click('.menu-pop button:has-text("What it said, whole")'); await pg.wait_for_timeout(300)
     whole = await pg.inner_text('.sheet.on pre.whole')
     check('What it said, whole shows the block too', '<changes>' in whole and 'Two changes to the first passage.' in whole, whole[:80])
@@ -1359,6 +1368,20 @@ async def scenario_partner(b):
     what = await pg.inner_text('#sideBody .turn.ai >> nth=-1 >> .change.waiting .cwhat')
     check('a passage the partner would take out is said to be taken out of the chapter', what.strip() == 'taken out of the chapter', what)
     await pg.click('#sideBody .turn.ai >> nth=-1 >> .change.waiting button:has-text("Leave it")'); await pg.wait_for_timeout(300)
+    # a passage handed to the writer: the card waits (the note his to edit), Apply hands it on — the writer writes it on the page, the card says written again, with Undo (2.12.9)
+    before_rw = (await pg.evaluate(first_words)).strip()
+    await pg.fill('#sideFoot textarea', 'HAND IT TO THE WRITER, please.')
+    await pg.click('#sideFoot button:has-text("Send")')
+    await pg.wait_for_selector('#sideBody .turn.ai >> nth=-1 >> .change.waiting', timeout=8000)
+    what = await pg.inner_text('#sideBody .turn.ai >> nth=-1 >> .change.waiting .cwhat')
+    check('a passage handed to the writer waits with its note, said as the writer’s to write again', what.startswith('to the writer, to write it again:') and 'A fiercer storm' in what and await pg.locator('#sideBody .turn.ai >> nth=-1 >> .change.waiting button:has-text("Edit by hand")').count() == 1, what)
+    await pg.click('#sideBody .turn.ai >> nth=-1 >> .change.waiting button:has-text("Apply")')
+    await pg.wait_for_selector('#sideBody .turn.ai >> nth=-1 >> .change.made', timeout=15000); await pg.wait_for_timeout(400)
+    state = await pg.inner_text('#sideBody .turn.ai >> nth=-1 >> .change.made .chead small')
+    after_rw = (await pg.evaluate(first_words)).strip()
+    check('Apply: the writer writes it again on the page; the card says so, one arrow from the words before, with Undo', after_rw.startswith('A rewritten passage.') and after_rw != before_rw and 'written again by the writer from its note' in state and await pg.locator('#sideBody .turn.ai >> nth=-1 >> .change.made button:has-text("Undo")').count() == 1, (after_rw, state))
+    await pg.click('#sideBody .turn.ai >> nth=-1 >> .change.made button:has-text("Undo")'); await pg.wait_for_timeout(500)
+    check('Undo: the words before, back on show', (await pg.evaluate(first_words)).strip() == before_rw and await pg.locator('#sideBody .turn.ai >> nth=-1 >> .change.undone').count() == 1, (await pg.evaluate(first_words)).strip())
     # Ideas: a premise a tap puts in the box; off, the chip is gone
     await pg.click('#sideClose'); await pg.wait_for_timeout(300)
     await pg.click('#ideasBtn'); await pg.wait_for_selector('.sheet.on .idea', timeout=10000)

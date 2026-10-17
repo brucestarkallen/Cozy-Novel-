@@ -797,9 +797,11 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version, { show: !lift }), { now: true });
   const request = rewriteRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text, last: lastInBook(book, chapterId, passageId) });
   const words = countWords(text);
-  return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
+  const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
     length: words > 2600 ? 'chapter' : words > 1500 ? 'long' : 'scene',
     build: { target: { chapterId, mark: passageId }, request, moment }, auto: Boolean(lift), hidden: Boolean(lift), showWhenDone: Boolean(lift) });
+  /* (the version it wrote and the one it wrote from: the partner's rewrite keeps them for its Undo) */
+  return { ...out, versionId: version.id, from: from.id };
 }
 
 /* Only the words he selected, rewritten; the rest of the passage untouched. */

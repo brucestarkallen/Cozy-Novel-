@@ -272,6 +272,9 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .notesbtn[data-state="waiting"] .dot { background: var(--warn); }
 .notesbtn[data-state="trouble"] .dot { background: var(--danger); box-shadow: 0 0 0 2px var(--chrome-solid), 0 0 10px rgba(224,122,95,.5); }
 .notesbtn[data-state="off"] .dot { background: #8a8378; box-shadow: 0 0 0 2px var(--chrome-solid); }
+/* the partner's changes waiting for him, counted on its button (panes.js drawWaiting) */
+#partnerBtn { position: relative; }
+#partnerBtn[data-waiting]::after { content: attr(data-waiting); position: absolute; right: 2px; top: 4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-ink, #1a1612); font: 600 10.5px/16px var(--ui, system-ui, sans-serif); text-align: center; box-shadow: 0 0 0 2px var(--chrome-solid); }
 @keyframes breathe { 50% { transform: scale(.7); opacity: .6; } }
 
 .deskbody { position: relative; flex: 1; min-height: 0; display: flex; }
@@ -396,6 +399,11 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .say-row textarea { flex: 1; min-width: 0; }
 .say-row .btn.primary, .say-row .btn { min-height: 44px; padding: 0 20px; flex: none; }
 .crow { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+/* what waits in the whole conversation: one line above his box, one Apply all (panes.js waitBar) */
+.waitbar { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: color-mix(in srgb, var(--accent) 8%, transparent); font-size: 13px; color: var(--chrome-ink); }
+.waitbar .waitcount { font-weight: 600; }
+.waitbar .grow { flex: 1; min-width: 0; }
+.waitbar button[disabled] { opacity: .5; }
 .crow .chip { height: 30px; font-size: 12.5px; }
 .crow .chip.mine { color: var(--chrome-ink); }
 .crow .grow { flex: 1; min-width: 0; }
