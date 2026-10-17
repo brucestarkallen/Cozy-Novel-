@@ -718,7 +718,10 @@ body.reading .page { margin-top: 0; }
 .checkbubble[data-state="found"] { background: #e2a72a; color: #2a1a00; }
 .checkbubble[data-state="trouble"] { background: var(--danger); }
 .checkbubble .ring { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255,255,255,.45); border-top-color: #fff; }
-.checkbubble[data-state="checking"] .ring { animation: spin .9s linear infinite; }
+/* waiting (the newest words checked in a moment, a page still being written): the ring breathes — never a spinner standing still; checking: it turns */
+.checkbubble[data-state="waiting"] .ring { animation: ringwait 1.6s ease-in-out infinite; }
+.checkbubble[data-state="checking"] .ring { animation: spin 1s linear infinite; }
+@keyframes ringwait { 50% { transform: scale(.78); opacity: .55; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 body.reading .checkbubble { display: none; }
 body.reading .scroller { bottom: 12px; }
