@@ -1776,6 +1776,83 @@ await test('the partner can read About this book whole — what it’s about, ho
   await putAway(b);
 });
 
+await test('his words on a card, contradicted by words he changed himself — a rewrite from his note, his partner’s passage, his hand on the page — are put right from the book; a writer’s fresh page that says the opposite leaves them standing, a slip for the checker; a quote that stands nowhere changes nothing (2.12.10)', async () => {
+  const b = await makeBook([['Jovan chose Emilia from the shortlist, and said so to his father.']], { manual: true });
+  markAllSeen(b);
+  const thread = { id: 'th-1', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan asked his father “If it’s going to be me, let it be her,” and chose Emilia from a shortlist.', open: true, updated: { by: 'you', at: 1 } };
+  store.change('novel', b.novelId, shape.novelSteps.putNote('threads', thread), { now: true });
+  const card = () => b.novel().notes.threads.find((c) => c.id === 'th-1');
+  const row = (contradicts, more = '') => ({ threads: [{ name: thread.name, about: `The marriage was arranged by Reginald and Harrison; Jovan was told of it as a decision already made.${more}`, ...(contradicts ? { contradicts } : {}) }] });
+  /* the writer's own next page says the opposite: his words stand, the book's account beside them — and the check is not asked */
+  store.change('chapter', b.ids[0], (c) => { c.passages.push(shape.newPassage('ai', 'Reginald had arranged it all; Jovan was told of the marriage as a decision already made.', { how: 'write', ask: { direction: '', length: 'scene' } })); }, { now: true });
+  await script([{ text: JSON.stringify(row('Jovan was told of the marriage as a decision already made')) }]);
+  await archivist.run(b.novelId);
+  assert.equal(card().about, thread.about, 'his words stand against the writer’s page');
+  assert.ok(String(card().since || '').includes('arranged by Reginald'), 'what the book now says rides beside them');
+  assert.equal(Boolean(b.novel().memory.auditAsked), false, 'a writer’s page asks no check');
+  /* the same, from a passage written again from his note: the book is his newer word — the card says what it says now, "Since then" folded in, his mark off that field; the thread stays his by name */
+  const p1 = b.ch().passages[0];
+  await script([{ text: 'Reginald Wayne and Harrison Vanderbilt arranged the marriage between them; Jovan learned of it as a decision already made, with a signature space and a calendar.' }]);
+  const out = await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: p1.id, note: 'The fathers arrange it; Jovan is told, never asked.' });
+  assert.equal(out.ok, true);
+  assert.equal(picked(b.ch().passages[0]).how, 'rewrite');
+  await script([{ text: JSON.stringify(row('Jovan learned of it as a decision already made')) }]);
+  await archivist.run(b.novelId);
+  assert.equal(card().about, 'The marriage was arranged by Reginald and Harrison; Jovan was told of it as a decision already made.');
+  assert.equal(card().since, undefined, 'Since then folded in');
+  assert.deepEqual([card().updated.by, card().updated.his.includes('about'), card().updated.his.includes('name')], ['you', false, true]);
+  /* the reading's Put back brings his words back as they were */
+  const list = archivist.readingsList(b.novelId);
+  assert.equal(archivist.putBackReading(b.novelId, list[0].pid, list[0].vid), true);
+  assert.equal(card().about, thread.about);
+  assert.equal(shape.hisField(card(), 'about'), true, 'his words his again');
+  /* a quote that stands nowhere in the words he changed is no ground: his words stand, the account rides beside them */
+  await script([{ text: JSON.stringify(row('the fathers signed it in blood', ' A signature space waited.')) }]);
+  store.change('novel', b.novelId, (n) => { delete n.memory.seen[b.ids[0]][p1.id]; }, { now: true });
+  await archivist.run(b.novelId);
+  assert.equal(card().about, thread.about, 'an unfounded contradiction changes nothing');
+  assert.ok(String(card().since || '').includes('A signature space waited.'));
+  assert.equal(b.novel().memory.auditAsked, true, 'words he changed laid Since then on his card: the check is asked soon');
+  await putAway(b);
+});
+
+await test('the notes’ check puts right a card of his that the book he changed contradicts — quoted from a passage his partner wrote or he changed by hand — and takes out a thread of his about a thing the book no longer has; without the quote, or quoted from the writer’s own page, his card stands; a book opened under 2.12.10 with “Since then” on a card of his is checked once (2.12.10)', async () => {
+  const b = await makeBook([['Jovan chose Emilia from the shortlist.', 'Mara kept the light.']], { manual: true });
+  markAllSeen(b);
+  const his = (c) => ({ ...c, updated: { by: 'you', at: 1 } });
+  store.change('novel', b.novelId, (n) => {
+    n.notes.threads.push(his({ id: 'th-1', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan chose Emilia from a shortlist.', since: 'The marriage was arranged by the fathers.', open: true }));
+    n.notes.lore.push(his({ id: 'lo-1', name: 'The shortlist', about: 'A list of five brides Jovan chose from.' }));
+    n.notes.lore.push(his({ id: 'lo-2', name: 'The lamp', about: 'Mara’s lamp, which she keeps.' }));
+    n.notes.people.push(his({ id: 'pe-1', name: 'Mara', about: 'The keeper of the light.', now: 'At the lamp.' }));
+  }, { now: true });
+  /* a book from before, with Since then on a card of his: opened under 2.12.10, a check is asked once */
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { at: 1, reads: 0, v: 3, checked: true } }), { now: true });
+  assert.equal(archivist.firstCheck(b.novelId), true);
+  assert.deepEqual([b.novel().memory.audit.v, b.novel().memory.audit.owed, b.novel().memory.auditAsked], [archivist.AUDIT_V, undefined, true]);
+  /* the partner wrote the first passage anew (how 'partner'): the book he changed */
+  store.change('chapter', b.ids[0], (c) => { const p = c.passages[0]; p.versions.push(shape.newVersion({ text: 'Reginald and Harrison arranged the marriage; there was no shortlist, and Jovan was told.', how: 'partner', from: p.versions[0].id })); p.pick = 1; }, { now: true });
+  markAllSeen(b);
+  const notes = () => b.novel().notes;
+  await script([{ text: JSON.stringify({
+    threads: [{ name: 'Jovan’s choice to ask for Emilia', about: 'The marriage was arranged by Reginald and Harrison; Jovan was told.', contradicts: 'Reginald and Harrison arranged the marriage', why: 'the book no longer has him choosing' }],
+    people: [{ name: 'Mara', about: 'A woman who hates the light.', contradicts: 'Mara kept the light', why: 'x' }],
+    gone: [{ kind: 'lore', name: 'The shortlist', contradicts: 'there was no shortlist', why: 'nothing of it is in the book' }, { kind: 'lore', name: 'The lamp', why: 'tidy' }],
+    clear: true, verdict: 'Put right.' }) }]);
+  await archivist.run(b.novelId);
+  const a = b.novel().memory.audit;
+  assert.equal(a.checked, true, JSON.stringify(a));
+  assert.equal(notes().threads[0].about, 'The marriage was arranged by Reginald and Harrison; Jovan was told.', 'his thread put right from the book he changed');
+  assert.equal(notes().threads[0].since, undefined);
+  assert.deepEqual(notes().threads[0].updated.his.includes('about'), false);
+  assert.equal(notes().lore.some((c) => c.id === 'lo-1'), false, 'his thing the book no longer has is taken out, quoted');
+  assert.equal(notes().lore.some((c) => c.id === 'lo-2'), true, 'his card never taken out without the book’s word against it');
+  assert.equal(notes().people[0].about, 'The keeper of the light.', 'quoted from the writer’s own page: his words stand');
+  const refused = (a.refused || []).map((r) => `${r.name}: ${r.why}`).join(' | ');
+  assert.ok(/The lamp: yours — never taken out/.test(refused), refused);
+  await putAway(b);
+});
+
 await test('the readings listed newest first; Put back takes out only what one reading changed; Read again reads that passage afresh', async () => {
   const b = await makeBook([['Mara kept the light.', 'A wolf came to the door.']], { manual: true });
   await script([

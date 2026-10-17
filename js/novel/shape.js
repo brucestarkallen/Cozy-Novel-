@@ -918,6 +918,20 @@ export function hisStamp(card, fields, at = Date.now()) {
   const before = hisCard(card) ? card.updated.his : [];
   return { by: 'you', at, his: CARD_FIELDS.filter((k) => before.includes(k) || (fields || []).includes(k)) };
 }
+/* his mark without one field (the book, changed by him, is his newer word for it — archivist foldNotes, 2.12.10) */
+export function letGoStamp(updated, field, chapterId, at) {
+  const list = Array.isArray(updated && updated.his) ? updated.his : CARD_FIELDS;
+  const his = list.filter((k) => k !== field);
+  return his.length ? { by: 'you', his, chapterId, at } : { chapterId, at };
+}
+/* WORDS HE CHANGED HIMSELF (2.12.10): a passage written again from his note or
+ * his partner's (never the app's own lift), the words he selected written again
+ * (never the checker's by itself), his partner's own passage, his own words, or
+ * his hand or his partner's on the page. A card he wrote is held against these:
+ * where they say the opposite of his words, the book is his newer word. The
+ * writer's fresh page, a scene's prose and the app's own fixes are not his — a
+ * slip in them is the checker's to catch, never a reason to change his card. */
+export const hisChange = (v) => Boolean(v) && ((v.how === 'rewrite' && !v.lift) || (v.how === 'selection' && !v.spanAuto) || v.how === 'partner' || v.how === 'mine' || mixedHands(v));
 /* the mark a card keeps when the helper writes what is not his */
 export function keptStamp(card, chapterId, at) {
   if (!hisCard(card)) return { chapterId, at };

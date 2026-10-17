@@ -26,7 +26,7 @@ import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writer.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
-import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, PRIOR_KEEP } from './shape.js';
+import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisChange, PRIOR_KEEP } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
 import { helperFrame, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook, bibAutoOn } from './context.js';
@@ -772,8 +772,23 @@ export function factsByCard(novelId, extra = []) {
   for (const f of extra || []) { const card = cardOf(f.name); if (card) add(card.id, `${f.fact} ${(f.evidence || []).join(' ')}`); }
   return (card) => map.get(card.id) || '';
 }
-export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null, grounds = null, keptElsewhere = null } = {}) {
+export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null, grounds = null, keptElsewhere = null, hisWords = null } = {}) {
   const out = clone(notes || {});
+  /* THE BOOK IS HIS NEWER WORD (2.12.10). His words on a card are never written
+   * over by a reading — unless the words he changed himself (`hisWords`: the
+   * folded text of the versions he wrote, had written again or had his partner
+   * write; shape.js hisChange) say the opposite, and the answer quotes them:
+   * "contradicts" — the words that say so, which must stand in those words.
+   * Then his card is put right (about whole, "Since then" folded in, that
+   * field his no longer), or a card of his about a thing the book no longer
+   * has goes with "gone". A quote that stands nowhere in them, or only in the
+   * writer's own page, changes nothing: a slip there is the checker's. */
+  const contradicted = (row) => {
+    const q = cleanText(row && row.contradicts, 600);
+    if (!q || !hisWords) return '';
+    const f = foldedText(q);
+    return hisWords.loose.includes(' ' + f.loose.trim() + ' ') || hisWords.tight.includes(' ' + f.tight.trim() + ' ') ? q : '';
+  };
   for (const k of NOTE_KINDS) if (!Array.isArray(out[k])) out[k] = [];
   const touched = new Map();       /* card id -> {kind, before} */
   const whys = {};
@@ -987,12 +1002,17 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     const aboutBad = about && !aboutTwice && !movedSince('about') ? unfounded(before, about) : '';
     if (aboutBad) refuse(kind, card.name, groundWhy(aboutBad));
     if (about && !movedSince('about') && !aboutTwice && !aboutBad) {
-      if (hisField(card, 'about')) {
+      if (hisField(card, 'about') && contradicted(row)) {
+        /* his words, contradicted by words he changed himself: the book as it stands is what the card says now */
+        card.about = about;
+        delete card.since;
+        letGo.add(card.id);
+      } else if (hisField(card, 'about')) {
         const add = newSentences(card.about, about).join(' ');
         const old = String(card.since || '').trim();
         if (add && !movedSince('since')) {
           const next = !audit && (shownShort(card.id) || thins(old, add)) ? addedTo(old, add) : add;
-          if (next !== old) card.since = next;
+          if (next !== old) { card.since = next; if (!audit) sinceHis.add(card.id); }
         }
       } else if (shownShort(card.id) && !audit) card.about = shownLevel(card.id) >= 2 ? addedTo(card.about, about) : addedTo(about, pastFirstLine(card.about));
       /* the check, which folds repeats and puts drift right, may thin one — unless it saw some of the book only in short (Cozy Tavern M403), when nothing is thinned;
@@ -1053,11 +1073,13 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     if (JSON.stringify(card) !== was) {
       if (!touched.has(card.id)) touched.set(card.id, { kind, before });
       landed.add(card.id);
-      /* a card he wrote stays his in what he wrote: the helper keeps the rest */
-      card.updated = keptStamp(before, chapterId, at);
+      /* a card he wrote stays his in what he wrote: the helper keeps the rest — what the book he changed contradicted is his no longer */
+      card.updated = letGo.has(card.id) ? letGoStamp(before.updated, 'about', chapterId, at) : keptStamp(before, chapterId, at);
       why(card.id, row);
     }
   };
+  const letGo = new Set();      /* his cards whose words the book he changed contradicted: put right */
+  const sinceHis = new Set();   /* his cards a reading laid "Since then" on: the check looks at them soon */
   for (const kind of NOTE_KINDS) for (const row of (Array.isArray(answer && answer[kind]) ? answer[kind] : [])) foldRow(kind, row);
   /* A THREAD CLOSED TAKES ITS COPIES WITH IT (Cozy Tavern M653): where the
    * notes already hold one thread as several, closing it closes every copy —
@@ -1081,14 +1103,16 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
     const drop = [];
     for (const c of cardsCalled(out[g.kind], cleanName(g.name))) {
       if (limit && !limit.has(c.id)) { refuse(g.kind, c.name, 'not among the cards checked this time'); continue; }
-      if (his(c)) { refuse(g.kind, c.name, 'yours — never taken out'); continue; }
+      /* his, unless the words he changed himself say the book no longer has it (contradicted, quoted) */
+      const against = his(c) ? contradicted(g) : '';
+      if (his(c) && !against) { refuse(g.kind, c.name, 'yours — never taken out'); continue; }
       if (asked && JSON.stringify(askedCard(g.kind, c.id)) !== JSON.stringify(standingCard(g.kind, c.id))) { refuse(g.kind, c.name, 'changed in the notes while this was being read'); continue; }
       if (written.has(c.id)) { refuse(g.kind, c.name, 'given whole in the same answer'); continue; }
       const carriers = carriersOf(g.kind, c, out[g.kind]);
       if (carriers.length) {
         /* folded into another card: only once what it held is there — nothing true is lost in the folding (Cozy Tavern M482) */
         if (!carriers.some((o) => landed.has(o.id) || heldIn([c.about, c.ties].join(' '), [o.about, o.since, o.ties, o.now].join(' ')) >= 0.6)) { refuse(g.kind, c.name, `what it holds is not on ${carriers[0].name} yet`); continue; }
-      } else if (stands && cardStands(g.kind, c, stands)) { refuse(g.kind, c.name, 'its name still stands in the book'); continue; }
+      } else if (stands && !against && cardStands(g.kind, c, stands)) { refuse(g.kind, c.name, 'its name still stands in the book'); continue; }
       /* a thing or a thread the check saw only in short may still be told of in the chapters it did not read whole (Cozy Tavern M403) */
       else if (unseen && (g.kind === 'lore' || g.kind === 'threads') && [...telling(c.name)].some((w) => unseen.loose.includes(' ' + foldedText(w).loose.trim() + ' '))) { refuse(g.kind, c.name, 'the chapters that may still tell of it were read only in short'); continue; }
       drop.push(c);
@@ -1105,8 +1129,22 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
   }
   const changed = cards.map((c) => ({ kind: c.kind, name: (c.after || c.before).name, how: !c.before ? 'new' : !c.after ? 'gone' : 'changed' }));
   for (const id of Object.keys(whys)) if (!cards.some((c) => c.id === id)) delete whys[id];
-  return { notes: out, cards, changed, whys, aside, refused };
+  return { notes: out, cards, changed, whys, aside, refused, sinceHis: [...sinceHis] };
 }
+/* the words he changed himself, folded (foldNotes' `hisWords`): every version on show that is his (shape.js hisChange) */
+export function hisWordsFolded(novel, chapters) {
+  const out = [];
+  for (const id of (novel && novel.order) || []) {
+    for (const p of ((chapters[id] || {}).passages) || []) {
+      if (p.by === 'break') continue;
+      const v = picked(p);
+      if (hisChange(v) && String(v.text || '').trim()) out.push(String(v.text));
+    }
+  }
+  return out.length ? foldedText(out.join('\n\n')) : null;
+}
+/* whether an answer claims the book contradicts a card of his (so the fold of his words is made only then) */
+const claimsContradiction = (o) => [...NOTE_KINDS, 'gone'].some((k) => Array.isArray(o && o[k]) && o[k].some((r) => r && cleanText(r.contradicts)));
 
 /* What a record put right may draw on (foldNotes' `grounds`): the book's
  * passages as they stand, and his About this book — what it's about, how it
@@ -1808,6 +1846,12 @@ async function readChanges(novelId, conn) {
           batchFacts.push(...codex.facts);
         }
       }
+      /* the words read that he changed himself (shape.js hisChange): a card of his is held against these alone */
+      const hisRead = B.items.filter((c) => {
+        const p = liveChapter && (liveChapter.passages || []).find((x) => x.id === c.pid);
+        const v = p && ((p.versions || []).find((x) => signature(x) === c.sig) || picked(p));
+        return hisChange(v) && String(c.text || '').trim();
+      }).map((c) => c.text);
       const folded = foldNotes(latest.notes, got.obj, {
         keptElsewhere: askedCodex ? factsByCard(novelId, batchFacts) : null,
         chapterId: chapter ? chapter.id : '', at: Date.now(),
@@ -1816,9 +1860,12 @@ async function readChanges(novelId, conn) {
         nowAt: chapter ? chapter.id : '', nowPid: lastPid,
         short: shortIds, asked: askedNotes,
         named: B.items.length ? foldedText(B.items.map((c) => c.text).join('\n\n')) : null,
+        hisWords: hisRead.length ? foldedText(hisRead.join('\n\n')) : null,
       });
       /* a row two cards answer to was kept on a card of its own: the notes' check folds it where it belongs */
       if (folded.aside.some((x) => x.own && !x.near)) store.change('novel', novelId, novelSteps.setMemory({ auditAsked: true }));
+      /* words he changed himself laid "Since then" on a card of his: the two may disagree — the check looks soon (2.12.10) */
+      if (hisRead.length && folded.sinceHis.length) store.change('novel', novelId, novelSteps.setMemory({ auditAsked: true }));
       /* what it keeps of the book as it stands (Automatic), when this part changed it — never over his correction */
       const kept = keptChanges(latest, got.obj, askedWords);
       if (folded.cards.length || Object.keys(kept).length) {
@@ -2872,7 +2919,7 @@ export const AUDIT_EVERY = 6;
  * person's card is a short portrait, its lasting details in the bibliography
  * (2.12). Notes checked under an earlier one are checked again once, by
  * themselves — once the bibliography holds the book's facts (owedCheck). */
-export const AUDIT_V = 3;
+export const AUDIT_V = 4;
 export function auditDue(novel) {
   const m = (novel && novel.memory) || {};
   const notes = (novel && novel.notes) || {};
@@ -2891,9 +2938,11 @@ export function firstCheck(novelId) {
   if (a && (a.v || 1) >= AUDIT_V) return false;
   const has = NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length);
   /* owed once the bibliography holds the book's facts (owedCheck): notes checked by the check of 2.4–2.11 only for the
-   * portrait — so not where the bibliography is not filled from the book; older ones in any case */
-  const owed = !has ? null : a && (a.v || 1) >= 2 ? 'portrait' : 'all';
-  store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, ...(owed ? { owed } : {}) } }), { now: true });
+   * portrait — so not where the bibliography is not filled from the book; older ones in any case; notes checked under 3 owe nothing there */
+  const owed = !has ? null : a && (a.v || 1) >= 3 ? null : a && (a.v || 1) >= 2 ? 'portrait' : 'all';
+  /* 4 (2.12.10): a card of his that the book he changed may contradict — one with "Since then" laid beside his words — is held against the book once, soon */
+  const sinceHis = has && NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).some((c) => his(c) && String(c.since || '').trim()));
+  store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, ...(owed ? { owed } : {}) }, ...(sinceHis ? { auditAsked: true } : {}) }), { now: true });
   return has;
 }
 /* A check owed by a book opened for the first time since the check learned
@@ -3089,6 +3138,7 @@ async function auditNotes(novelId, conn) {
   const folded = foldNotes(latest.notes, got.obj, {
     chapterId: '', at: Date.now(), audit: true, limit: only,
     stands: hasGone(got.obj) ? bookFolded(latest) : null,
+    hisWords: claimsContradiction(got.obj) ? hisWordsFolded(latest, live) : null,
     grounds: groundsOf(namedBook(latest, store.peek('house', 'house') || {})),
     asked: askedNotes, keepOpen: openedByNewest(latest, live), unseen, keptElsewhere: askedCodex ? factsByCard(novelId) : null,
     /* where people are "now" is the end of the book's: when it read the end only in short, it only fills one never written */
