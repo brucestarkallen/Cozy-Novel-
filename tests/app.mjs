@@ -2342,11 +2342,36 @@ await test('a change that missed its words is told back once in the same answer,
   await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Make it blue.' });
   const r2 = await requests();
   assert.equal(r2.length, 2);
-  assert.ok(r2[1].body.messages.at(-1).content.startsWith('Your answer says a change was made, but it holds no changes block'), r2[1].body.messages.at(-1).content.slice(0, 80));
+  assert.ok(r2[1].body.messages.at(-1).content.startsWith('Your last answer reads as if it made a change, but it holds no changes block'), r2[1].body.messages.at(-1).content.slice(0, 80));
   assert.equal(picked(b.ch().passages[0]).text, 'The lamp burned blue.');
-  /* the whole answer came again, with its block: it stands in place of the first */
+  /* the block came: it is laid beside its first words, which stand — the second try's prose is not the answer (2.12.7) */
   const v2 = picked(store.peek('talk', b.novelId).turns.at(-1));
-  assert.ok(v2.text.includes('Now it is in the book.') && !v2.text.includes('I’ve changed the lamp to burn blue.'), v2.text);
+  assert.ok(v2.text.startsWith('I’ve changed the lamp to burn blue.') && v2.text.includes('<changes>') && !v2.text.includes('Now it is in the book.'), v2.text);
+  assert.equal(v2.changes.map((c) => c.status).join(), 'made');
+  /* his question answered at length, in words that read like a claim — asked for the block, it says NOTHING was meant: the answer stands as it was, nothing added, nothing changed (2.12.7: it was written over by the second try) */
+  await reset();
+  const analysis = 'Updated thinking on the premise, as you asked.\n\nThe father’s ambition is the stronger engine: a merger forces the marriage and neither heir chooses, which keeps Jovan from looking like a man who picked his own cage. Name the companies and what they make — a hospital group and a robotics firm give the merger a reason a reader can hold.\n\nI agree with the change; say the word and I will make it.';
+  await script([{ text: analysis }, { text: 'NOTHING' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Is it possible to edit — the father’s ambition, not Jovan choosing? You agree?' });
+  const r3 = await requests();
+  assert.equal(r3.length, 2, 'asked once for the block');
+  assert.ok(r3[1].body.messages.at(-1).content.includes('reply with the one word NOTHING'), 'told how to say no change was meant');
+  const v3 = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.equal(v3.text, analysis, 'the analysis stands, untouched');
+  assert.deepEqual(v3.changes || [], []);
+  assert.equal(picked(b.ch().passages[0]).text, 'The lamp burned blue.', 'nothing changed');
+  /* a short line beginning with it is the same answer */
+  await reset();
+  await script([{ text: analysis }, { text: 'Nothing — you asked a question.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'And the companies?' });
+  assert.equal(picked(store.peek('talk', b.novelId).turns.at(-1)).text, analysis);
+  /* asked for the block, it says in a line that it cannot be made: the line is added under its words, which stand */
+  await reset();
+  await script([{ text: 'Done — the lamp is green now.' }, { text: 'That cannot be made: the chapter has no words about the lamp’s colour to quote.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Make it green.' });
+  const v4 = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.equal(v4.text, 'Done — the lamp is green now.\n\nThat cannot be made: the chapter has no words about the lamp’s colour to quote.');
+  assert.equal(picked(b.ch().passages[0]).text, 'The lamp burned blue.');
   /* an answer that changes nothing and says nothing of the kind is left alone — talk that only sounds like a claim too */
   for (const said of ['It reads well as it is.', 'I’ve added four directions below:\n1. She leaves.', 'That’s done well — everything’s changed for Oda now.', 'Mara said, “I’ve changed the passage,” and laughed.']) {
     await reset();

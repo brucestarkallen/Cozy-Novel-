@@ -424,13 +424,14 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         onText: (s) => {
           if (!ownsReply()) { ctl.abort(); return; }
           text += s;
-          live({ kind, id, turnId, versionId, text: prefix + text, thinking });
+          /* (asked for the block its first words described: those words stay on screen while it answers, never a blank nor the second try's prose) */
+          live({ kind, id, turnId, versionId, text: replacing ? done : prefix + text, thinking, ...(replacing ? { note: ASKING_BLOCK } : {}) });
           if (Date.now() - last > 3000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, { text: keptNow(), thinking: allThought(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 }); }
         },
         onThinking: (s) => {
           if (!ownsReply()) { ctl.abort(); return; }
           thinking += s;
-          live({ kind, id, turnId, versionId, text: prefix + text, thinking });
+          live({ kind, id, turnId, versionId, text: replacing ? done : prefix + text, thinking, ...(replacing ? { note: ASKING_BLOCK } : {}) });
           if (Date.now() - last > 20000) { last = Date.now(); store.change(kind, id, turnSteps.setVersion(turnId, versionId, { thinking: allThought(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 }); }
         },
       });
@@ -454,7 +455,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           rounds.push({ said: said.trim(), ask: READ_HOW });
           keepThought(thinking, 'asked how to read');
           text = ''; thinking = '';
-          live({ kind, id, turnId, versionId, text: replacing ? '' : prefix, thinking: thoughtBefore, note: 'Telling it how to ask for a chapter…' });
+          live({ kind, id, turnId, versionId, text: replacing ? done : prefix, thinking: thoughtBefore, note: 'Telling it how to ask for a chapter…' });
           continue;
         }
         if (!asked.length) return o;
@@ -470,7 +471,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         keepThought(thinking, `read ${rows.map((r) => r.label).join(', ')}`);
         text = '';
         thinking = '';
-        live({ kind, id, turnId, versionId, text: replacing ? '' : prefix, thinking: thoughtBefore, note: `Reading ${rows.map((r) => r.label).join(', ')} whole…` });
+        live({ kind, id, turnId, versionId, text: replacing ? done : prefix, thinking: thoughtBefore, note: `Reading ${rows.map((r) => r.label).join(', ')} whole…` });
       }
     };
     out = await askReading();
@@ -513,9 +514,14 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     /* what the partner's block asks for: made now, or waiting for Apply. What
      * could not be made is told back for it to put right in the same answer
      * (twice at most, every answer's block made); an answer that says it
-     * changed the book with no block for it is asked once for the whole
-     * answer again, with the block — its words then stand in place of the
-     * first ones (Cozy Tavern's M75/M118) */
+     * changed the book with no block for it is asked once for the block
+     * (Cozy Tavern's M75/M118) — and its first words stand whatever comes
+     * back: the block that comes is laid beside them and made; "NOTHING" (no
+     * change was meant — a question answered, a change made earlier spoken
+     * of) leaves them as they were; a plain line that it could not be made is
+     * added under them. They were never written over before 2.12.7: his
+     * question answered well, then the answer gone, a muddle about earlier
+     * changes in its place, because a sentence of it read like a claim. */
     if (kind === 'talk') {
       let segment = done;
       const all = [];
@@ -534,25 +540,29 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         keepThought(out.thinking || thinking, 'asked again');
         text = '';
         thinking = '';
-        live({ kind, id, turnId, versionId, text: replacing ? '' : done, thinking: thoughtBefore, note: missed.length ? 'Putting right what could not be made…' : 'Asking it for the change it described…' });
+        live({ kind, id, turnId, versionId, text: done, thinking: thoughtBefore, note: missed.length ? 'Putting right what could not be made…' : ASKING_BLOCK });
         out = await askReading();
         const next = cleanAnswer(kind, id, turnId, finalWords(out, text), leakNotes).replace(/\s+$/, '');
         const whole = replacing;
         replacing = false;
         if (!next.trim()) break;
         segment = next;
-        /* asked for the whole answer again and it came back cut: the first
-         * answer stands, whole, and only the block that came with the second
-         * is kept beside it — its changes are made (Cozy Tavern's M163: a
-         * re-ask never erases the reading it was improving) */
-        const cutAgain = whole && Boolean(out.cut || out.stopped);
-        if (cutAgain) {
+        let cutAgain = false;
+        if (whole) {
+          /* its first words stand (Cozy Tavern's M163: a re-ask never erases the reading it was improving) */
+          if (NOTHING_MEANT.test(next)) {
+            store.change(kind, id, turnSteps.setVersion(turnId, versionId, { thinking: allThought(out.thinking || thinking) || undefined, notes: notesOf(out), sources: sourcesOf(out) }), { checkpoint: true, now: true });
+            break;
+          }
           const block = blocksIn(next);
+          cutAgain = Boolean(out.cut || out.stopped);
           if (block) done = `${done}\n\n${block}`;
-          if (!leakNotes.includes(AGAIN_CUT)) leakNotes.push(AGAIN_CUT);
-        } else done = whole ? next : `${done}\n\n${next}`;
+          else if (cutAgain) { if (!leakNotes.includes(AGAIN_CUT)) leakNotes.push(AGAIN_CUT); }
+          else done = `${done}\n\n${next}`;
+        } else done = `${done}\n\n${next}`;
         store.change(kind, id, turnSteps.setVersion(turnId, versionId, { text: done, thinking: allThought(out.thinking || thinking) || undefined,
           cut: !cutAgain && (out.cut || out.stopped) ? true : undefined, cutWhy: !cutAgain && (out.cut || out.stopped) ? cutWords(out) : undefined, notes: notesOf(out), sources: sourcesOf(out) }), { checkpoint: true, now: true });
+        if (cutAgain && !blocksIn(next)) break;
       }
       /* a change that missed and was then made (or set to wait) in a later round no longer stands as missed (Cozy Tavern's M683) */
       supersede(novelId, turnId, versionId);
@@ -804,7 +814,10 @@ export function claimsChange(prose) {
 function missedWords(list) {
   return `Some of your changes couldn’t be made: ${list.map((c) => `${c.label} — ${c.said}`).join('; ')}. Give a changes block again for just those, quoting exactly what stands there now — enough of it to be found in one place only (a chapter you only have in short, read it whole first) — or say plainly that you’re leaving them. Don’t repeat the ones that were made.`;
 }
-const NOTHING_HAPPENED = 'Your answer says a change was made, but it holds no changes block — so nothing changed in the book: a change happens only through the block. Send your whole answer again, with the changes block that makes it, quoting exactly the words you change. If I didn’t ask for a change — it was a question, a check, a thought aloud — or the change you mean was made in an earlier answer, simply answer as if this note were not here: never mention it, and never make that change again. If a change was asked and no block can make it, say so plainly, without saying it was done.';
+const NOTHING_HAPPENED = 'Your last answer reads as if it made a change, but it holds no changes block, and a change happens only through the block — so that answer changed nothing (what your earlier answers changed stands in the book as you see it). Your words stay as they are; I am asking only for the block. If you meant to make a change now, send the changes block alone, quoting exactly the words you change, and nothing else. If no change was meant — I asked a question, you spoke of a change made earlier, you were thinking aloud — reply with the one word NOTHING and nothing else. If a change was asked and no block can make it, say so in one line, without saying it was done.';
+/* the one word NOTHING — or a short line beginning with it (“Nothing — you asked a question”) */
+const NOTHING_MEANT = /^\W*nothing\b[^\n]{0,60}$/i;
+const ASKING_BLOCK = 'Asking it for the block of the change it described…';
 function afterChanges(novelId) {
   recount(novelId);
   /* a version brought back brings its own notes back (readings.js) */
