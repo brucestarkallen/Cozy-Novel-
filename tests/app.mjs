@@ -1242,6 +1242,50 @@ await test('a card is found by the name the book gives: the one called that befo
   assert.equal(out.notes.places[0].about, 'A house with a red door.', 'a place called the same but for "the"');
 });
 
+await test('a whole book folded in one pass says what the regexes say, letter for letter — and asked again for the same words, it is kept (2.12.6)', () => {
+  /* the fold as the regexes define it (what short names still go through) */
+  const loose = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const tight = (t) => loose(t.replace(/([\p{L}\p{M}])['’‘ʼ](?=\p{L})/gu, '$1'));
+  const pieces = [
+    'Mara Venn carried the lantern; Rowan O’Hale and Mrs O\'Brien waited — “there’s time,” said Suì-Fēng.',
+    'Kyōraku-san, Chloé, Zoë, José, naïve café, Dvořák, Ǳ and ǅ; 9’s not enough, ninety-nine’s is; Oʼ Brien, aʼʼb, a\'b\'c.',
+    'nn‘̧𝔄İ — ςéʼ́ǅá — a’̧Å — 漢字とひらがな。한국어 ٣ Ⅻ ² 😀 𝔄𝟘 — é\'a, ²́\'म, नमस्ते',
+    '  leading and trailing spaces, tabs\t and\n\nbreaks  ',
+  ];
+  for (const piece of pieces) {
+    const long = `${'x'.repeat(260)} ${piece} ${'y'.repeat(260)}`;
+    const got = namesjs.foldedText(long);
+    assert.equal(got.loose, ` ${loose(long)} `, `loose: ${piece}`);
+    assert.equal(got.tight, ` ${tight(long)} `, `tight: ${piece}`);
+    /* the same text, long or short, folds the same way: a name asked of the book is found as it is of a line */
+    const short = namesjs.foldedText(piece);
+    assert.equal(short.loose, ` ${loose(piece)} `);
+    assert.equal(short.tight, ` ${tight(piece)} `);
+  }
+  const book = `${pieces.join('\n\n')}\n\n`.repeat(400);
+  const folded = namesjs.foldedText(book);
+  assert.ok(namesjs.nameInText(folded, 'O’Brien') && namesjs.nameInText(folded, 'Suì-Fēng') && namesjs.nameInText(folded, 'Rowan O’Hale') && !namesjs.nameInText(folded, 'Byakuya'));
+  /* asked again for the same words in a new string: the same answer, from what was kept — cheaper than folding by far */
+  const t0 = performance.now(); const again = namesjs.foldedText(`${book}`.slice(0)); const kept = performance.now() - t0;
+  assert.equal(again.loose, folded.loose);
+  const t1 = performance.now(); namesjs.foldedText(`${book}z`); const fresh = performance.now() - t1;
+  assert.ok(kept < fresh, `kept ${kept.toFixed(1)} ms, fresh ${fresh.toFixed(1)} ms`);
+  /* the cased fold is untouched */
+  assert.equal(namesjs.foldedText('x'.repeat(300) + ' Zoë', { cased: true }).cased, 'x'.repeat(300) + ' Zoe');
+});
+
+await test('words and tokens counted once for the same text: the same answer for the same words however the string was made, another for other words', () => {
+  const text = 'Mara Venn kept the light; 漢字 and ٣ figures. '.repeat(50);
+  const words = util.countWords(text), tokens = util.estimateTokens(text);
+  assert.equal(words, util.countWords(text.split('').join('')), 'the same words, a new string');
+  assert.equal(tokens, util.estimateTokens(`${text}`));
+  assert.equal(util.countWords('Mara Venn kept the light; 漢字 and ٣ figures. '), 10, 'eight words, two CJK letters');
+  assert.notEqual(util.countWords(`${text} more`), words);
+  assert.equal(util.countWords(''), 0);
+  assert.equal(util.estimateTokens(''), 0);
+  assert.ok(util.estimateTokens(`${text}${text}`) > tokens);
+});
+
 await test('a card is taken out only by its own name — never his, never one the same answer gives whole, never one still in the book unless another card now carries its name; the card a repeat folds into keeps its names, and each change says why', () => {
   const notes = { people: [
     { id: 'a', name: 'Mara', aka: [], about: 'The keeper.', now: '' },
@@ -1695,6 +1739,18 @@ await test('the partner offers each premise in its own block, shown with Use as 
   assert.deepEqual(changes.directionsIn('Coming: <direction>half'), [], 'one still coming is not offered yet');
   const frame = prompts.partnerFrame({}, { meta: { title: 'T' }, brief: '' });
   assert.ok(frame.includes('you as my writing partner') && frame.includes('<direction>') && frame.includes('You don’t write the next pages'));
+});
+
+await test('the partner is told the bibliography is the world behind the book, made up when he asks — written whole in the block, never asked about first, never refused as invention (2.12.6)', () => {
+  const frame = prompts.partnerFrame({}, { meta: { title: 'T' }, brief: '' });
+  const entry = frame.split('\n').find((l) => l.startsWith('- "entry"'));
+  assert.ok(entry, 'the entry change is explained');
+  assert.ok(entry.includes('whether or not a page has said it yet') && entry.includes('inventing freely wherever the pages have not spoken') && entry.includes('never against what they have said'), entry);
+  assert.ok(entry.includes('Never ask me for the particulars first') && entry.includes('whole, in the block, in that same answer'), entry);
+  assert.ok(!/never inventing/.test(frame) && !/never make up a passage or a fact/.test(frame), 'no line that reads as a refusal to make the world up');
+  assert.ok(frame.includes('is ours to make up, so make it'), 'what he asks for is made, not described');
+  /* Ideas (no changes) is told none of this */
+  assert.ok(!prompts.partnerFrame({}, { meta: { title: 'T' }, brief: '' }, { tools: false }).includes('"entry"'));
 });
 
 await test('the readings listed newest first; Put back takes out only what one reading changed; Read again reads that passage afresh', async () => {

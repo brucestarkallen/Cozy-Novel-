@@ -9,9 +9,35 @@ export function newId(prefix = '') {
   return (prefix ? prefix + '-' : '') + t + r;
 }
 
-/* A short fingerprint of a text (FNV-1a, 32 bits twice), to know whether it changed. */
-export function hashText(s) {
-  const str = String(s || '');
+
+/* A COUNT KEPT WHILE THE WORDS ARE THE SAME (2.12.6). Words, tokens and
+ * fingerprints are counted again and again for the same text — every passage of a chapter for
+ * each stretch plan, a whole chapter for each run of the helper, the book for
+ * each request fitted — and counting a 300,000-word book took 90 ms each time
+ * (a third of a second on a phone), on the thread the page draws with. A pure
+ * count is kept by its text: the same words, asked again, cost the look-up.
+ * Texts kept up to a bound, the oldest let go first. */
+function counted(count, { keep = 3e6, most = 12000 } = {}) {
+  const kept = new Map();   /* text -> count */
+  let held = 0;
+  return (text) => {
+    const s = String(text || '');
+    const had = kept.get(s);
+    if (had !== undefined) return had;
+    const n = count(s);
+    kept.set(s, n);
+    held += s.length;
+    if (held > keep || kept.size > most) {
+      for (const k of kept.keys()) { if (held <= keep && kept.size <= most) break; kept.delete(k); held -= k.length; }
+    }
+    return n;
+  };
+}
+
+/* A short fingerprint of a text (FNV-1a, 32 bits twice), to know whether it
+ * changed — asked of every version of every passage each time the helper
+ * looks for what changed, so kept by its text too. */
+export const hashText = counted((str) => {
   let h1 = 0x811c9dc5, h2 = 0x01000193 ^ str.length;
   for (let i = 0; i < str.length; i++) {
     const c = str.charCodeAt(i);
@@ -19,21 +45,19 @@ export function hashText(s) {
     h2 = Math.imul(h2 ^ (c + i), 2246822519);
   }
   return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
-}
+});
 
 const WORD = /[\p{L}\p{N}][\p{L}\p{N}'’\-]*/gu;
 const CJK = /[぀-ヿ㐀-鿿가-힯]/g;
-export function countWords(text) {
-  const s = String(text || '');
+export const countWords = counted((s) => {
   const cjk = (s.match(CJK) || []).length;
   const words = (s.replace(CJK, ' ').match(WORD) || []).length;
   return words + cjk;
-}
+});
 
 /* About how many tokens a text is. Set to read a little high: a request that
  * fits by this count fits by the model's own. */
-export function estimateTokens(text) {
-  const s = String(text || '');
+export const estimateTokens = counted((s) => {
   const cjk = (s.match(CJK) || []).length;
   let bytes = 0;
   for (let i = 0; i < s.length; i++) {
@@ -41,7 +65,7 @@ export function estimateTokens(text) {
     bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
   }
   return Math.ceil((bytes - cjk * 3) / 3.5 + cjk * 1.1);
-}
+});
 
 const ONES = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve',
   'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];

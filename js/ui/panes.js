@@ -86,6 +86,11 @@ export function openPanes(novelId, chapterId) {
 
 let chFrame = 0;
 function drawChaptersSoon() { if (!chFrame) chFrame = requestAnimationFrame(() => { chFrame = 0; drawChapters(); }); }
+/* the chapters are drawn only where they can be seen — the drawer open, or the
+ * column beside the page; closed, the list is drawn as it opens (openLeft,
+ * toggleLeft, dockWide). Every save of a chapter told the list to draw itself
+ * again behind a closed drawer, every chapter's words counted each time (2.12.6). */
+function leftVisible() { return Boolean(ui) && !document.getElementById('desk')?.hidden && (P.leftOpen || ui.left.classList.contains('dock')); }
 
 function dockWide() {
   const w = wide();
@@ -96,8 +101,10 @@ function dockWide() {
    * closed column still starts closed; opening a drawer is what changes it. */
   if (w && P.leftOpen) keep('cozynovel.left', 'on');
   if (w && P.rightOpen) keep('cozynovel.right', 'on');
+  const leftWas = leftVisible();
   ui.left.classList.toggle('dock', w && kept('cozynovel.left') !== 'off');
   ui.right.classList.toggle('dock', w && kept('cozynovel.right') === 'on');
+  if (!leftWas && leftVisible()) drawChapters();
   /* wide enough for columns: a drawer open from the narrow screen closes (its Back step with it) */
   if (w) { closeLeft(); closeRight(false, { keepFull: true }); ui.scrim.classList.remove('on'); }
   /* On the way back, keep only the column he is actually using. Reuse its
@@ -138,6 +145,7 @@ export function toggleLeft() {
     ui.left.classList.toggle('dock', on);
     keep('cozynovel.left', on ? 'on' : 'off');
     mirrorDock();
+    if (on) drawChapters();
     return;
   }
   if (P.leftOpen) closeLeft(); else openLeft();
@@ -245,6 +253,7 @@ function drawChapters() {
     P.watched.add(id);
     P.offs.push(store.subscribe('chapter', id, () => { drawChaptersSoon(); if (P.side === 'notes' || partnerChangesVisible()) drawSideSoon(); }));
   }
+  if (!leftVisible()) return;
   /* Save acknowledgements and helper summaries arrive while he is using
    * this list. Keep its buttons, focus and open menu anchors in place. */
   let list = ui.leftBody.querySelector('.chlist');

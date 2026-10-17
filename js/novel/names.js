@@ -11,8 +11,98 @@
 /* a name with its letters folded: accents off, case off, punctuation to spaces */
 export function foldName(name) {
   const key = String(name || '');
+  if (key.length > LONG_FROM) return foldLong(key).loose;
   return remembered(FOLDED, key, () => key.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim());
 }
+
+/* A WHOLE BOOK FOLDED (2.12.6). The helper and the checker ask whether a name
+ * stands in the book — the book whole, a chapter, the chapters before — many
+ * times for each page: through the regexes above, a book of 300,000 words
+ * took 460 ms each time (1.5 s on a phone), on the thread the page draws
+ * with; that was the lag while they worked. A long text is folded in one
+ * pass over its letters instead — both ways at once, the apostrophe kept
+ * inside a word (tight) and not (loose) — and the answer kept while the
+ * words are the same, so asking again costs the look-up alone. Same answer
+ * as the regexes, letter for letter (tests/app.mjs holds them together). */
+const LONG_FROM = 200;
+const LONG = new Map();           /* text -> { loose, tight } */
+const LONG_KEEP = 6e6;            /* letters kept in all (a long book twice over), the oldest let go first */
+let longHeld = 0;
+const APOSTROPHE = new Set([0x27, 0x2019, 0x2018, 0x2bc]);
+const IS_LETTER = /\p{L}/u, IS_NUMBER = /\p{N}/u, IS_MARK = /\p{M}/u;
+const OTHER = 0, LETTER = 1, NUMBER = 2, MARK = 3, ACCENT = 4;   /* ACCENT: a combining mark the fold takes off (U+0300–U+036F) */
+const CLASS_AT = new Map();       /* code point -> what it is */
+function classOf(cp) {
+  if (cp >= 0x300 && cp <= 0x36f) return ACCENT;
+  let c = CLASS_AT.get(cp);
+  if (c === undefined) {
+    const ch = String.fromCodePoint(cp);
+    c = IS_LETTER.test(ch) ? LETTER : IS_NUMBER.test(ch) ? NUMBER : IS_MARK.test(ch) ? MARK : OTHER;
+    CLASS_AT.set(cp, c);
+  }
+  return c;
+}
+function foldLong(text) {
+  const had = LONG.get(text);
+  if (had) return had;
+  const made = foldPair(text);
+  LONG.set(text, made);
+  longHeld += text.length;
+  for (const k of LONG.keys()) { if (longHeld <= LONG_KEEP) break; LONG.delete(k); longHeld -= k.length; }
+  return made;
+}
+/* The regexes, as one pass: the letters taken apart (NFD) and lowered; an
+ * accent (U+0300–U+036F) comes off and is nothing; every other run of what is
+ * not a letter or a figure is one space, none at either end. tight differs in
+ * one thing: an apostrophe right after a letter or a mark and right before a
+ * letter is nothing (O'Brien is obrien, Jovan's is jovans; 9's stays 9 s, and
+ * an accent still on the letter counts as a mark, as the regex saw it) —
+ * U+02BC is a letter in loose, an apostrophe in tight. */
+function foldPair(text) {
+  const s = text.normalize('NFD').toLowerCase();
+  const n = s.length;
+  const loose = [], tight = [];
+  let runL = -1, runT = -1;             /* where the run being copied began, or -1 */
+  let gapL = false, gapT = false;       /* a space owed before the next run */
+  const flush = (out, start, i, gap) => { if (gap && out.length) out.push(' '); out.push(s.slice(start, i)); };
+  let prev = OTHER;
+  for (let i = 0; i < n;) {
+    let cp = s.charCodeAt(i), w = 1, c;
+    if (cp < 128) c = (cp >= 97 && cp <= 122) ? LETTER : (cp >= 48 && cp <= 57) ? NUMBER : OTHER;
+    else {
+      if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < n) { cp = s.codePointAt(i); w = 2; }
+      c = classOf(cp);
+    }
+    if (c === ACCENT) { prev = MARK; i += w; continue; }   /* taken off: the run goes on around it */
+    if ((c === LETTER && cp !== 0x2bc) || c === NUMBER) {
+      if (runL < 0) runL = i;
+      if (runT < 0) runT = i;
+      prev = c;
+      i += w;
+      continue;
+    }
+    /* one plain space between two letters is itself what the fold would write: the run goes on through it */
+    if (cp === 32 && runL >= 0 && runT >= 0 && i + 1 < n) {
+      const nc = s.charCodeAt(i + 1);
+      if ((nc >= 97 && nc <= 122) || (nc >= 48 && nc <= 57)) { prev = OTHER; i++; continue; }
+    }
+    let skipT = false;
+    if ((cp === 0x27 || cp === 0x2019 || cp === 0x2018 || cp === 0x2bc) && (prev === LETTER || prev === MARK) && i + w < n) skipT = classOf(s.codePointAt(i + w)) === LETTER;
+    /* loose: U+02BC is a letter; the rest break the run */
+    if (cp === 0x2bc) { if (runL < 0) runL = i; } else if (runL >= 0) { flush(loose, runL, i, gapL); runL = -1; gapL = true; }
+    if (skipT) { if (runT >= 0) { flush(tight, runT, i, gapT); runT = -1; gapT = false; } }
+    else if (cp === 0x2bc) { if (runT < 0) runT = i; }
+    else if (runT >= 0) { flush(tight, runT, i, gapT); runT = -1; gapT = true; }
+    /* (the letter before a skipped apostrophe is spent on it, as the regex spends it: the one after cannot be another's letter before) */
+    prev = skipT ? OTHER : c;
+    i += w;
+  }
+  if (runL >= 0) flush(loose, runL, n, gapL);
+  if (runT >= 0) flush(tight, runT, n, gapT);
+  const bare = (parts) => parts.join('').replace(/[̀-ͯ]/g, '');
+  return { loose: bare(loose), tight: bare(tight) };
+}
+
 /* A name is folded and parsed again and again — every card held against
  * every name the bibliography gathers (bibItems: 1,500 names and 400 cards
  * took 1.7 s, most of it here): each short name's answer is kept, up to a
@@ -54,7 +144,9 @@ const NAME_STOP = new Set(['the', 'and', 'of', 'von', 'der', 'den', 'des', 'du',
 /* an apostrophe inside a word is part of the word: "O'Brien" is obrien, and
  * "Jovan's mother" is "jovans mother", never Jovan */
 function nameFold(name) {
-  return foldName(String(name || '').replace(/([\p{L}\p{M}])['’‘ʼ](?=\p{L})/gu, '$1'));
+  const raw = String(name || '');
+  if (raw.length > LONG_FROM) return foldLong(raw).tight;
+  return foldName(raw.replace(/([\p{L}\p{M}])['’‘ʼ](?=\p{L})/gu, '$1'));
 }
 /* a courtesy or a rank after the name only when joined to it the Japanese way */
 const TRAILING = /[-‐‑–]\s*(san|sama|kun|chan|dono|sensei|senpai|taich[oō]u?|fukutaich[oō]u?|s[oō]taich[oō]u?)\s*$/iu;
@@ -213,7 +305,9 @@ export function foldedText(text, { cased = false } = {}) {
   /* cased: the words with their capitals kept (accents off), so one word of a
    * name is asked of the book as a name — "Will" for Will Turner is never
    * "she will go", "Wells" never "the old wells" (Cozy Tavern's M257/M280) */
-  return { loose: ' ' + foldName(text) + ' ', tight: ' ' + nameFold(text) + ' ', ...(cased ? { cased: String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '') } : {}) };
+  const raw = String(text || '');
+  const pair = raw.length > LONG_FROM ? foldLong(raw) : { loose: foldName(raw), tight: nameFold(raw) };
+  return { loose: ' ' + pair.loose + ' ', tight: ' ' + pair.tight + ' ', ...(cased ? { cased: raw.normalize('NFD').replace(/[̀-ͯ]/g, '') } : {}) };
 }
 export function nameInText(folded, name, { words = true } = {}) {
   const f = typeof folded === 'string' ? foldedText(folded) : folded;

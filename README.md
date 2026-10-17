@@ -173,7 +173,7 @@ menus, pane changes and background saves, with repeatable browser measurements.
 The room remains visible around the manuscript, with opaque paper behind its words.
 Nothing scrolls the document itself — the shelf and the page each scroll inside their own box — so
 a phone browser's bar never slides the room up and down with a swipe. Every room is drawn as one
-still picture with its moving pieces laid over it, so the phone keeps few pictures apart (2.12.5). Each narrator
+still picture with its moving pieces laid over it, so the phone keeps few pictures apart (2.12.5); a long book is folded and counted once for the same words, not every time the helper looks (2.12.6). Each narrator
 answer shows how many input tokens were sent; estimates are marked “About.”
 The new-scene name and starting place also survive keyboard resizing and reloads.
 Settings → Appearance includes novel highlight, scene highlight and dialogue colours, with

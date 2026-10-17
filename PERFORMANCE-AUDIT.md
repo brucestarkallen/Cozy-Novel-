@@ -1,3 +1,32 @@
+# The long book folded once — 2.12.6
+
+2.12.5 took the rooms off the phone's graphics side and the lag stayed: a book opened
+lagged until the page was refreshed. Measured with a book of 300,000 words (five
+chapters of 150 passages), the helper and the checker at work, and a CPU profile of
+the page rather than a count of its layouts: nothing grew between a long session and
+a reload (nodes, listeners, records, layers all steady). What held the page's thread
+was the helper's and the checker's reading of the book, on that thread. Each time
+either asked whether a name stands in the book, the book was folded for the asking
+through three regexes over every letter — 460 ms for 300,000 words here, a second and
+a half on a phone, several times for each page, nothing kept between askings. Words
+and tokens were counted the same way (90 ms a count), every version fingerprinted
+anew for every reading, and the chapters list drew itself behind its closed drawer on
+every save.
+
+| | 2.12.5 | 2.12.6 |
+| --- | ---: | ---: |
+| A 1.85 MB book folded (loose and tight) | 469 ms | 94 ms the first time, 8 ms asked again |
+| The helper and checker working through that book: long tasks over 50 ms | 10, 1,688 ms in all, the longest 523 | 6, 893 ms, the longest 402 |
+| Frames over 100 ms meanwhile | 18 | 3 |
+| The fold in a CPU profile of one phase | the single heaviest function, 1.85 s of self time | not in the top twenty |
+
+How: a long text is folded in one pass over its letters, both ways at once, and kept
+while its words are the same (`names.js foldLong`, `foldPair` — the regexes' answer
+letter for letter, held to them on 30,000 random texts in tests/app.mjs); `countWords`,
+`estimateTokens` and `hashText` keep their answer by the text (`util.js counted`); the
+chapters list is drawn only where it can be seen (`panes.js leftVisible`). Chromium at
+412×915, 3× density, 1× CPU; the frames are the page's own, not a phone's.
+
 # What the phone keeps apart to move a room — 2.12.5
 
 Every earlier pass below measured the page's own thread (layouts, paints) and found
