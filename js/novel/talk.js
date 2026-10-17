@@ -614,6 +614,7 @@ function askLabel(n) {
   if (n && typeof n === 'object' && n.find) return `where “${n.find}” stands`;
   if (n && typeof n === 'object' && n.card) return `the card “${n.card}”`;
   if (n && typeof n === 'object' && n.entry) return `the entry “${n.entry}”`;
+  if (n && typeof n === 'object' && n.about) return 'About this book';
   if (n && typeof n === 'object' && n.module) return `the module “${n.module}”`;
   return `Chapter ${numberWords(n)}`;
 }
@@ -633,6 +634,17 @@ function readRows(novelId, asked) {
         return `${where} …${x.snippet.before}${x.snippet.match}${x.snippet.after}…`;
       });
       return { label: `${label} (${hits.length >= 40 ? 'the first 40 places' : `${hits.length} place${hits.length === 1 ? '' : 's'}`})`, text: rows.join('\n') };
+    }
+    /* the book's own words, whole, each under the name a change to it uses ("book": "title" / "subtitle" / "about" / "style" / "plans") */
+    if (n && typeof n === 'object' && n.about) {
+      const meta = (novel && novel.meta) || {};
+      const lines = [];
+      lines.push(`Title: ${String(meta.title || '').trim() || '(none)'}`);
+      if (String(meta.subtitle || '').trim()) lines.push(`Subtitle: ${String(meta.subtitle).trim()}`);
+      lines.push(`What it's about ("about"):\n${String((novel && novel.brief) || '').trim() || '(nothing written yet)'}`);
+      lines.push(`How it reads ("style"):\n${String((novel && novel.style) || '').trim() || '(nothing written yet)'}`);
+      lines.push(`Where it's headed ("plans"):\n${String((novel && novel.plans) || '').trim() || '(nothing written yet)'}`);
+      return { label: 'About this book, as it stands now', text: lines.join('\n\n') };
     }
     /* a card of the notes, whole: every part of it */
     if (n && typeof n === 'object' && n.card) {

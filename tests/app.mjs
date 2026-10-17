@@ -1751,6 +1751,29 @@ await test('the partner is told the bibliography is the world behind the book, m
   assert.ok(frame.includes('is ours to make up, so make it'), 'what he asks for is made, not described');
   /* Ideas (no changes) is told none of this */
   assert.ok(!prompts.partnerFrame({}, { meta: { title: 'T' }, brief: '' }, { tools: false }).includes('"entry"'));
+  /* the pages already written are its to change when asked — never a premise handed back for a page that exists; a question about the story gets its view and an offer to rewrite the passages it would touch (2.12.8) */
+  assert.ok(frame.includes('The pages already written are yours to change when I ask') && frame.includes('never hand me one for a page that exists') && frame.includes('Say rewrite and I write'), 'rewriting an existing page is its job, offered when he only asks');
+  assert.ok(frame.includes('["about"]</read>'), 'it can read the book’s own words before changing them');
+});
+
+await test('the partner can read About this book whole — what it’s about, how it reads, where it’s headed, as they stand now — and change it quoting from that (2.12.8)', async () => {
+  const b = await makeBook([['Mara kept the light.']], { manual: true, brief: 'The White Bride is a marriage that is a border treaty. Jovan chose her from a shortlist.' });
+  store.change('novel', b.novelId, (n) => { n.style = 'Close third, dry.'; n.plans = 'The merger closes in chapter nine.'; }, { now: true });
+  await script([
+    { text: 'Let me see the words as they stand.\n<read>["about"]</read>' },
+    { text: '<changes>[{"book": "about", "find": "Jovan chose her from a shortlist.", "replace": "Reginald chose her; Jovan was told.", "why": "the father’s ambition, not Jovan’s choice"}]</changes>\nReginald is the author of the merger now.' },
+  ]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Make it the father’s ambition, not Jovan choosing.' });
+  const r = await requests();
+  assert.equal(r.length, 2, 'read, then answered');
+  const back = String(r[1].body.messages.at(-1).content);
+  assert.ok(back.includes('About this book, as it stands now') && back.includes('What it\'s about ("about"):\nThe White Bride is a marriage that is a border treaty. Jovan chose her from a shortlist.') && back.includes('How it reads ("style"):\nClose third, dry.') && back.includes('Where it\'s headed ("plans"):\nThe merger closes in chapter nine.'), back);
+  assert.equal(b.novel().brief, 'The White Bride is a marriage that is a border treaty. Reginald chose her; Jovan was told.');
+  const v = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.equal(v.changes.map((c) => c.status).join(), 'made');
+  assert.deepEqual(changes.readAsks('<read>["about"]</read>'), [{ about: true }]);
+  assert.deepEqual(changes.readAsks('<read>["book: about", "about this book", 2]</read>'), [{ about: true }, 2]);
+  await putAway(b);
 });
 
 await test('the readings listed newest first; Put back takes out only what one reading changed; Read again reads that passage afresh', async () => {

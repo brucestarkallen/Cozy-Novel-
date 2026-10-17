@@ -101,7 +101,9 @@ export function readAsks(text) {
         : /^module\s*:/i.test(t) ? { module: t.replace(/^module\s*:\s*/i, '').slice(0, 120) }
           : /^card\s*:/i.test(t) ? { card: t.replace(/^card\s*:\s*/i, '').slice(0, 120) }
             : /^entry\s*:/i.test(t) ? { entry: t.replace(/^entry\s*:\s*/i, '').slice(0, 120) }
-              : chapterNumber(t);
+              /* the book's own words whole — what it's about, how it reads, where it's headed — as they stand now (2.12.8: a change to them quoted from an older look missed) */
+              : /^(?:about|book(?:\s*:\s*about)?|about\s+this\s+book|what\s+it['’]s\s+about)$/i.test(t) ? { about: true }
+                : chapterNumber(t);
       if (ask === null || (typeof ask === 'object' && !Object.values(ask)[0])) continue;
       if (!out.some((y) => JSON.stringify(y) === JSON.stringify(ask))) out.push(ask);
     }
