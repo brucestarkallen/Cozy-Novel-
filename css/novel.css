@@ -570,6 +570,11 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .list li { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .list li .grow { flex: 1; min-width: 0; }
 .list li small { display: block; color: var(--chrome-soft); font-size: 12.5px; }
+/* Earlier copies: the copy that reads as the chapter does now stands out; a copy's passages, read before anything changes */
+.list.copies li.same { border-left: 3px solid var(--accent); padding-left: 10px; }
+.list.copypassages li { display: block; }
+.list.copypassages li .say { margin: 4px 0 0; color: var(--chrome-ink); }
+.list.copypassages li.break { color: var(--chrome-soft); text-align: center; }
 .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin: 0 0 14px; align-items: stretch; }
 .swatch { border-radius: 14px; padding: 10px; border: 2px solid transparent; background: rgba(255,255,255,.04); text-align: left; font-size: 13px; line-height: 1.3; display: flex; flex-direction: column; justify-content: flex-start; gap: 8px; }
 .swatch[aria-pressed="true"] { border-color: var(--accent); }

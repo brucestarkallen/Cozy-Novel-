@@ -48,7 +48,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.12.3"
+VERSION = "2.12.4"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -690,6 +690,114 @@ def daily_copy(force=False):
         return ""
 
 
+# ---- what an earlier copy holds, said beside it in its list (his report,
+# 2.12.3: "everything looks the same" — which copy still had his passage 2?):
+# a chapter's passages, words and a print of its words (copies that read the
+# same, and the one that reads as the chapter does now, are said so); a copy
+# of everything, its books and words. Read once per copy.
+_copy_counts = {}
+
+
+def _picked(p):
+    vs = p.get("versions") if isinstance(p.get("versions"), list) else []
+    if not vs:
+        return None
+    i = p.get("pick")
+    return vs[i] if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(vs) else vs[-1]
+
+
+def chapter_info(data):
+    """{passages, words, print} of a chapter's words as they show."""
+    passages = data.get("passages") if isinstance(data, dict) else None
+    n = words = 0
+    shown = []
+    for p in passages if isinstance(passages, list) else []:
+        if not isinstance(p, dict):
+            continue
+        if p.get("by") == "break":
+            shown.append("—")
+            continue
+        v = _picked(p)
+        if v is None:
+            continue
+        text = str((v or {}).get("text") or "")
+        n += 1
+        words += len(text.split())
+        shown.append(text)
+    return {"passages": n, "words": words, "print": hashlib.sha1(json.dumps(shown).encode("utf-8")).hexdigest()[:16]}
+
+
+def _cached(f, read):
+    try:
+        st = f.stat()
+    except OSError:
+        return None
+    key = str(f)
+    got = _copy_counts.get(key)
+    if got and got[0] == (st.st_mtime_ns, st.st_size):
+        return got[1]
+    try:
+        info = read(read_gz(f))
+    except Exception:
+        info = None
+    if len(_copy_counts) > 2000:
+        _copy_counts.clear()
+    _copy_counts[key] = ((st.st_mtime_ns, st.st_size), info)
+    return info
+
+
+def copy_counts(f):
+    return _cached(f, lambda rec: chapter_info(rec.get("data")) if isinstance(rec, dict) and isinstance(rec.get("data"), dict) else None)
+
+
+def library_counts(f):
+    def read(snap):
+        books = words = 0
+        for e in snap.get("records") or []:
+            if not isinstance(e, dict) or not isinstance(e.get("data"), dict):
+                continue
+            if e.get("kind") == "novel":
+                books += 1
+            elif e.get("kind") == "chapter":
+                words += chapter_info(e["data"])["words"]
+        return {"books": books, "words": words}
+    return _cached(f, read)
+
+
+SEEN_VERSION = HOME / ".version-seen"
+
+
+def copy_before_update():
+    """Everything as it is, kept whole the first time a new version of the app
+    starts on it — before the new code opens a single book (his report, 2.12.3:
+    "your update broke my passage 2"): whatever an update does, the library as
+    it was is one Bring back away. Kept with the copies made before a copy was
+    brought back (the newest fourteen of those)."""
+    mark = "%s:%s" % (VERSION, COMMIT or "")
+    try:
+        seen = SEEN_VERSION.read_text(encoding="utf-8").strip()
+    except OSError:
+        seen = ""
+    if seen == mark:
+        return ""
+    name = ""
+    try:
+        with LOCK:
+            snap = library_snapshot()
+        if snap["records"]:
+            COPIES.mkdir(parents=True, exist_ok=True)
+            name = "cozynovel-before-update-%s.json.gz" % time.strftime("%Y%m%d-%H%M%S")
+            atomic_write_bytes(COPIES / name, gz_bytes(snap))
+            befores = sorted(COPIES.glob("cozynovel-before-*.json.gz"), key=lambda f: f.stat().st_mtime, reverse=True)
+            for old in befores[DAILY_KEEP:]:
+                old.unlink(missing_ok=True)
+        atomic_write_bytes(SEEN_VERSION, mark.encode("utf-8"))
+    except Exception as e:
+        print("the copy before the update was skipped:", e, file=sys.stderr)
+        return ""
+    return name
+
+
 def copies_list():
     out = []
     if not COPIES.is_dir():
@@ -701,7 +809,11 @@ def copies_list():
             st = f.stat()
         except OSError:
             continue
-        out.append({"name": f.name, "at": int(st.st_mtime * 1000), "size": st.st_size})
+        row = {"name": f.name, "at": int(st.st_mtime * 1000), "size": st.st_size}
+        counts = library_counts(f)
+        if counts:
+            row.update(counts)
+        out.append(row)
     out.sort(key=lambda r: r["at"], reverse=True)
     return out
 
@@ -1513,8 +1625,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         at = int(time.mktime(time.strptime(s[:15], "%Y%m%d-%H%M%S")) * 1000) + int(s[16:])
                     except ValueError:
                         continue
-                    rows.append({"stamp": s, "at": at, "size": f.stat().st_size})
-            return self.send_json({"copies": rows})
+                    row = {"stamp": s, "at": at, "size": f.stat().st_size}
+                    if parts[2] == "chapter":
+                        counts = copy_counts(f)
+                        if counts:
+                            row.update(counts)
+                    rows.append(row)
+            now = None
+            if parts[2] == "chapter":
+                cur = read_record(parts[2], parts[3])
+                now = chapter_info(cur["data"]) if cur else None
+            return self.send_json({"copies": rows, "now": now})
         if parts[:2] == ["api", "history"] and len(parts) == 5:
             if not self.ok_id(parts[2], parts[3]) or not STAMP_RE.match(parts[4]):
                 return self.send_json({"error": "bad id"}, 400)
@@ -2124,6 +2245,7 @@ def main():
     for d in (STORE, HISTORY, TRASH, COPIES, SENT):
         d.mkdir(parents=True, exist_ok=True)
     recover_branches()
+    copy_before_update()
     try:
         httpd = Server(("127.0.0.1", PORT), Handler)
     except OSError:

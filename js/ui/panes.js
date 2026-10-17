@@ -10,7 +10,7 @@ import { h, icon, toast, undoToast, menu, openSheet, confirmIt, askText, autoGro
 import { picked, chapterSteps, novelSteps, chapterWords, chapterLabel, chapterPrint, passageNumbers, newCard, NOTE_KINDS, turnSteps, hisStamp } from '../novel/shape.js';
 import { stretchPlan, scenePlan } from '../novel/stretches.js';
 import { checkedNow } from '../novel/summarycheck.js';
-import { numberWords, plural, timeAgo, nameKey, openOf } from '../util.js';
+import { numberWords, plural, timeAgo, nameKey, openOf, countWords } from '../util.js';
 import { showSent } from './sent.js';
 import { webUrl } from '../model/call.js';
 import { thinkBox, updateThinkBox } from './think.js';
@@ -431,27 +431,94 @@ async function earlierCopies(id) {
   const n = store.peek('novel', P.novelId);
   const c = store.peek('chapter', id);
   const s = openSheet('Earlier copies');
-  s.body.append(h('p.say', `${chapterLabel(n, c)} as it stood before each change — the newest eight, then one an hour for two days, then one a day for a month.`));
-  const { status, data } = await store.api('GET', `/api/history/chapter/${id}`).catch(() => ({ status: 0 }));
-  if (status !== 200 || !data || !data.copies.length) { s.body.append(h('p.say', 'No earlier copies yet.')); return; }
-  const list = h('ul.list');
+  s.body.append(h('p.say', `${chapterLabel(n, c)} as it stood before each change — the newest eight, then one an hour for two days, then one a day for a month. Each says what it holds beside the chapter now; copies that read the same are one row. Look shows its passages before anything changes.`));
+  const box = h('div');
+  s.body.append(box);
+  await fillEarlier(id, box, s);
+}
+/* how a copy differs from the chapter now, in a few words */
+function besideNow(row, now) {
+  if (!now || !Number.isFinite(row.passages)) return '';
+  if (row.print && row.print === now.print) return 'The same words as now';
+  const dp = row.passages - now.passages;
+  const dw = row.words - now.words;
+  const bits = [];
+  if (dp) bits.push(`${plural(Math.abs(dp), 'passage')} ${dp > 0 ? 'more' : 'fewer'} than now`);
+  if (dw) bits.push(`${plural(Math.abs(dw), 'word')} ${dw > 0 ? 'more' : 'fewer'}`);
+  return bits.length ? bits.join(', ') : 'Other words than now, the same length';
+}
+/* the list as the phone has it now (the newest eight change as the book is saved: a copy replaced meanwhile is never
+ * offered — his report, 2.12.3: "That copy could not be read"); copies that read the same, one row; the one that
+ * reads as the chapter does now, said so (his report: "everything looks the same") */
+async function fillEarlier(id, box, s) {
+  box.replaceChildren(h('p.say', 'Looking…'));
+  const { status, data } = await store.api('GET', `/api/history/chapter/${id}`, { wait: 60000 }).catch(() => ({ status: 0 }));
+  if (status !== 200 || !data) { box.replaceChildren(h('p.say', 'The copies could not be listed just now — the phone did not answer.'), h('button.btn.small', { onclick: () => fillEarlier(id, box, s) }, 'Try again')); return; }
+  if (!data.copies.length) { box.replaceChildren(h('p.say', 'No earlier copies yet.')); return; }
+  const now = data.now;
+  const groups = [];
   for (const row of data.copies) {
-    list.append(h('li', h('div.grow', new Date(row.at).toLocaleString(), h('small', timeAgo(row.at))),
-      h('button.btn.small', { onclick: async () => {
-        const got = await store.api('GET', `/api/history/chapter/${id}/${row.stamp}`);
-        if (got.status !== 200 || !got.data || !got.data.data) { toast('That copy could not be read.'); return; }
-        const old = got.data.data;
-        if (!(await confirmIt('Bring this copy back?', `The chapter goes back to how it was ${timeAgo(row.at)} (${plural(chapterWords(old), 'word')}). How it is now is kept as an earlier copy too.`, 'Bring it back'))) return;
-        /* what the helper had read that this changes is kept for it, so the notes follow the book back */
-        archivist.retireBeforeReplace(P.novelId, id, old.passages || []);
-        store.change('chapter', id, (d) => { d.passages = JSON.parse(JSON.stringify(old.passages || [])); d.name = old.name || ''; d.nameBy = old.nameBy || ''; }, { now: true });
-        archivist.nudge(P.novelId);
-        writer.recount(P.novelId);
-        s.close();
-        toast('The chapter is back as it was.');
-      } }, 'Bring back')));
+    const last = groups[groups.length - 1];
+    if (last && row.print && last.rows[0].print === row.print) last.rows.push(row);
+    else groups.push({ rows: [row] });
   }
-  s.body.append(list);
+  const list = h('ul.list.copies');
+  box.replaceChildren(now ? h('p.say', h('strong', 'Now: '), `${plural(now.passages, 'passage')} · ${plural(now.words, 'word')}.`) : '', list);
+  for (const g of groups) {
+    const row = g.rows[0];
+    const oldest = g.rows[g.rows.length - 1];
+    const when = g.rows.length > 1 ? `${new Date(oldest.at).toLocaleString()} – ${new Date(row.at).toLocaleString()}` : new Date(row.at).toLocaleString();
+    const holds = Number.isFinite(row.passages) ? `${plural(row.passages, 'passage')} · ${plural(row.words, 'word')}` : '';
+    const beside = besideNow(row, now);
+    const same = beside === 'The same words as now';
+    list.append(h(same ? 'li.same' : 'li',
+      h('div.grow', h('strong', beside || when), h('small', [beside ? when : '', holds, g.rows.length > 1 ? `${g.rows.length} copies, the same words` : '', timeAgo(row.at)].filter(Boolean).join(' · '))),
+      h('button.btn.small', { onclick: () => lookAtCopy(id, row, box, s) }, 'Look'),
+      same ? '' : h('button.btn.small', { onclick: () => bringBackCopy(id, row, box, s) }, 'Bring back')));
+  }
+}
+/* one copy, read from the phone: {old} or null (said why) */
+async function copyOf(id, row, box, s) {
+  const got = await store.api('GET', `/api/history/chapter/${id}/${row.stamp}`, { wait: 60000 }).catch(() => ({ status: 0 }));
+  if (got.status === 404) { toast('That copy was just replaced by a newer save — the list is up to date now. The copies an hour apart stay.', 7000); fillEarlier(id, box, s); return null; }
+  if (got.status === 0) { toast('The phone did not answer in time — try again.', 6000); return null; }
+  if (got.status !== 200 || !got.data || !got.data.data) { toast('That copy’s file is damaged — try the one below it.', 7000); return null; }
+  return got.data.data;
+}
+/* its passages, each beside the chapter now: one not in it now, one with other words now */
+async function lookAtCopy(id, row, box, s) {
+  const old = await copyOf(id, row, box, s);
+  if (!old) return;
+  const cur = store.peek('chapter', id) || { passages: [] };
+  const nowById = new Map((cur.passages || []).map((p) => [p.id, p]));
+  const sheet = openSheet(`The copy of ${new Date(row.at).toLocaleString()}`);
+  const list = h('ol.list.copypassages');
+  let k = 0;
+  for (const p of old.passages || []) {
+    if (p.by === 'break') { list.append(h('li.break', '❦ scene break')); continue; }
+    k++;
+    const v = picked(p) || {};
+    const text = String(v.text || '');
+    const here = nowById.get(p.id);
+    const state = !here ? 'Not in the chapter now' : String((picked(here) || {}).text || '') === text ? '' : 'Other words now';
+    list.append(h('li', h('strong', `Passage ${k}${state ? ` — ${state}` : ''}`), h('small', `${plural(countWords(text), 'word')}`), h('p.say', text.length > 220 ? `${text.slice(0, 220)}…` : text || '(no words)')));
+  }
+  const gone = (cur.passages || []).filter((p) => p.by !== 'break' && !(old.passages || []).some((x) => x.id === p.id)).length;
+  sheet.body.append(list,
+    gone ? h('p.say.quiet', `${plural(gone, 'passage')} in the chapter now ${gone === 1 ? 'is' : 'are'} not in this copy.`) : '',
+    h('div.btnrow', h('button.btn.primary.small', { onclick: () => { sheet.close(); bringBackCopy(id, row, box, s, old); } }, 'Bring this copy back')));
+}
+async function bringBackCopy(id, row, box, s, given = null) {
+  const old = given || await copyOf(id, row, box, s);
+  if (!old) return;
+  if (!(await confirmIt('Bring this copy back?', `The chapter goes back to the copy of ${new Date(row.at).toLocaleString()} (${plural((old.passages || []).filter((p) => p.by !== 'break').length, 'passage')}, ${plural(chapterWords(old), 'word')}). The chapter as it is now is kept as the newest earlier copy, at the top of this list.`, 'Bring it back'))) return;
+  /* what the helper had read that this changes is kept for it, so the notes follow the book back */
+  archivist.retireBeforeReplace(P.novelId, id, old.passages || []);
+  store.change('chapter', id, (d) => { d.passages = JSON.parse(JSON.stringify(old.passages || [])); d.name = old.name || ''; d.nameBy = old.nameBy || ''; }, { now: true });
+  archivist.nudge(P.novelId);
+  writer.recount(P.novelId);
+  s.close();
+  toast(`The chapter is back as it was at ${new Date(row.at).toLocaleString()}. How it was a moment ago is the newest earlier copy.`, 7000);
 }
 
 /* --------------------------------------------------------------- light */

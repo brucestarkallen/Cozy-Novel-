@@ -163,12 +163,75 @@ async def scenario(browser):
         await pg.context.close()
 
 
+async def earlier_copies(browser):
+    """His report, 2.12.3: "Who designed Earlier copies … everything looks the same" — a passage gone from the chapter
+    is found in the copy that still has it, said beside the chapter now, looked at before anything changes, and brought
+    back; copies that read the same are one row, and the one that reads as the chapter does now is said so."""
+    logs = []
+    pg = await page(browser, logs)
+    try:
+        await new_book(pg, 'Copies Book')
+        nid = (await pg.evaluate('location.hash')).split('/')[2]
+        await pg.evaluate("""async id => {
+          const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js');
+          const cid = s.peek('novel', id).order[0];
+          s.change('chapter', cid, c => { c.passages = [sh.newPassage('you', 'The first passage stays.'), sh.newPassage('you', 'My beautiful passage two, every word of it.')]; }, { now: true });
+          await s.flush();
+          s.change('chapter', cid, c => { c.name = 'Harbour'; }, { now: true }); await s.flush();
+          s.change('chapter', cid, c => { c.name = 'The Harbour'; }, { now: true }); await s.flush();
+          s.change('chapter', cid, c => { c.passages = c.passages.slice(0, 1); }, { now: true });
+          await s.flush();
+        }""", nid)
+        if not await pg.locator('#chaptersBody').is_visible():
+            await pg.click('#bookTitle')
+        await pg.locator('#chaptersBody li button.menu').first.click()
+        await pg.locator('.menu-pop button').filter(has_text='Earlier copies of this chapter').click()
+        sheet = pg.locator('.sheet.on').filter(has_text='Earlier copies')
+        await sheet.locator('text=Now:').wait_for()
+        body = await sheet.inner_text()
+        check('the chapter now is said first', 'Now: 1 passage · 4 words.' in body, body[:600])
+        rows = sheet.locator('ul.copies > li')
+        texts = [await rows.nth(i).inner_text() for i in range(await rows.count())]
+        check('the copy that still has the passage says so beside now', any('1 passage more than now' in t for t in texts), texts)
+        check('copies that read the same are one row', any('2 copies, the same words' in t or '3 copies, the same words' in t for t in texts), texts)
+        more = rows.filter(has_text='1 passage more than now').first
+        await more.locator('button').filter(has_text='Look').click()
+        look = pg.locator('.sheet.on').filter(has_text='The copy of')
+        await look.wait_for()
+        seen = await look.inner_text()
+        check('Look shows its passages, the one gone from the chapter named so', 'Passage 2 — Not in the chapter now' in seen and 'My beautiful passage two' in seen, seen[:500])
+        check('the passage still in the chapter is not marked', 'Passage 1 —' not in seen, seen[:300])
+        await look.locator('button').filter(has_text='Bring this copy back').click()
+        await pg.locator('.sheet.on button').filter(has_text='Bring it back').click()
+        await pg.locator('#toast.on').filter(has_text='The chapter is back as it was').wait_for()
+        back = await pg.evaluate("""async id => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js');
+          return s.peek('chapter', s.peek('novel', id).order[0]).passages.map(p => sh.picked(p).text); }""", nid)
+        check('brought back, the passage is in the chapter again', back == ['The first passage stays.', 'My beautiful passage two, every word of it.'], back)
+        await pg.evaluate("import('/js/store.js').then(s => s.flush())")
+        await pg.locator('#chaptersBody li button.menu').first.click()
+        await pg.locator('.menu-pop button').filter(has_text='Earlier copies of this chapter').click()
+        sheet = pg.locator('.sheet.on').filter(has_text='Earlier copies')
+        await sheet.locator('text=Now:').wait_for()
+        rows = sheet.locator('ul.copies > li')
+        top = await rows.nth(0).inner_text()
+        check('the chapter as it was a moment ago is the newest copy, said beside now', '1 passage fewer than now' in top, top)
+        same = sheet.locator('ul.copies > li.same')
+        check('the copy that reads as the chapter does now is marked, with nothing to bring back',
+              await same.count() >= 1 and 'The same words as now' in await same.first.inner_text() and await same.first.locator('button').filter(has_text='Bring back').count() == 0,
+              [await rows.nth(i).inner_text() for i in range(await rows.count())])
+        check('earlier copies make no page errors', not [r for r in logs if r.startswith('PAGEERROR')], logs)
+    finally:
+        await pg.context.close()
+
+
 async def main():
     with Env():
         async with async_playwright() as p:
             chromium = os.environ.get('COZY_TEST_CHROMIUM')
             browser = await p.chromium.launch(**({'executable_path': chromium} if chromium else {}))
-            try: await scenario(browser)
+            try:
+                await scenario(browser)
+                await earlier_copies(browser)
             except Exception:
                 traceback.print_exc(); check('the deletion walk completes', False, traceback.format_exc()[-500:])
             finally: await browser.close()

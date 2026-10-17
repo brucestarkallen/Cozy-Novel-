@@ -1240,7 +1240,7 @@ function backupsGroup() {
   const copies = h('div', h('p.say', 'Looking…'));
   const trash = h('div');
   g.body.append(
-    h('p.say', 'Your books live on this phone, in ~/.cozynovel — the same in every browser. A copy of everything is kept on the phone once a day (the newest fourteen), and every chapter keeps its earlier copies.'),
+    h('p.say', 'Your books live on this phone, in ~/.cozynovel — the same in every browser. A copy of everything is kept on the phone once a day (the newest fourteen) and just before each update, and every chapter keeps its earlier copies.'),
     h('div.btnrow',
       h('button.btn.primary.small', { title: 'Every book, its notes, talks and scenes, and your settings — as one file in your downloads.', onclick: async () => {
         if (!(await allOnPhone())) return;
@@ -1278,7 +1278,8 @@ async function fillCopies(box) {
   /* every copy the phone keeps (fourteen days' and fourteen kept before a copy was brought back) — never a few of them, the rest out of reach */
   for (const c of data.copies) {
     const before = c.name.includes('before-');
-    list.append(h('li', h('div.grow', before ? 'Kept just before a copy was brought back' : `The day’s copy`, h('small', `${new Date(c.at).toLocaleString()} · ${Math.max(1, Math.round(c.size / 1024)).toLocaleString()} KB`)),
+    const update = c.name.includes('before-update-');
+    list.append(h('li', h('div.grow', update ? 'Kept just before Cozy Novel was updated' : before ? 'Kept just before a copy was brought back' : `The day’s copy`, h('small', [new Date(c.at).toLocaleString(), Number.isFinite(c.books) ? `${plural(c.books, 'book')} · ${plural(c.words, 'word')}` : '', `${Math.max(1, Math.round(c.size / 1024)).toLocaleString()} KB`].filter(Boolean).join(' · '))),
       h('button.btn.small', { title: 'Everything goes back to how it was then — everything as it is now is kept as a copy first.', onclick: async () => {
         if (!(await confirmIt('Bring this copy back?', 'Everything goes back to how it was then. Everything as it is now is kept as a copy first, so nothing is lost.', 'Bring it back'))) return;
         if (!(await allOnPhone())) return;

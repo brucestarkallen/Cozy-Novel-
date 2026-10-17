@@ -217,6 +217,9 @@ function openMissing(novelId, novel) {
 async function repairNow(novelId) {
   try {
     await writer.repairStale(novelId);
+    /* words written again that broke off partway, kept through 2.12.3 on show: the words before are back */
+    const broken = writer.repairBrokenWords(novelId);
+    if (broken) toast(`${broken === 1 ? 'A passage' : `${broken} passages`} showed a sentence written again that broke off partway — ${broken === 1 ? 'its' : 'their'} words before are back on show.`, 9000);
     /* a grade a fix lost before 2.6.3, put back from the version it was made from */
     keepGrades(novelId);
     if (store.peek('talk', novelId)) await talkRepair('talk', novelId);

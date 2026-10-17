@@ -645,8 +645,11 @@ export const chapterSteps = {
   /* a new version on a passage (if not there yet), shown — knowing the one
    * that was on show when it came (`was`): if it goes unkept (nothing came,
    * Stop before a word, its writer's window closed, an Undo), that one is on
-   * show again, never simply the newest (Cozy Tavern M364) */
-  addVersion: (pid, version) => (c) => {
+   * show again, never simply the newest (Cozy Tavern M364). show false: what
+   * the app writes by itself is written off the page — the words he is
+   * reading stay on show until it is done (his report, 2.12.3: "blinking and
+   * jagged and flashing") */
+  addVersion: (pid, version, { show = true } = {}) => (c) => {
     const p = findPassage(c, pid);
     if (!p) return;
     if (!findVersion(p, version.id)) {
@@ -655,6 +658,7 @@ export const chapterSteps = {
       /* (a copy of another version brings that one's `was`: this one's is the version on show now) */
       if (shown) copy.was = shown.id; else delete copy.was;
       p.versions.push(copy);
+      if (!show && shown) return;
     }
     p.pick = p.versions.findIndex((v) => v.id === version.id);
   },

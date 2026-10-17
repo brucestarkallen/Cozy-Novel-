@@ -1119,6 +1119,8 @@ const pending = new Map();
 const livePaint = paced(flushLive);
 function onLive(ev) {
   if (ev.novelId !== S.novelId) return;
+  /* written off the page (what the app does by itself): nothing painted until it is done, then the page as it is */
+  if (ev.hidden && !ev.done) return;
   if (ev.done) {
     S.live.delete(ev.passageId);
     pending.delete(ev.passageId);

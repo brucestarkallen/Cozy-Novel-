@@ -169,6 +169,22 @@ def run(home):
     pg.put("chapter", "c-t1", {"novelId": "n-t1", "passages": [{"id": "p1"}], "n": 99}, 13, checkpoint=True)
     st, out = pg.ask("GET", "/api/history/chapter/c-t1")
     check("a checkpoint save adds no earlier copy", len(out["copies"]) == before, (before, len(out["copies"])))
+    # each earlier copy of a chapter says what it holds (his report, 2.12.3: which copy still has passage 2?)
+    two = {"novelId": "n-t1", "passages": [
+        {"id": "p1", "versions": [{"id": "v1", "text": "The lamp was cold."}, {"id": "v2", "text": "The lamp was cold and dark tonight."}], "pick": 1},
+        {"id": "pb", "by": "break", "versions": []},
+        {"id": "p2", "versions": [{"id": "v3", "text": "My beautiful passage two."}]}]}
+    st, cur = pg.ask("GET", "/api/store/chapter/c-t1")
+    pg.put("chapter", "c-t1", two, cur["rev"])
+    pg.put("chapter", "c-t1", {"novelId": "n-t1", "passages": [two["passages"][0]]}, cur["rev"] + 1)
+    st, out = pg.ask("GET", "/api/history/chapter/c-t1")
+    newest = out["copies"][0]
+    check("an earlier copy of a chapter says its passages and words — the version on show of each, never a scene break",
+          (newest.get("passages"), newest.get("words")) == (2, 11), newest)
+    st, got = pg.ask("GET", "/api/history/chapter/c-t1/" + newest["stamp"])
+    check("and it holds what it says", st == 200 and [p["id"] for p in got["data"]["passages"]] == ["p1", "pb", "p2"], got if st != 200 else "")
+    st, got = pg.ask("GET", "/api/history/chapter/c-t1/20200101-000000-000")
+    check("a copy no longer kept is said as not kept (the page lists them again)", st == 404, (st, got))
     pg.put("house", "house", {"connections": [{"id": "c1"}]}, 0)
     pg.put("house", "house", {"connections": [{"id": "c1"}, {"id": "c2"}]}, 1)
     st, out = pg.ask("GET", "/api/history/house/house")
@@ -418,6 +434,9 @@ def run_update_lands():
         srv = start(home, port=port, app=folder)
         page = urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=5).read().decode()
         check("the page says which code it is", '<meta name="cozynovel-commit" content="%s">' % first in page, page[:400])
+        check("a first start on an empty library keeps no copy", not list((home / "copies").glob("cozynovel-before-update-*")), list((home / "copies").glob("*")))
+        # the book as it stands before the update
+        Page(port).put("chapter", "c-up", {"id": "c-up", "passages": [{"id": "p2", "versions": [{"id": "v", "text": "Passage two, before the update."}]}]}, 0)
         # a page being written through the relay while the update lands: the
         # update waits for it, and never cuts it short
         class Slow(BaseHTTPRequestHandler):
@@ -469,6 +488,16 @@ def run_update_lands():
                 break
             time.sleep(0.25)
         check("a pull that changed only the page's files relights the server with it", got == second, (first[:7], second[:7], got[:7]))
+        # everything as it was, kept whole before the new code opened a book (his report, 2.12.3: "your update broke my passage 2")
+        kept = sorted((home / "copies").glob("cozynovel-before-update-*.json.gz"))
+        held = []
+        if kept:
+            import gzip
+            snap = json.loads(gzip.decompress(kept[0].read_bytes()).decode())
+            held = [r["data"]["passages"][0]["versions"][0]["text"] for r in snap["records"] if r["kind"] == "chapter" and r["id"] == "c-up"]
+        st, listed = Page(port).ask("GET", "/api/copies")
+        check("an update keeps a copy of everything first — listed with the copies, the book as it stood",
+              len(kept) == 1 and held == ["Passage two, before the update."] and any(c["name"] == kept[0].name for c in listed["copies"]), (kept, held))
     finally:
         if srv:
             srv.terminate()

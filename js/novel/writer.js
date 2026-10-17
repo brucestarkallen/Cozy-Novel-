@@ -301,7 +301,7 @@ function joinThought(before, after) {
 
 /* Write one version: kind 'new' (a passage), 'version' (another on a passage),
  * 'append' (go on). Resolves {ok, error?, stopped?, notes?}. */
-async function runVersion({ novelId, chapterId, passageId, versionId, base = '', original = null, mode, build, how, splice = null, length = 'scene', purpose = 'write', auto = false, keepEnd = null }) {
+async function runVersion({ novelId, chapterId, passageId, versionId, base = '', original = null, mode, build, how, splice = null, length = 'scene', purpose = 'write', auto = false, keepEnd = null, hidden = false, showWhenDone = false }) {
   const h = house();
   const conn = connFor(h, 'writer');
   const undo = () => undoEmpty(chapterId, passageId, versionId, mode, original);
@@ -330,6 +330,10 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     return false;
   };
   const unwatchAuto = auto ? store.subscribe('house', 'house', automaticAllowed) : () => {};
+  /* written off the page: what was on show as it began — shown once whole only while that is still on show (a version
+   * he put on show meanwhile stays) */
+  const shownAt = () => { const c = store.peek('chapter', chapterId); const p = c && (c.passages || []).find((x) => x.id === passageId); return (p && picked(p)) || null; };
+  const shownBefore = showWhenDone ? (shownAt() || {}).id : null;
   const ownsPage = () => {
     const novel = store.peek('novel', novelId);
     const chapter = store.peek('chapter', chapterId);
@@ -337,8 +341,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     const passage = (chapter.passages || []).find((p) => p.id === passageId);
     return Boolean(passage && (passage.versions || []).some((v) => v.id === versionId));
   };
-  /* what the page hears as words arrive: a page the app writes by itself says so (the page never follows it) */
-  const live = (ev) => tellLive(job.auto ? { ...ev, auto: true } : ev);
+  /* what the page hears as words arrive: a page the app writes by itself says so (the page never follows it); one
+   * written off the page says so too — nothing of it is painted until it is done */
+  const live = (ev) => tellLive({ ...ev, ...(job.auto ? { auto: true } : {}), ...(hidden ? { hidden: true } : {}) });
   running.set(novelId, job);
   tellJob(novelId);
   let text = '';
@@ -509,6 +514,15 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
                   : 'it reached the reply length';
     /* a few words rewritten in the middle of a passage cut at its end: the end is still cut, and Go on is still offered */
     const own = Boolean(out.cut || out.stopped);
+    /* some words written again are written whole or not at all: words broken off in the middle of a passage are never
+     * a page (2.12.3 kept them on show — "something went wrong partway", the rest of the sentence gone). The words
+     * before stay as they were, and why is said */
+    if (how === 'selection' && own) {
+      undo();
+      await store.flush('chapter', chapterId);
+      if (out.stopped) return { ok: false, stopped: true };
+      return { ok: false, error: `the new words were not finished (${cutWhy}) — nothing was changed`, notes, unfinished: true };
+    }
     const endKept = !own && keepEnd && keepEnd.cut ? keepEnd : null;
     const patch = {
       text: finalText,
@@ -542,6 +556,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       ...(mode === 'append' && original && finalText.startsWith(original.text) ? grownFields({ ...(versionNow(chapterId, passageId, versionId) || {}), text: original.text }, finalText.slice(original.text.length)) : {}),
     };
     store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, patch), { checkpoint: true, now: true });
+    /* written off the page: on show once it is whole */
+    if (showWhenDone && (shownAt() || {}).id === shownBefore) store.change('chapter', chapterId, chapterSteps.pick(passageId, versionId), { now: true });
     store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
     keepSent(novelId, key, out.sent, { purpose: how, chapterId, passageId });
     await store.flush('chapter', chapterId);
@@ -555,7 +571,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       return { ok: false, stopped: true, yielded: true };
     }
     try {
-      if (job.yielded || !String(text || '').trim()) undo();
+      /* (some words written again: whole or not at all) */
+      if (job.yielded || !String(text || '').trim() || how === 'selection') undo();
       else store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, { text: shown(), thinking: thoughtOf(thinking) || undefined, streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'something went wrong partway' }), { now: true });
     } catch (_) { /* the record is gone */ }
     return { ok: false, error: (e && e.message) || String(e), thought: !String(text || '').trim() && thinking.trim() ? thinking : undefined };
@@ -605,7 +622,12 @@ export async function repairStale(novelId) {
         const here = v.browser && v.browser === store.BROWSER && tabs;
         const gone = here ? !tabs.has(v.tab) : Date.now() - (v.beat || v.done || v.at || 0) > STALE_MS;
         if (!gone) continue;
-        if (!String(v.text || '').trim()) {
+        /* some words written again, its window closed partway: whole or not at all — the words before stay on show */
+        if (v.how === 'selection' && p.versions.length > 1) {
+          const onShow = (picked(p) || {}).id === v.id;
+          store.change('chapter', cid, chapterSteps.removeVersion(p.id, v.id), { now: true });
+          if (onShow && p.versions.some((x) => x.id === v.base)) store.change('chapter', cid, chapterSteps.pick(p.id, v.base), { now: true });
+        } else if (!String(v.text || '').trim()) {
           if (p.versions.length < 2) store.change('chapter', cid, chapterSteps.removePassage(p.id), { now: true });
           else store.change('chapter', cid, chapterSteps.removeVersion(p.id, v.id), { now: true });
         } else {
@@ -618,6 +640,34 @@ export async function repairStale(novelId) {
   }
   if (fixed) recount(novelId);
   return fixed;
+}
+
+/* Some words written again that broke off partway, kept through 2.12.3 as a
+ * version — on show, cut, the rest of the sentence gone ("something went
+ * wrong partway", the reply ran out, its window closed): the words it was
+ * written from are on show again and it goes. Never one he changed since or
+ * put on show himself. How many passages. */
+export function repairBrokenWords(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return 0;
+  let n = 0;
+  for (const cid of novel.order || []) {
+    const c = store.peek('chapter', cid);
+    for (const p of (c && c.passages) || []) {
+      for (const v of [...(p.versions || [])]) {
+        if (v.how !== 'selection' || v.streaming || !v.cut || v.endCut || v.chosen || (Array.isArray(v.hands) && v.hands.length)) continue;
+        if ((p.versions || []).length < 2 || !(p.versions || []).some((x) => x.id === v.base)) continue;
+        const live = store.peek('chapter', cid);
+        const lp = live && (live.passages || []).find((x) => x.id === p.id);
+        const onShow = lp && (picked(lp) || {}).id === v.id;
+        store.change('chapter', cid, chapterSteps.removeVersion(p.id, v.id), { now: true });
+        if (onShow) store.change('chapter', cid, chapterSteps.pick(p.id, v.base), { now: true });
+        n++;
+      }
+    }
+  }
+  if (n) recount(novelId);
+  return n;
 }
 
 /* -------------------------------------------------------- what he asks */
@@ -739,12 +789,13 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   const moment = momentOf(chapter, p, note);
   /* lift: the judge's own lift, the app writing it by itself (its try, 1 or 2) */
   const version = newVersion({ how: 'rewrite', ask: { note }, streaming: true, from: from.id, ...(lift ? { lift } : {}) });
-  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
+  /* the app's own lift is written off the page, and shown once whole — never streamed over the words he reads */
+  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version, { show: !lift }), { now: true });
   const request = rewriteRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text, last: lastInBook(book, chapterId, passageId) });
   const words = countWords(text);
   return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'rewrite',
     length: words > 2600 ? 'chapter' : words > 1500 ? 'long' : 'scene',
-    build: { target: { chapterId, mark: passageId }, request, moment }, auto: Boolean(lift) });
+    build: { target: { chapterId, mark: passageId }, request, moment }, auto: Boolean(lift), hidden: Boolean(lift), showWhenDone: Boolean(lift) });
 }
 
 /* Only the words he selected, rewritten; the rest of the passage untouched. */
@@ -772,15 +823,16 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   const moment = momentOf(chapter, p, note);
   /* a few words rewritten in place: the rest are the passage's as they were — his own, or from before the checker began, stay so (Cozy Tavern's M607) */
   const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV), ...keptTail(baseV), ...(auto ? { spanAuto: true } : {}) });
-  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
+  /* by itself: written off the page, the words he reads untouched until the sentence is whole and goes in */
+  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version, { show: !auto }), { now: true });
   const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
   /* (given way to him, it is taken away whole — runVersion's undo — and the version on show before it is on show again) */
   const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
     splice: (answer) => spliceSelection(full, start, end, answer),
     /* the passage it is written into was cut at its end: so is this version, and Go on still carries it on */
     keepEnd: cutAtEnd(baseV) ? endOf(baseV) : null,
-    build: { target: { chapterId, mark: passageId }, request, moment }, auto });
-  /* a fix: on the version it was written for, while that still reads as it did (else it stays a version of its own, one arrow away) */
+    build: { target: { chapterId, mark: passageId }, request, moment }, auto, hidden: auto });
+  /* a fix: on the version it was written for, while that still reads as it did */
   if ((fix || auto) && out && out.ok) {
     const live = store.peek('chapter', chapterId);
     const lp = live && (live.passages || []).find((x) => x.id === passageId);
@@ -790,6 +842,28 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
       && foldVersion({ novelId, chapterId, passageId, childId: version.id, targetId: baseV.id, by: 'checker' })) {
       await store.flush('chapter', chapterId);
       return { ...out, inPlace: true, versionId: baseV.id };
+    }
+    /* the words changed while it was written (a fix put in, his edit, his partner's change): the new sentence goes in
+     * where the old one still stands, once — never a version of words since changed on show over them (through 2.12.3
+     * it stayed one, the change made meanwhile out of sight). Where the old sentence is gone, nothing goes in. */
+    if (target && made && !made.cut) {
+      const old = full.slice(start, end);
+      const after = full.slice(end);
+      const madeText = String(made.text || '');
+      const fresh = madeText.startsWith(full.slice(0, start)) && madeText.endsWith(after) && madeText.length >= start + after.length ? madeText.slice(start, madeText.length - after.length) : null;
+      const cur = String(target.text || '');
+      const at = fresh !== null && old.trim() ? cur.indexOf(old) : -1;
+      const once = at >= 0 && cur.indexOf(old, at + 1) < 0;
+      const shownWas = picked(lp);
+      store.change('chapter', chapterId, chapterSteps.removeVersion(passageId, version.id), { now: true });
+      if (shownWas && shownWas.id === version.id) store.change('chapter', chapterId, chapterSteps.pick(passageId, baseV.id), { now: true });
+      if (once && changeInPlace({ novelId, chapterId, passageId, versionId: baseV.id, next: cur.slice(0, at) + fresh + cur.slice(at + old.length), by: 'checker', extra: auto ? { auto: true } : {} })) {
+        if (auto) store.change('chapter', chapterId, chapterSteps.setVersion(passageId, baseV.id, { spans: (Number(target.spans) || 0) + 1 }), { now: true });
+        await store.flush('chapter', chapterId);
+        return { ...out, inPlace: true, versionId: baseV.id };
+      }
+      await store.flush('chapter', chapterId);
+      return { ok: false, error: 'the passage changed while the sentence was written, and the sentence is not there any more — nothing was put in', changedMeanwhile: true };
     }
   }
   return out;

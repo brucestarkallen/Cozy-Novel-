@@ -3616,6 +3616,80 @@ await test('Apply the checker’s fixes by themselves: every passage checked get
   await putAway(b);
 });
 
+await test('what the app writes by itself is written off the page: the words on show never change while a sentence is written again, nothing of it is painted, and it goes in once, whole; words that break off partway change nothing; words changed meanwhile keep their change (his report, 2.12.3: “blinking and jagged and flashing”, “broke my passage 2”)', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 }, ...HIS({ avoid: 'tar' }) });
+  const TEXT = 'The sea was grey. It smelled of tar. The gulls slept.';
+  const watch = (b) => {
+    const pid = b.ch().passages[0].id;
+    const seen = [];
+    const lives = [];
+    const offs = [store.subscribe('chapter', b.ids[0], () => { const p = b.ch().passages[0]; seen.push([picked(p).id, picked(p).text, Boolean(picked(p).streaming)]); }),
+      writer.onLive((ev) => { if (ev.passageId === pid && !ev.done) lives.push(ev); })];
+    return { seen, lives, off: () => offs.forEach((f) => f()) };
+  };
+  /* written whole: the words on show, then the words with the new sentence — nothing between, nothing painted */
+  const b = await makeBook([[TEXT]]);
+  const first = picked(b.ch().passages[0]).id;
+  let w = watch(b);
+  await script([{ text: JSON.stringify({ edits: [] }) }, { text: 'It smelled of the harbour.', delay: 0.02, chunk: 3 }]);
+  await checker.runCheck(b.novelId);
+  await checker.forTests().lifting.get(b.novelId);
+  w.off();
+  assert.deepEqual([...new Set(w.seen.map((x) => x[0]))], [first], 'the version on show never changes');
+  assert.deepEqual([...new Set(w.seen.map((x) => x[1]))], [TEXT, 'The sea was grey. It smelled of the harbour. The gulls slept.'], 'the words, then the words with it');
+  assert.ok(w.seen.every((x) => !x[2]), 'never a page being written on show');
+  assert.ok(w.lives.length > 1 && w.lives.every((ev) => ev.hidden), `nothing of it painted (${w.lives.length} live words, all off the page)`);
+  assert.equal(b.ch().passages[0].versions.length, 1);
+  await putAway(b);
+  /* broken off partway — the provider fails mid-answer, or the reply runs out: nothing changes, nothing left behind */
+  for (const [how, answer] of [['fails partway', { midstream_error: 'It smelled of the', message: 'boom' }], ['runs out', { text: 'It smelled of the', finish: 'length' }]]) {
+    const c = await makeBook([[TEXT]]);
+    w = watch(c);
+    await script([{ text: JSON.stringify({ edits: [] }) }, answer]);
+    await checker.runCheck(c.novelId);
+    await checker.forTests().lifting.get(c.novelId);
+    w.off();
+    const p = c.ch().passages[0];
+    assert.deepEqual([p.versions.length, picked(p).text], [1, TEXT], `${how}: the passage as it was`);
+    assert.deepEqual([...new Set(w.seen.map((x) => x[1]))], [TEXT], `${how}: never another word on show`);
+    await putAway(c);
+  }
+  /* the words changed while it was written (his edit further on): the new sentence goes in where the old one stands, his change kept */
+  const d = await makeBook([[TEXT]]);
+  await script([{ text: JSON.stringify({ edits: [] }) }, { text: 'It smelled of the harbour.', pause: 0.6 }]);
+  const run = checker.runCheck(d.novelId);
+  for (let i = 0; i < 300 && !writer.autoBusy(d.novelId); i++) await sleep(10);
+  assert.ok(writer.autoBusy(d.novelId), 'being written');
+  const pd = d.ch().passages[0];
+  assert.ok(inplace.changeInPlace({ novelId: d.novelId, chapterId: d.ids[0], passageId: pd.id, next: 'The sea was grey. It smelled of tar. The gulls woke.', by: 'you' }));
+  await run;
+  await checker.forTests().lifting.get(d.novelId);
+  const q = d.ch().passages[0];
+  assert.deepEqual([q.versions.length, picked(q).text], [1, 'The sea was grey. It smelled of the harbour. The gulls woke.'], 'his change kept, the sentence in where it stood');
+  assert.deepEqual(picked(q).before.map((x) => x.by), ['you', 'checker'], 'each to put back');
+  await putAway(d);
+  await setHouse();
+});
+
+await test('some words written again that broke off partway, kept on show through 2.12.3, are taken back when the book opens — the words they were written from on show; one he changed since or put on show himself stays', async () => {
+  const b = await makeBook([['The sea was grey. It smelled of tar.', 'The lamp was cold.', 'The rope was wet.']], { manual: true });
+  const ps = b.ch().passages;
+  const add = (p, fields) => { const v = shape.newVersion({ words: 4, ...fields }); store.change('chapter', b.ids[0], shape.chapterSteps.addVersion(p.id, v), { now: true }); return v; };
+  const base = (i) => picked(b.ch().passages[i]);
+  const v0 = base(0);
+  add(ps[0], { text: 'The sea was grey. It smelled of the', how: 'selection', base: v0.id, spanAuto: true, cut: true, cutWhy: 'something went wrong partway' });
+  const v1 = base(1);
+  const kept1 = add(ps[1], { text: 'The lamp was', how: 'selection', base: v1.id, cut: true, cutWhy: 'the writing stopped when its window closed', hands: ['you'] });
+  const v2 = base(2);
+  const kept2 = add(ps[2], { text: 'The rope', how: 'selection', base: v2.id, cut: true, cutWhy: 'it reached the reply length', chosen: Date.now() });
+  assert.equal(writer.repairBrokenWords(b.novelId), 1);
+  const now = b.ch().passages;
+  assert.deepEqual([now[0].versions.length, picked(now[0]).id, picked(now[0]).text], [1, v0.id, 'The sea was grey. It smelled of tar.'], 'the words it was written from, on show');
+  assert.deepEqual([picked(now[1]).id, picked(now[2]).id], [kept1.id, kept2.id], 'changed since by him, or put on show by him: as they are');
+  assert.equal(writer.repairBrokenWords(b.novelId), 0, 'once');
+  await putAway(b);
+});
+
 await test('a sentence to write again, with the fixes going in by themselves: his own words too, twice at most for a passage; never for a word he took off his list; never again after a real failure; it gives way to him; and with the switch off it waits', async () => {
   const on = () => ({ on: true, from: Date.now() - 50000 });
   /* the writer asked (the checker after it is told what the version was asked for, too) */
@@ -3845,6 +3919,8 @@ await test('never written again by itself: a grade he left, writing from before 
   await checker.runCheck(b2.novelId);
   for (let i = 0; i < 100 && !writer.autoBusy(b2.novelId); i++) await sleep(10);
   assert.ok(writer.autoBusy(b2.novelId), 'the app is writing it again');
+  /* written off the page: the words he is reading stay on show while it is written (2.12.4) */
+  assert.deepEqual([picked(b2.ch().passages[0]).text, picked(b2.ch().passages[0]).streaming], ['Another writer’s page.', undefined], 'the page he reads, untouched while the lift is written');
   const lift = checker.forTests().lifting.get(b2.novelId);
   await writer.yieldAuto(b2.novelId);
   const out = await lift;
