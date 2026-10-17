@@ -952,7 +952,7 @@ function drawNotes() {
           state ? h('span.ctag.lit', state === 'new' ? 'new' : 'updated') : null,
           mine ? h('span.ctag.yours', 'yours') : null),
         c.aka && c.aka.length ? h('div.aka', 'also ' + c.aka.join(', ')) : null,
-        state && whyOf.get(kind + ':' + nameKey(c.name)) ? h('div.why', 'Why: ' + whyOf.get(kind + ':' + nameKey(c.name))) : null,
+        /* (why a card changed is in the check's own list above, never on every card: 2.12.16) */
         c.about ? h('div.ab', c.about) : null,
         c.since && String(c.since).trim() ? h('div.nw.since', { title: 'What the book has told of them since your words — kept beside them, never over them.' }, h('b', 'Since then'), c.since) : null,
         kind === 'people' && c.ties ? h('div.nw.ties', h('b', 'With others'), c.ties) : null,

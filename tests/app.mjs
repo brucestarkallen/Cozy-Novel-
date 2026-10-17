@@ -1796,23 +1796,23 @@ await test('his words on a card, contradicted by words he changed himself — a 
   const out = await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: p1.id, note: 'The fathers arrange it; Jovan is told, never asked.' });
   assert.equal(out.ok, true);
   assert.equal(picked(b.ch().passages[0]).how, 'rewrite');
-  await script([{ text: JSON.stringify(row('Jovan learned of it as a decision already made')) }]);
+  /* a reading sees one passage: it never rewrites his words, whatever it claims (2.12.16 — the whole-book check does, below) */
+  await script([{ text: JSON.stringify(row('Jovan learned of it as a decision already made', ' A signature space waited.')) }]);
   await archivist.run(b.novelId);
-  assert.equal(card().about, 'The marriage was arranged by Reginald and Harrison; Jovan was told of it as a decision already made.');
-  assert.equal(card().since, undefined, 'Since then folded in');
-  assert.deepEqual([card().updated.by, card().updated.his.includes('about'), card().updated.his.includes('name')], ['you', false, true]);
-  /* the reading's Put back brings his words back as they were */
-  const list = archivist.readingsList(b.novelId);
-  assert.equal(archivist.putBackReading(b.novelId, list[0].pid, list[0].vid), true);
-  assert.equal(card().about, thread.about);
-  assert.equal(shape.hisField(card(), 'about'), true, 'his words his again');
-  /* a quote that stands nowhere in the words he changed is no ground: his words stand, the account rides beside them */
-  await script([{ text: JSON.stringify(row('the fathers signed it in blood', ' A signature space waited.')) }]);
+  assert.equal(card().about, thread.about, 'his words stand through a reading');
+  assert.ok(String(card().since || '').includes('A signature space waited.'), 'the reading’s account beside them');
+  assert.equal(shape.hisField(card(), 'about'), true);
+  /* "about" given with the notes' own lines in it: those lines never stay in a card's words (2.12.16) */
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-d', name: 'Damien Thorne', aka: [], about: 'Alaric’s father.', ties: '', now: '' }); }, { now: true });
   store.change('novel', b.novelId, (n) => { delete n.memory.seen[b.ids[0]][p1.id]; }, { now: true });
+  await script([{ text: JSON.stringify({ people: [{ name: 'Damien Thorne', about: 'Alaric’s father; head of the Thorne group.\n  With others: Alaric Thorne (his son): beside him.\n  Right now: In St. Aldrich.' }] }) }]);
   await archivist.run(b.novelId);
-  assert.equal(card().about, thread.about, 'an unfounded contradiction changes nothing');
-  assert.ok(String(card().since || '').includes('A signature space waited.'));
-  assert.equal(b.novel().memory.auditAsked, true, 'words he changed laid Since then on his card: the check is asked soon');
+  const d = () => b.novel().notes.people.find((c) => c.id === 'pe-d');
+  assert.deepEqual([d().about, d().ties, d().now], ['Alaric’s father; head of the Thorne group.', 'Alaric Thorne (his son): beside him.', 'In St. Aldrich.']);
+  /* a card left so by an earlier version is put right at open */
+  store.change('novel', b.novelId, (n) => { n.notes.people.find((c) => c.id === 'pe-d').about = 'Alaric’s father.\n  With others: his son.\n  Now: At the wedding.'; }, { now: true });
+  archivist.firstCheck(b.novelId);
+  assert.deepEqual([d().about, d().ties, d().now], ['Alaric’s father.', 'Alaric Thorne (his son): beside him.', 'In St. Aldrich.'], 'cleaned, and what the card already says stays');
   await putAway(b);
 });
 
@@ -1901,16 +1901,94 @@ await test('every card of his with “Since then” is judged by the notes’ ch
     d.memory.mine = { ...(d.memory.mine || {}), 'th-3': { h: util.hashText(['Jovan’s choice to ask for Emilia', 'Jovan did not choose her; the marriage was arranged as a decision already made. Still unaddressed between Jovan and Emilia.', ''].join('\n')), held: true } };
   }, { now: true });
   sent = await ask({ mine: [{ kind: 'threads', name: 'Jovan’s choice to ask for Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', newName: 'The marriage they were both handed', about: 'Arranged by the fathers; still unaddressed between Jovan and Emilia.', open: true, why: 'he never chose, and it is unaddressed' }] });
-  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('A thread holds only when all of it does'));
+  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('It holds only when all of it does'));
   const t3 = n().threads.find((c) => c.id === 'th-3');
   assert.deepEqual([t3.name, t3.open, t3.about, shape.hisField(t3, 'name'), shape.hisField(t3, 'open')], ['The marriage they were both handed', true, 'Arranged by the fathers; still unaddressed between Jovan and Emilia.', false, false]);
   /* a book checked under 2.12.11: opened, nothing left to judge asks nothing; a Since then that changed is judged again, at open */
+  /* (the thread renamed above is judged again for what it says now: held, here) */
+  const left = archivist.mineToJudge(b.novel());
+  assert.deepEqual(left.map((x) => x.id), ['th-3'], 'only the thread that changed is left to judge');
+  store.change('novel', b.novelId, (d) => { d.memory.mine['th-3'] = { h: left[0].h, held: true }; }, { now: true });
   store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { ...b.novel().memory.audit, v: 4 }, auditAsked: false }), { now: true });
   archivist.firstCheck(b.novelId);
   assert.equal(b.novel().memory.auditAsked, false, 'every one judged or asked three times');
   store.change('novel', b.novelId, (d) => { d.notes.people.find((c) => c.id === 'pe-2').since = 'She was the duke’s daughter, and she ran.'; d.memory.audit.v = 4; }, { now: true });
   archivist.firstCheck(b.novelId);
   assert.equal(b.novel().memory.auditAsked, true, 'a Since then that changed is judged again');
+  await putAway(b);
+});
+
+await test('every thread is held to the book’s own words that set it up: one no words of the book set up goes, whoever wrote it; one partly told from nowhere keeps only what the book sets up; one held without its words is not taken as held; an evidence quote that is not the book’s changes nothing (2.12.16)', async () => {
+  const b = await makeBook([['Harrison Vanderbilt signed the merger papers in Reginald Wayne’s study. Nobody spoke of Georgia.']], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => {
+    n.notes.threads.push({ id: 't-g', name: 'The Georgia-led pressure on Harrison Vanderbilt', about: 'Harrison has a railroad’s worth of leverage pressed against his cattle country’s throat, and Reginald has been the one pressing it.', open: true });
+    n.notes.threads.push({ id: 't-m', name: 'The merger', about: 'Harrison signed the merger papers, pushed into it by debts in Georgia.', open: true, updated: { by: 'you', his: ['about'], at: 1 } });
+    n.notes.threads.push({ id: 't-h', name: 'Who called the meeting', about: 'The meeting in the study.', open: true });
+    n.notes.threads.push({ id: 't-x', name: 'The signing', about: 'Harrison signed the papers.', open: true });
+  }, { now: true });
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', mine: [
+    { kind: 'threads', name: 'The Georgia-led pressure on Harrison Vanderbilt', never: true, why: 'no railroad, no cattle, no pressure in the book' },
+    { kind: 'threads', name: 'The merger', holds: false, evidence: 'Harrison Vanderbilt signed the merger papers', about: 'Harrison signed the merger papers in Reginald’s study.', why: 'the debts in Georgia are not in the book' },
+    { kind: 'threads', name: 'Who called the meeting', holds: true },
+    { kind: 'threads', name: 'The signing', holds: false, evidence: 'they signed in blood', about: 'Signed in blood.' },
+  ] }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((c) => c.includes(prompts.AUDIT_ASK)) || '';
+  assert.ok(sent.includes('every thread, whoever wrote it') && sent.includes('The Georgia-led pressure on Harrison Vanderbilt (threads)') && sent.includes('nothing the notes or anyone added from nowhere'));
+  const th = (id) => b.novel().notes.threads.find((c) => c.id === id);
+  assert.equal(th('t-g'), undefined, 'set up by no words of the book: gone');
+  assert.deepEqual([th('t-m').about, shape.hisField(th('t-m'), 'about')], ['Harrison signed the merger papers in Reginald’s study.', false], 'his thread, partly from nowhere: only what the book sets up');
+  assert.equal(th('t-h').about, 'The meeting in the study.', 'held without its words: left as it is');
+  assert.equal(th('t-x').about, 'Harrison signed the papers.', 'an evidence quote that is not the book’s changes nothing');
+  const m = b.novel().memory.mine;
+  assert.deepEqual([m['t-h'].n, m['t-h'].held, m['t-x'].n], [1, undefined, 1], 'not taken as held: asked again');
+  assert.ok((b.novel().memory.audit.changes || []).some((c) => c.name === 'The Georgia-led pressure on Harrison Vanderbilt' && c.how === 'gone'));
+  /* the check's Undo brings them back */
+  assert.equal(archivist.undoLast(b.novelId), true);
+  assert.ok(th('t-g') && th('t-m').about.includes('debts in Georgia'));
+  await putAway(b);
+});
+
+await test('his other words the writer reads as true — What it’s about, Where it’s headed, a chapter’s plan, an entry for a name the book has — are judged by the notes’ check: overturned and quoted from the book, given whole as the book has them; held, left; unfounded, left; Undo puts them back (2.12.15)', async () => {
+  /* (the page as his partner wrote it anew: the story he changed — his own words are put right only from those, never from the writer's own page) */
+  const b = await makeBook([[{ text: 'Reginald and Harrison arranged the marriage; Jovan learned of it as a decision already made.', how: 'partner' }], ['']], { brief: 'Jovan chose Emilia from a shortlist, to spite his father.', manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => {
+    n.plans = 'The wedding in the spring.';
+    n.notes.people.push({ id: 'pe-j', name: 'Jovan', aka: [], about: 'The heir.', now: '' });
+    n.bibliography = [{ id: 'bb-j', name: 'Jovan', aka: [], kind: 'people', line: '', text: 'Heir of the Wayne line. He picked Emilia himself from his father’s shortlist.', rides: 'named', at: 1 }, { id: 'bb-n', name: 'Nobody Here', aka: [], kind: 'people', line: '', text: 'Never named in the book.', rides: 'named', at: 1 }];
+  }, { now: true });
+  store.change('chapter', b.ids[1], shape.chapterSteps.setPlan('Jovan confronts his father over the choice he made.'), { now: true });
+  /* (chapter one finished: its summary his, so the helper's one answer is the check's) */
+  store.change('chapter', b.ids[0], shape.chapterSteps.setSummary({ text: 'The fathers arrange it.', fp: shape.chapterPrint(b.ch(0)), at: Date.now(), by: 'you' }), { now: true });
+  const entry = () => b.novel().bibliography.find((e) => e.name === 'Jovan');
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', mine: [
+    { kind: 'book', name: 'about', holds: false, contradicts: 'Jovan learned of it as a decision already made', text: 'The fathers arranged the marriage; Jovan was told, never asked.', why: 'he never chose' },
+    { kind: 'book', name: 'plans', holds: true },
+    { kind: 'plan', name: '2', holds: false, contradicts: 'the fathers wept', text: '' },
+    { kind: 'entry', name: 'Jovan', holds: false, contradicts: 'Reginald and Harrison arranged the marriage', text: 'Heir of the Wayne line. The marriage to Emilia was arranged for him.' },
+  ] }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((c) => c.includes(prompts.AUDIT_ASK)) || '';
+  assert.ok(sent.includes('My own words the writer reads as true on every page') && sent.includes('"entry" "Jovan"') && sent.includes('"plan" "2"') && sent.includes('"book" "about"') && !sent.includes('Nobody Here'), sent.slice(sent.indexOf('My own words'), sent.indexOf('My own words') + 600));
+  assert.equal(b.novel().brief, 'The fathers arranged the marriage; Jovan was told, never asked.', 'What it’s about, put right from the book');
+  assert.equal(b.novel().plans, 'The wedding in the spring.', 'held: left');
+  assert.equal(b.ch(1).plan, 'Jovan confronts his father over the choice he made.', 'a quote that is not the book’s changes nothing');
+  assert.equal(entry().text, 'Heir of the Wayne line. The marriage to Emilia was arranged for him.', 'the entry put right');
+  const m = b.novel().memory.mine;
+  assert.deepEqual([m['book:plans'].held, m[`plan:${b.ids[1]}`].n, m['book:about'], m[`entry:${entry().id}`]], [true, 1, undefined, undefined]);
+  assert.ok((b.novel().memory.audit.changes || []).some((c) => c.kind === 'book' && c.name === 'What it’s about' && c.why === 'he never chose'));
+  /* the check's Undo puts his words back */
+  assert.equal(archivist.undoLast(b.novelId), true);
+  assert.equal(b.novel().brief, 'Jovan chose Emilia from a shortlist, to spite his father.');
+  assert.equal(entry().text, 'Heir of the Wayne line. He picked Emilia himself from his father’s shortlist.');
+  /* the partner is told the same */
+  assert.ok(prompts.partnerFrame({}, { meta: { title: 'T' }, brief: '' }).includes('What it\'s about and Where it\'s headed, and the plans of the chapters ahead'));
   await putAway(b);
 });
 

@@ -918,6 +918,36 @@ export function hisStamp(card, fields, at = Date.now()) {
   const before = hisCard(card) ? card.updated.his : [];
   return { by: 'you', at, his: CARD_FIELDS.filter((k) => before.includes(k) || (fields || []).includes(k)) };
 }
+/* A CARD'S WORDS NEVER CARRY THE NOTES' OWN LINES (2.12.16). The notes are
+ * shown to the helper as "- Name — who they are / With others: … / Right now:
+ * … / Since then: …"; given "about" whole again, a model copies those lines
+ * into it, and the card shows "With others" and "Now" twice. Lines that begin
+ * with one of those labels come out of "about" — into "ties" or "now" when
+ * those are empty — wherever a card is written, and in every card at open. */
+const LABEL_LINE = /^\s*(with others|right now|now|since then|last seen \(chapter [a-z -]+\))\s*:\s*(.*)$/i;
+export function splitAbout(about) {
+  const lines = String(about == null ? '' : about).split('\n');
+  const kept = [];
+  const got = {};
+  for (const l of lines) {
+    const m = LABEL_LINE.exec(l);
+    if (!m) { kept.push(l); continue; }
+    const label = m[1].toLowerCase();
+    const key = label === 'with others' ? 'ties' : label === 'since then' ? 'since' : 'now';
+    if (m[2].trim() && !got[key]) got[key] = m[2].trim();
+  }
+  return { about: kept.join('\n').replace(/\s+$/, ''), ...got };
+}
+/* a card with its words cleared of the notes' own lines (null when it had none) */
+export function cleanCard(card) {
+  if (!card || typeof card.about !== 'string' || !/\n/.test(card.about)) return null;
+  const s = splitAbout(card.about);
+  if (s.about === card.about) return null;
+  const next = { ...card, about: s.about };
+  if (s.ties && !String(card.ties || '').trim()) next.ties = s.ties;
+  if (s.now && !String(card.now || '').trim()) next.now = s.now;
+  return next;
+}
 /* his mark without one field (the book, changed by him, is his newer word for it — archivist foldNotes, 2.12.10) */
 export function letGoStamp(updated, field, chapterId, at) {
   const list = Array.isArray(updated && updated.his) ? updated.his : CARD_FIELDS;

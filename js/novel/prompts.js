@@ -743,7 +743,7 @@ ${CHANGES_OPEN}[
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
 - "entry" is an entry in my bibliography — the world behind the book: what is true of a name whether or not a page has said it yet. How someone looks and what makes them unlike anyone else, where they come from and what they carry, what a place is like, how a power or a technique works and what it costs, what a word of the world means, what a group is and who leads it. The writer reads an entry when its name comes up and writes from it as the truth of the world; I read it when I tap the name. This is where the world is made up, and that is your job in it: when I ask for an entry, write it — whole, in the block, in that same answer — richly and particularly, the way a novelist builds a world, inventing freely wherever the pages have not spoken and never against what they have said; what I tell you is true of them is true. Never ask me for the particulars first or offer me choices instead of the entry: write it, and I change what I see differently. "kind" is "people", "places", "things", "groups" or "lore"; "line" says in a line who or what it is; "text" is the entry whole, "add" a paragraph added to it; "rides" is "named" (the writer reads it when its name comes up — the usual), "always" or "never" (only for me); "newName", "aka", "dropAka" and "remove" as for a card.
 - To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole (the chapter open too, when some of it is left out), ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["entry: Name"]${READ_CLOSE} an entry of my bibliography, whole, ${READ_OPEN}["about"]${READ_CLOSE} the book’s own words as they stand now — what it’s about, how it reads, where it’s headed — to quote exactly before changing them, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
-- The pages already written are yours to change when I ask — "rewrite", or "find"/"replace" — every passage the change touches, chapter by chapter. Never write the passage yourself unless I ask for your words. When the story changes, every card, thread and entry that tells the old story changes with it in the same block — a thread about a thing that no longer happens is taken out. A premise in ${DIRECTION_OPEN}…${DIRECTION_CLOSE} is for the page not written yet — never hand me one for a page that exists, and never leave a page as it was because changing it is "a real edit". When I ask whether the story should change — "would it be better if…", "is it possible to edit…", "do you agree?" — say what you think, make the changes to the notes and the bibliography that follow, and name the passages that would have to be written again, offering it in a line: "Say rewrite and I hand 1.3–1.5 to the writer with my notes." When I say so — or ask for the change plainly — do it in that same answer.
+- The pages already written are yours to change when I ask — "rewrite", or "find"/"replace" — every passage the change touches, chapter by chapter. Never write the passage yourself unless I ask for your words. When the story changes, everything that tells the old story changes with it in the same block — every card, thread and entry, What it's about and Where it's headed, and the plans of the chapters ahead; a thread about a thing that no longer happens is taken out. A premise in ${DIRECTION_OPEN}…${DIRECTION_CLOSE} is for the page not written yet — never hand me one for a page that exists, and never leave a page as it was because changing it is "a real edit". When I ask whether the story should change — "would it be better if…", "is it possible to edit…", "do you agree?" — say what you think, make the changes to the notes and the bibliography that follow, and name the passages that would have to be written again, offering it in a line: "Say rewrite and I hand 1.3–1.5 to the writer with my notes." When I say so — or ask for the change plainly — do it in that same answer.
 - A passage you write is the book: in it, people know only what they have lived, seen or been told — what we say here stays ours unless I ask for it on the page.
 - Only quote what you can see, and never say the pages hold what they do not: the pages are what they are, and what I ask you to make — an entry, a plan, a card, a note for the writer — is ours to make up, so make it. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block, and never describe what you would write in place of writing it.`;
 
@@ -1063,10 +1063,8 @@ const PEOPLE_FIELDS = `"about": "${ABOUT_ASK}", "ties": "${TIES_ASK}", "now": "$
 const PORTRAIT_ASK = 'who they are in a short portrait, a few sentences at most — what defines them, how they come across, what they want, what they would never do';
 const PEOPLE_PORTRAIT = `"about": "${PORTRAIT_ASK}", "ties": "${TIES_ASK}", "now": "${NOW_ASK}"`;
 const peopleFields = (codex) => (codex ? PEOPLE_PORTRAIT : PEOPLE_FIELDS);
-const ABOUT_RULE = '- A person\'s "about" is who they are for good: change it only for something lasting, never a passing mood, and keep everything already in it.';
-const PORTRAIT_RULE = '- A person\'s "about" is a short portrait of who they are for good — a few sentences at most: what defines them, how they come across, what they want, what they would never do. Give it whole and keep it short, even when that means saying it again in fewer words. What they did in a scene is never who they are — the chapters and the Timeline keep it; a lasting detail (a feature seen up close, a habit, a skill, a piece of their past) goes in "bibliography" with its words, and the portrait keeps only what defines them.';
-/* his cards, as every reading is told (and the check, in its own words — auditRequest): his words stand, the book's account beside them — unless words he changed himself say the opposite, quoted (2.12.10) */
-export const MY_WORDS_RULE = '- A card marked (my words) is mine: never repeat or rewrite my words — give in "about" only what these words add, and it is kept beside mine as "Since then". Unless these words say the opposite of what I wrote (not merely more; not someone\'s lie, joke or mistaken belief): then I changed the book after I wrote the card, so give "about" whole as the book has it now, with "contradicts": the words here that say so, quoted exactly.';
+const ABOUT_RULE = '- A person\'s "about" is who they are for good: change it only for something lasting, never a passing mood, and keep everything already in it. On a card marked (my words), never repeat mine: give in "about" only what the book has added since — all of it, whole — and it is kept beside my words.';
+const PORTRAIT_RULE = '- A person\'s "about" is a short portrait of who they are for good — a few sentences at most: what defines them, how they come across, what they want, what they would never do. Give it whole and keep it short, even when that means saying it again in fewer words. What they did in a scene is never who they are — the chapters and the Timeline keep it; a lasting detail (a feature seen up close, a habit, a skill, a piece of their past) goes in "bibliography" with its words, and the portrait keeps only what defines them. On a card marked (my words), never repeat mine: give in "about" only what the book has added since, briefly, and it is kept beside my words.';
 const PLACE_ASK = "what it is, what it looks and feels like, what's there";
 const LORE_ASK = 'a thing, a fact, a secret or a rule of the world worth remembering — and who knows it';
 const THREAD_ASK = "what's been set up — a promise, a secret, a question, a debt — and where it stands";
@@ -1079,7 +1077,6 @@ export const ASKED_WORDS = [ABOUT_ASK, PORTRAIT_ASK, TIES_ASK, NOW_ASK, PLACE_AS
 const NOTE_RULES = `Include only entries that are new or changed, and in each only the fields that changed — a field you give replaces the old one, so give it whole. Keep every fact that's still true{{KEPT_WHERE}}.
 - Someone, somewhere or something new: write down how they're described the first time they appear — looks, features, voice, what they wear or carry{{FIRST_WHERE}}. It can't be found again later.
 {{ABOUT_RULE}}
-${MY_WORDS_RULE}
 - A place's, a thing's or a thread's "about" says where it stands now: a thing that matters to what can happen next (a vehicle, a weapon, a key, a letter) with whose it is and where it is, written again when it moves; a place as it is now.
 - "now" leads with where they are and what they're doing. Feelings carry over — a shock, a slight, a warmth set earlier still colours them until the story changes it. A plan is never "now": it's a thread. A flashback, a dream, a memory, a letter or a story someone tells is not now — it moves no one's "now", and someone only talked about, thought of or written to is not there; a jump in time moves the "now" of everyone it carries along: write theirs again.
 - What someone says, believes, fears or plans is theirs — kept as said or believed, by whom, never as what happened, until the book shows it.
@@ -1170,7 +1167,7 @@ ${noteRules(codex)}
  * whatever the notes still hold from words since rewritten or taken out, or
  * have drifted on, is put right. His own cards keep his words. */
 export const AUDIT_ASK = 'Check every card against the book as it stands';
-export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [] }) {
+export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [] }) {
   const parts = [];
   parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
   if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);
@@ -1197,10 +1194,13 @@ ${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it�
 
 ${mine.length ? `${mineAsk(mine)}
 
+` : ''}${words.length ? `${wordsAsk(words)}
+
 ` : ''}Answer with one JSON object and nothing else — only the cards that need a change, each field you give whole, each with "why": what was wrong, in a few plain words:
 
 {
-  "people": [{"name": "…", "aka": ["every other name they go by"], ${peopleFields(codex)}, "why": "…"}],${mine.length ? `
+  "people": [{"name": "…", "aka": ["every other name they go by"], ${peopleFields(codex)}, "why": "…"}],${words.length && !mine.length ? `
+  "mine": [{"kind": "${words[0].what}", "name": "${words[0].name}", "holds": true}],` : ''}${mine.length ? `
   "mine": [{"kind": "${mine[0].kind}", "name": "${String(mine[0].name).replace(/"/g, '\\"')}", "holds": false, "contradicts": "the book’s words", "about": "…", "why": "…"}],` : ''}
   "places": [{"name": "…", "about": "…", "why": "…"}],
   "lore": [{"name": "…", "about": "…", "why": "…"}],
@@ -1220,11 +1220,25 @@ ${mine.length ? `${mineAsk(mine)}
  * beside the book's account that says the opposite) */
 function mineAsk(mine) {
   const names = mine.map((x) => `${x.name} (${x.kind})`).join(', ');
-  return `My cards to judge against the book — those with "Since then" beside my words (what the book told after I wrote them), and my threads: ${names}. Judge each one, and answer in "mine" for every one of them:
-- {"kind": "…", "name": "…", "holds": true} when the book still bears it out — what is told since only adds to my words, or tells the same. A thread holds only when all of it does: its name (what storyline it is), its words, and whether it is open or closed.
-- A thread of mine the book has overturned — its name or words say what did not happen in the book as it stands, or it is closed though the book leaves it unresolved (or open though resolved): {"kind": "threads", "name": "…", "holds": false, "contradicts": "the book’s own words that say otherwise, quoted exactly", "newName": "the storyline the book sets up now, named for it", "about": "where that storyline stands", "open": true, "why": "…"} — or without "newName" when nothing of it is a storyline in the book any more: then it goes.
+  return `Cards to judge against the book — mine with "Since then" beside my words (what the book told after I wrote them), and every thread, whoever wrote it: ${names}. Judge each one, and answer in "mine" for every one of them:
+- {"kind": "…", "name": "…", "holds": true} when the book still bears it out — what is told since only adds to my words, or tells the same.
+- A thread is what the book sets up — nothing the notes or anyone added from nowhere. It holds only when all of it does: its name (what storyline it is), its words, and whether it is open or closed — {"kind": "threads", "name": "…", "holds": true, "evidence": "the book’s own words that set it up, quoted exactly"}.
+- A thread partly told from nowhere — a cause, a person, a place, a "why" the book never gives: {"kind": "threads", "name": "…", "holds": false, "evidence": "the book’s own words that set it up, quoted exactly", "about": "only what the book sets up", "open": true, "why": "what was not in the book"}.
+- A thread no words of the book set up at all: {"kind": "threads", "name": "…", "never": true, "why": "…"} — it goes.
+- A thread the book has overturned — its name or words say what did not happen in the book as it stands, or it is closed though the book leaves it unresolved (or open though resolved): {"kind": "threads", "name": "…", "holds": false, "contradicts": "the book’s own words that say otherwise, quoted exactly", "newName": "the storyline the book sets up now, named for it", "about": "where that storyline stands", "open": true, "why": "…"} — or without "newName" when nothing of it is a storyline in the book any more: then it goes.
 - {"kind": "…", "name": "…", "holds": false, "contradicts": "the book’s own words that say otherwise, quoted exactly", "about": "the card as the book has it now, whole", "why": "…"} when the book now says the opposite of my words — not merely more; not someone’s lie, joke or mistaken belief; not a secret the book has yet to reveal. I changed the book after I wrote the card: the book is my newer word.
 - The same with "gone": true in place of "about" when nothing of what the card is about is in the book any more (a thing or a place the book no longer has).`;
+}
+
+/* HIS OTHER WORDS THE WRITER READS AS TRUE, judged (archivist wordsToJudge) */
+function wordsAsk(words) {
+  const shown = words.map((w) => `${w.what === 'book' ? `"book" "${w.name}" — ${w.label}` : w.what === 'plan' ? `"plan" "${w.name}" — ${w.label}` : `"entry" "${w.name}" — my bibliography’s entry`}:\n${fence(w.text.length > 1500 ? `${w.text.slice(0, 1500)}…` : w.text)}`).join('\n\n');
+  return `My own words the writer reads as true on every page — judge each against the book as it stands, and answer in "mine" for every one of them, by its kind and name as given:
+
+${shown}
+
+- {"kind": "book", "name": "about", "holds": true} when the book bears them out, or has not come to them yet — an entry may tell what no page has said, and a plan is for pages not written.
+- {"kind": "…", "name": "…", "holds": false, "contradicts": "the book’s own words that say otherwise, quoted exactly", "text": "my words given whole again as the book has them now — everything the book has not overturned kept as I wrote it", "why": "…"} only where the book now says the opposite — not someone’s lie or mistaken belief, not a secret yet to come out. For a chapter’s plan with nothing of it left, "text": "".`;
 }
 
 /* Written whole, for a book set to Automatic (when it has none yet, or he
