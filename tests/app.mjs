@@ -424,6 +424,29 @@ await test('an edit goes on the page itself — no new version; the words before
   await putAway(b);
 });
 
+await test('many changes on one page: Put back the words before always comes back to the words as first written — the newest four changes kept, and the first words never let go', async () => {
+  const b = await makeBook([[{ text: 'The lamp was cold.', model: 'model-a' }]]);
+  const p = b.ch().passages[0];
+  const words = ['The lamp was warm.', 'The lamp was hot.', 'The lamp burned.', 'The lamp burned low.', 'The lamp flickered.', 'The lamp went out.', 'The lamp was dark.'];
+  const by = ['checker', 'you', 'partner', 'checker', 'you', 'checker', 'you'];
+  words.forEach((t, i) => assert.ok(inplace.changeInPlace({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id, next: t, by: by[i] })));
+  await store.flush();
+  const v = picked((await onPhone('chapter', b.ids[0])).passages[0]);
+  assert.equal(b.ch().passages[0].versions.length, 1, 'still one version');
+  assert.deepEqual(v.before.map((x) => x.text), ['The lamp was cold.', 'The lamp burned.', 'The lamp burned low.', 'The lamp flickered.', 'The lamp went out.'], 'the first words, then the newest four');
+  const seen = [];
+  for (let i = 0; i < 5; i++) {
+    assert.equal(inplace.putBackWords({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id }).ok, true);
+    seen.push(picked(b.ch().passages[0]).text);
+  }
+  assert.deepEqual(seen, ['The lamp went out.', 'The lamp flickered.', 'The lamp burned low.', 'The lamp burned.', 'The lamp was cold.']);
+  const back = picked(b.ch().passages[0]);
+  assert.deepEqual([back.before, back.hands, back.written], [undefined, undefined, undefined], 'its first words: the writer’s own again, changed by no one');
+  assert.deepEqual(checker.gradesOf(b.novelId).models.filter((m) => m.mixed), [], 'no Mixed row for it now');
+  assert.equal(inplace.putBackWords({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id }).said, 'there are no words before to put back');
+  await putAway(b);
+});
+
 /* =================================================== the helper */
 await test('every page keeps how big its request was: the provider\'s own count, or the app\'s', async () => {
   const b = await makeBook([['The lamp was cold.']]);

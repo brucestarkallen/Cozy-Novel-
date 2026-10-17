@@ -556,3 +556,9 @@ His reports, 17 October: "Grammarly always change directly the page … rewrite 
 - An empty changes block, `[]` or `{}`, is no change.
 
 Checked with 51 suites, 2,486 checks, all passing — app 445, server 70, thinking 348, crafts 179, instructions 37, 17 other node suites 198, Python 14, 27 browser walks 1,195. In the app suite, 19 tests are new or written again for changes on the page itself, the fold, the checker by itself, markup, the grades and the partner; each of the 19 fails on 2.12.1's code. walk_checks has 6 new checks and walk_branch_imports 3. Not checked: his own phone and provider; no paid calls.
+
+## 2.12.3, Put back always comes back to the first words
+
+His question, 17 October: "what does this mean Put back the words before?" Answering it showed a fault of 2.12.2. A page kept the words before its last five changes, and a sixth change let go of the oldest: the words as the writer first wrote them. They were still kept for the judge, but **⋯ → Put back the words before** could no longer bring them back, and the page stayed off its writer's row. Now the words as first written stay first, with the newest four changes after them (`shape.js keptBefore`). Putting back all five brings the writer's own words back, changed by no one, and the page counts for its writer again.
+
+Checked with 51 suites, 2,487 checks, all passing — app 446, server 70, thinking 348, crafts 179, instructions 37, 17 other node suites 198, Python 14, 27 browser walks 1,195. The one new app check (seven changes on a page, put back five times to the writer's words) fails on 2.12.2's code.

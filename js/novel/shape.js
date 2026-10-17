@@ -123,8 +123,9 @@ export function keptTail(v) {
  * A fix the checker put in, a sentence it had written again, his partner's
  * words, his own edit, a name changed everywhere: the version on show takes
  * them, as a page takes a correction. Kept on it:
- *  - `before`: the words before each change, the newest last (the last
- *    BEFORE_KEEP) — Put back the words before brings the newest back, with
+ *  - `before`: the words before each change, the newest last (the first
+ *    words and the newest BEFORE_KEEP - 1 changes: keptBefore) — Put back
+ *    the words before brings the newest back, with
  *    what the checker had found in them and the bibliography's facts of them
  *    (on the newest only), whether it stopped short, and what had been taken
  *    off it;
@@ -135,6 +136,10 @@ export function keptTail(v) {
  * A new version is a take: written, another take, written again (whole, or
  * the words he selected), or a passage his partner wrote anew. */
 export const BEFORE_KEEP = 5;
+/* past BEFORE_KEEP, the oldest change after the first words goes — the words as first written stay first, so Put back
+ * the words before always comes back to them (through 2.12.2 the oldest of all went, and with it the writer's own
+ * words once a page had been changed six times) */
+const keptBefore = (list) => (list.length <= BEFORE_KEEP ? list : [list[0], ...list.slice(-(BEFORE_KEEP - 1))]);
 export const PRIOR_KEEP = 4;
 export const handsOf = (v) => (v && Array.isArray(v.hands) ? v.hands : []);
 export const writtenOf = (v) => (v ? String(typeof v.written === 'string' ? v.written : v.text || '') : '');
@@ -153,7 +158,7 @@ export function inPlaceFields(v, next, by, { at = Date.now(), check = null, code
   /* the facts of the words, kept on the newest words before only (they can be many); what the checker found in them on each */
   const older = (Array.isArray(v && v.before) ? v.before : []).map(({ codex: _x, ...rest }) => rest);
   const hands = handsOf(v).includes(by) ? handsOf(v).slice() : [...handsOf(v), by];
-  const out = { text: next, words: countWords(next), before: [...older, entry].slice(-BEFORE_KEEP), hands };
+  const out = { text: next, words: countWords(next), before: keptBefore([...older, entry]), hands };
   if (!(v && typeof v.written === 'string')) out.written = was;
   if (!keepEnd) for (const k of END_KEYS) out[k] = undefined;
   if (tail) { out.tookOff = undefined; out.tookOffTop = undefined; }
