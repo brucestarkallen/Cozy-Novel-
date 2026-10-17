@@ -372,12 +372,12 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
 :root[data-world="tokyo"] .composer .inner { border-radius: 18px 18px 6px 18px; border-top-color: color-mix(in srgb, var(--secondary) 30%, var(--line)); }
 :root[data-world="tokyo"] .sheet .head h2 { font-size: 23px; font-weight: 550; letter-spacing: -.04em; }
 :root[data-world="tokyo"] .sheet > .box { border-top-color: color-mix(in srgb, var(--secondary) 35%, var(--line)); }
-:root[data-world="tokyo"] .settings-welcome p, :root[data-world="tokyo"] .pane-intro h2, :root[data-world="tokyo"] .pane-welcome h2, :root[data-world="tokyo"] .check-intro h3, :root[data-world="tokyo"] .check-empty h3 { font-size: 23px; line-height: 1.3; letter-spacing: -.035em; font-weight: 500; }
-:root[data-world="tokyo"] .group > .ghead h3, :root[data-world="tokyo"] .settings-section > .ghead h3 { font-size: 17px; line-height: 1.4; letter-spacing: -.025em; font-weight: 550; }
+:root[data-world="tokyo"] .pane-intro h2, :root[data-world="tokyo"] .pane-welcome h2, :root[data-world="tokyo"] .check-intro h3, :root[data-world="tokyo"] .check-empty h3 { font-size: 23px; line-height: 1.3; letter-spacing: -.035em; font-weight: 500; }
+:root[data-world="tokyo"] .group > .ghead h3 { font-size: 17px; line-height: 1.4; letter-spacing: -.025em; font-weight: 550; }
 :root[data-world="tokyo"] .pane .card .nm, :root[data-world="tokyo"] .pane .chlist .nm, :root[data-world="tokyo"] .pane .notesec > .sechead h3, :root[data-world="tokyo"] .pane-section-title { font-size: 16px; font-weight: 550; letter-spacing: -.02em; }
 :root[data-world="tokyo"] .panehead h2, :root[data-world="tokyo"] .note-status-heading h3, :root[data-world="tokyo"] .pane .convrow .convpick { font-size: 16px; }
 :root[data-world="tokyo"] .pane-welcome-mark { border-radius: 19px 6px 19px 6px; color: var(--secondary); }
-:root[data-world="tokyo"] .pane-kicker, :root[data-world="tokyo"] .turn-speaker, :root[data-world="tokyo"] .settings-eyebrow, :root[data-world="tokyo"] .note-report-label { font-family: var(--label-font); letter-spacing: .08em; }
+:root[data-world="tokyo"] .pane-kicker, :root[data-world="tokyo"] .turn-speaker, :root[data-world="tokyo"] .note-report-label { font-family: var(--label-font); letter-spacing: .08em; }
 :root[data-world="tokyo"] .booksheet .keptname, :root[data-world="tokyo"] .booksheet .book-sound > span, :root[data-world="tokyo"] .booksheet .book-plans .field > span, :root[data-world="tokyo"] .sentsheet .sent-section-title h3, :root[data-world="tokyo"] .sugsheet .sughead { font-size: 18px; font-weight: 550; letter-spacing: -.025em; }
 :root[data-world="tokyo"] .booksheet .book-preview .t { font-size: 15px; line-height: 1.3; }
 :root[data-mode="light"] #shelfGreeting, :root[data-mode="light"] .shelf-invitation { text-shadow: none; }

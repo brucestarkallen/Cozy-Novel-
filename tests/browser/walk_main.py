@@ -329,7 +329,7 @@ async def scenario_main(b):
     await pg.wait_for_timeout(600)
     check('a removed book leaves the shelf', 'The Lantern Keeper' not in await pg.inner_text('#books'), await pg.inner_text('#books'))
     await pg.click('#shelfSettings')
-    await pg.click('.sheet .group button.ghead:has-text("Backups")')
+    await settings_part(pg, 'Backups')
     await pg.wait_for_timeout(400)
     bk = await pg.inner_text('.sheet .group[data-key="set.backups"]')
     check('Recently deleted names the book', 'The Lantern Keeper' in bk, bk[:500])
@@ -392,7 +392,7 @@ async def scenario_small(b):
     await pg.wait_for_selector('.sheet.on')
     row = pg.locator('.sheet.on .modrow[data-id="novel-craft"]')
     if not await row.is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(200)
+        await settings_part(pg, 'Your instructions'); await pg.wait_for_timeout(200)
     await row.click(); await pg.wait_for_timeout(300)
     await pg.select_option('.sheet.on >> nth=-1 >> select', 'off')
     await close_sheet(pg)

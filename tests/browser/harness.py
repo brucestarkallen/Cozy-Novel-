@@ -74,6 +74,12 @@ async def settled_reload(pg, **kw):
     await pg.evaluate("() => { window.__backsLanded = false; import('/js/ui/dom.js').then((d) => d.afterBacks()).then(() => { window.__backsLanded = true; }, () => { window.__backsLanded = true; }); }")
     await pg.wait_for_function("window.__backsLanded === true")
     return await pg.reload(**kw)
+async def settings_part(pg, name):
+    """Settings shows one part at a time under its toolbar (2.12.20): the tab
+    named as the screen names it is pressed, and its part is waited for."""
+    tab = pg.locator('.sheet.on .settings-nav').get_by_role('tab', name=name, exact=True)
+    await tab.click()
+    await pg.wait_for_function("(name) => [...document.querySelectorAll('.sheet.on .settings-tab')].some((t) => t.textContent === name && t.getAttribute('aria-selected') === 'true')", arg=name)
 async def add_conn(pg, model='fake-writer'):
     if 'Choose a writer' not in await pg.inner_text('#writerBtn'):
         await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')

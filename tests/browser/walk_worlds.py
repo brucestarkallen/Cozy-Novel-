@@ -48,7 +48,7 @@ async def appearance(pg, shelf=False):
         await pg.click('#moreBtn')
         await pg.click('.menu-pop button:has-text("Settings")')
     await pg.get_by_role('dialog', name='Settings', exact=True).wait_for()
-    await pg.locator('.settings-nav [aria-controls="settings-look"]').click()
+    await H.settings_part(pg, 'How it looks')
 
 
 async def close_settings(pg):

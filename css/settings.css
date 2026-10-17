@@ -1,20 +1,13 @@
 /* Settings: a quiet, navigable study, using the room's own colours. */
 .settings-sheet { max-width: 820px !important; }
 .settings-sheet > .head { background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent); }
-.settings-sheet > .body { padding-top: 0; scroll-padding-top: 112px; }
-.settings-nav { position: sticky; top: 0; z-index: 4; display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -2px 20px; padding: 12px 0; background: var(--chrome-solid); border-bottom: 1px solid var(--line); }
-.settings-jump { min-height: 38px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--chrome-soft); background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); font: 500 12px/1.2 var(--ui); }
-.settings-jump:hover, .settings-jump:focus-visible { color: var(--chrome-ink); background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: var(--accent); }
-.settings-welcome { margin: 4px 4px 24px; }
-.settings-eyebrow { font-size: 10px; font-weight: 650; letter-spacing: .17em; color: var(--accent); }
-.settings-welcome p { margin: 7px 0 0; font: 500 25px/1.2 var(--display); color: var(--chrome-ink); }
-.settings-section { overflow: clip; margin-bottom: 12px; background: color-mix(in srgb, var(--chrome-ink) 2%, transparent); }
-.settings-section > .ghead { padding: 18px 20px; gap: 12px; }
-.settings-section > .ghead h3 { font-size: 24px; }
-.settings-section > .ghead .chev { flex: none; }
-.settings-summary { display: block; margin-top: 4px; font: 400 12px/1.45 var(--ui); color: var(--chrome-soft); }
-.settings-section > .gbody { padding: 6px 20px 20px; }
-.settings-section > .ghead > small { align-self: flex-start; margin-top: 6px; white-space: nowrap; }
+/* the toolbar of its parts, fixed under the title; only the part chosen below */
+.settings-nav { flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 12px; border-bottom: 1px solid var(--line); background: var(--chrome-solid); }
+.settings-tab { min-height: 36px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; color: var(--chrome-soft); background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); font: 500 12.5px/1.2 var(--ui); white-space: nowrap; }
+.settings-tab:hover, .settings-tab:focus-visible { color: var(--chrome-ink); border-color: var(--accent); }
+.settings-tab[aria-selected="true"] { color: var(--chrome-ink); background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); font-weight: 650; }
+.settings-section.group { margin: 0; background: none; border: 0; border-radius: 0; }
+.settings-section > .gbody { padding: 4px 4px 8px; }
 .settings-sheet .say, .settings-sheet .field > em, .settings-detail .field > em { line-height: 1.6; }
 .settings-sheet .field > span, .settings-detail .field > span { font-size: 12px; letter-spacing: .015em; margin-bottom: 8px; }
 .settings-sheet .field input:not([type=checkbox]):not([type=radio]), .settings-sheet .field select, .settings-detail .field input:not([type=checkbox]):not([type=radio]), .settings-detail .field select { min-height: 44px; }
@@ -48,16 +41,10 @@
 .settings-detail .modwho { display: flex; flex-wrap: wrap; gap: 10px 20px; }
 .settings-detail .modtext { font-size: 14px; line-height: 1.65; }
 @media (max-width: 600px) {
-  .settings-sheet > .body { padding-left: 14px; padding-right: 14px; scroll-padding-top: 150px; }
-  .settings-nav { gap: 5px; padding: 10px 0; margin-bottom: 18px; }
-  .settings-jump { padding: 9px 10px; min-height: 38px; font-size: 11px; }
-  .settings-welcome { margin-bottom: 20px; }
-  .settings-welcome p { font-size: 23px; }
-  .settings-section > .ghead { padding: 16px 14px; }
-  .settings-section > .ghead h3 { font-size: 23px; }
-  .settings-section > .ghead > small { font-size: 10px; }
-  .settings-section > .gbody { padding: 4px 12px 14px; }
-  .settings-summary { font-size: 11px; }
+  .settings-sheet > .body { padding-left: 14px; padding-right: 14px; }
+  .settings-nav { gap: 5px; padding: 8px 12px 10px; }
+  .settings-tab { min-height: 34px; padding: 6px 10px; font-size: 11.5px; }
+  .settings-section > .gbody { padding: 2px 0 6px; }
   .settings-sheet .say, .settings-sheet .field > em { font-size: 12px; }
   .connection-section > .ghead { flex-wrap: wrap; gap: 5px; }
   .connection-section > .ghead h3 { flex-basis: 60%; }

@@ -7792,6 +7792,45 @@ await test('fixes put in by themselves never hold the page to the notes — a co
   await putAway(b);
 });
 
+/* his report, 2.12.20: "Tense slip: the sentence is in past tense … Not put in by itself: it holds the page to the notes"
+ * with Apply the checker's fixes by themselves on — the checker was told to file a slip of the book's tense under
+ * continuity, and every continuity fix waited for him */
+await test('a fix that only puts a verb back in the book’s tense goes in by itself, even filed under continuity — one already waiting goes in at the next look — and a fact held to the notes still waits', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['Mara lit the green lamp, which is the way she always did it. Then she waits by the door.']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.1', kind: 'continuity', find: 'which is the way she always did it', replace: 'which was the way she always did it', why: 'Tense slip: the sentence is in past tense.' },
+    { passage: '1.1', kind: 'continuity', find: 'she waits by', replace: 'she waited by', why: 'Tense slip.' },
+    { passage: '1.1', kind: 'continuity', find: 'green lamp', replace: 'red lamp', why: 'the notes say red' },
+  ] }) }]);
+  await checker.runCheck(b.novelId);
+  const asked = (await requests()).map((x) => x.body.messages.map((m) => String(m.content || '')).join('\n')).find((m) => m.includes('Check these passages from'));
+  assert.ok(asked && /"grammar": [^\n]*a tense slip, inside a sentence or from the tense the book is told in; a slip from the point of view the book is told in/.test(asked), 'the checker is told a slip of the book’s tense is grammar');
+  assert.ok(!/"continuity": [^\n]*tense/.test(asked), 'and continuity is facts alone');
+  const waiting = checker.suggestions(b.novelId);
+  assert.equal(waiting.length, 3, 'with nothing by itself, all three wait');
+  assert.equal(picked(b.ch().passages[0]).text, 'Mara lit the green lamp, which is the way she always did it. Then she waits by the door.');
+  /* he switches it on: the tense goes in at the next look, with nothing new to check — the lamp waits */
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const tense = waiting.find((x) => x.item.replace.startsWith('which was'));
+  assert.equal(checker.waitsWhy(tense.chapterId, tense.passageId, tense.item), '', 'the card says nothing holds it back');
+  await checker.runCheck(b.novelId);
+  const v = picked(b.ch().passages[0]);
+  assert.deepEqual([v.text, v.hands], ['Mara lit the green lamp, which was the way she always did it. Then she waited by the door.', ['checker']], 'both tense fixes went in by themselves, on the page');
+  const left = checker.suggestions(b.novelId);
+  assert.deepEqual(left.map((x) => x.item.replace), ['red lamp'], 'the lamp the notes call red still waits');
+  assert.equal(checker.waitsWhy(left[0].chapterId, left[0].passageId, left[0].item), 'it holds the page to the notes, and the notes may be what is wrong');
+  /* what is read as a change of tense alone, and what is not */
+  const t = checker.tenseOnly;
+  assert.deepEqual([t('which is the way', 'which was the way'), t('She walks in', 'She walked in'), t('he moves', 'he moved'), t('it tries', 'it tried'),
+    t('they don’t know', 'they didn’t know'), t('She was here.', 'She is here.')], [true, true, true, true, true, true], 'a verb moved between present and past');
+  assert.deepEqual([t('green lamp', 'red lamp'), t('Mara is', 'Tom was'), t('the wan light', 'the wand light'), t('he is', 'he is'), t('is', 'was there')],
+    [false, false, false, false, false], 'a word that is not a verb’s tense, a name, a new word, nothing changed, more words — never');
+  await setHouse();
+  await putAway(b);
+});
+
 /* (a fix that came meanwhile was a version one arrow back through 2.12.1 — since 2.12.2 it is on the page itself, and his
  * edit over it keeps it among the words before) */
 await test('his edit is made on the version his box was opened on — a fix that came meanwhile is kept among the words before — and nothing goes in by itself under his open box', async () => {

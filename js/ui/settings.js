@@ -1,6 +1,7 @@
 /* Cozy Novel — js/ui/settings.js — THE STUDY: connections and who does
  * what, your own instructions, how it looks, and keeping copies of
- * everything. Busy sections fold closed until opened. */
+ * everything. A toolbar of these parts along the top, and only the part
+ * chosen under it; busy sections inside a part fold closed until opened. */
 
 import * as store from '../store.js';
 import { h, openSheet, field, group, toast, undoToast, confirmIt, askChoice, copyText, download, pickFile, menu, icon } from './dom.js';
@@ -37,76 +38,98 @@ function typing(fn, ms) {
 }
 function landTyping() { for (const d of [...waiting]) d.now(); }
 
+/* Settings is a toolbar of its parts along the top and, under it, only the
+ * part chosen — never every part stacked at once. It opens at the part last
+ * shown in this browser (Connections while there is no connection yet);
+ * asked for by name — the writer chip's Connections…, Open Who does what,
+ * Your writing room — it opens at that part. */
+const PARTS = [
+  ['connections', 'Connections', 'Choose who writes with you.'],
+  ['roles', 'Who does what', 'Your writer, helper, partner and checker.'],
+  ['usage', 'Usage and cost', 'The words sent, and what they cost.'],
+  ['words', 'Your instructions', 'Your voice, presets, modules and writing rules.'],
+  ['look', 'How it looks', 'The room, the paper and the type.'],
+  ['backups', 'Backups', 'Keep a copy. Bring your books back.'],
+  ['about', 'About', 'This copy of Cozy Novel.'],
+];
+const PART_KEY = 'cozy.settings.part';
+let part = 'connections';
+const isPart = (k) => PARTS.some(([x]) => x === k);
+function lastPart() {
+  if (!(house().connections || []).length) return 'connections';
+  try { const k = localStorage.getItem(PART_KEY); if (isPart(k)) return k; } catch (_) { /* this visit only */ }
+  return 'connections';
+}
+
 export function openSettings(focus = '') {
+  part = isPart(focus) ? focus : lastPart();
   sheet = openSheet('Settings', { onClose: () => { landTyping(); sheet = null; } });
   sheet.box.classList.add('settings-sheet');
-  draw(focus);
+  sheet.tabs = h('nav.settings-nav', { role: 'tablist', 'aria-label': 'Settings' },
+    ...PARTS.map(([key, label, line]) => h('button.settings-tab', {
+      role: 'tab', id: `settings-tab-${key}`, 'data-part': key, title: line,
+      onclick: () => choosePart(key),
+      onkeydown: (e) => {
+        const i = PARTS.findIndex(([x]) => x === key);
+        const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: PARTS.length - 1 }[e.key];
+        if (to === undefined) return;
+        e.preventDefault();
+        const next = PARTS[(to + PARTS.length) % PARTS.length][0];
+        choosePart(next);
+        sheet?.tabs.querySelector(`[data-part="${next}"]`)?.focus();
+      },
+    }, label)));
+  sheet.box.insertBefore(sheet.tabs, sheet.body);
+  draw();
+}
+
+/* a part pressed is shown from its top — the one already shown too */
+function choosePart(key) {
+  if (!sheet) return;
+  if (key === part) { sheet.body.scrollTop = 0; return; }
+  part = key;
+  draw();
 }
 
 function draw(focus = '') {
   if (!sheet) return;
   landTyping();
-  const scroll = sheet.body.scrollTop;
+  if (isPart(focus)) part = focus;
+  try { localStorage.setItem(PART_KEY, part); } catch (_) { /* this visit only */ }
+  /* the same part drawn again stays where he was in it; another part starts at its top */
+  const scroll = sheet.body.dataset.part === part ? sheet.body.scrollTop : 0;
   /* what is open stays open when the sheet is drawn again */
   const open = new Set([...sheet.body.querySelectorAll('section.group[data-key]:not(.fold)')].map((g) => g.dataset.key));
-  /* asked for by name (the writer chip's Connections…): it opens, however it was left */
-  if (focus === 'connections') open.add('set.connections');
-  if (focus === 'roles') open.add('set.roles');
   sheet.body.textContent = '';
   const hs = house();
-  sheet.body.append(
-    h('div.settings-welcome', h('span.settings-eyebrow', 'MAKE YOURSELF AT HOME'), h('p', 'Your writing room, just the way you like it.')),
-    connectionsGroup(hs, focus === 'connections'),
-    rolesGroup(hs, focus === 'connections'),
-    usageGroup(hs),
-    wordsGroup(hs),
-    lookGroup(hs),
-    backupsGroup(),
-    aboutGroup());
-  for (const g of sheet.body.querySelectorAll('section.group[data-key]')) {
-    if (open.has(g.dataset.key)) { g.classList.remove('fold'); g.firstChild.setAttribute('aria-expanded', 'true'); }
+  const g = ({
+    connections: () => connectionsGroup(hs, true),
+    roles: () => rolesGroup(hs, true),
+    usage: () => usageGroup(hs),
+    words: () => wordsGroup(hs),
+    look: () => lookGroup(hs),
+    backups: () => backupsGroup(),
+    about: () => aboutGroup(),
+  })[part]();
+  for (const x of g.querySelectorAll('section.group[data-key]')) {
+    if (open.has(x.dataset.key)) { x.classList.remove('fold'); x.firstChild.setAttribute('aria-expanded', 'true'); }
   }
-  arrangeSettings();
+  /* the part shown is shown whole: the toolbar names it, and a head of its own would only fold it away */
+  g.querySelector(':scope > .ghead')?.remove();
+  g.classList.remove('fold');
+  g.classList.add('settings-section');
+  g.id = 'settings-panel';
+  g.setAttribute('role', 'tabpanel');
+  g.setAttribute('aria-labelledby', `settings-tab-${part}`);
+  for (const tab of sheet.tabs.children) {
+    const on = tab.dataset.part === part;
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+    if (on) tab.setAttribute('aria-controls', 'settings-panel'); else tab.removeAttribute('aria-controls');
+  }
+  sheet.body.append(g);
+  sheet.body.dataset.part = part;
   sheet.body.scrollTop = scroll;
-  if (focus === 'look') sheet.body.querySelector('.settings-jump[aria-controls="settings-look"]')?.click();
-}
-
-/* A short way back to every part of a long settings sheet. The section's
- * own button still owns folding and remembers it for the next visit. */
-function arrangeSettings() {
-  const sections = [
-    ['connections', 'Connections', 'Choose who writes with you.'],
-    ['roles', 'Who does what', 'Your writer, helper, partner and checker.'],
-    ['usage', 'Usage', 'The words sent, and what they cost.'],
-    ['words', 'Instructions', 'Your voice, presets and writing rules.'],
-    ['look', 'Appearance', 'The room, the paper and the type.'],
-    ['backups', 'Backups', 'Keep a copy. Bring your books back.'],
-    ['about', 'About', 'This copy of Cozy Novel.'],
-  ];
-  const nav = h('nav.settings-nav', { 'aria-label': 'Settings sections' });
-  for (const [key, label, description] of sections) {
-    const section = sheet.body.querySelector(`:scope > .group[data-key="set.${key}"]`);
-    if (!section) continue;
-    section.id = `settings-${key}`;
-    section.classList.add('settings-section');
-    const heading = section.querySelector(':scope > .ghead');
-    const title = heading.querySelector('h3');
-    title.append(h('span.settings-summary', description));
-    const jump = h('button.settings-jump', {
-      'aria-label': `Go to ${label.toLowerCase()}`,
-      'aria-controls': section.id,
-      title: description,
-      onclick: () => {
-        if (section.classList.contains('fold')) heading.click();
-        heading.focus({ preventScroll: true });
-        const body = sheet.body;
-        const top = body.scrollTop + section.getBoundingClientRect().top - body.getBoundingClientRect().top - nav.getBoundingClientRect().height - 12;
-        body.scrollTo({ top: Math.max(0, top), behavior: 'instant' });
-      },
-    }, label);
-    nav.append(jump);
-  }
-  sheet.body.prepend(nav);
 }
 
 /* ------------------------------------------------------------ connections */
@@ -160,7 +183,7 @@ function connectionsGroup(hs, open) {
   /* which parts the one shown has — picking it here only opens it to change (Who does what gives the parts) */
   const shown = conns.find((x) => x.id === editingId);
   const parts = shown ? partsOf(hs, shown.id) : [];
-  g.body.append(row, shown ? h('p.say.inuse' + (parts.length ? '.good' : ''), parts.length ? `In use as ${partsWords(parts)}.` : 'Not in use — Who does what, below, gives it a part.') : '', h('p.say.quiet', conns.length
+  g.body.append(row, shown ? h('p.say.inuse' + (parts.length ? '.good' : ''), parts.length ? `In use as ${partsWords(parts)}.` : 'Not in use — Who does what gives it a part.') : '', h('p.say.quiet', conns.length
     ? 'Pick a connection to edit. Copy keeps its settings so you can try another model.'
     : 'No connections yet. Add one: pick your provider, paste your key, pick a model.'));
   const c = conns.find((x) => x.id === editingId);
@@ -336,7 +359,7 @@ function connectionForm(c) {
     field('Input price, $ per million tokens', num('priceIn', 'e.g. 3')),
     field('Output price, $ per million tokens', num('priceOut', 'e.g. 15')),
     field('Cached input price, $ per million', num('priceCached', 'e.g. 0.3'))),
-    quiet('Never sent — for Usage and cost below. Cached input is what the provider serves from its cache; empty, the input price.'));
+    quiet('Never sent — for Usage and cost. Cached input is what the provider serves from its cache; empty, the input price.'));
 
   /* ---- looking things up */
   if (searchOffered(c)) {
@@ -621,7 +644,7 @@ function judgeField(hs) {
 function usageGroup(hs) {
   const g = group('Usage and cost', { key: 'set.usage' });
   const box = h('div', h('p.say', 'Looking…'));
-  g.body.append(h('p.say', 'Every call to a model — the writer, the helper, the checker, your partner, the narrator — counted as it lands. Set each connection’s prices above to see the money.'), box,
+  g.body.append(h('p.say', 'Every call to a model — the writer, the helper, the checker, your partner, the narrator — counted as it lands. Set each connection’s prices in Connections to see the money.'), box,
     h('div.btnrow', h('button.btn.quiet.small', { title: 'The counts start again from nothing; your books and connections are not touched.', onclick: async () => {
       if (!(await confirmIt('Clear the counts?', 'Usage and cost starts again from nothing. Your books and connections are not touched.', 'Clear them', { danger: true }))) return;
       await store.api('POST', '/api/usage/clear', { body: {} }).catch(() => {});

@@ -444,10 +444,21 @@ function exitReading(fromBack = false) {
 function banner(offline) {
   const b = $('#banner');
   if (b.hidden === !offline) return;
-  if (!offline) { b.hidden = true; return; }
+  if (!offline) { b.hidden = true; bannerRoom(); return; }
   b.hidden = false;
   b.innerHTML = '';
   b.append('Cozy Novel’s server on the phone is not answering, so nothing can be saved or written just now. Open Termux and run ', h('code', 'cozynovel'), ' — what you typed here waits and is saved the moment it answers.');
+  bannerRoom();
+}
+/* An open sheet starts under the banner, never beneath it: the banner lay over a sheet's title, its Close and the
+ * toolbar of Settings' parts while the phone was not answering (2.12.20). Measured again as its words wrap anew. */
+let bannerWatch = null;
+function bannerRoom() {
+  const b = $('#banner');
+  const root = document.documentElement.style;
+  if (b.hidden) { root.removeProperty('--banner-room'); return; }
+  root.setProperty('--banner-room', `${Math.ceil(b.getBoundingClientRect().bottom) + 10}px`);
+  if (!bannerWatch && typeof ResizeObserver === 'function') { bannerWatch = new ResizeObserver(() => bannerRoom()); bannerWatch.observe(b); }
 }
 
 /* An update to the app lands by itself: the page refreshes once nothing

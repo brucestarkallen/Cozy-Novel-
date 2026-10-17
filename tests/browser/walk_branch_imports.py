@@ -102,7 +102,7 @@ async def scenario(browser):
               await pg.get_by_role('button', name='Open The Book Already Here', exact=True).is_visible())
 
         await pg.click('#shelfSettings')
-        await pg.get_by_role('button', name='Go to backups', exact=True).click()
+        await H.settings_part(pg, 'Backups')
         before = await saved_records(pg)
         writes.clear()
         # Clear the earlier transient message by its normal timeout before

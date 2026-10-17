@@ -199,8 +199,8 @@
 :root[data-world="tokyo"] .pane.right { box-shadow: -1px 0 0 rgba(255, 62, 165, .45), -18px 0 40px -24px rgba(255, 62, 165, .9); }
 :root[data-world="tokyo"] .pane.left { box-shadow: 1px 0 0 rgba(54, 232, 255, .4), 18px 0 40px -24px rgba(54, 232, 255, .8); }
 :root[data-world="tokyo"][data-mode="light"] .pane.right, :root[data-world="tokyo"][data-mode="light"] .pane.left { box-shadow: var(--shadow); }
-:root[data-world="tokyo"] .pane-intro h2, :root[data-world="tokyo"] .pane-welcome h2, :root[data-world="tokyo"] .settings-welcome p, :root[data-world="tokyo"] .check-intro h3, :root[data-world="tokyo"] .check-empty h3 { font: 400 25px/1.25 var(--display); letter-spacing: 0; }
-:root[data-world="tokyo"] .pane-kicker, :root[data-world="tokyo"] .settings-eyebrow { color: var(--tube-c); letter-spacing: .14em; }
+:root[data-world="tokyo"] .pane-intro h2, :root[data-world="tokyo"] .pane-welcome h2, :root[data-world="tokyo"] .check-intro h3, :root[data-world="tokyo"] .check-empty h3 { font: 400 25px/1.25 var(--display); letter-spacing: 0; }
+:root[data-world="tokyo"] .pane-kicker { color: var(--tube-c); letter-spacing: .14em; }
 :root[data-world="tokyo"] .toast { background: rgba(12, 8, 30, .97); color: var(--chrome-ink); border: 1px solid rgba(54, 232, 255, .4); box-shadow: 0 0 22px -6px rgba(54, 232, 255, .6), var(--shadow); }
 :root[data-world="tokyo"] .toast .toastact { color: var(--tube-c); }
 :root[data-world="tokyo"][data-mode="light"] .toast { background: rgba(38, 26, 64, .96); color: #fff; }

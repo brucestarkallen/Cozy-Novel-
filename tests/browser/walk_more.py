@@ -69,15 +69,15 @@ async def scenario_back(b):
     check('and Back again closes the settings, still in the book', await pg.locator('.sheet.on').count() == 0 and await on_desk(pg), '')
     hs = await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())")
     check('the connection was not removed', len(hs['data']['connections']) == 1, len(hs['data']['connections']))
-    # Connections… opens on the connections, even when he folded them before
+    # Connections… opens on the connections, even when he left Settings on another part
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
-    if await pg.locator('.sheet .group[data-key="set.connections"]:not(.fold)').count():
-        await pg.click('.sheet .group button.ghead:has-text("Connections")')
+    await settings_part(pg, 'Backups')
     await close_sheet(pg)
     await pg.click('#writerBtn'); await pg.click('.menu-pop button:has-text("Connections…")')
     await pg.wait_for_selector('.sheet.on')
-    check('Connections… opens the connections even after they were folded', await pg.locator('.sheet .group[data-key="set.connections"]:not(.fold)').count() == 1, '')
+    shown = await pg.evaluate("[[...document.querySelectorAll('.sheet.on .settings-tab[aria-selected=true]')].map((t) => t.textContent), [...document.querySelectorAll('.sheet.on .settings-sheet > .body > section')].map((x) => x.dataset.key)]")
+    check('Connections… opens the connections even after he left Settings on another part', shown == [['Connections'], ['set.connections']], shown)
     await close_sheet(pg)
     # a passage menu then a drawer
     await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
@@ -228,7 +228,7 @@ async def scenario_look(b):
     await pg.goto(f'http://127.0.0.1:{PORT}/')
     await pg.wait_for_selector('#shelf:not([hidden])', timeout=8000)
     await pg.click('#shelfSettings')
-    await pg.click('.sheet .group button.ghead:has-text("How it looks")')
+    await settings_part(pg, 'How it looks')
     await pg.click('.sheet button.swatch[data-world="tokyo"]')
     await pg.wait_for_timeout(200)
     check('a world is chosen at once', await pg.evaluate("document.documentElement.dataset.world") == 'tokyo', '')
@@ -296,8 +296,11 @@ async def scenario_offline(b, env):
     # a copy of everything is not taken while words wait to reach the phone
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
+    await pg.wait_for_timeout(300)
+    room = await pg.evaluate("(() => { const b = document.querySelector('#banner').getBoundingClientRect(), s = document.querySelector('.sheet.on > .box').getBoundingClientRect(); return [Math.round(b.bottom), Math.round(s.top)]; })()")
+    check('an open sheet starts under the banner, its title, Close and toolbar never beneath it', room[0] <= room[1], room)
     if not await pg.locator('.sheet.on .group[data-key="set.backups"] button:has-text("Take a copy of everything")').is_visible():
-        await pg.click('.sheet.on .group button.ghead:has-text("Backups")'); await pg.wait_for_timeout(200)
+        await settings_part(pg, 'Backups'); await pg.wait_for_timeout(200)
     await pg.click('.sheet.on button:has-text("Take a copy of everything")')
     try:
         await pg.wait_for_function("document.querySelector('#toast') && /not reached the phone yet/.test(document.querySelector('#toast').textContent)", timeout=15000)
@@ -376,7 +379,7 @@ async def scenario_round(b):
     look = await pg.evaluate("(() => { const s = document.querySelector('.sheet.on select[aria-label=\"What’s on offer\"]'); const c = getComputedStyle(s); return { inField: Boolean(s.closest('label.field')), bg: c.backgroundColor, radius: c.borderRadius } })()")
     check('the models on offer: a box like the others, never a white block', look['inField'] and look['bg'] != 'rgb(255, 255, 255)' and look['radius'] == '12px', look)
     # Your instructions: the narrator's own box, with its starting words (2.3: his preset's own opening) and Back to the default
-    await pg.click('.sheet.on .ghead:has-text("Your instructions")')
+    await settings_part(pg, 'Your instructions')
     await pg.wait_for_timeout(200)
     narr = pg.locator('.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) textarea')
     check('a box for the narrator, with its starting words', (await narr.count()) == 1 and await narr.input_value() == NARRATOR_STARTING)
@@ -633,7 +636,7 @@ async def scenario_checker(b):
     avoid = pg.locator('.sheet.on label.field:has(span:text-is("Words to avoid")) textarea')
     # (a section stays as he left it, open or folded, in this browser)
     if not await avoid.is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Your instructions")')
+        await settings_part(pg, 'Your instructions')
         await pg.wait_for_timeout(200)
     check('Your instructions has a box for words to avoid', await avoid.count() == 1)
     await avoid.fill('tar')
@@ -701,7 +704,7 @@ async def scenario_checker(b):
         await pg.wait_for_selector('.sheet.on')
         jt = pg.locator('.sheet.on label.toggle:has-text("The judge grades each passage") input')
         if not await jt.is_visible():
-            await pg.click('.sheet.on .ghead:has-text("Who does what")'); await pg.wait_for_timeout(200)
+            await settings_part(pg, 'Who does what'); await pg.wait_for_timeout(200)
         await (jt.check() if on else jt.uncheck()); await pg.wait_for_timeout(500)
         await close_sheet(pg)
     await judge_on(False)
@@ -762,7 +765,7 @@ async def scenario_checker(b):
     await pg.wait_for_selector('.sheet.on')
     avoid = pg.locator('.sheet.on label.field:has(span:text-is("Words to avoid")) textarea')
     if not await avoid.is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Your instructions")')
+        await settings_part(pg, 'Your instructions')
         await pg.wait_for_timeout(200)
     await avoid.fill('')
     await pg.wait_for_timeout(700)
@@ -803,7 +806,7 @@ async def scenario_crafts(b):
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
     if not await pg.locator('.sheet.on .modrow').first.is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(200)
+        await settings_part(pg, 'Your instructions'); await pg.wait_for_timeout(200)
     box = await pg.input_value('.sheet.on label.field:has(span:text-is("How you like it written")) textarea')
     check('How you like it written shows the master novelist', box.startswith('You are a master novelist'), box[:80])
     # ---- a note at the end for the book, and one for scenes
@@ -919,7 +922,7 @@ async def scenario_crafts(b):
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
     if not await pg.locator('.sheet.on .modrow').first.is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(200)
+        await settings_part(pg, 'Your instructions'); await pg.wait_for_timeout(200)
     await pg.click('.sheet.on .modrow:has-text("My rain")'); await pg.wait_for_timeout(300)
     await pg.click(f'{top} >> button:has-text("Remove this module")')
     await pg.wait_for_timeout(400)
@@ -1016,7 +1019,7 @@ async def scenario_versions(b):
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
     if not await pg.locator('.sheet.on button:has-text("Save current preset")').is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(300)
+        await settings_part(pg, 'Your instructions'); await pg.wait_for_timeout(300)
     sysbox = '.sheet.on label.field:has(span:text-is("How you like it written")) textarea'
     await pg.fill(sysbox, 'BATMAN WRITES.')
     await pg.wait_for_timeout(1200)
@@ -1072,7 +1075,7 @@ async def scenario_versions(b):
     await pg.select_option(f'{sent_as} >> nth=0', 'system'); await pg.select_option(f'{sent_as} >> nth=1', 'system'); await pg.wait_for_timeout(700)
     # the connection editor: Structured shows the ready-made templates
     if not await pg.locator('.sheet.on label.field:has(> span:text-is("How it is sent")) select').is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Connections")'); await pg.wait_for_timeout(300)
+        await settings_part(pg, 'Connections'); await pg.wait_for_timeout(300)
     await pg.select_option('.sheet.on label.field:has(> span:text-is("How it is sent")) select', 'structured'); await pg.wait_for_timeout(700)
     await pg.select_option('.sheet.on label.field:has(> span:text-is("Ready-made template")) select', 'line')
     await pg.fill('.sheet.on label.field:has(> span:has-text("Your words")) input', 'Yuhuu')
@@ -1775,8 +1778,7 @@ async def scenario_rest(b):
     await pg.evaluate("async () => (await import('/js/ui/settings.js')).openSettings()")
     await pg.wait_for_timeout(300)
     g = '.sheet.on section.group[data-key="set.backups"]'
-    if 'fold' in (await pg.get_attribute(g, 'class') or ''):
-        await pg.click(f'{g} > button.ghead'); await pg.wait_for_timeout(300)
+    await settings_part(pg, 'Backups')
     await pg.wait_for_function("(() => { const h = [...document.querySelectorAll('.sheet.on h4')].find((x) => x.textContent.includes('Copies kept on this phone')); return h && h.nextElementSibling && h.nextElementSibling.querySelector('li'); })()", timeout=8000)
     listed = await pg.evaluate("(() => { const h = [...document.querySelectorAll('.sheet.on h4')].find((x) => x.textContent.includes('Copies kept on this phone')); const box = h.nextElementSibling; return [box.querySelectorAll('li').length, [...box.querySelectorAll('li button')].every((x) => x.title)]; })()")
     check('every copy the phone keeps is listed, each Bring it back saying what it does', listed == [25, True], listed)
@@ -1994,7 +1996,7 @@ async def scenario_auto(b):
     await pg.wait_for_selector('.sheet.on')
     grp = '.sheet.on .group[data-key="set.roles"]'
     if not await pg.locator(f'{grp} label.toggle:has-text("Apply the checker")').is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Who does what")'); await pg.wait_for_timeout(200)
+        await settings_part(pg, 'Who does what'); await pg.wait_for_timeout(200)
     fix = pg.locator(f'{grp} label.toggle:has-text("Apply the checker’s fixes by themselves") input')
     lift = pg.locator(f'{grp} label.toggle:has-text("Write a passage under your mark again by itself") input')
     check('Who does what has both switches, off to begin with', await fix.count() == 1 and await lift.count() == 1 and not await fix.is_checked() and not await lift.is_checked())
@@ -2057,7 +2059,7 @@ async def scenario_auto(b):
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
     if not await pg.locator(f'{grp} label.toggle:has-text("Apply the checker")').is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Who does what")'); await pg.wait_for_timeout(200)
+        await settings_part(pg, 'Who does what'); await pg.wait_for_timeout(200)
     await pg.locator(f'{grp} label.toggle:has-text("Apply the checker’s fixes by themselves") input').uncheck()
     await pg.locator(f'{grp} label.toggle:has-text("Write a passage under your mark again by itself") input').uncheck()
     await pg.wait_for_timeout(500)
@@ -2370,17 +2372,17 @@ async def scenario_tavern_ui(b):
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')
     if not await pg.locator('.sheet.on .say.inuse').is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Connections")'); await pg.wait_for_timeout(300)
+        await settings_part(pg, 'Connections'); await pg.wait_for_timeout(300)
     inuse = await pg.inner_text('.sheet.on .say.inuse')
     opt = await pg.evaluate("[...document.querySelectorAll('.sheet.on select[aria-label=\"Which connection\"] option')].map((o) => o.textContent)")
     check('the connection shown says which parts it has, and the list marks the ones in use', inuse == 'In use as the writer, the partner, the helper and the checker.' and opt and opt[0].endswith('(in use)'), (inuse, opt))
     if not await pg.locator('.sheet.on .group[data-key="set.roles"] label.toggle').first.is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Who does what")'); await pg.wait_for_timeout(300)
+        await settings_part(pg, 'Who does what'); await pg.wait_for_timeout(300)
     ticks = await pg.evaluate("[...document.querySelectorAll('.sheet.on .field input[type=checkbox]')].filter((i) => i.offsetParent).map((i) => [Math.round(i.getBoundingClientRect().width), Math.round(i.getBoundingClientRect().height)])")
     check('a tick inside a field is a tick’s size, never a text box’s', ticks and all(w <= 24 and h <= 24 for w, h in ticks), ticks)
     # Back to the default over his words: Copy mine first, or back — and Undo puts his back
     if not await pg.locator('.sheet.on button:has-text("Save current preset")').is_visible():
-        await pg.click('.sheet.on .ghead:has-text("Your instructions")'); await pg.wait_for_timeout(300)
+        await settings_part(pg, 'Your instructions'); await pg.wait_for_timeout(300)
     narr = '.sheet.on label.field:has(span:text-is("How the narrator tells scenes")) textarea'
     await pg.fill(narr, 'MY NARRATOR, MY WAY.')
     await pg.wait_for_timeout(900)

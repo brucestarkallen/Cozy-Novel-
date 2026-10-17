@@ -207,7 +207,7 @@ async def main():
             await pg.wait_for_selector('#books .book:not(.new)')
             check('search restores the existing cover and its current title', await pg.evaluate("savedCover.isConnected && savedCover.textContent.includes('A steadier candle')"))
             await pg.click('#shelfSettings')
-            await pg.click('.settings-jump[aria-controls="settings-words"]')
+            await H.settings_part(pg, 'Your instructions')
             await pg.locator('.modrow').first.click()
             await pg.wait_for_selector('.modsheet')
             result = await pg.evaluate("""async () => {

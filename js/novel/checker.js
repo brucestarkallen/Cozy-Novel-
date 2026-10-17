@@ -1412,6 +1412,40 @@ export function smallMend(before, after) {
 }
 const smallFix = (item, text) => item.find.length <= Math.max(400, text.length * 0.4) && !(item.find.length > 120 && item.replace.length < item.find.length * 0.5);
 
+/* A fix under continuity holds the page to the notes, and the notes may be what is wrong, so it waits for him — unless
+ * all it changes is the tense of its verbs ("which is the way" → "which was the way"): that holds the page to the tense
+ * the book is told in, never to the notes. Through 2.12.19 the checker was told to file a slip of the book's tense under
+ * continuity, and such a fix never went in by itself; it is filed under grammar now, and one filed before still goes in.
+ * Only plain pairs are read as tense — anything else under continuity waits, as before. */
+const TENSE_PAIRS = new Set();
+for (const [a, b] of [['is', 'was'], ['are', 'were'], ['am', 'was'], ['has', 'had'], ['have', 'had'], ['does', 'did'], ['do', 'did'],
+  ['can', 'could'], ['will', 'would'], ['shall', 'should'], ['may', 'might'], ["isn't", "wasn't"], ["aren't", "weren't"],
+  ["hasn't", "hadn't"], ["haven't", "hadn't"], ["doesn't", "didn't"], ["don't", "didn't"], ["can't", "couldn't"], ["won't", "wouldn't"]]) {
+  TENSE_PAIRS.add(`${a}|${b}`); TENSE_PAIRS.add(`${b}|${a}`);
+}
+/* a regular verb's present and past: walks/walked, moves/moved, watches/watched, tries/tried, walk/walked, move/moved */
+const ENDINGS = [['s', 'ed'], ['s', 'd'], ['es', 'ed'], ['ies', 'ied'], ['', 'ed'], ['', 'd']];
+const pastOf = (now, then) => ENDINGS.some(([a, b]) => {
+  const stem = now.slice(0, now.length - a.length);
+  return now.endsWith(a) && then.endsWith(b) && stem.length >= 2 && stem === then.slice(0, then.length - b.length) &&
+    /* a bare "d" only after an "e" (move/moved, never wan/wand) */
+    (b !== 'd' || stem.endsWith('e'));
+});
+const tenseWords = (x) => String(x || '').toLowerCase().replace(/[’‘]/g, "'").match(/[a-z']+|[^a-z'\s]+/g) || [];
+export function tenseOnly(find, replace) {
+  const a = tenseWords(find);
+  const b = tenseWords(replace);
+  if (!a.length || a.length !== b.length) return false;
+  let moved = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (!TENSE_PAIRS.has(`${a[i]}|${b[i]}`) && !pastOf(a[i], b[i]) && !pastOf(b[i], a[i])) return false;
+    moved++;
+  }
+  return moved > 0;
+}
+const holdsToNotes = (item) => item.kind === 'continuity' && !tenseOnly(item.find, item.replace);
+
 /* every suggestion of a passage that has words to put in, applied at once */
 function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) {
   const w = where(chapterId, passageId);
@@ -1428,7 +1462,7 @@ function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) 
     /* by itself: only a small fix — and never one that holds the page to
      * the notes (a fact the notes say may be the notes' slip, Cozy Tavern
      * M447/M448): continuity waits for him; the rest wait if large */
-    if (byItself && (item.kind === 'continuity' || !smallFix(item, text))) { rest.push(item); continue; }
+    if (byItself && (holdsToNotes(item) || !smallFix(item, text))) { rest.push(item); continue; }
     const spot = locate(text, item.find);
     if (spot.why || spots.some((s) => overlaps(s, spot))) { rest.push(item); continue; }
     spots.push({ ...spot, item });
@@ -1469,7 +1503,7 @@ export function waitsWhy(chapterId, passageId, item) {
     if (spansOf(p) >= MAX_SPANS) return `${numberWord(MAX_SPANS)} sentences of this passage were written again by itself already — Write it again does this one`;
     return '';
   }
-  if (item.kind === 'continuity') return 'it holds the page to the notes, and the notes may be what is wrong';
+  if (holdsToNotes(item)) return 'it holds the page to the notes, and the notes may be what is wrong';
   const text = String(v.text || '');
   if (!smallFix(item, text)) return 'it rewrites a large stretch of the passage';
   const spot = locate(text, item.find);

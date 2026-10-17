@@ -114,6 +114,10 @@ The small dot on the **Notes** button is the helper: green when the notes are up
 
 **One connection for everything**: a provider that takes one request at a time refuses your page while the helper or the checker is asking on the same connection — that one now makes way, your page goes once more (said under it), and the helper or checker carries on a little later. A provider that stays silent while its model thinks unseen is given twice the time from then on.
 
+## Settings
+
+A toolbar along the top names its parts — **Connections**, **Who does what**, **Usage and cost**, **Your instructions**, **How it looks**, **Backups**, **About** — and under it only the part you pressed is shown. Settings opens again on the part you last looked at; the writer button's **Connections…** opens it on Connections.
+
 ## Connections
 
 Cozy Tavern's connection editor, field for field and in its words. The connection shown says which parts it has (*In use as the writer, the partner, the helper and the checker*), and the list marks those in use; **Who does what** gives the parts. The writer button under the page switches the writer — each connection in its menu says what switching does, and which parts go with the writer. **Settings → Connections → Add a connection**, start from the provider (DeepSeek, Kimi, Synthetic, OpenRouter, Z.ai, Claude, OpenAI, Gemini, Hermes Agent, or anything else that talks like OpenAI), call it something, paste the key, and pick a model from **Fetch what's on offer** or type its name. Every field says under it what it does and what is sent: **Thinking** (Not set — nothing is sent — or Off to Max, each spoken as the nearest level the address takes) and its **Thinking room**; Temperature, Top-p, Top-k, Min-p, the three penalties, **Stop text**, **Seed**; **Longest reply**; **The model's room**; the **prices** for Usage and cost; **Let it look things up** (Claude's own web search or OpenRouter's web plugin — for the pages, the partner and scenes, never the helper; what it looked at is listed under the passage). A number is read the way you type it — "8,000", "200.000" and "128k" for the room, "8/10" or "80%" for your mark; one that is no number is said under its box and never kept as another.
@@ -179,7 +183,7 @@ a phone browser's bar never slides the room up and down with a swipe. Every room
 still picture with its moving pieces laid over it, so the phone keeps few pictures apart (2.12.5); a long book is folded and counted once for the same words, not every time the helper looks (2.12.6). Each narrator
 answer shows how many input tokens were sent; estimates are marked “About.”
 The new-scene name and starting place also survive keyboard resizing and reloads.
-Settings → Appearance includes novel highlight, scene highlight and dialogue colours, with
+Settings → How it looks includes novel highlight, scene highlight and dialogue colours, with
 separate night/day values, saved colour pairs, Cozy dark and Warm orange presets,
 and Back to default. Novel and scene highlights each have their own on/off switch;
 the novel switch removes the selected passage’s highlight, while the scene switch removes
