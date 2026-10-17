@@ -1170,7 +1170,7 @@ ${noteRules(codex)}
  * whatever the notes still hold from words since rewritten or taken out, or
  * have drifted on, is put right. His own cards keep his words. */
 export const AUDIT_ASK = 'Check every card against the book as it stands';
-export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false }) {
+export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [] }) {
   const parts = [];
   parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
   if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);
@@ -1195,10 +1195,13 @@ ${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it�
 - ${his.join(', ')} — ${one ? 'this card is' : 'these cards are'} mine, written or changed by me: never change what I wrote about ${one ? 'it' : 'them'}, never take ${one ? 'it' : 'them'} out; only "now" and "ties" may move, and what the book has told since my words (shown as "Since then") may be put right — give that in "about", never repeating mine. Where another card repeats what ${one ? 'it says' : 'one of mine says'}, the other card gives way. Unless the book as it stands says the opposite of what I wrote — not merely more; not someone's lie, joke or mistaken belief: then I changed the book after I wrote the card, and the book is my newer word. Give that card's "about" whole as the book has it now, with "contradicts": the book's own words that say so, quoted exactly; a card of mine about a thing the book no longer has at all goes in "gone" the same way, with "contradicts".` : ''}${partial ? `
 - Some chapters are given here in short, or left out to save room: a detail a chapter in short leaves out may still be in the book. Change or take out only what the words here contradict — never what they merely leave unsaid. A chapter in short is a telling of it, not its words: against one, change a card only for what it plainly says happened — never for who said a line, a look, or a small detail it may have got wrong.` : ''}
 
-Answer with one JSON object and nothing else — only the cards that need a change, each field you give whole, each with "why": what was wrong, in a few plain words:
+${mine.length ? `${mineAsk(mine)}
+
+` : ''}Answer with one JSON object and nothing else — only the cards that need a change, each field you give whole, each with "why": what was wrong, in a few plain words:
 
 {
-  "people": [{"name": "…", "aka": ["every other name they go by"], ${peopleFields(codex)}, "why": "…"}],
+  "people": [{"name": "…", "aka": ["every other name they go by"], ${peopleFields(codex)}, "why": "…"}],${mine.length ? `
+  "mine": [{"kind": "${mine[0].kind}", "name": "${String(mine[0].name).replace(/"/g, '\\"')}", "holds": false, "contradicts": "the book’s words", "about": "…", "why": "…"}],` : ''}
   "places": [{"name": "…", "about": "…", "why": "…"}],
   "lore": [{"name": "…", "about": "…", "why": "…"}],
   "threads": [{"name": "…", "about": "…", "open": true, "why": "…"}],
@@ -1209,6 +1212,18 @@ Answer with one JSON object and nothing else — only the cards that need a chan
 
 "clear" is false only when something is left for me to look at. When every card checks out, answer only {"clear": true, "verdict": "…"}. Write only what the book actually says — never invent, never guess.`);
   return parts.join('\n\n');
+}
+
+/* HIS CARDS, JUDGED AGAINST THE BOOK (archivist mineToJudge, foldNotes
+ * `mine`): asked by name, every one answered — never an optional field the
+ * check may leave out (2.12.12: it left one out, and his old words stood
+ * beside the book's account that says the opposite) */
+function mineAsk(mine) {
+  const names = mine.map((x) => `${x.name} (${x.kind})`).join(', ');
+  return `My cards with "Since then" beside my words — what the book told after I wrote them: ${names}. Judge each one, and answer in "mine" for every one of them:
+- {"kind": "…", "name": "…", "holds": true} when what is told since only adds to my words, or tells the same — my words stand.
+- {"kind": "…", "name": "…", "holds": false, "contradicts": "the book’s own words that say otherwise, quoted exactly", "about": "the card as the book has it now, whole", "why": "…"} when the book now says the opposite of my words — not merely more; not someone’s lie, joke or mistaken belief; not a secret the book has yet to reveal. I changed the book after I wrote the card: the book is my newer word.
+- The same with "gone": true in place of "about" when nothing of what the card is about is in the book any more (a thread about a thing that no longer happens).`;
 }
 
 /* Written whole, for a book set to Automatic (when it has none yet, or he

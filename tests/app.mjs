@@ -1853,6 +1853,53 @@ await test('the notes’ check puts right a card of his that the book he changed
   await putAway(b);
 });
 
+await test('every card of his with “Since then” is judged by the notes’ check, by name: the opposite, quoted from the book and from what Since then holds, puts it right or takes it out; held, it is not asked again; unanswered, asked three times at most; a quote that is not the book’s changes nothing (2.12.12)', async () => {
+  const b = await makeBook([['Reginald and Harrison arranged the marriage; Jovan learned of it as a decision already made.', 'Mara kept the light. She was the duke’s daughter.']], { manual: true });
+  markAllSeen(b);
+  const his = (c) => ({ ...c, updated: { by: 'you', at: 1 } });
+  store.change('novel', b.novelId, (n) => {
+    n.notes.threads.push(his({ id: 'th-1', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan chose Emilia from a shortlist.', since: 'Jovan did not choose her; the marriage was arranged and he learned of it as a decision already made.', open: false }));
+    n.notes.people.push(his({ id: 'pe-1', name: 'Emilia', about: 'The bride.', since: 'Jovan did not choose her; the marriage was arranged and he learned of it as a decision already made.' }));
+    n.notes.people.push(his({ id: 'pe-2', name: 'Mara', about: 'A kitchen maid.', since: 'She was the duke’s daughter.' }));
+    n.notes.lore.push(his({ id: 'lo-1', name: 'The lamp', about: 'Mara’s lamp.', since: 'Mara kept the light.' }));
+  }, { now: true });
+  const ask = async (answer) => { await reset(); archivist.askAudit(b.novelId); await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', ...answer }) }]); await archivist.run(b.novelId); return (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((c) => c.includes(prompts.AUDIT_ASK)) || ''; };
+  const n = () => b.novel().notes;
+  /* asked by name, every one */
+  let sent = await ask({ mine: [
+    { kind: 'threads', name: 'Jovan’s choice to ask for Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', gone: true, why: 'he never chose' },
+    { kind: 'people', name: 'Emilia', holds: false, contradicts: 'the fathers sold her', about: 'The bride the fathers chose.' },
+    { kind: 'people', name: 'Mara', holds: true },
+  ] });
+  assert.ok(sent.includes('Judge each one, and answer in "mine" for every one of them') && sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('Mara (people)') && sent.includes('The lamp (lore)'), sent.slice(sent.indexOf('My cards with'), sent.indexOf('My cards with') + 400));
+  assert.equal(n().threads.some((c) => c.id === 'th-1'), false, 'the thread about a thing that no longer happens: gone, though his');
+  assert.equal(n().people.find((c) => c.id === 'pe-1').about, 'The bride.', 'a quote that is not the book’s changes nothing');
+  assert.equal(n().people.find((c) => c.id === 'pe-2').about, 'A kitchen maid.', 'held: his words stand');
+  const m = b.novel().memory.mine;
+  assert.deepEqual([m['th-1'], m['pe-2'].held, m['pe-1'].n, m['lo-1'].n], [undefined, true, 1, 1]);
+  /* the next check: Mara is not asked again; Emilia put right from the book, Since then folded in, his mark off who she is */
+  sent = await ask({ mine: [{ kind: 'people', name: 'Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', about: 'The bride the fathers chose for Jovan.' }] });
+  assert.ok(!sent.includes('Mara (people)') && sent.includes('Emilia (people)'));
+  const em = n().people.find((c) => c.id === 'pe-1');
+  assert.deepEqual([em.about, em.since, shape.hisField(em, 'about'), shape.hisField(em, 'name')], ['The bride the fathers chose for Jovan.', undefined, false, true]);
+  /* the check's Undo puts his words back */
+  assert.equal(archivist.undoLast(b.novelId), true);
+  assert.equal(n().people.find((c) => c.id === 'pe-1').about, 'The bride.');
+  /* unanswered: asked three times, then it waits for its Since then to change */
+  for (let i = 0; i < 3; i++) await ask({});
+  assert.equal(b.novel().memory.mine['lo-1'].n, 3);
+  sent = await ask({});
+  assert.ok(!sent.includes('The lamp (lore)'), 'not asked a fourth time');
+  /* a book checked under 2.12.11: opened, nothing left to judge asks nothing; a Since then that changed is judged again, at open */
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { ...b.novel().memory.audit, v: 4 }, auditAsked: false }), { now: true });
+  archivist.firstCheck(b.novelId);
+  assert.equal(b.novel().memory.auditAsked, false, 'every one judged or asked three times');
+  store.change('novel', b.novelId, (d) => { d.notes.people.find((c) => c.id === 'pe-2').since = 'She was the duke’s daughter, and she ran.'; d.memory.audit.v = 4; }, { now: true });
+  archivist.firstCheck(b.novelId);
+  assert.equal(b.novel().memory.auditAsked, true, 'a Since then that changed is judged again');
+  await putAway(b);
+});
+
 await test('the readings listed newest first; Put back takes out only what one reading changed; Read again reads that passage afresh', async () => {
   const b = await makeBook([['Mara kept the light.', 'A wolf came to the door.']], { manual: true });
   await script([

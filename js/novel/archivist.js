@@ -772,7 +772,7 @@ export function factsByCard(novelId, extra = []) {
   for (const f of extra || []) { const card = cardOf(f.name); if (card) add(card.id, `${f.fact} ${(f.evidence || []).join(' ')}`); }
   return (card) => map.get(card.id) || '';
 }
-export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null, grounds = null, keptElsewhere = null, hisWords = null } = {}) {
+export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audit = false, stands = null, limit = null, nowStays = false, short = null, asked = null, named = null, keepOpen = null, nowAt = '', nowPid = '', unseen = null, grounds = null, keptElsewhere = null, hisWords = null, mine = null } = {}) {
   const out = clone(notes || {});
   /* THE BOOK IS HIS NEWER WORD (2.12.10). His words on a card are never written
    * over by a reading — unless the words he changed himself (`hisWords`: the
@@ -1081,6 +1081,53 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
   const letGo = new Set();      /* his cards whose words the book he changed contradicted: put right */
   const sinceHis = new Set();   /* his cards a reading laid "Since then" on: the check looks at them soon */
   for (const kind of NOTE_KINDS) for (const row of (Array.isArray(answer && answer[kind]) ? answer[kind] : [])) foldRow(kind, row);
+  /* HIS WORDS AND THE BOOK'S ACCOUNT BESIDE THEM, JUDGED (2.12.12). Each card
+   * of his with "Since then" is listed for the check (`mine`: {ids, book}), and
+   * it must say for each whether the book still bears his words out. Where the
+   * book says the opposite — quoted, the quote standing in the book as it
+   * stands and in what "Since then" already holds of it — his words go and the
+   * book's account is the card (about whole, Since then folded in, that field
+   * his no longer), or the card goes when nothing of it is in the book. Held:
+   * nothing changes, and it is not asked again until Since then changes. */
+  const mineSaid = new Map();     /* card id -> 'held' | 'changed' | 'gone' | 'unfounded' */
+  const goneMine = [];
+  if (mine && mine.ids && mine.ids.size) {
+    for (const row of (Array.isArray(answer && answer.mine) ? answer.mine : [])) {
+      if (!row || typeof row !== 'object' || !NOTE_KINDS.includes(row.kind)) continue;
+      const c = cardsCalled(out[row.kind], cleanName(row.name)).find((x) => mine.ids.has(x.id));
+      if (!c || mineSaid.has(c.id)) continue;
+      if (asked && JSON.stringify(askedCard(row.kind, c.id)) !== JSON.stringify(standingCard(row.kind, c.id))) continue;
+      const holds = truthOf(row.holds);
+      if (holds !== false) { if (holds === true) mineSaid.set(c.id, 'held'); continue; }
+      const q = cleanText(row.contradicts, 600);
+      const f = q ? foldedText(q) : null;
+      const inBook = f && mine.book && (mine.book.loose.includes(' ' + f.loose.trim() + ' ') || mine.book.tight.includes(' ' + f.tight.trim() + ' '));
+      /* the quote is the book's, and what the account beside his words already tells (never a contradiction made up out of other words) */
+      const inSince = q && heldIn(q, String(c.since || '')) >= 0.5;
+      if (!inBook || !inSince) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, q ? 'the words it gave for the book saying otherwise are not the book’s' : 'it said the book says otherwise without the book’s words'); continue; }
+      const whyNow = cleanText(row.why, 400) || `the book now says “${clipQuote(q)}”`;
+      if (truthOf(row.gone) === true) {
+        if (written.has(c.id)) continue;
+        touch(row.kind, c);
+        whys[c.id] = whyNow;
+        goneMine.push([row.kind, c]);
+        mineSaid.set(c.id, 'gone');
+        continue;
+      }
+      const given = cleanText(row.about, 4000);
+      const about = given && !unfounded(c, given) ? given : String(c.since || '').trim();
+      if (!about) continue;
+      touch(row.kind, c);
+      const before = clone(c);
+      c.about = about;
+      delete c.since;
+      c.updated = letGoStamp(before.updated, 'about', chapterId, at);
+      landed.add(c.id);
+      whys[c.id] = whyNow;
+      mineSaid.set(c.id, 'changed');
+    }
+    for (const [kind, c] of goneMine) out[kind] = out[kind].filter((x) => x !== c);
+  }
   /* A THREAD CLOSED TAKES ITS COPIES WITH IT (Cozy Tavern M653): where the
    * notes already hold one thread as several, closing it closes every copy —
    * never one left open for ever */
@@ -1129,7 +1176,28 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
   }
   const changed = cards.map((c) => ({ kind: c.kind, name: (c.after || c.before).name, how: !c.before ? 'new' : !c.after ? 'gone' : 'changed' }));
   for (const id of Object.keys(whys)) if (!cards.some((c) => c.id === id)) delete whys[id];
-  return { notes: out, cards, changed, whys, aside, refused, sinceHis: [...sinceHis] };
+  return { notes: out, cards, changed, whys, aside, refused, sinceHis: [...sinceHis], mineSaid };
+}
+const clipQuote = (q) => (q.length > 120 ? q.slice(0, 117).trimEnd() + '…' : q);
+/* HIS CARDS TO JUDGE: in his words, with "Since then" beside them not yet judged
+ * against them (memory.mine: card id -> {h: the Since then's hash, held, n: how
+ * many checks listed it and did not answer — three, and it waits for its Since
+ * then to change) */
+export function mineToJudge(novel, only = null) {
+  const done = (novel && novel.memory && novel.memory.mine) || {};
+  const out = [];
+  for (const kind of NOTE_KINDS) {
+    for (const c of ((novel && novel.notes) || {})[kind] || []) {
+      if (only && !only.has(c.id)) continue;
+      const since = String(c.since || '').trim();
+      if (!since || !hisField(c, 'about')) continue;
+      const m = done[c.id];
+      const h = hashText(since);
+      if (m && m.h === h && (m.held || (m.n || 0) >= 3)) continue;
+      out.push({ kind, id: c.id, name: c.name, h });
+    }
+  }
+  return out;
 }
 /* the words he changed himself, folded (foldNotes' `hisWords`): every version on show that is his (shape.js hisChange) */
 export function hisWordsFolded(novel, chapters) {
@@ -1198,12 +1266,14 @@ export function readingRoom(conn, fixed) {
  * of them, which is what the first whole object of an answer cut off is
  * (Cozy Tavern's M246/M682: a cut answer stored as a finished reading) */
 /* only the answer's own parts: a row's map of ties ("Aldric": …) found inside a reply cut off is no answer (Cozy Tavern's M685) */
-const ANSWER_KEYS = new Set([...NOTE_KINDS, 'gone', 'chapterName', 'about', 'style', 'clear', 'verdict', 'timeline', 'bibliography']);
+const ANSWER_KEYS = new Set([...NOTE_KINDS, 'gone', 'mine', 'chapterName', 'about', 'style', 'clear', 'verdict', 'timeline', 'bibliography']);
 export const notesShape = (o) => Boolean(o) && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every((k) => {
   if (!ANSWER_KEYS.has(k)) return false;
   /* A bad history does not discard sound notes or ask the model again.
    * Its valid events survive; its coverage stays incomplete (timeline.js). */
   if (k === 'timeline' || k === 'bibliography') return true;
+  /* the check's judgment of his cards: rows it cannot read are passed by (foldNotes), never the whole answer lost */
+  if (k === 'mine') return Array.isArray(o[k]);
   if (NOTE_KINDS.includes(k) || k === 'gone') return Array.isArray(o[k]) && o[k].every((row) =>
     Boolean(row) && typeof row === 'object' && !Array.isArray(row) && Boolean(cleanName(row.name)) && (k !== 'gone' || NOTE_KINDS.includes(row.kind)));
   if (k === 'clear') return truthOf(o[k]) !== undefined;
@@ -2919,7 +2989,7 @@ export const AUDIT_EVERY = 6;
  * person's card is a short portrait, its lasting details in the bibliography
  * (2.12). Notes checked under an earlier one are checked again once, by
  * themselves — once the bibliography holds the book's facts (owedCheck). */
-export const AUDIT_V = 4;
+export const AUDIT_V = 5;
 export function auditDue(novel) {
   const m = (novel && novel.memory) || {};
   const notes = (novel && novel.notes) || {};
@@ -2940,8 +3010,8 @@ export function firstCheck(novelId) {
   /* owed once the bibliography holds the book's facts (owedCheck): notes checked by the check of 2.4–2.11 only for the
    * portrait — so not where the bibliography is not filled from the book; older ones in any case; notes checked under 3 owe nothing there */
   const owed = !has ? null : a && (a.v || 1) >= 3 ? null : a && (a.v || 1) >= 2 ? 'portrait' : 'all';
-  /* 4 (2.12.10): a card of his that the book he changed may contradict — one with "Since then" laid beside his words — is held against the book once, soon */
-  const sinceHis = has && NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).some((c) => his(c) && String(c.since || '').trim()));
+  /* 4–5 (2.12.11–12): a card of his with "Since then" not yet judged against his words is held against the book, soon */
+  const sinceHis = has && mineToJudge(novel).length > 0;
   store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, ...(owed ? { owed } : {}) }, ...(sinceHis ? { auditAsked: true } : {}) }), { now: true });
   return has;
 }
@@ -3006,7 +3076,7 @@ function auditStamp(novel, chapters) {
   ]);
 }
 /* the shape of the check's answer: the notes' parts, or at least whether they are clear or its verdict — never an empty object */
-export const auditShape = (o) => notesShape(o) && (truthOf(o.clear) !== undefined || Boolean(cleanText(o.verdict)) || [...NOTE_KINDS, 'gone'].some((k) => Array.isArray(o[k]) && o[k].length));
+export const auditShape = (o) => notesShape(o) && (truthOf(o.clear) !== undefined || Boolean(cleanText(o.verdict)) || [...NOTE_KINDS, 'gone', 'mine'].some((k) => Array.isArray(o[k]) && o[k].length));
 async function auditNotes(novelId, conn) {
   const novel = store.peek('novel', novelId);
   if (!novel) return;
@@ -3094,7 +3164,8 @@ async function auditNotes(novelId, conn) {
   const askedWords = wordsNow(novel);
   const stamp = auditStamp(novel, chapters);
   const askedCodex = bibReading(novel, conn);
-  const got = await helperJson(novelId, conn, frame, auditRequest({ novel: namedBook(novel, house), bookText: bookText(fit.book), his, partial, only, others, endShort, codex: askedCodex }), { want: auditShape });
+  const mineList = mineToJudge(novel, only);
+  const got = await helperJson(novelId, conn, frame, auditRequest({ novel: namedBook(novel, house), bookText: bookText(fit.book), his, partial, only, others, endShort, codex: askedCodex, mine: mineList }), { want: auditShape });
   /* the whole book began to be read again while it checked: the notes it checked are not there any more */
   const now = store.peek('novel', novelId);
   if (!now || ((now.memory || {}).reread || 0) !== gen || rebuildingNow(now)) return;
@@ -3139,6 +3210,7 @@ async function auditNotes(novelId, conn) {
     chapterId: '', at: Date.now(), audit: true, limit: only,
     stands: hasGone(got.obj) ? bookFolded(latest) : null,
     hisWords: claimsContradiction(got.obj) ? hisWordsFolded(latest, live) : null,
+    mine: mineList.length ? { ids: new Set(mineList.map((x) => x.id)), book: Array.isArray(got.obj && got.obj.mine) && got.obj.mine.length ? bookFolded(latest) : null } : null,
     grounds: groundsOf(namedBook(latest, store.peek('house', 'house') || {})),
     asked: askedNotes, keepOpen: openedByNewest(latest, live), unseen, keptElsewhere: askedCodex ? factsByCard(novelId) : null,
     /* where people are "now" is the end of the book's: when it read the end only in short, it only fills one never written */
@@ -3168,6 +3240,15 @@ async function auditNotes(novelId, conn) {
   const round = roundOn && a0.round ? a0.round : [];
   const nextRound = only ? [...round, ...(clear ? [] : [{ at: Date.now(), verdict, refused }])].slice(-6) : [];
   const fixedNow = folded.cards.length + Object.keys(kept).length;
+  /* what it said of each card of his it was asked to judge: held is not asked again until its Since then changes; put right or gone, nothing to keep; not answered, counted */
+  const mineNow = { ...((store.peek('novel', novelId).memory || {}).mine || {}) };
+  for (const x of mineList) {
+    const said = folded.mineSaid.get(x.id);
+    if (said === 'changed' || said === 'gone') delete mineNow[x.id];
+    else if (said === 'held') mineNow[x.id] = { h: x.h, held: true };
+    else mineNow[x.id] = { h: x.h, n: ((mineNow[x.id] && mineNow[x.id].h === x.h ? mineNow[x.id].n : 0) || 0) + 1 };
+  }
+  if (mineList.length) store.change('novel', novelId, novelSteps.setMemory({ mine: mineNow }));
   store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, checked: true, fixed: fixedNow, changes: changed.slice(0, 200), verdict, clear, partial, refused, refusedAll: folded.refused.length,
     ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round, ...roundKeep, roundFixed: roundKeep.roundFixed + fixedNow, roundChanges: [...roundKeep.roundChanges, ...changed].slice(0, 200) } : {}), ...(a0.groupMax ? { groupMax: a0.groupMax } : {}), ...owedKeep },
     /* the next group of the round, as soon as the helper is free */
