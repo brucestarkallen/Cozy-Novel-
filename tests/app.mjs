@@ -1893,8 +1893,17 @@ await test('every card of his with “Since then” is judged by the notes’ ch
   /* a thread of his already rewritten into the book's account (as 2.12.12 could leave one): judged for itself; overturned, it goes — whatever "about" it offers (2.12.13) */
   store.change('novel', b.novelId, (d) => { d.notes.threads.push({ id: 'th-2', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan did not ask for Emilia and did not choose her. The marriage was arranged and presented as a decision already made.', open: false, updated: { by: 'you', his: ['name', 'open'], chapterId: '', at: 2 } }); }, { now: true });
   sent = await ask({ mine: [{ kind: 'threads', name: 'Jovan’s choice to ask for Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', about: 'The marriage was arranged.', why: 'he never chose' }] });
-  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('it goes, never rewritten into a thread about something else'));
+  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('then it goes'));
   assert.equal(n().threads.some((c) => c.id === 'th-2'), false, 'a thread overturned goes');
+  /* a thread of his whose words the book bears out but whose name and "closed" are the old story's — judged held under 2.12.13 — is judged whole again: renamed for the storyline the book sets up, opened, and his no longer in those (2.12.14) */
+  store.change('novel', b.novelId, (d) => {
+    d.notes.threads.push({ id: 'th-3', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan did not choose her; the marriage was arranged as a decision already made. Still unaddressed between Jovan and Emilia.', open: false, updated: { by: 'you', his: ['name', 'open'], chapterId: '', at: 3 } });
+    d.memory.mine = { ...(d.memory.mine || {}), 'th-3': { h: util.hashText(['Jovan’s choice to ask for Emilia', 'Jovan did not choose her; the marriage was arranged as a decision already made. Still unaddressed between Jovan and Emilia.', ''].join('\n')), held: true } };
+  }, { now: true });
+  sent = await ask({ mine: [{ kind: 'threads', name: 'Jovan’s choice to ask for Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', newName: 'The marriage they were both handed', about: 'Arranged by the fathers; still unaddressed between Jovan and Emilia.', open: true, why: 'he never chose, and it is unaddressed' }] });
+  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('A thread holds only when all of it does'));
+  const t3 = n().threads.find((c) => c.id === 'th-3');
+  assert.deepEqual([t3.name, t3.open, t3.about, shape.hisField(t3, 'name'), shape.hisField(t3, 'open')], ['The marriage they were both handed', true, 'Arranged by the fathers; still unaddressed between Jovan and Emilia.', false, false]);
   /* a book checked under 2.12.11: opened, nothing left to judge asks nothing; a Since then that changed is judged again, at open */
   store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { ...b.novel().memory.audit, v: 4 }, auditAsked: false }), { now: true });
   archivist.firstCheck(b.novelId);

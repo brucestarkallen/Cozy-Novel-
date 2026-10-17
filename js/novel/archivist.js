@@ -1107,8 +1107,11 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       const inSince = q && heldIn(q, String(c.since || c.about || '')) >= 0.5;
       if (!inBook || !inSince) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, q ? 'the words it gave for the book saying otherwise are not the book’s' : 'it said the book says otherwise without the book’s words'); continue; }
       const whyNow = cleanText(row.why, 400) || `the book now says “${clipQuote(q)}”`;
-      /* a thread is a storyline set up: the book overturning it leaves nothing to tell — it goes, whatever "about" it offers (2.12.13) */
-      if (truthOf(row.gone) === true || row.kind === 'threads') {
+      /* a thread is judged whole — its name (the storyline), its words, open or closed (2.12.14): overturned, it is the
+       * storyline the book sets up now, named for it; with no storyline left to name, it goes (2.12.13) */
+      const newName = cleanName(row.newName);
+      const renamed = row.kind === 'threads' && newName && nameKey(newName) !== nameKey(c.name) && !cardsCalled(out.threads, newName).some((x) => x.id !== c.id) ? newName : '';
+      if (truthOf(row.gone) === true || (row.kind === 'threads' && !renamed)) {
         if (written.has(c.id)) continue;
         touch(row.kind, c);
         whys[c.id] = whyNow;
@@ -1117,13 +1120,17 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
         continue;
       }
       const given = cleanText(row.about, 4000);
-      const about = given && !unfounded(c, given) ? given : String(c.since || '').trim();
+      const about = given && !unfounded(c, given) ? given : String(c.since || c.about || '').trim();
       if (!about) continue;
       touch(row.kind, c);
       const before = clone(c);
       c.about = about;
       delete c.since;
-      c.updated = letGoStamp(before.updated, 'about', chapterId, at);
+      const off = ['about'];
+      if (renamed) { c.name = renamed; off.push('name'); }
+      const open = row.kind === 'threads' ? truthOf(row.open) : undefined;
+      if (open !== undefined && open !== (c.open !== false)) { c.open = open; off.push('open'); }
+      c.updated = letGoStamp(before.updated, off, chapterId, at);
       landed.add(c.id);
       whys[c.id] = whyNow;
       mineSaid.set(c.id, 'changed');
@@ -1196,7 +1203,8 @@ export function mineToJudge(novel, only = null) {
       const thread = kind === 'threads' && his(c);
       if (!thread && (!since || !hisField(c, 'about'))) continue;
       const m = done[c.id];
-      const h = hashText(thread ? [c.name, c.about, since].join('\n') : since);
+      /* (a thread judged whole since 2.12.14 — name, words, open — so every one is judged once again under that) */
+      const h = hashText(thread ? ['t2', c.name, c.about, since, c.open === false ? 'closed' : 'open'].join('\n') : since);
       if (m && m.h === h && (m.held || (m.n || 0) >= 3)) continue;
       out.push({ kind, id: c.id, name: c.name, h });
     }
@@ -2993,7 +3001,7 @@ export const AUDIT_EVERY = 6;
  * person's card is a short portrait, its lasting details in the bibliography
  * (2.12). Notes checked under an earlier one are checked again once, by
  * themselves — once the bibliography holds the book's facts (owedCheck). */
-export const AUDIT_V = 6;
+export const AUDIT_V = 7;
 export function auditDue(novel) {
   const m = (novel && novel.memory) || {};
   const notes = (novel && novel.notes) || {};

@@ -921,7 +921,8 @@ export function hisStamp(card, fields, at = Date.now()) {
 /* his mark without one field (the book, changed by him, is his newer word for it — archivist foldNotes, 2.12.10) */
 export function letGoStamp(updated, field, chapterId, at) {
   const list = Array.isArray(updated && updated.his) ? updated.his : CARD_FIELDS;
-  const his = list.filter((k) => k !== field);
+  const off = Array.isArray(field) ? field : [field];
+  const his = list.filter((k) => !off.includes(k));
   return his.length ? { by: 'you', his, chapterId, at } : { chapterId, at };
 }
 /* WORDS HE CHANGED HIMSELF (2.12.10): a passage written again from his note or
