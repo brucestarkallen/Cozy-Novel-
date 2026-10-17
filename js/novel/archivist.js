@@ -1113,6 +1113,10 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
        * taken as held (asked again, three times at most) */
       const evidence = cleanText(row.evidence, 600);
       if (row.kind === 'threads' && truthOf(row.never) === true && !written.has(c.id)) {
+        /* (its telling words standing in the book, it is the book's — never taken for invented) */
+        const words = [...telling([c.name, c.about].join(' '))];
+        const found = words.filter((w) => mine.book && mine.book.loose.includes(' ' + foldName(w).split(' ')[0])).length;
+        if (words.length && found / words.length >= 0.7) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, 'said to be set up by no words of the book, but its words stand in it'); continue; }
         touch(row.kind, c);
         whys[c.id] = cleanText(row.why, 400) || 'no words of the book set it up';
         goneMine.push([row.kind, c]);
@@ -1121,9 +1125,10 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       }
       if (holds === true) { mineSaid.set(c.id, row.kind !== 'threads' || bookHas(evidence) ? 'held' : 'unfounded'); continue; }
       if (holds !== false) continue;
-      if (row.kind === 'threads' && !cleanText(row.contradicts) && cleanText(row.about)) {
-        const told = cleanText(splitAbout(row.about).about, 4000);
-        if (!bookHas(evidence) || unfounded(c, told)) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, 'what it gave of the thread rests on no words of the book'); continue; }
+      if (row.kind === 'threads' && !cleanText(row.contradicts) && (cleanText(row.about) || truthOf(row.open) !== undefined)) {
+        /* (cut down only: what it keeps are the thread's own words or the book's it quoted — never new words of its own) */
+        const told = cleanText(splitAbout(row.about).about, 4000) || String(c.about || '');
+        if (!bookHas(evidence) || unfounded(c, told) || heldIn(told, [c.about, c.since, evidence].join(' ')) < 0.8) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, 'what it gave of the thread is not the thread’s own words nor the book’s'); continue; }
         touch(row.kind, c);
         const was = clone(c);
         c.about = told;
@@ -1146,9 +1151,9 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       const whyNow = cleanText(row.why, 400) || `the book now says “${clipQuote(q)}”`;
       /* a thread is judged whole — its name (the storyline), its words, open or closed (2.12.14): overturned, it is the
        * storyline the book sets up now, named for it; with no storyline left to name, it goes (2.12.13) */
-      const newName = cleanName(row.newName);
-      const renamed = row.kind === 'threads' && newName && nameKey(newName) !== nameKey(c.name) && !cardsCalled(out.threads, newName).some((x) => x.id !== c.id) ? newName : '';
-      if (truthOf(row.gone) === true || (row.kind === 'threads' && !renamed)) {
+      /* a thread the book has overturned goes — the check never names or writes a storyline of its own in its place (2.12.16: it did, under 2.12.14, and wrote what no page says) */
+      const renamed = '';
+      if (truthOf(row.gone) === true || row.kind === 'threads') {
         if (written.has(c.id)) continue;
         touch(row.kind, c);
         whys[c.id] = whyNow;

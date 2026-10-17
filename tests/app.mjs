@@ -1893,22 +1893,19 @@ await test('every card of his with “Since then” is judged by the notes’ ch
   /* a thread of his already rewritten into the book's account (as 2.12.12 could leave one): judged for itself; overturned, it goes — whatever "about" it offers (2.12.13) */
   store.change('novel', b.novelId, (d) => { d.notes.threads.push({ id: 'th-2', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan did not ask for Emilia and did not choose her. The marriage was arranged and presented as a decision already made.', open: false, updated: { by: 'you', his: ['name', 'open'], chapterId: '', at: 2 } }); }, { now: true });
   sent = await ask({ mine: [{ kind: 'threads', name: 'Jovan’s choice to ask for Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', about: 'The marriage was arranged.', why: 'he never chose' }] });
-  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('then it goes'));
+  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('— it goes'));
   assert.equal(n().threads.some((c) => c.id === 'th-2'), false, 'a thread overturned goes');
-  /* a thread of his whose words the book bears out but whose name and "closed" are the old story's — judged held under 2.12.13 — is judged whole again: renamed for the storyline the book sets up, opened, and his no longer in those (2.12.14) */
+  /* a thread of his whose words the book bears out but whose name and "closed" are the old story's — judged held under 2.12.13 — is judged whole again; overturned, it goes: the check never names or writes a storyline in its place (2.12.16) */
   store.change('novel', b.novelId, (d) => {
     d.notes.threads.push({ id: 'th-3', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan did not choose her; the marriage was arranged as a decision already made. Still unaddressed between Jovan and Emilia.', open: false, updated: { by: 'you', his: ['name', 'open'], chapterId: '', at: 3 } });
     d.memory.mine = { ...(d.memory.mine || {}), 'th-3': { h: util.hashText(['Jovan’s choice to ask for Emilia', 'Jovan did not choose her; the marriage was arranged as a decision already made. Still unaddressed between Jovan and Emilia.', ''].join('\n')), held: true } };
   }, { now: true });
   sent = await ask({ mine: [{ kind: 'threads', name: 'Jovan’s choice to ask for Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', newName: 'The marriage they were both handed', about: 'Arranged by the fathers; still unaddressed between Jovan and Emilia.', open: true, why: 'he never chose, and it is unaddressed' }] });
   assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('It holds only when all of it does'));
-  const t3 = n().threads.find((c) => c.id === 'th-3');
-  assert.deepEqual([t3.name, t3.open, t3.about, shape.hisField(t3, 'name'), shape.hisField(t3, 'open')], ['The marriage they were both handed', true, 'Arranged by the fathers; still unaddressed between Jovan and Emilia.', false, false]);
+  assert.equal(n().threads.some((c) => c.id === 'th-3'), false, 'gone — never renamed into a storyline the check wrote');
+  assert.equal(n().threads.some((c) => c.name === 'The marriage they were both handed'), false);
   /* a book checked under 2.12.11: opened, nothing left to judge asks nothing; a Since then that changed is judged again, at open */
-  /* (the thread renamed above is judged again for what it says now: held, here) */
-  const left = archivist.mineToJudge(b.novel());
-  assert.deepEqual(left.map((x) => x.id), ['th-3'], 'only the thread that changed is left to judge');
-  store.change('novel', b.novelId, (d) => { d.memory.mine['th-3'] = { h: left[0].h, held: true }; }, { now: true });
+  assert.deepEqual(archivist.mineToJudge(b.novel()).map((x) => x.id), [], 'nothing left to judge');
   store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { ...b.novel().memory.audit, v: 4 }, auditAsked: false }), { now: true });
   archivist.firstCheck(b.novelId);
   assert.equal(b.novel().memory.auditAsked, false, 'every one judged or asked three times');
@@ -1931,7 +1928,7 @@ await test('every thread is held to the book’s own words that set it up: one n
   archivist.askAudit(b.novelId);
   await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', mine: [
     { kind: 'threads', name: 'The Georgia-led pressure on Harrison Vanderbilt', never: true, why: 'no railroad, no cattle, no pressure in the book' },
-    { kind: 'threads', name: 'The merger', holds: false, evidence: 'Harrison Vanderbilt signed the merger papers', about: 'Harrison signed the merger papers in Reginald’s study.', why: 'the debts in Georgia are not in the book' },
+    { kind: 'threads', name: 'The merger', holds: false, evidence: 'Harrison Vanderbilt signed the merger papers', about: 'Harrison signed the merger papers.', why: 'the debts in Georgia are not in the book' },
     { kind: 'threads', name: 'Who called the meeting', holds: true },
     { kind: 'threads', name: 'The signing', holds: false, evidence: 'they signed in blood', about: 'Signed in blood.' },
   ] }) }]);
@@ -1940,15 +1937,26 @@ await test('every thread is held to the book’s own words that set it up: one n
   assert.ok(sent.includes('every thread, whoever wrote it') && sent.includes('The Georgia-led pressure on Harrison Vanderbilt (threads)') && sent.includes('nothing the notes or anyone added from nowhere'));
   const th = (id) => b.novel().notes.threads.find((c) => c.id === id);
   assert.equal(th('t-g'), undefined, 'set up by no words of the book: gone');
-  assert.deepEqual([th('t-m').about, shape.hisField(th('t-m'), 'about')], ['Harrison signed the merger papers in Reginald’s study.', false], 'his thread, partly from nowhere: only what the book sets up');
+  assert.deepEqual([th('t-m').about, shape.hisField(th('t-m'), 'about')], ['Harrison signed the merger papers.', false], 'his thread, partly from nowhere: cut down to what the book sets up');
   assert.equal(th('t-h').about, 'The meeting in the study.', 'held without its words: left as it is');
   assert.equal(th('t-x').about, 'Harrison signed the papers.', 'an evidence quote that is not the book’s changes nothing');
+
   const m = b.novel().memory.mine;
   assert.deepEqual([m['t-h'].n, m['t-h'].held, m['t-x'].n], [1, undefined, 1], 'not taken as held: asked again');
   assert.ok((b.novel().memory.audit.changes || []).some((c) => c.name === 'The Georgia-led pressure on Harrison Vanderbilt' && c.how === 'gone'));
   /* the check's Undo brings them back */
   assert.equal(archivist.undoLast(b.novelId), true);
   assert.ok(th('t-g') && th('t-m').about.includes('debts in Georgia'));
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', mine: [
+    { kind: 'threads', name: 'The signing', never: true, why: 'x' },
+    { kind: 'threads', name: 'Who called the meeting', holds: false, evidence: 'Harrison Vanderbilt signed the merger papers', about: 'Reginald called the meeting to force the vote at midnight.' },
+  ] }) }]);
+  await archivist.run(b.novelId);
+  assert.equal(th('t-x').about, 'Harrison signed the papers.', '“never set up”, but its words stand in the book: kept');
+  assert.equal(th('t-h').about, 'The meeting in the study.', 'a cut that brings words of its own: refused — the check never writes a thread');
+
   await putAway(b);
 });
 
