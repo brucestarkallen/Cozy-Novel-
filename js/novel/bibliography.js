@@ -667,7 +667,14 @@ export function ridingItems(items, { his = '', near = '', budget = 4000, skip = 
     const facts = (it.facts || []).filter((f) => !(skip && skip.has(f.passageId)));
     const own = itemWords(it, { facts: [] });
     if (!own && !facts.length) continue;
-    const row = { it, facts, own: Boolean(own), n: 0, on: false };
+    /* WHICH FACTS FIRST, WHEN THE SHARE RUNS OUT (2.12.18): from both ends of
+     * the book toward its middle — what first told who they are, then what the
+     * book told of them last (a lost hand, a new rank) — never only the
+     * earliest, so a long book's newest lasting facts are not the ones that
+     * wait; those chosen are told in the book's order */
+    const ends = [];
+    for (let i = 0, j = facts.length - 1; i <= j; i++, j--) { ends.push(i); if (j !== i) ends.push(j); }
+    const row = { it, facts, ends, own: Boolean(own), n: 0, on: false };
     if (own) {
       const c = cost(own) + 3;
       if (spent + c > budget) { left++; continue; }
@@ -682,7 +689,7 @@ export function ridingItems(items, { his = '', near = '', budget = 4000, skip = 
     more = false;
     for (const x of rows) {
       if (x.full || x.n >= x.facts.length) continue;
-      const c = cost(factLine(x.facts[x.n])) + (x.n ? 0 : cost(toldHead(x.it))) + (x.on ? 0 : cost(headOf(x.it)) + 3);
+      const c = cost(factLine(x.facts[x.ends[x.n]])) + (x.n ? 0 : cost(toldHead(x.it))) + (x.on ? 0 : cost(headOf(x.it)) + 3);
       if (spent + c > budget || factsSpent + c > factsMost) { x.full = true; continue; }
       spent += c;
       factsSpent += c;
@@ -696,7 +703,7 @@ export function ridingItems(items, { his = '', near = '', budget = 4000, skip = 
   for (const x of rows) {
     if (!x.on) { left++; continue; }
     out.push(x.it);
-    words.push(itemWords(x.it, { facts: x.facts.slice(0, x.n) }));
+    words.push(itemWords(x.it, { facts: x.ends.slice(0, x.n).sort((p, q) => p - q).map((i) => x.facts[i]) }));
   }
   return { items: out, words, cost: spent, left };
 }

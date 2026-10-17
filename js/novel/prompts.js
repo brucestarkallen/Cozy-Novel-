@@ -269,7 +269,34 @@ export function notesText(novel, { forHelper = false, fit = 0, focus = '', only 
   /* (a Map is told how each rode: 1 its first line, 2 its name, 3 left out) */
   const mark = (level) => { if (!shortIds) return; for (const k of NOTE_KINDS) for (const c of n[k] || []) { const lv = level(k, c); if (lv) { if (shortIds instanceof Map) shortIds.set(c.id, lv); else shortIds.add(c.id); } } };
   const at = (lv, out = null) => (kind, c) => (whole(kind, c) ? 0 : out && out.has(c.id) ? 3 : lv);
-  let text = render(at(1));
+  /* WHAT GIVES WAY FIRST (2.12.18): for the writer and the rest, closed threads
+   * before anyone — then places, things and open threads — and people last:
+   * how someone stands with the others and where they are is what a page
+   * needs most. Each step is tried in turn; the first that fits is sent. (The
+   * helper's own reading keeps the order it always had.) */
+  let text = '';
+  if (!forHelper) {
+    const closed = (kind, c) => kind === 'threads' && c.open === false;
+    const people = (kind) => kind === 'people';
+    const steps = [
+      (kind, c) => (closed(kind, c) ? 2 : 0),
+      (kind, c) => (closed(kind, c) ? 2 : people(kind) ? 0 : 1),
+      (kind, c) => (closed(kind, c) ? 3 : people(kind) ? 0 : 1),
+      (kind, c) => (closed(kind, c) ? 3 : 1),
+      (kind, c) => (closed(kind, c) ? 3 : people(kind) ? 1 : 2),
+    ].map((f) => (kind, c) => (whole(kind, c) ? 0 : f(kind, c)));
+    for (const level of steps) {
+      text = render(level);
+      if (estimateTokens(text) <= fit) {
+        mark(level);
+        /* (how each was shown, said exactly — the model reads it) */
+        const used = new Set(NOTE_KINDS.flatMap((k) => (n[k] || []).map((c) => level(k, c))));
+        const how = used.has(1) && used.has(2) ? 'shown by their first line, or by their names only' : used.has(2) ? 'shown by their names only' : 'shown by their first line';
+        return `${text}\n\n(To fit, the cards the words below do not name are ${used.has(1) || used.has(2) ? how : 'shown whole'}${used.has(3) ? ', and the threads already closed are left out here' : ''}.)`;
+      }
+    }
+  }
+  text = render(at(1));
   if (estimateTokens(text) <= fit) { mark(at(1)); return `${text}\n\n(To fit, the cards the words below do not name are shown by their first line.)`; }
   text = render(at(2));
   if (estimateTokens(text) <= fit) { mark(at(2)); return `${text}\n\n(To fit, the cards the words below do not name are shown by their names only.)`; }
@@ -335,7 +362,10 @@ export function standingNotes(novel) {
   if (!rebuilding(novel)) return novel;
   const from = novel.memory.rereadFrom;
   const corrected = Object.fromEntries(Object.entries(novel.kept || {}).filter(([, k]) => k && k.by === 'you'));
-  return { ...novel, notes: from.notes || {}, kept: { ...(from.kept || {}), ...corrected } };
+  /* (what had been read when those notes stood, so "Last seen (Chapter N)" is said as it was — never "Right now" for an old place, 2.12.18) */
+  const u = novel.memory.undo;
+  const memory = u && u.seen ? { ...novel.memory, seen: u.seen } : novel.memory;
+  return { ...novel, notes: from.notes || {}, kept: { ...(from.kept || {}), ...corrected }, memory };
 }
 
 /* What it's about and how it reads: his own words, set by hand ("Manual"),
@@ -370,7 +400,8 @@ export function aboutTheBook(novel, { plans = true, kept = true } = {}) {
   else if (voice || reads) parts.push(voice || readsHis ? `How it reads:\n${voice || reads}` : `How it reads so far:\n${reads}`);
   const narration = narrationChoices(novel);
   if (narration) parts.push(narration);
-  if (plans && String(novel.plans || '').trim()) parts.push(`Where it's headed — plans for later, none of this has happened yet:\n${novel.plans.trim()}`);
+  /* (a plan the book has carried out stays his plan: never told as not having happened — as a chapter's plan says, 2.12.18) */
+  if (plans && String(novel.plans || '').trim()) parts.push(`Where it's headed — my plans for later. None of it has happened unless the pages say so:\n${novel.plans.trim()}`);
   return parts.join('\n\n');
 }
 
@@ -1221,7 +1252,7 @@ ${mine.length ? `${mineAsk(mine)}
 function mineAsk(mine) {
   const names = mine.map((x) => `${x.name} (${x.kind})`).join(', ');
   return `Cards to judge against the book — mine (in my words or my partner's, some with "Since then" beside them: what the book told after they were written), and every thread, whoever wrote it: ${names}. Judge each one, and answer in "mine" for every one of them:
-- {"kind": "…", "name": "…", "holds": true} when the book bears it out, or has not come to it yet — what is told since only adds to my words, or tells the same.
+- {"kind": "…", "name": "…", "holds": true} when the book bears it out, or has not come to it yet — what is told since only adds to my words, or tells the same. Where my words hold but "Since then" says what the book no longer does, add "since": what of it the book still says ("" for nothing) — nothing new.
 - A thread is what the book sets up — nothing the notes or anyone added from nowhere. It holds only when all of it does: its name (what storyline it is), its words, and whether it is open or closed — {"kind": "threads", "name": "…", "holds": true, "evidence": "the book’s own words that set it up, quoted exactly"}.
 - A thread partly told from nowhere — a cause, a person, a place, a "why" the book never gives — or closed though the book leaves it unresolved (open though resolved): {"kind": "threads", "name": "…", "holds": false, "evidence": "the book’s own words that set it up, quoted exactly", "about": "the thread’s own words with what the book never gives taken out — nothing new added", "open": true, "why": "what was not in the book"}.
 - A thread no words of the book set up at all: {"kind": "threads", "name": "…", "never": true, "why": "…"} — it goes.
@@ -1232,7 +1263,8 @@ function mineAsk(mine) {
 
 /* HIS OTHER WORDS THE WRITER READS AS TRUE, judged (archivist wordsToJudge) */
 function wordsAsk(words) {
-  const shown = words.map((w) => `${w.what === 'book' ? `"book" "${w.name}" — ${w.label}` : w.what === 'plan' ? `"plan" "${w.name}" — ${w.label}` : `"entry" "${w.name}" — my bibliography’s entry`}:\n${fence(w.text.length > 1500 ? `${w.text.slice(0, 1500)}…` : w.text)}`).join('\n\n');
+  /* (each shown whole — it is to be given back whole: 2.12.18) */
+  const shown = words.map((w) => `${w.what === 'book' ? `"book" "${w.name}" — ${w.label}` : w.what === 'plan' ? `"plan" "${w.name}" — ${w.label}` : `"entry" "${w.name}" — my bibliography’s entry`}:\n${fence(w.text)}`).join('\n\n');
   return `My own words the writer reads as true on every page — judge each against the book as it stands, and answer in "mine" for every one of them, by its kind and name as given:
 
 ${shown}

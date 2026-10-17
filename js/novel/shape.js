@@ -918,34 +918,92 @@ export function hisStamp(card, fields, at = Date.now()) {
   const before = hisCard(card) ? card.updated.his : [];
   return { by: 'you', at, his: CARD_FIELDS.filter((k) => before.includes(k) || (fields || []).includes(k)) };
 }
-/* A CARD'S WORDS NEVER CARRY THE NOTES' OWN LINES (2.12.16). The notes are
- * shown to the helper as "- Name — who they are / With others: … / Right now:
- * … / Since then: …"; given "about" whole again, a model copies those lines
- * into it, and the card shows "With others" and "Now" twice. Lines that begin
- * with one of those labels come out of "about" — into "ties" or "now" when
- * those are empty — wherever a card is written, and in every card at open. */
-const LABEL_LINE = /^\s*(with others|right now|now|since then|last seen \(chapter [a-z -]+\))\s*:\s*(.*)$/i;
-export function splitAbout(about) {
-  const lines = String(about == null ? '' : about).split('\n');
-  const kept = [];
-  const got = {};
-  for (const l of lines) {
-    const m = LABEL_LINE.exec(l);
-    if (!m) { kept.push(l); continue; }
-    const label = m[1].toLowerCase();
-    const key = label === 'with others' ? 'ties' : label === 'since then' ? 'since' : 'now';
-    if (m[2].trim() && !got[key]) got[key] = m[2].trim();
+/* A CARD'S WORDS NEVER CARRY THE NOTES' OWN DISPLAY (2.12.16; 2.12.18 for
+ * every field and every kind). The notes are shown to the helper as
+ * "- Name (also A, B) — who they are (my words) / With others: … / Right now:
+ * … / Last seen (Chapter N): … / Since then: …"; a model copies that display
+ * back, and a second card is made for "Name (also A, B)", or a fact is lost,
+ * or a label shows twice. `unrender` takes the display off whatever a row or a
+ * card gives: the other names into aka, "(my words)" off, a label at the head
+ * of ties or now off, and labelled lines out of "about" — for a person into
+ * ties or now (when those are not given) or, for "Since then", kept in "about"
+ * so what it adds is read as added; for a place, a thing or a thread (which
+ * have no "now" of their own) the words kept in "about", the label off. */
+const ALSO = /^(.*?\S)\s*\(also ([^()]*)\)\s*$/i;
+const LABEL_HEAD = /^\s*(?:[-•]\s*)?(with others|right now|now|since then|last seen \(chapter [a-z -]+\))\s*:\s*/i;
+const LABEL_INLINE = /\s+(with others|right now|since then|last seen \(chapter [a-z -]+\))\s*:\s*/gi;
+const MY_WORDS = /\s*\(my words\)/gi;
+const keyOf = (label) => { const l = label.toLowerCase(); return l === 'with others' ? 'ties' : l === 'since then' ? 'since' : 'now'; };
+const asText = (v) => (typeof v === 'string' ? v : Array.isArray(v) ? v.filter((x) => typeof x === 'string').join('\n') : v);
+export function unrender(kind, fields) {
+  const out = { ...fields };
+  const person = kind === 'people';
+  if (typeof out.name === 'string') {
+    const m = ALSO.exec(out.name);
+    if (m) {
+      out.name = m[1].trim();
+      const more = m[2].split(',').map((x) => x.trim()).filter(Boolean);
+      const had = Array.isArray(out.aka) ? out.aka : typeof out.aka === 'string' ? out.aka.split(',') : [];
+      out.aka = [...had, ...more];
+    }
   }
-  return { about: kept.join('\n').replace(/\s+$/, ''), ...got };
+  const head = (v) => (typeof v === 'string' ? v.replace(MY_WORDS, '').replace(LABEL_HEAD, '') : v);
+  const about = asText(out.about);
+  const shows = (t) => /\(my words\)/i.test(t) || /\s(with others|right now|since then|last seen \(chapter [a-z -]+\))\s*:/i.test(t) || t.split('\n').some((l) => LABEL_HEAD.test(l));
+  /* (words with none of the display in them stay exactly as given) */
+  if (typeof about === 'string' && shows(about)) {
+    /* a label run together on one line is a line of its own */
+    const lines = about.replace(MY_WORDS, '').replace(LABEL_INLINE, (all, label) => `\n${label}: `).split('\n');
+    const kept = [];
+    const got = {};
+    for (const l of lines) {
+      const m = LABEL_HEAD.exec(l);
+      if (!m) { kept.push(l); continue; }
+      const words = l.slice(m[0].length).trim();
+      const key = keyOf(m[1]);
+      if (!words) continue;
+      if (person && key !== 'since') { if (!got[key]) got[key] = words; continue; }
+      kept.push(words);
+    }
+    out.about = kept.map((l) => l.trim()).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    if (got.ties && !String(asText(out.ties) || '').trim()) out.ties = got.ties;
+    if (got.now && !String(asText(out.now) || '').trim()) out.now = got.now;
+  }
+  for (const f of ['ties', 'now']) {
+    const v = asText(out[f]);
+    if (typeof v !== 'string' || !shows(v)) continue;
+    /* a "Right now:" line inside ties is the person's now, when none is given */
+    const lines = v.split('\n');
+    const kept = [];
+    for (const l of lines) {
+      const m = LABEL_HEAD.exec(l);
+      if (m && f === 'ties' && keyOf(m[1]) === 'now' && person) { const w = l.slice(m[0].length).trim(); if (w && !String(asText(out.now) || '').trim()) out.now = w; continue; }
+      kept.push(head(l));
+    }
+    out[f] = kept.map((l) => l.trim()).filter(Boolean).join('\n');
+  }
+  return out;
 }
-/* a card with its words cleared of the notes' own lines (null when it had none) */
-export function cleanCard(card) {
-  if (!card || typeof card.about !== 'string' || !/\n/.test(card.about)) return null;
-  const s = splitAbout(card.about);
-  if (s.about === card.about) return null;
-  const next = { ...card, about: s.about };
-  if (s.ties && !String(card.ties || '').trim()) next.ties = s.ties;
-  if (s.now && !String(card.now || '').trim()) next.now = s.now;
+/* a card cleared of the notes' display (null when it had none): what it says
+ * twice goes, what it says once is kept where it belongs */
+export function cleanCard(card, kind = 'people') {
+  if (!card) return null;
+  const fields = { name: card.name, aka: card.aka, about: card.about, ties: card.ties, now: card.now };
+  const MINE_ONE = /\(my words\)/i;
+  const INLINE_ONE = /\s(with others|right now|since then|last seen \(chapter [a-z -]+\))\s*:/i;
+  const touched = ['name', 'about', 'ties', 'now'].some((f) => typeof fields[f] === 'string' && (MINE_ONE.test(fields[f]) || LABEL_HEAD.test(fields[f]) || (f === 'about' && (/\n/.test(fields[f]) || INLINE_ONE.test(fields[f]))) || (f === 'name' && ALSO.test(fields[f]))));
+  if (!touched) return null;
+  /* a stored card: a "Since then" line in its words is what its own Since then says (kept there when it has none), never its words */
+  let since = '';
+  const about0 = typeof card.about === 'string' ? card.about.replace(LABEL_INLINE, (all, label) => `\n${label}: `) : card.about;
+  LABEL_INLINE.lastIndex = 0;
+  const aboutNoSince = typeof about0 === 'string' ? about0.split('\n').filter((l) => { const m = LABEL_HEAD.exec(l); if (m && keyOf(m[1]) === 'since') { since = since || l.slice(m[0].length).trim(); return false; } return true; }).join('\n') : about0;
+  const u = unrender(kind, { ...fields, about: aboutNoSince, ties: String(card.ties || '').trim() ? card.ties : undefined, now: String(card.now || '').trim() ? card.now : undefined });
+  const next = { ...card, name: u.name, about: u.about };
+  if (Array.isArray(u.aka) && u.aka.length) next.aka = u.aka.filter((a, i) => u.aka.findIndex((b) => String(b).toLowerCase() === String(a).toLowerCase()) === i && String(a).toLowerCase() !== String(u.name).toLowerCase());
+  if (kind === 'people') { if (u.ties !== undefined) next.ties = u.ties; if (u.now !== undefined) next.now = u.now; }
+  if (since && !String(card.since || '').trim()) next.since = since;
+  if (JSON.stringify(next) === JSON.stringify(card)) return null;
   return next;
 }
 /* his mark without one field (the book, changed by him, is his newer word for it — archivist foldNotes, 2.12.10) */

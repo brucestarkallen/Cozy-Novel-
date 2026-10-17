@@ -1189,6 +1189,8 @@ async function editCard(kind, id) {
       if (out.now && ord.length) { out.nowAt = ord[ord.length - 1]; delete out.nowPid; }
     }
     if (since && t.since !== undefined) { const v = since.value.trim(); if (v) out.since = v; else delete out.since; }
+    /* his own words changed and Since then left: of it, only what his new words do not already say (2.12.18) — the check judges the rest against the book */
+    else if (t.about !== undefined && String(out.since || '').trim()) { const rest = archivist.newSentences(out.about, out.since).join(' ').trim(); if (rest) out.since = rest; else delete out.since; }
     if (ties && (t.ties !== undefined || !cur)) out.ties = ties.value.trim();
     if (open && (t.open !== undefined || !cur)) out.open = open.checked;
     if (cur && !Object.keys(t).length) { done = true; keepCardDraft(novelId, draftKey, undefined); s.close(); return; }

@@ -541,8 +541,6 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   /* the story map: this chapter's plan, and in the book's last chapter how it ends with what is still open (prompts.js) */
   const planHere = String(chapter.plan || '').trim();
   const lastHere = Boolean(chapter.id) && (novel.prefs || {}).endsAt === chapter.id && (purpose === 'write' || purpose === 'play');
-  const current = opened ? { ...opened, ...(planHere ? { plan: withMacros(planHere, macroNames(house, purpose, play)) } : {}),
-    ...(lastHere ? { ending: endingWords(withMacros(String(novel.ending || ''), macroNames(house, purpose, play)), ((novel.notes || {}).threads || []).filter((t) => t.open !== false)) } : {}) } : null;
   const label = chapter.id ? chapterLabel(novel, chapter) : 'the first chapter';
   let own = '';
   let frame = '';
@@ -564,6 +562,9 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const runsOn = atPoint && atPoint.later && !atPoint.clean ? notesRunOn(novel, chapters) : '';
   /* the book's own words with {{user}} and {{char}} filled, never sent raw */
   const named = namedBook(notesNow, house);
+  /* (the last chapter's open threads: the notes as of the point, names filled — never the live notes of a take being replaced, 2.12.18) */
+  const current = opened ? { ...opened, ...(planHere ? { plan: withMacros(planHere, macroNames(house, purpose, play)) } : {}),
+    ...(lastHere ? { ending: endingWords(withMacros(String(novel.ending || ''), macroNames(house, purpose, play)), ((named.notes || {}).threads || []).filter((t) => t.open !== false)) } : {}) } : null;
   /* how he means it to end: the partner's to plan with, always; the writer's only in the last chapter (above) */
   const endingNote = purpose === 'partner' && String(named.ending || '').trim() ? `How I mean the book to end (between us — the writer is told it only in the book's last chapter):\n${String(named.ending).trim()}` : '';
   const about = [aboutTheBook(named, { plans: true }), endingNote].filter(Boolean).join('\n\n');

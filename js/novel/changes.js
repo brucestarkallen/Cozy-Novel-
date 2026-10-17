@@ -1194,7 +1194,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     }
     if (kind === 'threads' && openOf(op) !== undefined) next.open = openOf(op);
     /* its words never carry the notes' own lines (With others:, Right now:) — they go where they belong (shape.js cleanCard) */
-    { const cl = cleanCard(next); if (cl) Object.assign(next, cl); }
+    { const cl = cleanCard(next, kind); if (cl) Object.assign(next, cl); }
     /* what this change wrote, field by field */
     const fields = CARD_FIELDS.filter((k) => !card ? (k === 'name' || (next[k] !== undefined && JSON.stringify(next[k]) !== JSON.stringify(newCard(kind)[k]))) : JSON.stringify(card[k]) !== JSON.stringify(next[k]));
     if (card && !fields.length) return refuse('the card already says that');
