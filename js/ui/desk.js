@@ -9,7 +9,8 @@ import * as talk from '../novel/talk.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf } from '../novel/shape.js';
+import { putBackWords } from '../novel/inplace.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
 import { showJudged } from './checks.js';
@@ -26,6 +27,7 @@ const S = {
   novelId: null, chapterId: null,
   selected: null,        /* the passage whose controls show */
   editing: null,         /* the passage being edited */
+  editText: null,        /* the words its box opened on */
   rewriting: null,       /* the passage with the rewrite box open */
   sel: null,             /* {passageId, start, end, text} — words selected for rewriting */
   errors: new Map(),     /* chapterId -> a page that did not come there: why, and what it thought */
@@ -101,7 +103,7 @@ export async function openChapter(novelId, chapterId) {
   }
   S.novelId = novelId;
   S.chapterId = chapterId;
-  S.selected = null; S.editing = null; S.rewriting = null; S.sel = null; S.insertAfter = null; S.followId = null;
+  S.selected = null; S.editing = null; S.editText = null; S.rewriting = null; S.sel = null; S.insertAfter = null; S.followId = null;
   F.start();
   S.offs.push(store.subscribe('chapter', chapterId, (data, why) => {
     if (why === 'deleted') { hooks.chapterGone(); return; }
@@ -199,12 +201,15 @@ export function rewritePassage({ chapterId, passageId, note = '' }) {
   S.selected = passageId;
   run(() => writer.rewrite({ novelId: S.novelId, chapterId, passageId, note }));
 }
+/* the checker looks now (Settings: what goes in by itself was switched on) */
+export function nudgeChecker() { if (S.novelId) checker.schedule(S.novelId, 300); }
 /* some words of a passage written again (a word he never wants) */
 export function rewriteSpan({ chapterId, passageId, start, end, note = '' }) {
   if (busy()) { toast('The writer is busy — try again once it has finished.'); return; }
   if (chapterId !== S.chapterId) { whenOpen(chapterId, { rewrite: { chapterId, passageId, start, end, note } }); return; }
   S.selected = passageId;
-  run(() => writer.rewriteSelection({ novelId: S.novelId, chapterId, passageId, start, end, note }));
+  /* the checker's sentence written again: a fix, on the page itself */
+  run(() => writer.rewriteSelection({ novelId: S.novelId, chapterId, passageId, start, end, note, fix: true }));
 }
 
 function novel() { return store.peek('novel', S.novelId); }
@@ -339,10 +344,11 @@ function drawnKey(p, { tint, nums, working, names = null, snapshot = false }) {
   const checkpoint = snapshot && writingHere(v);
   const text = checkpoint ? null : (live ? live.text : v.text);
   const thinking = checkpoint ? null : (live ? live.thinking : v.thinking);
-  const body = [p.id, p.by, v.id, text, thinking, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id), Boolean(v.streaming || live), names ? names.sig : ''];
+  /* (the names marked in its own words — a name that came for another passage never draws this one again) */
+  const body = [p.id, p.by, v.id, text, thinking, tint, sel, S.editing === p.id, S.rewriting === p.id, S.thinkOpen.has(p.id), Boolean(v.streaming || live), names && text ? names.marksOf(text) : ''];
   const controls = sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : '', gradeSaid(p),
     p.pick, (p.versions || []).length, ...(p.versions || []).map((x) => x.id), Boolean(v.streaming || live), cutAtEnd(v), Boolean(writer.takeOf(p)),
-    v.how, v.why, checkpoint ? null : v.words, checkpoint ? null : v.text, v.tokensIn, v.tokensCounted, v.ask && v.ask.note,
+    v.how, v.why, ...handsOf(v), (v.before || []).length, checkpoint ? null : v.words, checkpoint ? null : v.text, v.tokensIn, v.tokensCounted, v.ask && v.ask.note,
     v.cut, v.cutWhy, (v.notes || []).length, ...(v.notes || []), (v.sources || []).length, ...(v.sources || []).flatMap((x) => x ? [x.url, x.title] : [])] : [];
   return { body, controls };
 }
@@ -405,11 +411,11 @@ function drawPassage(p, { tint, names = null }) {
   if (S.editing === p.id) {
     const ta = h('textarea.editbox', { 'aria-label': 'Edit the passage' });
     /* the words the box was opened on, whatever came meanwhile */
-    ta.value = ((S.editFrom && p.versions.find((x) => x.id === S.editFrom)) || v).text || '';
+    ta.value = typeof S.editText === 'string' ? S.editText : ((S.editFrom && p.versions.find((x) => x.id === S.editFrom)) || v).text || '';
     el.append(ta, h('div.editrow',
       h('button.btn.primary.small', { onclick: () => finishEdit(p.id, ta.value) }, 'Save'),
       h('button.btn.quiet.small', { onclick: () => closeEdit() }, 'Cancel'),
-      h('span.say', { style: { margin: 0, color: 'var(--ink-soft)' } }, 'Your edit is kept as a new version — the words before it stay one arrow away.')));
+      h('span.say', { style: { margin: 0, color: 'var(--ink-soft)' } }, 'Your edit goes on the page itself — ⋯ → Put back the words before undoes it.')));
     autoGrow(ta, 0.7);
     /* the keyboard goes to it once, when it opens — never again on a redraw */
     if (S.focusNext === 'edit') { S.focusNext = null; setTimeout(() => ta.focus(), 30); }
@@ -472,7 +478,7 @@ function controls(p) {
   if (carry) row.append(h('button.go', { title: 'Carry this passage on from its last word', disabled: working, onclick: () => run(() => writer.goOn({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Go on'));
   if (writer.takeOf(p)) row.append(h('button', { title: 'The same request written again, as a new version — the notes it is written from are the ones before this passage', disabled: working, onclick: () => run(() => writer.anotherTake({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Another take'));
   row.append(h('button', { title: 'Say what should change; the change becomes what happens, carried through the passage', disabled: working, onclick: () => { S.rewriting = S.rewriting === p.id ? null : p.id; S.focusNext = 'rewrite'; drawPage(); } }, 'Rewrite…'));
-  row.append(h('button', { title: 'Change the words yourself — a new version, the old one an arrow away', disabled: working, onclick: () => openEdit(p.id) }, 'Edit'));
+  row.append(h('button', { title: 'Change the words yourself, on the page itself — ⋯ → Put back the words before undoes it', disabled: working, onclick: () => openEdit(p.id) }, 'Edit'));
   row.append(h('button', { 'aria-label': 'More for this passage', title: 'More for this passage', onclick: (e) => passageMenu(e.currentTarget, p) }, icon('more', 18)));
   /* what to know about this version, in a line — first, its number on the page */
   const bits = [];
@@ -482,8 +488,13 @@ function controls(p) {
   if (graded) bits.push(graded);
   if (v.how === 'mine' || v.how === 'imported') bits.push(v.how === 'imported' ? 'brought in' : 'your words');
   else if (v.how === 'edit') bits.push('edited by you');
-  else if (v.how === 'partner') bits.push(v.why ? `changed by your partner: “${v.why.slice(0, 80)}”` : 'changed by your partner');
+  else if (v.how === 'partner') bits.push(v.why ? `written anew by your partner: “${v.why.slice(0, 80)}”` : 'written anew by your partner');
   else if (v.how === 'suggested') bits.push('the checker’s fixes put in');
+  /* changed on the page itself (2.12.2): by whom, the newest reason his partner gave */
+  const hands = handsOf(v);
+  if (hands.includes('you') && v.how !== 'edit' && v.how !== 'mine') bits.push('edited by you');
+  if (hands.includes('partner')) { const why = [...(v.before || [])].reverse().find((b) => b && b.by === 'partner' && b.why); bits.push(why ? `changed by your partner: “${String(why.why).slice(0, 80)}”` : 'changed by your partner'); }
+  if (hands.includes('checker') && v.how !== 'suggested') bits.push('the checker’s fixes put in');
   if (v.words || v.text) bits.push(plural(v.words || countWords(v.text), 'word'));
   /* the request that wrote it, counted in full: the provider's own count, or the app's (about) */
   if (Number.isFinite(v.tokensIn)) bits.push(`${v.tokensCounted ? '' : 'about '}${v.tokensIn.toLocaleString()} tokens sent`);
@@ -528,9 +539,12 @@ function passageMenu(anchor, p) {
     gradeSaid(p) ? { label: 'What the judge said', hint: 'Its ten checks of this version — each passed or failed, with the words; a no it could not find in the passage is shown, not counted.', run: () => showJudged(S.novelId, c.id, p.id) } : null,
     ...(Array.isArray(v.sentMore) ? v.sentMore : []).map((key, k, all) => ({ label: all.length > 1 ? `What Go on was sent (${numberWords(k + 1).toLowerCase()})` : 'What Go on was sent', hint: 'Every word of the request that carried this passage on.', run: () => showSent(S.novelId, key) })),
     { label: 'Copy the words', hint: 'This passage as it shows, to paste anywhere.', run: async () => { toast((await copyText(v.text || '')) ? 'Copied.' : 'It could not be copied.'); } },
+    Array.isArray(v.before) && v.before.length && !v.streaming ? { label: 'Put back the words before',
+      hint: `The words before the last change made on this page — ${({ checker: 'the checker’s fixes', partner: 'your partner’s change', you: 'your edit' })[v.before[v.before.length - 1].by] || 'the last change'}${v.before.length > 1 ? `; ${v.before.length - 1} more before ${v.before.length === 2 ? 'it' : 'them'} can be put back after` : ''}. What the checker found in them comes back with them, and nothing goes in on them by itself.`,
+      run: () => { const out = putBackWords({ novelId: S.novelId, chapterId: c.id, passageId: p.id, versionId: v.id }); if (out.ok) { archivist.nudge(S.novelId); drawPage(); toast('The words before are back.'); } else toast(`They couldn’t be put back: ${out.said}.`, 5000); } } : null,
     v.tookOff || v.tookOffTop ? { label: v.tookOff && v.tookOffTop ? 'Put back what was taken off' : v.tookOffTop ? 'Put back what was taken off its top' : 'Put back what was taken off its end',
-      hint: v.tookOff && v.tookOffTop ? 'What the writer put around the story — a heading or its plan above it, and a note to you, its check of its work or a block of tracking after it — back where it stood, as a new version.' : v.tookOffTop ? 'What the writer put above the story — a heading, or its plan for the page — back at the top as it came, as a new version.' : 'What the writer added after the story — a note to you, its check of its work, a block of tracking — back on the page as it came, as a new version.',
-      run: () => { if (writer.putBackTail({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) { archivist.nudge(S.novelId); toast('Put back — the page without it is one arrow away.'); } } } : null,
+      hint: v.tookOff && v.tookOffTop ? 'What the writer put around the story — a heading or its plan above it, and a note to you, its check of its work or a block of tracking after it — back where it stood, on the page itself.' : v.tookOffTop ? 'What the writer put above the story — a heading, or its plan for the page — back at the top as it came, on the page itself.' : 'What the writer added after the story — a note to you, its check of its work, a block of tracking — back on the page as it came.',
+      run: () => { if (writer.putBackTail({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) { archivist.nudge(S.novelId); toast('Put back — ⋯ → Put back the words before takes it off again.'); } } } : null,
     '-',
     { label: 'Write from here (a passage after this one)', hint: 'A new passage between this one and the next, written to fit both.', disabled: busy(), run: () => { S.insertAfter = p.id; S.sel = null; drawComposer(); ui.direction.focus(); } },
     { label: 'Branch from here', hint: 'Take the story up to this passage into a separate book, with its own notes.', disabled: branchBusy(S.novelId), run: () => openBranch({ novelId: S.novelId, chapterId: c.id, through: p.id }) },
@@ -562,7 +576,7 @@ function openEdit(pid) {
   keepOpenEdit();
   S.editing = pid;
   /* the version the box opens on: his edit is made on it, whatever comes meanwhile — and nothing goes in by itself under his hand (Cozy Tavern M429) */
-  { const c = chapter(); const p = c && (c.passages || []).find((x) => x.id === pid); S.editFrom = p && picked(p) ? picked(p).id : null; }
+  { const c = chapter(); const p = c && (c.passages || []).find((x) => x.id === pid); S.editFrom = p && picked(p) ? picked(p).id : null; S.editText = p && picked(p) ? String(picked(p).text || '') : null; }
   checker.setEditing(pid, true);
   S.focusNext = 'edit';
   S.editBack = onBack(() => { S.editBack = null; keepOpenEdit(true); });
@@ -580,11 +594,15 @@ function editBase(pid) {
   const p = c && (c.passages || []).find((x) => x.id === pid);
   const shown = p && picked(p);
   const v = p && ((S.editFrom && p.versions.find((x) => x.id === S.editFrom)) || shown);
-  return { from: v ? v.id : null, text: String((v && v.text) || ''), meanwhile: Boolean(v && shown && v.id !== shown.id) };
+  const opened = typeof S.editText === 'string' ? S.editText : String((v && v.text) || '');
+  /* another version on show now (a rewrite), or these words changed on the page while he edited (his partner's change) */
+  const meanwhile = !v || !shown ? '' : v.id !== shown.id ? MEANWHILE : String(v.text || '') !== opened ? CHANGED_MEANWHILE : '';
+  return { from: v ? v.id : null, text: opened, meanwhile };
 }
 function closeEdit() {
   editDone(S.editing);
   S.editing = null;
+  S.editText = null;
   if (S.editBack) { const r = S.editBack; S.editBack = null; r(); }
   drawPage();
 }
@@ -594,30 +612,33 @@ function keepOpenEdit(fromBack = false) {
   const pid = S.editing;
   const base = editBase(pid);
   S.editing = null;
+  S.editText = null;
   if (!fromBack && S.editBack) { const r = S.editBack; S.editBack = null; r(); }
   if (box) {
     if (!box.value.trim()) toast(EMPTY_EDIT, 6000);
     else {
-      if (writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text: box.value, fromId: base.from })) editKept(pid, base.text, box.value, `Your edit is kept — the earlier words are one arrow away.${base.meanwhile ? MEANWHILE : ''}`);
+      if (writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text: box.value, fromId: base.from, opened: base.text })) editKept(pid, base.text, box.value, `Your edit is kept — ⋯ → Put back the words before undoes it.${base.meanwhile}`);
     }
   }
   editDone(pid);
   if (fromBack) drawPage();
 }
 /* another version came while he edited (his partner, a fix): said, never lost */
-const MEANWHILE = ' Another version came while you edited — it is one arrow back.';
+const MEANWHILE = ' Another version came while you edited — it is one arrow away; your edit is on the one you opened.';
+const CHANGED_MEANWHILE = ' These words were changed while you edited (your partner, a fix) — your edit is on the page now, and those words are under ⋯ → Put back the words before.';
 /* a passage emptied in the edit box is not kept empty: taking it out is its own step */
 const EMPTY_EDIT = 'An empty passage is not kept, so the words stay as they were. To take the passage out, use ⋯ → Remove the passage.';
 function finishEdit(pid, text) {
   const empty = !String(text || '').trim();
   const base = editBase(pid);
-  const changed = !empty && writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text, fromId: base.from });
+  const changed = !empty && writer.saveEdit({ novelId: S.novelId, chapterId: S.chapterId, passageId: pid, text, fromId: base.from, opened: base.text });
   S.editing = null;
+  S.editText = null;
   if (S.editBack) { const r = S.editBack; S.editBack = null; r(); }
   editDone(pid);
   drawPage();
   if (empty) toast(EMPTY_EDIT, 6000);
-  else if (changed) editKept(pid, base.text, text, `Saved — the earlier words are one arrow away.${base.meanwhile ? MEANWHILE : ''}`);
+  else if (changed) editKept(pid, base.text, text, `Saved — ⋯ → Put back the words before undoes it.${base.meanwhile}`);
 }
 /* His edit kept, and said. When it changed a name everywhere it stood in the
  * passage, and the rest of the book still holds the old one, changing it

@@ -354,6 +354,137 @@ export function dropGluedStrays(text, { from = 0 } = {}) {
   return { text: out, changed: out !== src };
 }
 
+/* WEB PAGE AND CODE MARKUP LEFT LOOSE IS NEVER THE STORY (his report,
+ * 2.12.2: a page that ended "…everybody paid for.</code>"). A model that has
+ * read the web leaves its marks in prose, and the page shows every one of
+ * them as it is:
+ *  - a tag standing alone — one that closes what was never opened, or opens
+ *    what is never closed ("</code>" after the last sentence) — comes off;
+ *  - code's own marks (<code>, <pre>, <kbd>…) and a paragraph's (<p>) come
+ *    off around their words, which stay; a line that opens or closes a block
+ *    of code (```) comes off;
+ *  - italics and bold written as tags become the book's own (*it*, **it**),
+ *    a line break written as a tag a line break, an escaped character
+ *    (&amp;, &mdash;) the character.
+ * HTML a page may truly carry — a <div> or a <table> around its words, opened
+ * and closed (finishTail, Cozy Tavern M524) — stays, and so does what only
+ * looks like a tag: a game's window ("<Level Up!>", "<Skill: Fireball>"), a
+ * heart ("<3"). Only what stands at or after `from` (Go on: only what is new). */
+const TAG_NAMES = 'a|abbr|article|b|big|blockquote|body|br|center|cite|code|del|div|em|font|footer|h[1-6]|head|header|hr|html|i|img|ins|kbd|li|main|mark|nav|ol|p|pre|q|s|samp|section|small|span|strike|strong|sub|sup|table|tbody|td|th|thead|tr|tt|u|ul|var';
+const WEB_TAG = new RegExp(`<(\\/?)(${TAG_NAMES})(?:\\s[^<>\\n]{0,200})?\\s*(\\/?)>`, 'gi');
+const FENCE_LINE = /^[ \t]*```[\w-]*[ \t]*$/gm;
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–', hellip: '…', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”', '#39': "'", '#x27': "'", '#8217': '’', '#8216': '‘', '#8220': '“', '#8221': '”', '#8212': '—', '#8211': '–', '#8230': '…', '#160': ' ' };
+const ENTITY = /&(amp|lt|gt|quot|apos|nbsp|mdash|ndash|hellip|rsquo|lsquo|ldquo|rdquo|#39|#x27|#8217|#8216|#8220|#8221|#8212|#8211|#8230|#160);/g;
+const VOID = new Set(['br', 'hr', 'img']);
+const CODE_TAGS = new Set(['code', 'pre', 'kbd', 'samp', 'tt', 'var']);
+const EMPHASIS = { i: '*', em: '*', b: '**', strong: '**' };
+/* every tag of a web page in the words, paired where it is: [{start, end, name, close, pair, what}] — what: 'keep'
+ * (HTML the page carries), 'stray', 'code' and 'p' (off, words kept), 'br', 'hr', 'img', or 'em' (the book's marks) */
+function tagsIn(t) {
+  const tags = [...t.matchAll(WEB_TAG)].map((m) => ({ start: m.index, end: m.index + m[0].length, name: m[2].toLowerCase(), close: m[1] === '/', self: m[3] === '/', raw: m[0] }));
+  const open = new Map();
+  for (const x of tags) {
+    if (VOID.has(x.name)) { x.what = x.close ? 'stray' : x.name; continue; }
+    if (x.self) { x.what = 'stray'; continue; }
+    if (!x.close) { if (!open.has(x.name)) open.set(x.name, []); open.get(x.name).push(x); continue; }
+    const list = open.get(x.name);
+    const o = list && list.pop();
+    if (!o) { x.what = 'stray'; continue; }
+    o.pair = x; x.pair = o;
+    const kind = EMPHASIS[x.name] ? 'em' : CODE_TAGS.has(x.name) ? 'code' : x.name === 'p' ? 'p' : 'keep';
+    o.what = kind; x.what = kind;
+  }
+  for (const list of open.values()) for (const o of list) o.what = 'stray';
+  /* a paragraph's marks, paired or not, part paragraphs ("…said.</p>\n<p>The gate…") */
+  for (const x of tags) if (x.name === 'p') x.what = 'p';
+  return tags;
+}
+const changes = (x) => x.what !== 'keep';
+export function hasMarkup(text) {
+  const t = String(text == null ? '' : text);
+  if (!/[<&`]/.test(t)) return false;
+  FENCE_LINE.lastIndex = 0; ENTITY.lastIndex = 0;
+  const out = FENCE_LINE.test(t) || ENTITY.test(t) || tagsIn(t).some(changes);
+  FENCE_LINE.lastIndex = 0; ENTITY.lastIndex = 0;
+  return out;
+}
+function cleanMarkup(given) {
+  /* escaped characters first — but for what would read as a tag once unescaped, which waits for the tags */
+  const t = String(given).replace(ENTITY, (m, name) => (['lt', 'gt', 'amp'].includes(name) ? m : ENTITIES[name] || m));
+  const tags = tagsIn(t).filter(changes);
+  let x = '';
+  let at = 0;
+  for (const g of tags) {
+    let put = '';
+    let before = t.slice(at, g.start);
+    let skip = 0;
+    if (g.what === 'br') {
+      put = '\n';
+      before = before.replace(/[ \t]+$/, '');
+      skip = t.slice(g.end).match(/^[ \t]*/)[0].length;
+    } else if (g.what === 'p') {
+      put = '\n\n';
+      before = before.replace(/[ \t]+$/, '');
+      skip = t.slice(g.end).match(/^[ \t]*/)[0].length;
+    }
+    else if (g.what === 'em') {
+      /* the book's marks hug the words they mark: spaces inside the tags go outside them, once */
+      const mark = EMPHASIS[g.name];
+      const inner = g.close ? t.slice(g.pair.end, g.start) : t.slice(g.end, g.pair.start);
+      if (inner.trim()) {
+        if (g.close) {
+          const moved = /\s$/.test(inner);
+          before = before.replace(/\s+$/, '');
+          const next = t[g.end];
+          put = mark + (moved && next !== undefined && !/[\s,.;:!?…’”)\]]/.test(next) ? ' ' : '');
+        } else {
+          const moved = /^\s/.test(inner);
+          put = (moved && !/\s$/.test(x + before) && (x + before) ? ' ' : '') + mark;
+          skip = t.slice(g.end).match(/^\s*/)[0].length;
+        }
+      }
+    }
+    /* a tag between two words leaves one space; at a line's edge, or before a mark, none */
+    if (!put && g.what !== 'p') {
+      const prev = x + before;
+      const nextCh = t[g.end];
+      const edge = !prev || /\n[ \t]*$/.test(prev) || nextCh === undefined || nextCh === '\n';
+      const tight = /[,.;:!?…’”)\]]/.test(nextCh || '') || /[(\[“‘]$/.test(prev);
+      if (/[ \t]$/.test(prev) && /^[ \t]/.test(t.slice(g.end))) skip = t.slice(g.end).match(/^[ \t]+/)[0].length;
+      else if (!edge && !tight && !/[ \t]$/.test(prev) && !/^[ \t]/.test(t.slice(g.end))) put = ' ';
+      if (edge || tight) { before = before.replace(/[ \t]+$/, ''); if (!edge || nextCh === undefined || nextCh === '\n') skip = (t.slice(g.end).match(/^[ \t]*/) || [''])[0].length; }
+    }
+    x += before + put;
+    at = g.end + skip;
+  }
+  x += t.slice(at);
+  x = x.replace(FENCE_LINE, '').replace(ENTITY, (m, name) => ENTITIES[name] || m);
+  return x.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').replace(/\s+$/, '');
+}
+export function dropMarkup(text, { from = 0 } = {}) {
+  const src = String(text == null ? '' : text);
+  const head = src.slice(0, from);
+  const tail = src.slice(from);
+  if (!hasMarkup(tail)) return { text: src, changed: false, taken: [] };
+  const taken = markupAt(tail).map((h) => h.words).filter((w, i, a) => a.indexOf(w) === i);
+  const cleaned = cleanMarkup(tail);
+  /* (what stood right after the words carried on keeps its first white space: a new paragraph is still one) */
+  const lead = from > 0 ? tail.match(/^\s*/)[0] : '';
+  const out = head + (from > 0 && !cleaned.startsWith(lead) ? lead + cleaned.replace(/^\s+/, '') : cleaned);
+  return { text: out, changed: out !== src, taken };
+}
+/* words as they read without their loose markup (a sentence the checker offers) */
+export function unmarked(text) { return cleanMarkup(String(text == null ? '' : text)); }
+/* where loose markup stands in words: [{start, end, words}] */
+export function markupAt(text) {
+  const src = String(text == null ? '' : text);
+  if (!hasMarkup(src)) return [];
+  const hits = tagsIn(src).filter(changes).map((g) => ({ start: g.start, end: g.end, words: g.raw.trim() }));
+  for (const m of src.matchAll(FENCE_LINE)) if (m[0].trim()) hits.push({ start: m.index, end: m.index + m[0].length, words: m[0].trim() });
+  for (const m of src.matchAll(ENTITY)) hits.push({ start: m.index, end: m.index + m[0].length, words: m[0] });
+  return hits.sort((a, b) => a.start - b.start);
+}
+
 /* STRAYS OF ANOTHER SCRIPT LEFT ON A LATIN PAGE (Cozy Tavern M119, M121):
  * what dropGluedStrays could not take off by itself — one to four characters
  * standing apart ("the 틀 door"), or inside a word, and a short run (to sixty

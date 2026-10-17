@@ -124,7 +124,9 @@ try {
     assert.ok(request.includes(note), 'the exact rewrite direction rides');
     assert.ok(!request.includes('How it turns out is yours to decide'), 'a rewrite already settled the outcome');
     assert.ok(request.includes('MY EXACT WRITING WORDS'));
-    assert.equal(p.versions[0].text, 'At dawn, Mara held the crown while the old clock struck its final');
+    /* (his edit made a version of its own through 2.12.1; since 2.12.2 it is on the page itself — the rewrite's words kept as the words before it) */
+    const now = shape.picked(b.chapter().passages[0]);
+    assert.deepEqual([b.chapter().passages[0].versions.length, now.text, now.before[0].text], [1, 'At dusk, Mara held the crown while the old clock struck its final hour.', 'At dawn, Mara held the crown while the old clock struck its final hour.']);
   });
 
   await test('Go on carries the originating premise and latest selection instruction together', async () => {

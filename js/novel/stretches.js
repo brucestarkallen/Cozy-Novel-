@@ -129,7 +129,7 @@ function opening(text, n = 700) {
  * keep their end (the words right before the point matter most). A stretch
  * not summed up yet rides by its opening and close; the one right before the
  * words kept whole by its opening, its last passages joining those words. */
-export function soFarText(chapter, { upto, keep, estimate, join, size = STRETCH_WORDS, label = (a, b) => '' }) {
+export function soFarText(chapter, { upto, keep, estimate, join, size = STRETCH_WORDS, label = (a, b) => '', cut = null }) {
   const list = (chapter && chapter.passages) || [];
   const n = Math.max(0, Math.min(list.length, upto));
   const plan = stretchPlan(chapter, { size });
@@ -205,12 +205,15 @@ export function soFarText(chapter, { upto, keep, estimate, join, size = STRETCH_
   const rest = join(list.slice(startOf(k), n));
   const room = Math.max(600, keep - spent);
   if (estimate(rest) <= room) return compose(rows, rest);
+  /* cut at the passages' edges, each left out named (the partner's: context.js partnerCut) */
+  if (cut) return compose(rows, cut(list.slice(startOf(k), n), room));
   const chars = Math.floor(room * 3.2);
   if (!k) {
-    /* nothing summed up yet: its opening, and the words right before the point */
+    /* nothing summed up yet: its opening, and the words right before the point (the middle is what is left out —
+     * through 2.12.1 it said "the start") */
     const head = rest.slice(0, 1200).replace(/\s+\S*$/, '');
     const tail = rest.slice(-Math.max(1000, chars - head.length - 120)).replace(/^\S*\s+/, '');
-    return `(The start of this chapter is left out here to save room. It opens:)\n${head}\n[…]\n${tail}`;
+    return `(The middle of this chapter is left out here to save room — its opening, then the words leading up to here:)\n${head}\n[…]\n${tail}`;
   }
   return compose(rows, `(Some of what follows is left out here to save room — its end:)\n[…]\n${rest.slice(-chars).replace(/^\S*\s+/, '')}`);
 }

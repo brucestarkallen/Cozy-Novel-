@@ -18,7 +18,7 @@ import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
 import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './look.js';
 import { colourPicker } from './colour-picker.js';
-import { draftNow } from './desk.js';
+import { draftNow, nudgeChecker } from './desk.js';
 
 let sheet = null;
 let editingId = null;
@@ -577,12 +577,16 @@ function ideasField(hs) {
 function autoFields(hs) {
   const row = (key, label, say) => {
     const on = h('input', { type: 'checkbox', checked: Boolean(hs[key] && hs[key].on) });
-    on.addEventListener('change', () => changeHouse((x) => { x[key] = on.checked ? { on: true, from: Date.now() } : { on: false }; }, { now: true }));
+    on.addEventListener('change', () => {
+      changeHouse((x) => { x[key] = on.checked ? { on: true, from: Date.now() } : { on: false }; }, { now: true });
+      /* switched on: the checker looks at once, and what waits goes in (his report, 2.12.2: on, and nothing happened) */
+      if (on.checked) nudgeChecker();
+    });
     return h('div.field', h('label.toggle', on, h('span', label)), h('em', say));
   };
   return [
     row('autoFix', 'Apply the checker’s fixes by themselves',
-      'Every fix with words to put in goes in as soon as it’s found — grammar, clarity, wording — your own words too: one new version per checking, the words before one arrow away. A sentence to write again (a word on your list, stock wording) is written again by itself, twice at most for a passage. A slip against the book’s notes, and a rewrite of most of a paragraph, wait behind the bubble for you, and a version you put back on show yourself stays as you chose it. For passages written after you switch it on.'),
+      'Every fix with words to put in goes in on the page itself as soon as it’s found — grammar, clarity, wording — on every passage checked, your own words too, from the moment you switch it on. ⋯ → Put back the words before takes a fix back out, and words you put back yourself stay as you put them. A sentence to write again (a word on your list, stock wording) is written again by itself, on the page too — twice at most for a passage, each one a call to the writer. A slip against the book’s notes, a rewrite of a large stretch, and more than a small change at once wait behind the bubble for you, each saying why — and so do words you brought in from a file. A new version is only ever a rewrite or another take.'),
     row('autoLift', 'Write a passage under your mark again by itself',
       'When the judge puts a passage under your mark, the writer writes it again toward it with what the judge said it needs — twice at most; then the best-graded version stays on show, every version one arrow away. Its fixes wait until then. Anything you ask the writer meanwhile goes first, Leave it on its grade stops it, and a version you put back on show yourself stays as you chose it. Your own words too. For passages written after you switch it on.'),
   ];

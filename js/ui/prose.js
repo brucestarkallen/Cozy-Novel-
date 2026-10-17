@@ -119,7 +119,7 @@ function drawLines(frag, parts, pos, tint, lines, names) {
 function keep(into, tint, text, lines, names) {
   let shown = 0;
   for (const l of lines) if (l.el) shown++;
-  drawn.set(into, { tint, names: names ? names.sig : '', text, lines, shown, lastAt: text.length - lines[lines.length - 1].line.length });
+  drawn.set(into, { tint, finder: names || null, marks: names && names.marksOf ? names.marksOf(text) : '', text, lines, shown, lastAt: text.length - lines[lines.length - 1].line.length });
 }
 
 /* Draw a passage's text into `into` (a .prose element). names: the names the
@@ -168,7 +168,15 @@ export function growProse(into, text, { tint = false, names = null } = {}) {
   const was = drawn.get(into);
   /* drawn some other way since (or with something else in it, like "Writing…"), or other names marked: drawn whole —
    * keeping the words he has selected in it selected (a name the helper just found never takes his selection away) */
-  if (!was || was.tint !== tint || was.names !== (names ? names.sig : '') || into.childNodes.length !== was.shown) {
+  /* other names marked: drawn whole only when the names in these words change (his report, 2.12.2: a name the helper
+   * found anywhere drew every passage again — the app lagged) */
+  let otherMarks = false;
+  if (was && was.finder !== (names || null)) {
+    const now = names && names.marksOf ? names.marksOf(was.text) : '';
+    if (now !== was.marks) otherMarks = true;
+    else { was.finder = names || null; }
+  }
+  if (!was || was.tint !== tint || otherMarks || into.childNodes.length !== was.shown) {
     /* (only over the same words: offsets into words since changed would select others) */
     const held = was && raw === was.text ? heldSelection(into) : null;
     drawProse(into, raw, { tint, names });

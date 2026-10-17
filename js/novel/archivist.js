@@ -26,14 +26,15 @@ import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writer.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
-import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp } from './shape.js';
+import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, PRIOR_KEEP } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
 import { helperFrame, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook, bibAutoOn } from './context.js';
-import { readingOf, planOf, moved, changedBy, newestRead, unread } from './readings.js';
+import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep } from './timeline.js';
 import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey } from './bibliography.js';
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
+import { setHelperHooks } from './inplace.js';
 import { applyCheck, checkSig, checkedNow } from './summarycheck.js';
 
 const lights = new Map();          /* novelId -> {state, words, at} */
@@ -60,6 +61,8 @@ export function onLight(fn) { lightFns.add(fn); return () => lightFns.delete(fn)
  * way — a few seconds at most, and never for a summary, the Automatic texts,
  * the notes' check or a wait after a passing fault (Cozy Tavern's M673) */
 setBeforeGrow((novelId, chapterId, passageId, versionId) => retireIfSeen(novelId, chapterId, passageId, versionId));
+/* words changed in place (inplace.js): what the helper read of them kept, or moved with them */
+setHelperHooks({ retire: (...a) => retireIfSeen(...a), rekey: (...a) => rekeyVersion(...a) });
 setNotesWait(async (novelId, ms, signal) => {
   const until = Date.now() + ms;
   while (readingNow.has(novelId) && Date.now() < until && !(signal && signal.aborted)) await new Promise((r) => setTimeout(r, 150));
@@ -248,6 +251,49 @@ export function resign(novelId, chapterId, pid, vid, oldText, newText) {
     for (const byV of Object.values(m.readings || {})) for (const x of Object.values(byV || {})) if (x && x.in && x.in.pid === pid && x.in.vid === vid && x.in.sig === from) x.in.sig = to;
     const a = m.aside && m.aside[pid];
     if (a && a.sig === from) a.sig = to;
+  }, { checkpoint: true });
+}
+
+/* One version's words now kept on another of the same passage (inplace.js
+ * foldVersion: a fix made before 2.12.2 as a version of its own, put on the
+ * version it was made from — 2.12.2 changes words in place): what the helper
+ * read of it — the passage as read, its reading and the readings pointing to
+ * it, what it set aside — moved to the other, the other's own reading kept
+ * beside it (readings.js readingAt), nothing read again. */
+export function rekeyVersion(novelId, chapterId, pid, fromVid, toVid) {
+  if (!store.peek('novel', novelId) || fromVid === toVid) return;
+  const swap = (sig) => (typeof sig === 'string' && sig.split(SIG_SEP)[0] === fromVid ? toVid + sig.slice(fromVid.length) : sig);
+  const swapIn = (r) => (r && r.in && r.in.pid === pid && r.in.vid === fromVid ? { ...r, in: { ...r.in, vid: toVid, sig: swap(r.in.sig) } } : r);
+  store.change('novel', novelId, (n) => {
+    const m = n.memory || (n.memory = {});
+    const seen = m.seen && m.seen[chapterId];
+    if (seen && seen[pid]) seen[pid] = swap(seen[pid]);
+    const all = m.readings || {};
+    /* the readings read together with it point to it where it is now */
+    for (const group of Object.values(all)) {
+      for (const [vid, r] of Object.entries(group || {})) {
+        if (!r) continue;
+        const next = swapIn(r);
+        if (Array.isArray(next.prior)) next.prior = next.prior.map(swapIn);
+        group[vid] = next;
+      }
+    }
+    const byV = all[pid];
+    const r = byV && byV[fromVid];
+    if (r) {
+      const moved = { ...r, sig: swap(r.sig), ...(r.fromSig ? { fromSig: swap(r.fromSig) } : {}) };
+      if (Array.isArray(moved.prior)) moved.prior = moved.prior.map((x) => ({ ...x, sig: swap(x.sig), ...(x.fromSig ? { fromSig: swap(x.fromSig) } : {}) }));
+      const was = byV[toVid];
+      /* the other's own reading, and its earlier ones, kept beside it */
+      const older = [...(was && was.sig !== moved.sig ? [(({ prior, ...x }) => x)(was)] : []), ...((was && was.prior) || []), ...(moved.prior || [])];
+      const prior = older.filter((x, i) => x && x.sig !== moved.sig && older.findIndex((y) => y && y.sig === x.sig) === i).slice(0, PRIOR_KEEP);
+      delete moved.prior;
+      if (prior.length) moved.prior = prior;
+      byV[toVid] = moved;
+      delete byV[fromVid];
+    }
+    const a = m.aside && m.aside[pid];
+    if (a && a.sig) a.sig = swap(a.sig);
   }, { checkpoint: true });
 }
 
@@ -462,14 +508,19 @@ export function readingsList(novelId) {
   for (const id of (novel && novel.order) || []) {
     const c = store.peek('chapter', id);
     for (const p of (c && c.passages) || []) {
-      for (const [vid, r] of Object.entries(all[p.id] || {})) {
-        if (!r || r.in || !Array.isArray(r.cards)) continue;
+      for (const [vid, top] of Object.entries(all[p.id] || {})) {
         const v = (p.versions || []).find((x) => x.id === vid);
-        if (!v) continue;
-        const shown = (picked(p) || {}).id === vid;
-        const live = (seen[id] || {})[p.id] === r.sig;
-        rows.push({ pid: p.id, vid, chapterId: id, at: r.at || 0, label: r.label || passageLabel(novel, c, p.id), mode: r.mode, shown, live,
-          changed: changedOf(r.cards || []).concat(keptChangedOf(r.kept || {})) });
+        if (!v || !top) continue;
+        /* (and the readings of its earlier words, a version changed on the page itself: 2.12.2) */
+        for (const r of [top, ...(Array.isArray(top.prior) ? top.prior : [])]) {
+          if (!r || r.in || !Array.isArray(r.cards)) continue;
+          const onShow = picked(p) || {};
+          const shown = onShow.id === vid && signature(onShow) === r.sig;
+          const earlier = onShow.id === vid && !shown;
+          const live = (seen[id] || {})[p.id] === r.sig;
+          rows.push({ pid: p.id, vid, sig: r.sig, chapterId: id, at: r.at || 0, label: r.label || passageLabel(novel, c, p.id), mode: r.mode, shown, live, earlier,
+            changed: changedOf(r.cards || []).concat(keptChangedOf(r.kept || {})) });
+        }
       }
     }
   }
@@ -479,10 +530,12 @@ export function readingsList(novelId) {
 /* Put back what one reading changed — card by card, only where the card
  * still reads as it left it (his edits, and later readings, stay); read
  * again: and the passage is read afresh from there. */
-export function putBackReading(novelId, pid, vid, { readAgain: again = false } = {}) {
+export function putBackReading(novelId, pid, vid, { readAgain: again = false, sig = null } = {}) {
   const novel = store.peek('novel', novelId);
   const all = (novel && novel.memory && novel.memory.readings) || {};
-  const r = all[pid] && all[pid][vid];
+  const top = all[pid] && all[pid][vid];
+  /* (one of a version's readings by its words — its newest, or one of its earlier words) */
+  const r = sig ? readingAt(all[pid], vid, sig) : top;
   if (!r || r.in) return false;
   const plan = planOf({ notes: novel.notes || {}, kept: novel.kept || {} }, r, { back: true });
   if (plan.moves.length) store.change('novel', novelId, novelSteps.moveCards(plan.moves), { now: true });
@@ -490,9 +543,13 @@ export function putBackReading(novelId, pid, vid, { readAgain: again = false } =
   /* the reading is no longer what the notes hold: it goes, and with it the
    * readings of the passages read together with it */
   const covers = r.covers && r.covers.length ? r.covers : [pid];
-  const drop = [[pid, vid]];
-  for (const other of covers) if (other !== pid) for (const [ov, x] of Object.entries(all[other] || {})) if (x && x.in && x.in.pid === pid && x.in.vid === vid) drop.push([other, ov]);
-  store.change('novel', novelId, novelSteps.dropReadings(drop), { now: true });
+  const drop = [];
+  for (const other of covers) if (other !== pid) for (const [ov, x] of Object.entries(all[other] || {})) if (x && x.in && x.in.pid === pid && x.in.vid === vid && x.in.sig === r.sig) drop.push([other, ov]);
+  /* that reading alone: the version's readings of its other words stay */
+  if (top && top.sig !== r.sig) store.change('novel', novelId, (n) => { const t = n.memory.readings[pid] && n.memory.readings[pid][vid]; if (t && Array.isArray(t.prior)) t.prior = t.prior.filter((x) => x && x.sig !== r.sig); }, { now: true });
+  else if (top && Array.isArray(top.prior) && top.prior.length) store.change('novel', novelId, (n) => { const t = n.memory.readings[pid] && n.memory.readings[pid][vid]; if (!t) return; const [next, ...rest] = t.prior; n.memory.readings[pid][vid] = { ...next, ...(rest.length ? { prior: rest } : {}) }; }, { now: true });
+  else drop.push([pid, vid]);
+  if (drop.length) store.change('novel', novelId, novelSteps.dropReadings(drop), { now: true });
   const changed = changedBy(plan.moves);
   store.change('novel', novelId, novelSteps.setMemory({ lit: changed.length ? { at: Date.now(), label: `${r.label || 'a reading'} — put back`, changed } : null }), { now: true });
   if (again) {
@@ -1842,7 +1899,8 @@ async function readChanges(novelId, conn) {
           const p = live && live.passages.find((x) => x.id === c.pid);
           const v = p && picked(p);
           /* renamed while it was read: what was read is the version the name made, read already */
-          if (renamedSince.length && v && v.from === c.sig.split(SIG_SEP)[0] && signature(v) !== c.sig && String(v.text || '') === renameIn(c.whole !== undefined ? c.whole : c.text, renamedSince)) c.sig = signature(v);
+          /* (on the page itself since 2.12.2: the same version, its words renamed — or, kept from before, a version made from it) */
+          if (renamedSince.length && v && (v.id === c.sig.split(SIG_SEP)[0] || v.from === c.sig.split(SIG_SEP)[0]) && signature(v) !== c.sig && String(v.text || '') === renameIn(c.whole !== undefined ? c.whole : c.text, renamedSince)) c.sig = signature(v);
           map[c.pid] = c.sig;
           if (v && signature(v) === c.sig) continue;
           const [vid] = c.sig.split(SIG_SEP);
@@ -2536,7 +2594,11 @@ function codexBefore(chapterId, c) {
   const ch = chapterId ? store.peek('chapter', chapterId) : null;
   const p = ch && (ch.passages || []).find((x) => x.id === c.pid);
   if (!p) return null;
-  for (const v of p.versions || []) if (String(v.text || '') === String(c.old || '')) { const k = codexNow(v); if (k) return k; }
+  for (const v of p.versions || []) {
+    if (String(v.text || '') === String(c.old || '')) { const k = codexNow(v); if (k) return k; }
+    /* words changed in place since (2.12.2): their facts kept with the words before */
+    for (const b of v.before || []) if (b && b.codex && String(b.text) === String(c.old || '')) { const k = codexNow({ text: b.text, codex: b.codex }); if (k) return k; }
+  }
   return null;
 }
 /* the backfill's tries, by version: a batch its model will not read is read one passage at a time (bibNarrow), and a

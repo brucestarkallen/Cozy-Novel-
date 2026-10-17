@@ -37,17 +37,30 @@ function cardIn(notes, kind, id) {
   return ((notes && notes[kind]) || []).find((c) => c.id === id) || null;
 }
 
+/* A version whose words changed in place — a fix, his partner's words, his
+ * edit, Go on (his word, 2.12.2: only a rewrite or another take is a new
+ * version) — keeps the readings of its earlier words beside its newest
+ * (`prior`, shape.js putReading): read as a change, it is taken back to them
+ * as it would be to a version before it. The reading of one version at one
+ * signature, the newest or one before it: */
+export function readingAt(byV, vid, sig) {
+  const r = byV && byV[vid];
+  if (!r || !sig) return null;
+  if (r.sig === sig) return r;
+  return (Array.isArray(r.prior) ? r.prior : []).find((x) => x && x.sig === sig) || null;
+}
+
 /* The reading kept for a passage as the helper read it (its seen signature),
  * following a passage read together with others to the reading they share. */
 export function readingOf(novel, pid, sig) {
   const all = (novel && novel.memory && novel.memory.readings) || {};
   if (!sig) return null;
   const vid = String(sig).split(SEP)[0];
-  const r = all[pid] && all[pid][vid];
-  if (!r || r.sig !== sig) return null;
+  const r = readingAt(all[pid], vid, sig);
+  if (!r) return null;
   if (r.in) {
-    const shared = all[r.in.pid] && all[r.in.pid][r.in.vid];
-    return shared && shared.sig === r.in.sig ? { ...shared, pointer: true } : null;
+    const shared = readingAt(all[r.in.pid], r.in.vid, r.in.sig);
+    return shared ? { ...shared, pointer: true } : null;
   }
   return r;
 }

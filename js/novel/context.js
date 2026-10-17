@@ -21,11 +21,11 @@
  * every page.
  */
 
-import { estimateTokens } from '../util.js';
+import { estimateTokens, countWords, numberWords } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
-import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers } from './shape.js';
+import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers, picked } from './shape.js';
 import { ownWordsFor } from './ownwords.js';
-import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook, bibPart } from './prompts.js';
+import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook, bibPart, READ_OPEN, READ_CLOSE } from './prompts.js';
 import { entriesOf, entryIndex, bibShare, bibItems, ridingItems } from './bibliography.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
@@ -159,13 +159,67 @@ export function partlyWhole(novel, chapter, keep, numbered = false) {
  * passage 3 of Chapter Two; a scene break has no number) — for the partner,
  * who changes a passage by its number. */
 export function numberedText(novel, chapter, list = null) {
+  return numberedRows(novel, chapter, list).map((x) => x.text).join('\n\n');
+}
+/* each passage as the partner sees it: [{p, text, words, brk}] — one with no words yet is said so, never left out
+ * without a word (a number the page shows it would not find) */
+function numberedRows(novel, chapter, list = null) {
   const n = chapterNumber(novel, chapter.id);
   const nums = passageNumbers(chapter);
   return (list || chapter.passages || []).map((p) => {
     const t = passageText(p);
-    if (!t.trim()) return '';
-    return p.by === 'break' ? t : `[${n}.${nums.get(p.id)}] ${t}`;
-  }).filter(Boolean).join('\n\n');
+    if (p.by === 'break') return t.trim() ? { p, text: t, words: 0, brk: true } : null;
+    const v = picked(p) || {};
+    if (!t.trim()) return { p, text: `[${n}.${nums.get(p.id)}] (${v.streaming ? 'being written just now' : 'no words yet'})`, words: 0 };
+    return { p, text: `[${n}.${nums.get(p.id)}] ${t}`, words: countWords(t), label: `[${n}.${nums.get(p.id)}]` };
+  }).filter(Boolean);
+}
+
+/* THE CHAPTER OPEN, CUT ONLY AT ITS PASSAGES' EDGES, FOR THE PARTNER (his
+ * report, 2.12.2: it said "[1.2], which you did not send this time", and
+ * that it would wait for him to "paste [1.2] back"). Through 2.12.1 it was
+ * cut by letters: the chapter's first lines, then its end — a passage's
+ * number in the middle lost, the end of [1.2] read as more of [1.1], and
+ * nothing said of what was gone. Now whole passages go: the first stays if
+ * it is short, then as many of the newest as fit; every passage left out is
+ * named where it stood, with its length and how to read it. The one
+ * passage too long by itself keeps its number, its start and its end, its
+ * middle said. Within `keep` tokens. */
+export function partnerCut(novel, chapter, list, keep) {
+  const rows = numberedRows(novel, chapter, list);
+  const cost = rows.map((x) => estimateTokens(x.text) + 2);
+  const all = cost.reduce((a, b) => a + b, 0);
+  if (all <= keep) return rows.map((x) => x.text).join('\n\n');
+  const n = chapterNumber(novel, chapter.id);
+  const how = `${READ_OPEN}[${n}]${READ_CLOSE} sends this chapter whole, and ${READ_OPEN}["find: …"]${READ_CLOSE} every place some words stand`;
+  const gapLine = (gone) => {
+    const named = gone.filter((x) => !x.brk);
+    if (!named.length) return '';
+    const words = named.reduce((a, x) => a + x.words, 0).toLocaleString('en-US');
+    const which = named.length === 1 ? `${named[0].label || named[0].text.split(' ')[0]} — left out here to save room (${words} words)` : `${named[0].label}–${named[named.length - 1].label} — ${numberWords(named.length).toLowerCase()} passages left out here to save room (${words} words)`;
+    return `${which}: ${how}.`;
+  };
+  const GAP = 70;
+  /* the first, when it is short beside the room; then the newest, back from the end, while they fit */
+  const keepFirst = rows.length > 1 && cost[0] <= keep * 0.25;
+  let spent = (keepFirst ? cost[0] : 0) + GAP;
+  let from = rows.length;
+  while (from - 1 > (keepFirst ? 0 : -1) && spent + cost[from - 1] <= keep) { spent += cost[from - 1]; from--; }
+  if (from < rows.length) {
+    const head = keepFirst ? [rows[0].text] : [];
+    const gone = rows.slice(keepFirst ? 1 : 0, from);
+    return [...head, gapLine(gone), ...rows.slice(from).map((x) => x.text)].filter(Boolean).join('\n\n');
+  }
+  /* not even the newest passage fits whole: the others named, and its start and its end */
+  const last = rows[rows.length - 1];
+  const before = gapLine(rows.slice(0, -1));
+  const room = Math.max(200, keep - estimateTokens(before) - GAP);
+  const body = last.text;
+  const chars = Math.floor(room * 3.2);
+  const headPart = body.slice(0, Math.floor(chars * 0.4)).replace(/\s+\S*$/, '');
+  const tailPart = body.slice(-Math.floor(chars * 0.6)).replace(/^\S*\s+/, '');
+  const middle = `[… the middle of ${last.label || 'this passage'} is left out here to save room: ${how} …]`;
+  return [before, `${headPart}\n\n${middle}\n\n${tailPart}`].filter(Boolean).join('\n\n');
 }
 
 /* where in the current chapter the request sits — said by whoever speaks:
@@ -199,7 +253,7 @@ function currentPart(novel, chapter, target, purpose = 'write', notesAs = 'syste
 /* The chapter being written, cut to fit `keep` tokens: what leads up to the
  * point being written keeps its end (the words right before it) and the
  * chapter's opening lines; what follows the point keeps its start. */
-export function trimCurrent(current, keep) {
+export function trimCurrent(current, keep, { cutPre = null } = {}) {
   const preKey = current.marker ? 'before' : 'text';
   const postKey = current.marker ? 'after' : 'afterText';
   const pre = String(current[preKey] || '');
@@ -214,9 +268,13 @@ export function trimCurrent(current, keep) {
   const preChars = Math.floor(preShare * 3.2);
   /* the words before the point already fitted by the chapter so far (fitCurrent) are left as they are */
   if (pre.length > preChars && !current.fitted) {
-    const head = pre.slice(0, 1200).replace(/\s+\S*$/, '');
-    const tail = pre.slice(-Math.max(1000, preChars - head.length - 120)).replace(/^\S*\s+/, '');
-    out[preKey] = `(The start of this chapter is left out here to save room. It opens:)\n${head}\n[…]\n${tail}`;
+    if (cutPre) out[preKey] = cutPre(preShare);
+    else {
+      const head = pre.slice(0, 1200).replace(/\s+\S*$/, '');
+      const tail = pre.slice(-Math.max(1000, preChars - head.length - 120)).replace(/^\S*\s+/, '');
+      /* (its opening and the words leading up to here: the middle is what is left out — through 2.12.1 it said "the start") */
+      out[preKey] = `(The middle of this chapter is left out here to save room — its opening, then the words leading up to here:)\n${head}\n[…]\n${tail}`;
+    }
   }
   const postChars = Math.floor(postShare * 3.2);
   if (post.length > postChars) {
@@ -247,8 +305,10 @@ function fitCurrent(novel, chapter, current, target, keep, purpose) {
     const ns = list.slice(a, b + 1).map((p) => nums.get(p.id)).filter(Boolean);
     return ns.length ? `[${n}.${ns[0]}–${n}.${ns[ns.length - 1]}, in short]` : '';
   } : () => '';
-  const soFar = soFarText(chapter, { upto, keep: Math.max(600, keep - postShare), estimate: estimateTokens, join, label });
-  return trimCurrent(soFar ? { ...current, [preKey]: soFar, fitted: true } : current, keep);
+  /* the partner: cut only at a passage's edges, each one left out named (partnerCut) */
+  const cut = numbered ? (arr, room) => partnerCut(novel, chapter, arr, room) : null;
+  const soFar = soFarText(chapter, { upto, keep: Math.max(600, keep - postShare), estimate: estimateTokens, join, label, cut });
+  return trimCurrent(soFar ? { ...current, [preKey]: soFar, fitted: true } : current, keep, { cutPre: cut ? (room) => cut(list.slice(0, upto), room) : null });
 }
 
 /* what the chapters before the open one cost told in short, and what comes after it (capped as fitBook caps it) */
@@ -689,6 +749,9 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const sideOf = (key) => String(((cur || {})[key]) || '');
   const preK = current && current.marker ? 'before' : 'text', postK = current && current.marker ? 'after' : 'afterText';
   const pre = sideOf(preK);
+  /* the passages of the chapter open whose words did not go whole (said under the partner's answer: never a silent cut) */
+  const toldNow = cur === current ? null : [cur && cur.text, cur && cur.before, cur && cur.after, cur && cur.afterText].filter(Boolean).join('\n');
+  const openLeft = !toldNow || !chapter.id ? [] : (chapter.passages || []).filter((p) => p.by !== 'break' && passageText(p).trim() && !toldNow.includes(passageText(p).trim())).map((p) => `${chapterNumber(novel, chapter.id)}.${passageNumbers(chapter).get(p.id)}`);
   const chapterFit = !current || cur === current ? { before: 'whole', after: 'whole' } : {
     before: pre === String(current[preK] || '') ? 'whole' : !cur.fitted || !pre.includes('The chapter so far, in short:') ? 'cut' : /left out here to save room/.test(pre) ? 'stretches-cut' : 'stretches',
     after: sideOf(postK) === String(current[postK] || '') ? 'whole' : 'cut',
@@ -701,17 +764,19 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
       /* the chapters it was given whole — the one open (unless told in part) and the earlier ones that fit (talk.js: never a passage written anew in one it only had in short) */
       wholeIds: [...fit.book.whole.map((w) => w.id), ...(chapter.id && cur === current ? [chapter.id] : [])],
       /* the passages of a chapter told partly whole (partlyWhole) that it had word for word: those may be written anew */
-      wholePassages: fit.book.summaries.filter((x) => x.wholeFrom).flatMap((x) => {
+      wholePassages: [...fit.book.summaries.filter((x) => x.wholeFrom).flatMap((x) => {
         const list = (chapters[x.id] || {}).passages || [];
         const i = list.findIndex((p) => p.id === x.wholeFrom);
         return i < 0 ? [] : list.slice(i).map((p) => p.id);
       }),
+      /* the chapter open told in part: the passages whose words went whole (the partner's cut keeps whole passages) */
+      ...(toldNow && chapter.id ? (chapter.passages || []).filter((p) => p.by !== 'break' && passageText(p).trim() && toldNow.includes(passageText(p).trim())).map((p) => p.id) : [])],
       /* the cards shown by their first line (talk.js: never written whole from it) */
       shortCards: [...shortIds],
       /* the bibliography's entries it read whole, and how many named ones the room left out */
       entries: bib.ids, entriesLeft: bib.left,
       /* what goes whatever the book's earlier chapters, the answer's room, the chapter open (talk.js) */
-      fixed, reserve, current: currentCost(current), chapterFit,
+      fixed, reserve, current: currentCost(current), chapterFit, openLeft,
       /* chapters in the book's list that could not be read (the writer is told so in their place; writer.js tells him under the page) */
       unreadChapters: (novel.order || []).filter((id) => !chapters[id]).length },
     /* a model whose room cannot hold what has to go with the least of the

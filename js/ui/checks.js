@@ -8,8 +8,10 @@
 
 import * as store from '../store.js';
 import * as checker from '../novel/checker.js';
-import { h, icon, toast, openSheet, confirmIt } from './dom.js';
-import { chapterLabel, picked } from '../novel/shape.js';
+import { h, icon, toast, undoToast, openSheet, confirmIt } from './dom.js';
+import { putBackWords } from '../novel/inplace.js';
+import * as archivist from '../novel/archivist.js';
+import { chapterLabel, picked, passageNumbers } from '../novel/shape.js';
 import { GRADE_AXES, JUDGE_CHECKS, avoidList } from '../novel/prompts.js';
 import { findIn } from '../novel/search.js';
 import { plural } from '../util.js';
@@ -195,15 +197,15 @@ function drawSheet(st = checker.stateOf(C.novelId)) {
   s.body.append(h('div.check-intro',
     h('p.eyebrow', novel.meta?.title || 'YOUR BOOK'),
     h('h3', 'A little polish for your pages.'),
-    h('p', 'Keep what feels right. Every applied change saves a new version.')));
+    h('p', 'Keep what feels right. A change goes in on the page itself — its Undo, or ⋯ → Put back the words before on the passage, takes it back out.')));
   s.body.append(h('div.sugstate', { 'data-state': st.state, role: 'status' }, h('span.dot', { 'aria-hidden': 'true' }), h('span', st.words)));
   const list = checker.suggestions(novelId);
   const row = h('div.btnrow.check-actions');
   /* Apply all puts in every change that has its words (a sentence to write again is his to ask for) */
   const can = list.filter((x) => typeof x.item.replace === 'string').length;
-  if (can > 1) row.append(h('button.btn.primary.small', { title: 'Every change below that has its words goes in — one new version for each passage, the words before one arrow away.', onclick: () => {
+  if (can > 1) row.append(h('button.btn.primary.small', { title: 'Every change below that has its words goes in on the page itself — ⋯ → Put back the words before, on a passage, takes them back out.', onclick: () => {
     const n = checker.applyAll(novelId);
-    toast(n ? `${plural(n, 'change')} applied — the words before are one arrow away.` : 'Nothing could be applied — the words had changed.');
+    toast(n ? `${plural(n, 'change')} put in on the page — ⋯ → Put back the words before, on a passage, takes them out.` : 'Nothing could be applied — the words had changed.');
   } }, `Apply all (${can})`));
   /* the older writing, checked only when he asks */
   const here = checker.unchecked(novelId, C.chapterId);
@@ -270,15 +272,44 @@ function judgeBox(novelId) {
     h('div.check-table', { tabindex: 0, role: 'region', 'aria-label': 'Grades by writer' }, h('table.usage-table',
       h('tr', h('th', 'Who wrote it'), h('th', 'Graded'), h('th', 'Average'), h('th', 'Stock per 1,000 words'), head ? h('th', 'Head to head') : null),
       ...writers.map((m) => h('tr',
-        h('td', m.model, m.self ? h('small.quiet', ' · judged by itself') : null),
+        h('td', m.mixed ? 'Mixed — your words or your partner’s in it, carried on by another writer, or brought in' : m.model, m.self ? h('small.quiet', ' · judged by itself') : null),
         h('td.num', String(m.n)),
         h('td.num', m.average === null ? '—' : String(m.average)),
         h('td.num', m.per1000 === null ? '—' : String(m.per1000)),
         head ? h('td.num', { title: 'won – lost – even' }, `${m.win}–${m.loss}–${m.tie}`) : null)))));
   if (g.fails.length) box.append(h('p.say', h('b', 'Fails most: '), g.fails.slice(0, 4).map((f) => `${f.name} ${f.n}`).join(' · ')));
+  /* why each grade is what it is (his ask, 2.12.2: "add reasoning why it gives 9"): a point for each of the ten
+   * checks passed — the ones it failed, with the words that fail them and why; a tap opens all ten */
+  if (g.rows.length) box.append(gradesWhy(novelId, g.rows));
   if (writers.some((m) => m.self && m.n)) box.append(h('p.say.quiet', 'A judge leans toward its own writing: a checker on another model grades the passages it wrote more fairly (Settings → Who does what).'));
   box.append(h('p.say.quiet', 'Ten checks a passage passes or fails — Opening, True to the book, Shown, Pacing, Specific, Fresh, Sentences, People, Moves, Ending — its grade the number passed. Stock wording is counted, not judged (for scale: classic books of fiction hold about 0.01 in every 1,000 words, machine-made stories 0.1 to 7). Two versions of one passage by two writers are read head to head, blind and both ways round. The mark, and whether it judges: Settings → Who does what.'));
   return box;
+}
+
+function gradesWhy(novelId, rows) {
+  const novel = store.peek('novel', novelId);
+  const order = (novel && novel.order) || [];
+  const where = new Map();
+  for (const id of order) {
+    const c = store.peek('chapter', id);
+    if (!c) continue;
+    const nums = passageNumbers(c);
+    (c.passages || []).forEach((p, k) => where.set(p.id, { c, n: nums.get(p.id), k, ci: order.indexOf(id) }));
+  }
+  const list = rows.filter((r) => where.has(r.passageId)).sort((a, b) => (where.get(a.passageId).ci - where.get(b.passageId).ci) || (where.get(a.passageId).k - where.get(b.passageId).k));
+  const name = (k) => (JUDGE_CHECKS.find(([x]) => x === k) || [k, k])[1];
+  return h('div.gradewhy',
+    h('p.say', h('b', 'Why each grade: '), 'each of the ten checks a passage passes is a point, so a 9 is nine passed and one failed — the one named, with the words that fail it. For scale, the judge is told that judged this way a page from a published novelist fails one or two of the ten, and a page that reads machine-made fails most.'),
+    h('ul.gradelist', ...list.map((r) => {
+      const at = where.get(r.passageId);
+      const failed = (r.faults || []).filter((f) => !f.unverified);
+      const uncounted = (r.faults || []).filter((f) => f.unverified).length;
+      return h('li',
+        h('button.link', { title: 'All ten checks of this passage, each passed or failed.', onclick: () => showJudged(novelId, at.c.id, r.passageId) }, `${chapterLabel(novel, at.c, { withName: false })}, passage ${at.n}`),
+        ` — ${r.overall} of ${r.of || 10}: `,
+        failed.length ? failed.map((f, i) => [i ? '; ' : '', h('b', name(f.check)), ' failed', f.words ? ` — “${f.words}”` : '', f.why ? ` — ${f.why}` : '']) : 'passed all ten',
+        uncounted ? h('small.quiet', ` (${uncounted === 1 ? 'one more no' : `${uncounted} more noes`} quoted words not in the passage, so not counted)`) : null);
+    })));
 }
 
 /* Set aside, folded: each passage its model would not check, why, and Check
@@ -362,14 +393,22 @@ function card(novelId, x) {
     el.append(h('div.sugwhat.word-passage', h('small.word-label', 'In your passage'), marked(item.find, phrasesOf(item))));
   }
   if (item.why) el.append(h('div.sugwhy', item.why));
+  /* with the fixes going in by themselves: why this one waits for him (his report, 2.12.2) */
+  const waits = checker.waitsWhy(x.chapterId, x.passageId, item);
+  if (waits) el.append(h('div.sugwhy.sugwaits', h('b', 'Not put in by itself: '), `${waits}.`));
   const btns = h('div.btnrow');
   if (typeof item.replace === 'string') {
-    btns.append(h('button.btn.primary.small', { title: 'This change goes in — a new version, the words before one arrow away.', onclick: () => {
+    btns.append(h('button.btn.primary.small', { title: 'This change goes in on the page itself — Undo takes it back out.', onclick: () => {
       const out = checker.applyOne(novelId, x.chapterId, x.passageId, item.id);
-      if (!out.ok) toast(`It couldn’t be applied: ${out.said}.`, 5000);
+      if (!out.ok) { toast(`It couldn’t be applied: ${out.said}.`, 5000); return; }
+      undoToast('Put in on the page.', () => {
+        const back = putBackWords({ novelId, chapterId: x.chapterId, passageId: x.passageId, versionId: out.versionId, expect: out.after, before: out.before });
+        if (back.ok) archivist.nudge(novelId);
+        else toast(`It couldn’t be taken back out: ${back.said}.`, 5000);
+      });
     } }, 'Apply'));
   } else {
-    btns.append(h('button.btn.primary.small', { title: 'The writer writes this sentence again without them — a new version, the words before one arrow away.', onclick: () => {
+    btns.append(h('button.btn.primary.small', { title: 'The writer writes this sentence again without them, on the page itself — ⋯ → Put back the words before takes it back out.', onclick: () => {
       const spot = checker.spotOf(x.chapterId, x.passageId, item);
       if (!spot) { toast('Those words are not there any more.'); checker.leaveOne(x.chapterId, x.passageId, item.id, { remember: false }); return; }
       if (C.sheet) C.sheet.close();

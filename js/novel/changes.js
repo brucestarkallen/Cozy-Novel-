@@ -21,9 +21,10 @@ import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
 import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
-import { joinSoftWraps, mendMarks, dropGluedStrays } from './textshape.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, hasMarkup as hasMarkupText } from './textshape.js';
 import { replaceMany, renameRule } from './names.js';
 import { entriesOf, entryNamed, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
+import { changeInPlace, putBackWords } from './inplace.js';
 
 /* ------------------------------------------------------------ reading it */
 
@@ -144,9 +145,12 @@ export function opsOf(text) {
     if (!body) continue;
     if (!body.includes('"') && /[“”]/.test(body)) body = body.replace(/[“”]/g, '"');
     const list = parseLenient(body);
-    const ops = Array.isArray(list) ? list : (list && typeof list === 'object' ? [list] : []);
+    /* a block that says nothing is to change — [] or {} — is no change, never one that could not be read (his report,
+     * 2.12.2: "✗ A changes block couldn't be made — its changes block could not be read (it began: [])") */
+    if ((Array.isArray(list) && !list.length) || (list && typeof list === 'object' && !Array.isArray(list) && !Object.keys(list).length)) continue;
+    const ops = (Array.isArray(list) ? list : (list && typeof list === 'object' ? [list] : [])).filter((op) => op && typeof op === 'object' && !Array.isArray(op));
     if (!ops.length) { out.push({ unreadable: true, head: body.replace(/\s+/g, ' ').slice(0, 120) }); continue; }
-    for (const op of ops) if (op && typeof op === 'object') out.push(op);
+    for (const op of ops) out.push(op);
   }
   return out;
 }
@@ -495,11 +499,14 @@ function chapterRange(novel, spec) {
   if (!a || !b) return null;
   return { from: Math.max(1, Math.min(a, b)), to: Math.min(n, Math.max(a, b)) };
 }
-function newVersionOn(put, novelId, x, next, why) {
-  /* the words fixed in place: what the version they came from was keeps (cut short, stopped — its Go on: M511-1) */
-  const version = newVersion({ text: next, how: 'partner', from: x.version.id, words: countWords(next), why: why || undefined, ...carried(x.version) });
-  put('chapter', x.chapterId, chapterSteps.addVersion(x.passage.id, version), { now: true });
-  return { chapterId: x.chapterId, passageId: x.passage.id, versionId: version.id, from: x.version.id };
+/* the words changed on the page itself (his word, 2.12.2: only a rewrite or another take is a new version): the
+ * version takes them, where it stops stays (cut short, stopped — its Go on: M511-1), the words before are kept on
+ * it. retire: false where what the helper read is moved to the new words by the caller (a name changed) */
+function newVersionOn(put, novelId, x, next, why, { retire = true } = {}) {
+  const row = { chapterId: x.chapterId, passageId: x.passage.id, versionId: x.version.id, before: String(x.version.text || ''), after: next, inPlace: true };
+  if (put.dry) return row;
+  changeInPlace({ novelId, chapterId: x.chapterId, passageId: x.passage.id, versionId: x.version.id, next, by: 'partner', retire, extra: why ? { why } : {} });
+  return row;
 }
 /* what a version's words fixed in place keep of it: what was asked, and
  * whether it was cut short or stopped (its Go on stays) */
@@ -582,9 +589,11 @@ function renameEverywhere(novelId, novel, rules, put, why) {
   for (const x of eachPassage(novel)) {
     const next = swap(x.version.text);
     if (next === x.version.text) continue;
-    const made = newVersionOn(put, novelId, x, next, why);
+    /* (what it read as before it changes on the page itself: its words, their facts) */
+    const was = { text: String(x.version.text || ''), sig: archivist.signature(x.version), codex: clone(codexNow(x.version)) };
+    const made = newVersionOn(put, novelId, x, next, why, { retire: false });
     undo.passages.push(made);
-    restamp.push({ x, made, next });
+    restamp.push({ x, made, next, was });
   }
   /* WHAT WAS READ, CHECKED AND SUMMED UP FOLLOWS THE NAME (Cozy Tavern's
    * M752 restamp, M730): a version a rename made from the one the helper read
@@ -661,7 +670,7 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
   const readings = mem.readings || {};
   const sigOfV = (v) => archivist.signature(v);
   const newSigs = new Map();
-  for (const { x, made, next } of restamp) newSigs.set(sigOfV(x.version), { pid: x.passage.id, vid: made.versionId, sig: sigOfV({ id: made.versionId, text: next }) });
+  for (const { x, made, next, was } of restamp) newSigs.set(was.sig, { pid: x.passage.id, vid: made.versionId, sig: sigOfV({ id: made.versionId, text: next }) });
   const swapCard = (c) => {
     if (!c) return c;
     const out = clone(c);
@@ -671,8 +680,8 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
   };
   const swapKept = (k) => (k && typeof k.text === 'string' ? { ...clone(k), text: quiet(k.text) } : clone(k));
   const seenNow = {};
-  for (const { x, made, next } of restamp) {
-    const oldSig = sigOfV(x.version);
+  for (const { x, made, next, was } of restamp) {
+    const oldSig = was.sig;
     const to = newSigs.get(oldSig);
     /* read as it was: read as it is now */
     if ((seenAll[x.chapterId] || {})[x.passage.id] === oldSig) {
@@ -689,7 +698,7 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
       put('novel', novelId, novelSteps.putReading(x.passage.id, made.versionId, copy), { now: true });
     }
     /* the bibliography's facts it established, their words changed with it (bibliography.js carriedCodex): never read for again */
-    const facts = carriedCodex(codexNow(x.version), next, quiet);
+    const facts = carriedCodex(was.codex, next, quiet);
     if (facts) {
       put('chapter', x.chapterId, (ch) => {
         const p = (ch.passages || []).find((y) => y.id === x.passage.id);
@@ -701,7 +710,7 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
     /* the checker's findings on it, their words changed with it */
     const live = store.peek('chapter', x.chapterId);
     const e = live && live.checks && live.checks[x.passage.id] && live.checks[x.passage.id][x.version.id];
-    if (e && e.sig === hashText(String(x.version.text || ''))) {
+    if (e && e.sig === hashText(was.text)) {
       const items = (e.items || []).map((it) => ({ ...clone(it), ...(typeof it.find === 'string' ? { find: quiet(it.find) } : {}), ...(typeof it.replace === 'string' ? { replace: quiet(it.replace) } : {}) }));
       put('chapter', x.chapterId, chapterSteps.setCheck(x.passage.id, made.versionId, { ...clone(e), sig: hashText(next), items }), { now: true });
     }
@@ -744,7 +753,7 @@ function replaceEverywhere(novelId, novel, items, put, why) {
  * it. Returns one change per op, in order. */
 const REREADING = 'the whole book is being read again for the notes just now — ask for this once that is done';
 export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
-  const put = dry ? () => {} : (...a) => store.change(...a);
+  const put = dry ? Object.assign(() => {}, { dry: true }) : (...a) => store.change(...a);
   const at = Date.now();
   const bases = ops.map((op, i) => ({ id: ids[i] || newId('cg'), op: clone(op), label: labelOf(op), why: text(op.why) }));
   const novel = store.peek('novel', novelId);
@@ -979,23 +988,37 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
        * stuck to a word, a soft wrap, a quotation left open — its words never
        * cut, they are all its own */
       const unglued = dropGluedStrays(next);
-      const marks = mendMarks(joinSoftWraps(unglued.text));
-      if (unglued.changed || marks.text !== unglued.text) {
-        mended = [unglued.changed ? 'a stray character of another script stuck to a word taken off' : '', marks.changed ? 'a quotation left open closed' : '', !marks.changed && marks.text !== unglued.text ? 'a line broken mid-sentence joined' : ''].filter(Boolean).join('; ');
+      const unmarked = dropMarkup(unglued.text);
+      const marks = mendMarks(joinSoftWraps(unmarked.text));
+      if (unglued.changed || unmarked.changed || marks.text !== unmarked.text) {
+        mended = [unglued.changed ? 'a stray character of another script stuck to a word taken off' : '', unmarked.changed ? 'web page or code markup taken off' : '', marks.changed ? 'a quotation left open closed' : '', !marks.changed && marks.text !== unmarked.text ? 'a line broken mid-sentence joined' : ''].filter(Boolean).join('; ');
         next = marks.text;
       }
     } else {
-      const words = newWords(op);
+      let words = newWords(op);
       if (words === null) return refuse('it gave no new words for them');
+      /* its new words, never a web page's tag or a fence of code (his report, 2.12.2) — unless the words it replaces had them */
+      if (!hasMarkupText(String(op.find || ''))) {
+        const lead = words.match(/^\s*/)[0];
+        const trail = words.match(/\s*$/)[0];
+        const unmarked = dropMarkup(words.trim());
+        if (unmarked.changed) { words = lead + unmarked.text + trail; mended = 'web page or code markup taken off'; }
+      }
       const spot = locate(old, op.find);
       if (spot.why) return refuse(whyNotFound(spot, old, op.find));
       next = old.slice(0, spot.start) + words + old.slice(spot.end);
     }
     if (next === old) return refuse('it would change nothing');
     const anew = op.text !== undefined && op.find === undefined;
-    const version = newVersion({ text: next, how: 'partner', from: v.id, words: countWords(next), why: base.why || undefined, ...(anew ? (v.ask ? { ask: v.ask } : {}) : carried(v)) });
-    put('chapter', chapter.id, chapterSteps.addVersion(passage.id, version), { now: true });
-    put('novel', novelId, novelSteps.touchWritten(at));
+    /* words changed in it: on the page itself, the words before kept on it (his word, 2.12.2: "Why partner edit create
+     * new version??? … new version is only for rewrite or another take"); the passage written anew is a rewrite: a
+     * version of its own, the one before one arrow away */
+    let version = null;
+    if (anew) {
+      version = newVersion({ text: next, how: 'partner', from: v.id, words: countWords(next), why: base.why || undefined, ...(v.ask ? { ask: v.ask } : {}) });
+      put('chapter', chapter.id, chapterSteps.addVersion(passage.id, version), { now: true });
+      put('novel', novelId, novelSteps.touchWritten(at));
+    } else if (!dry && !changeInPlace({ novelId, chapterId: chapter.id, passageId: passage.id, versionId: v.id, next, by: 'partner', extra: base.why ? { why: base.why } : {} })) return refuse('the passage is being written just now');
     /* the words it replaced, where they still stand elsewhere in the book —
      * said, so the rest can be made to agree when it should (Cozy Tavern's
      * ripple, M61 v2.77; nothing else is changed by itself) */
@@ -1006,7 +1029,8 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     const now = countWords(next);
     const shrunk = anew && was > 60 && now < was / 2 ? `it is ${now.toLocaleString()} words now, from ${was.toLocaleString()}` : '';
     const said = [shrunk, stands, mended].filter(Boolean).join('; ');
-    return { ...base, status: 'made', undo: { what: 'passage', chapterId: chapter.id, passageId: passage.id, versionId: version.id, from: v.id }, before: old, after: next, ...(said ? { said } : {}) };
+    const undo = anew ? { what: 'passage', chapterId: chapter.id, passageId: passage.id, versionId: version.id, from: v.id } : { what: 'words', chapterId: chapter.id, passageId: passage.id, versionId: v.id, before: old, after: next };
+    return { ...base, status: 'made', undo, before: old, after: next, ...(said ? { said } : {}) };
   }
 
   if (op.chapter !== undefined) {
@@ -1186,6 +1210,14 @@ export function undoChange(novelId, change) {
     for (const x of u.passages || []) {
       const c = store.peek('chapter', x.chapterId);
       const p = c && (c.passages || []).find((y) => y.id === x.passageId);
+      /* changed on the page itself (2.12.2): its words before put back, where it still reads as the change left it */
+      if (x.inPlace) {
+        const got = putBackWords({ novelId, chapterId: x.chapterId, passageId: x.passageId, versionId: x.versionId, expect: x.after, before: x.before, retire: !asRead(x.passageId), hold: false });
+        if (!got.ok) { kept++; continue; }
+        putBack.add(x.passageId);
+        back++;
+        continue;
+      }
       const shown = p && picked(p);
       if (!shown || shown.id !== x.versionId || !p.versions.some((v) => v.id === x.from)) { kept++; continue; }
       putBack.add(x.passageId);
@@ -1290,6 +1322,10 @@ export function undoChange(novelId, change) {
       if (kept && JSON.stringify(kept) === JSON.stringify(u.after)) store.change('chapter', u.chapterId, u.keptBefore ? chapterSteps.keepSummary(u.keptBefore) : chapterSteps.dropSummary(u.after.fp), { now: true });
     }
     return { ok: true };
+  }
+  if (u.what === 'words') {
+    const back = putBackWords({ novelId, chapterId: u.chapterId, passageId: u.passageId, versionId: u.versionId, expect: u.after, before: u.before, hold: false });
+    return back.ok ? { ok: true } : { ok: false, said: back.said };
   }
   if (u.what === 'passage') {
     const c = store.peek('chapter', u.chapterId);
@@ -1561,16 +1597,66 @@ export function wordsNow(novelId, change) {
   return '';
 }
 
+/* the words a change wrote, in short (his report, 2.12.2: "Chapter One, passage 2 — made" five times could not tell it
+ * which of its fixes had landed) */
+const clipQ = (t, n = 60) => { const x = String(t == null ? '' : t).replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
+export function changeShort(c) {
+  const o = (c && c.op) || {};
+  if (o.find !== undefined && !(o.rename && typeof o.rename === 'object')) {
+    const to = o.replace !== undefined ? o.replace : o.text;
+    return ` (“${clipQ(o.find)}” → ${String(to == null ? '' : to).trim() ? `“${clipQ(to)}”` : 'taken out'})`;
+  }
+  if (o.passage !== undefined && o.remove !== undefined) return ' (taken out)';
+  if (o.passage !== undefined && o.text !== undefined) return ' (written anew)';
+  return '';
+}
+/* a change made that the page no longer shows: he put back the words before it, or another version is on show (his
+ * report, 2.12.2: the partner must know what the book holds now) — '' when it stands */
+export function madeGone(novelId, c) {
+  const u = c && c.status === 'made' && c.undo;
+  if (!u || (u.what !== 'words' && u.what !== 'passage')) return '';
+  const ch = store.peek('chapter', u.chapterId);
+  const p = ch && (ch.passages || []).find((x) => x.id === u.passageId);
+  if (!p) return 'the passage has been taken out since';
+  const v = picked(p);
+  if (!v || v.id !== u.versionId) return 'another version of the passage is on show now';
+  const o = c.op || {};
+  const to = o.replace !== undefined ? o.replace : o.text;
+  if (u.what !== 'words') return '';
+  /* put back, or written over since (his edit, a fix of the checker's): said as it happened */
+  const now = String(v.text || '');
+  const back = u.before !== undefined && u.before !== u.after && now === String(u.before);
+  if (back) return 'the page no longer reads that way — the words before it were put back';
+  if (String(to || '').trim() && !now.includes(String(to).trim())) return 'the page no longer reads that way — those words were changed since';
+  return '';
+}
 /* what came of its changes, in his words, for the partner to read next time */
-export function outcomeWords(changes) {
+export function outcomeWords(changes, novelId = null) {
   const bits = (changes || []).filter((c) => !c.superseded).map((c) => {
+    const what = `${c.label}${changeShort(c)}`;
     /* made with his own words in place of the ones it gave (Edit by hand): said, so it never takes its words as the ones that stand (Cozy Tavern M736) */
-    if (c.status === 'made' && c.edited) return `${c.label} — made, in my own words instead of yours (the book as it reads now has them)`;
-    if (c.status === 'made') return `${c.label} — made${c.said && c.op && c.op.passage !== undefined ? ` (${c.said})` : ''}`;
-    if (c.status === 'undone') return `${c.label} — I undid it`;
-    if (c.status === 'waiting') return `${c.label} — waiting for me to apply it`;
-    if (c.status === 'skipped') return `${c.label} — ${c.aside ? 'set aside for a newer answer’s change to the same' : 'I left it'}`;
-    return `${c.label} — couldn’t be made (${c.said || 'no reason given'})`;
+    if (c.status === 'made' && c.edited) { const gone = novelId ? madeGone(novelId, c) : ''; return gone ? `${c.label} — made, in my own words instead of yours, but ${gone}` : `${c.label} — made, in my own words instead of yours (the book as it reads now has them)`; }
+    if (c.status === 'made') { const gone = novelId ? madeGone(novelId, c) : ''; return `${what} — made${c.said && c.op && c.op.passage !== undefined ? ` (${c.said})` : ''}${gone ? `, but ${gone}` : ''}`; }
+    if (c.status === 'undone') return `${what} — I undid it`;
+    if (c.status === 'waiting') return `${what} — waiting for me to apply it`;
+    if (c.status === 'skipped') return `${what} — ${c.aside ? 'set aside for a newer answer’s change to the same' : 'I left it'}`;
+    return `${what} — couldn’t be made (${c.said || 'no reason given'})`;
   });
   return bits.length ? `(Of your changes: ${bits.join('; ')}.)` : '';
+}
+/* where a change stands now, as it was last told to the partner (toldAs): its status, or 'gone' for one made the page
+ * no longer shows */
+export function statusNow(novelId, c) { return c.status === 'made' && madeGone(novelId, c) ? 'gone' : c.status; }
+/* what changed of its changes since it was last told, in his words */
+export function sinceWords(novelId, c) {
+  const what = `${c.label}${changeShort(c)}`;
+  const now = statusNow(novelId, c);
+  /* applied in his own words (Edit by hand): said as his, as outcomeWords says it (Cozy Tavern M736) */
+  if (now === 'made' && c.edited) return `${what} — I applied it in my own words instead of yours: the book has them now`;
+  if (now === 'made') return `${what} — I applied it: the book has it now`;
+  if (now === 'gone') return `${what} — made, but ${madeGone(novelId, c)}`;
+  if (now === 'undone') return `${what} — I undid it: the book no longer has it`;
+  if (now === 'waiting') return `${what} — still waiting for me to apply it`;
+  if (now === 'skipped') return `${what} — I left it`;
+  return `${what} — couldn’t be made (${c.said || 'no reason given'})`;
 }

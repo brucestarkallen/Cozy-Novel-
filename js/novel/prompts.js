@@ -468,14 +468,14 @@ const WHAT_FOLLOWS = 'what it’s about, who and what is in it so far, and the b
 export const NOTES_KNOW = 'In the story, each person knows only what they have lived, seen, been told or could plainly work out — never a secret, or how a power works and its limits, because it is written here.';
 export function notesOpening(house, novel, as, purpose = 'write') {
   const name = nameOf(house);
-  const numbered = purpose === 'partner' ? ' — every passage numbered as it is on the page' : '';
+  const numbered = purpose === 'partner' ? ' — every passage numbered as it is on the page, as it reads right now' : '';
   const know = purpose === 'partner' ? '' : ` ${NOTES_KNOW}`;
   if (as === 'assistant') return `My notebook for ${titled(novel)} — ${WHAT_FOLLOWS}${numbered}. I keep it so I never lose the thread; nothing in my notes is ever quoted or mentioned on the page.${know}`;
   return `${name ? `${name} here. ` : ''}Here’s where our book stands — ${WHAT_FOLLOWS}${numbered}. The notes are mine, for you alone: nothing in them is ever quoted or mentioned on the page.${know}`;
 }
 /* the line that leads into the book when it rides in the system message */
 function hereIs(purpose) {
-  if (purpose === 'partner') return `Here is ${WHAT_FOLLOWS} — every passage numbered as it is on the page.`;
+  if (purpose === 'partner') return `Here is ${WHAT_FOLLOWS} — every passage numbered as it is on the page, as it reads right now.`;
   if (purpose === 'play') return `Here is what it’s about, who and what is in it so far, and the book itself up to where the scene picks up — for you alone. ${NOTES_KNOW}`;
   return `Here is ${WHAT_FOLLOWS} — for you alone. ${NOTES_KNOW}`;
 }
@@ -741,7 +741,7 @@ ${CHANGES_OPEN}[
 - "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary. "plan": what a chapter is for — my plan for it, which the writer reads only while writing in that chapter; the number after the last chapter makes a new, empty chapter to hold it, so a few in a row map the chapters ahead.
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
 - "entry" is an entry in my bibliography — what a name in the book means, for me to read when I tap it and for the writer when the name comes up: "kind" is "people", "places", "things", "groups" or "lore"; "line" says in a line who or what it is; "text" is the entry whole, "add" a paragraph added to it; "rides" is "named" (the writer reads it when its name comes up — the usual), "always" or "never" (only for me); "newName", "aka", "dropAka" and "remove" as for a card. Write one when I ask, from what I tell you and what the book shows — never inventing what neither says.
-- To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole, ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["entry: Name"]${READ_CLOSE} an entry of my bibliography, whole, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
+- To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole (the chapter open too, when some of it is left out), ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["entry: Name"]${READ_CLOSE} an entry of my bibliography, whole, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - A passage you write is the book: in it, people know only what they have lived, seen or been told — what we say here stays ours unless I ask for it on the page.
 - Only quote what you can see; never make up a passage or a fact. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block.`;
 
@@ -751,7 +751,7 @@ const NOTES_UNKEPT = 'Nothing reads the new pages into the notes just now, so th
 export function partnerFrame(house, novel, { notesAs = 'system', tools = true, notesKept = true } = {}) {
   return [
     TELLER_VOICE,
-    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner. Work from the book shown here; some of it may be in short or left out. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. Distinguish what the pages establish from an inference or a possible direction. ${tools ? 'Read the relevant pages before making a change that depends on words not shown here; if they cannot be read, say what remains uncertain.' : 'Use only what is shown here, and do not claim to have read missing pages.'} ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
+    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner. Our book comes to you fresh with every message of mine, just as it reads right now: a change of yours that was made is already in it, and I never paste pages to you. Where some of it is in short or left out to save room, it says so where it stands, with how to read it. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. Distinguish what the pages establish from an inference or a possible direction. ${tools ? 'Read the relevant pages before making a change that depends on words not shown here; if they cannot be read, say what remains uncertain.' : 'Use only what is shown here, and do not claim to have read missing pages.'} ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
     PROSE_GUIDE,
     /* Ideas reads nothing more and changes nothing: it is never told it could (Cozy Tavern's M241) */
     tools ? partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now') : '',

@@ -6,7 +6,7 @@ import * as store from './store.js';
 import * as writer from './novel/writer.js';
 import * as archivist from './novel/archivist.js';
 import { onLearn, onKey, onIdentity } from './model/call.js';
-import { h, $, icon, toast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays, setText } from './ui/dom.js';
+import { h, $, icon, toast, hintToast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays, setText } from './ui/dom.js';
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
 import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound, whenOpen } from './ui/desk.js';
@@ -110,7 +110,7 @@ async function boot() {
   A.booting = false;
   window.addEventListener('hashchange', route);
   await route();
-  if (!(house.connections || []).length) setTimeout(() => toast('Add a connection in Settings to let a writer write with you — your own words need none.', 6500), 900);
+  if (!(house.connections || []).length) setTimeout(() => hintToast('Add a connection in Settings to let a writer write with you — your own words need none.', 6500), 900);
 }
 
 /* ------------------------------------------------------------- routes */
@@ -183,9 +183,13 @@ async function showNovel(novelId, chapterId, token = A.route) {
   /* a page or a reply left being written by a window that closed is set right */
   repairNow(novelId);
   /* pages kept before a repair to how a page is made whole: mended once, what came off kept with each (mend.js) */
-  mendBook(novelId).then(({ pages, tellings }) => {
+  mendBook(novelId).then(({ pages, tellings, versions }) => {
     const what = [pages ? plural(pages, 'page') : '', tellings ? `${plural(tellings, 'telling')} of a scene` : ''].filter(Boolean).join(' and ');
-    if (what) toast(`${what} kept from before ${pages + tellings === 1 ? 'was' : 'were'} made whole the way new ones are — anything taken off is kept with ${pages + tellings === 1 ? 'it' : 'each'} (⋯ → Put back).`, 8000);
+    const said = [];
+    if (what) said.push(`${what} kept from before ${pages + tellings === 1 ? 'was' : 'were'} made whole the way new ones are — anything taken off is kept with ${pages + tellings === 1 ? 'it' : 'each'} (⋯ → Put back).`);
+    /* the fixes kept as versions of their own before 2.12.2, put on the versions they were made from */
+    if (versions) said.push(`${versions === 1 ? 'One version' : `${plural(versions, 'version')}`} made only to hold fixes ${versions === 1 ? 'is' : 'are'} now on the page ${versions === 1 ? 'it was' : 'they were'} made from — a new version is a rewrite or another take only. ⋯ → Put back the words before undoes a fix.`);
+    if (said.length) toast(said.join(' '), 10000);
   }).catch((e) => console.warn(e));
   /* notes kept before the auditor are checked against the book, once, by themselves */
   archivist.firstCheck(novelId);

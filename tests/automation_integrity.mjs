@@ -95,6 +95,7 @@ try {
     await house({ [kind === 'lift' ? 'autoLift' : 'autoFix']: { on: true, from: 0 }, ...(kind === 'span' ? { judge: { on: false }, instructions: { system: '', late: '', avoid: 'tucked' } } : {}) });
     const b = await book();
     const source = prepareAutomatic(b, kind);
+    const sourceText = String(source.text);
     await script([{ status: 503, message: 'Temporarily unavailable.', ...(kind === 'span' ? { retry_after: '240' } : {}) }]);
     checker.forTests().autoAfter(b.id);
     const job = checker.forTests().lifting.get(b.id);
@@ -125,7 +126,10 @@ try {
     } finally { Date.now = now; }
     assert.equal((await requests()).length, 1, 'one fresh writing call succeeds');
     assert.match(shape.picked(b.c().passages[0]).text, /warm nose free/);
-    assert.equal(b.c().passages[0].versions.length, 2, 'the original remains one version away');
+    if (kind === 'span') {
+      /* (a sentence written again by itself was a version of its own through 2.12.1; since 2.12.2 it goes in on the page itself, the original kept as the words before) */
+      assert.deepEqual([b.c().passages[0].versions.length, shape.picked(b.c().passages[0]).before[0].text], [1, sourceText], 'the original kept as the words before');
+    } else assert.equal(b.c().passages[0].versions.length, 2, 'the original remains one version away');
   });
 
   const { JUDGE_CHECKS } = await import('../js/novel/prompts.js');

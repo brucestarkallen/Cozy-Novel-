@@ -37,6 +37,14 @@ async def main():
             await pg.wait_for_function("document.querySelectorAll('.sug').length === 1")
             check('grade details remain open after applying a suggestion', await pg.locator('.judgebox').evaluate('(e) => e.open'))
             check('keyboard focus moves to the next suggestion action', await pg.evaluate("document.activeElement.matches('.sug button')"))
+            # 2.12.2: the fix goes in on the page itself, with its Undo — no new version
+            toast = await pg.inner_text('#toast')
+            check('an applied fix says it is on the page, with its Undo', 'Put in on the page.' in toast and await pg.locator('#toast button.toastact:text-is("Undo")').count() == 1)
+            check('no new version for a fix', await pg.evaluate("(async () => { const s = await import('/js/store.js'); const n = s.peek('novel', location.hash.split('/')[2]); const c = s.peek('chapter', n.order[0]); return c.passages[0].versions.length; })()") == 1)
+            # why each grade: the checks it failed, with the words, and the scale
+            why = await pg.inner_text('.judgebox .gradewhy')
+            check('the grades say why each grade is what it is', 'Why each grade' in why and 'of 10' in why and 'published novelist' in why)
+            check('the table holds the writer whose words were graded', await pg.locator('.judgebox table tr').count() >= 2)
             await pg.locator('.judgebox summary').focus()
             await pg.evaluate("""async () => {
                 const s = await import('/js/store.js');
@@ -58,6 +66,15 @@ async def main():
             await pg.keyboard.press('Escape')
             await pg.wait_for_timeout(200)
             check('closing review returns focus to its button', await pg.evaluate("document.activeElement.id === 'checkBubble'"))
+            # the fix taken back out from the passage's menu
+            before = await pg.evaluate("(async () => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const n = s.peek('novel', location.hash.split('/')[2]); const v = sh.picked(s.peek('chapter', n.order[0]).passages[0]); return [v.text, v.before[v.before.length - 1].text]; })()")
+            await pg.locator('.passage').first.click()
+            await pg.locator('button[aria-label="More for this passage"]').first.click()
+            await pg.locator('.menu-pop button:has-text("Put back the words before")').click()
+            await pg.wait_for_timeout(250)
+            now = await pg.evaluate("(async () => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const n = s.peek('novel', location.hash.split('/')[2]); return sh.picked(s.peek('chapter', n.order[0]).passages[0]).text; })()")
+            check('Put back the words before brings the words before the fix back', now == before[1] and now != before[0])
+            check('and says so', 'The words before are back.' in await pg.inner_text('#toast'))
             check('no browser exceptions', not [x for x in logs if x.startswith('PAGEERROR')])
             await b.close()
     print(f'{passed} passed', flush=True)

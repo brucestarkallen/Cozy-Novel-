@@ -90,7 +90,9 @@ async def scenario_main(b):
     await pg.fill('.editbox', 'Edited by hand. The lamp burned all night.')
     await pg.click('.editrow button:has-text("Save")')
     await pg.wait_for_timeout(400)
-    check('an edit is kept as a new version', 'Edited by hand' in await pg.inner_text('.passage.selected .prose') and (await pg.inner_text('.passage.selected .pctl .ver > span')).strip() == '4 / 4', await pg.inner_text('.passage.selected .pctl'))
+    # (a new version through 2.12.1 — since 2.12.2 an edit goes on the page itself: his word, "new version is only for rewrite or another take")
+    pctl = await pg.inner_text('.passage.selected .pctl')
+    check('an edit goes on the page itself, no new version', 'Edited by hand' in await pg.inner_text('.passage.selected .prose') and (await pg.inner_text('.passage.selected .pctl .ver > span')).strip() == '2 / 3' and 'edited by you' in pctl, pctl)
     # Back while editing keeps the edit
     await pg.click('.passage.selected .pctl button:has-text("Edit")')
     await pg.fill('.editbox', 'Edited, then Back was pressed.')

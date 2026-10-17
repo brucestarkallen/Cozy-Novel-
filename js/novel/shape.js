@@ -118,6 +118,72 @@ export function keptTail(v) {
   if (!v) return {};
   return { ...(String(v.tookOff || '').trim() ? { tookOff: v.tookOff } : {}), ...(String(v.tookOffTop || '').trim() ? { tookOffTop: v.tookOffTop } : {}) };
 }
+/* WORDS CHANGED IN PLACE (his word, 2.12.2: "rewrite is the only thing who
+ * create new version"; "new version is only for rewrite or another take").
+ * A fix the checker put in, a sentence it had written again, his partner's
+ * words, his own edit, a name changed everywhere: the version on show takes
+ * them, as a page takes a correction. Kept on it:
+ *  - `before`: the words before each change, the newest last (the last
+ *    BEFORE_KEEP) — Put back the words before brings the newest back, with
+ *    what the checker had found in them and the bibliography's facts of them
+ *    (on the newest only), whether it stopped short, and what had been taken
+ *    off it;
+ *  - `hands`: who changed its words — 'checker', 'partner', 'you';
+ *  - `written`: its words as they were before the first change — for a
+ *    writer's page, the writer's own words: what is measured of the writer
+ *    (its stock wording, head to head) is measured on these.
+ * A new version is a take: written, another take, written again (whole, or
+ * the words he selected), or a passage his partner wrote anew. */
+export const BEFORE_KEEP = 5;
+export const PRIOR_KEEP = 4;
+export const handsOf = (v) => (v && Array.isArray(v.hands) ? v.hands : []);
+export const writtenOf = (v) => (v ? String(typeof v.written === 'string' ? v.written : v.text || '') : '');
+/* changed by him or his partner: no longer the writer's own words, nor only its words with fixes put in */
+export const mixedHands = (v) => handsOf(v).some((x) => x === 'you' || x === 'partner');
+export const END_KEYS = ['cut', 'cutWhy', 'cutBy', 'stopped', 'endCut'];
+export function inPlaceFields(v, next, by, { at = Date.now(), check = null, codex = null, keepEnd = true, tail = false, extra = {} } = {}) {
+  const was = String((v && v.text) || '');
+  const end = Object.fromEntries(END_KEYS.filter((k) => v && v[k] !== undefined).map((k) => [k, v[k]]));
+  const entry = { text: was, by, at,
+    ...(Object.keys(end).length ? { end } : {}),
+    ...(check ? { check: JSON.parse(JSON.stringify(check)) } : {}),
+    ...(codex ? { codex: JSON.parse(JSON.stringify(codex)) } : {}),
+    ...(tail ? { tail: keptTail(v) } : {}),
+    ...extra };
+  /* the facts of the words, kept on the newest words before only (they can be many); what the checker found in them on each */
+  const older = (Array.isArray(v && v.before) ? v.before : []).map(({ codex: _x, ...rest }) => rest);
+  const hands = handsOf(v).includes(by) ? handsOf(v).slice() : [...handsOf(v), by];
+  const out = { text: next, words: countWords(next), before: [...older, entry].slice(-BEFORE_KEEP), hands };
+  if (!(v && typeof v.written === 'string')) out.written = was;
+  if (!keepEnd) for (const k of END_KEYS) out[k] = undefined;
+  if (tail) { out.tookOff = undefined; out.tookOffTop = undefined; }
+  return out;
+}
+/* the words before the fixes the checker has put in by itself since the last other change (`auto` on the words before):
+ * what goes in by itself is measured against these, so a passage never drifts far by itself, a look at a time */
+export function autoBaseOf(v) {
+  const list = Array.isArray(v && v.before) ? v.before : [];
+  let base = String((v && v.text) || '');
+  let i = list.length - 1;
+  for (; i >= 0 && list[i] && list[i].auto; i--) base = String(list[i].text || '');
+  /* every change kept was by itself, and older ones may have gone: the words as they were first */
+  if (i < 0 && list.length >= BEFORE_KEEP) base = writtenOf(v);
+  return base;
+}
+/* the newest words before, put back: the fields to set, and what was found in them (or null) — null when there are none */
+export function putBackFields(v) {
+  const list = Array.isArray(v && v.before) ? v.before : [];
+  const last = list[list.length - 1];
+  if (!last || typeof last.text !== 'string') return null;
+  const rest = list.slice(0, -1);
+  const out = { text: last.text, words: countWords(last.text), before: rest.length ? rest : undefined };
+  for (const k of END_KEYS) out[k] = last.end ? last.end[k] : undefined;
+  if (last.tail) { out.tookOff = last.tail.tookOff; out.tookOffTop = last.tail.tookOffTop; }
+  /* back to its first words: no longer changed by anyone */
+  if (!rest.length && last.text === writtenOf(v)) { out.hands = undefined; out.written = undefined; }
+  return { patch: out, check: last.check || null, codex: last.codex || null, by: last.by, at: last.at };
+}
+
 /* the two read the same at their end: the last words untouched */
 export function sameEnd(a, b) {
   const tail = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(-40);
@@ -230,7 +296,7 @@ export function hisWordsIn(passage) {
     /* his own words: the version on show when it is his (typed, or his
      * edit), else the one of his it was rewritten from — never a rewrite
      * the writer made of it */
-    const isMine = (v) => Boolean(v && (v.how === 'mine' || v.how === 'edit'));
+    const isMine = (v) => Boolean(v && (v.how === 'mine' || v.how === 'edit' || handsOf(v).includes('you')));
     const from = versions.find((v) => v.id === (shown.from || shown.base));
     const mine = isMine(shown) ? shown : isMine(from) ? from : [...versions].reverse().find(isMine);
     const t = mine ? String(mine.text || '') : '';
@@ -468,10 +534,18 @@ export const novelSteps = {
     }
   },
   /* what one reading of one version of a passage changed (readings.js) */
+  /* one version's reading; the one it had of its earlier words, changed in place since (a fix, his edit, Go on),
+   * kept beside it — the last few (readings.js readingAt) */
   putReading: (pid, vid, reading) => (n) => {
     n.memory = n.memory || {};
     const all = n.memory.readings || (n.memory.readings = {});
-    all[pid] = { ...(all[pid] || {}), [vid]: JSON.parse(JSON.stringify(reading)) };
+    const was = all[pid] && all[pid][vid];
+    const next = JSON.parse(JSON.stringify(reading));
+    delete next.prior;
+    const older = was ? [...(was.sig !== next.sig ? [(({ prior, ...x }) => x)(was)] : []), ...(Array.isArray(was.prior) ? was.prior : [])] : [];
+    const prior = older.filter((x, i) => x && x.sig !== next.sig && older.findIndex((y) => y && y.sig === x.sig) === i).slice(0, PRIOR_KEEP);
+    if (prior.length) next.prior = JSON.parse(JSON.stringify(prior));
+    all[pid] = { ...(all[pid] || {}), [vid]: next };
   },
   dropReadings: (list) => (n) => {
     const all = n.memory && n.memory.readings;
@@ -518,10 +592,11 @@ function findPassage(c, pid) { return (c.passages || []).find((p) => p.id === pi
 function findVersion(p, vid) { return p && (p.versions || []).find((v) => v.id === vid); }
 /* Go on keeps the version's id while changing its words. A comparison
  * belongs to the words it read, including when its save is replayed. */
+/* (head to head reads the writers' own words — a fix put in since does not undo it) */
 export function duelMatches(p, row) {
   if (!p || !row) return false;
   const x = findVersion(p, row.x), y = findVersion(p, row.y);
-  return Boolean(x && y && (!row.xSig || row.xSig === hashText(String(x.text || ''))) && (!row.ySig || row.ySig === hashText(String(y.text || ''))));
+  return Boolean(x && y && (!row.xSig || row.xSig === hashText(writtenOf(x))) && (!row.ySig || row.ySig === hashText(writtenOf(y))));
 }
 
 /* What the checker kept for a passage or its versions, put aside when they
@@ -606,6 +681,35 @@ export const chapterSteps = {
     const back = gone && gone.was ? p.versions.findIndex((v) => v.id === gone.was) : -1;
     const keep = shown && shown.id !== vid ? p.versions.findIndex((v) => v.id === shown.id) : back >= 0 ? back : p.versions.length - 1;
     p.pick = Math.max(0, keep);
+  },
+  /* one version's words put on another of the same passage, and the one gone (inplace.js foldVersion): the other
+   * takes the patch, whatever was made from the one gone is made from the other, what was on show stays on show
+   * (the other, where it was the one gone), and what the checker found in its words is the other's now */
+  foldVersion: (pid, childId, targetId, patch) => (c) => {
+    const p = findPassage(c, pid);
+    const child = findVersion(p, childId);
+    const target = findVersion(p, targetId);
+    if (!child || !target || childId === targetId) return;
+    const shown = picked(p);
+    for (const [k, val] of Object.entries(patch)) { if (val === undefined) delete target[k]; else target[k] = val; }
+    for (const v of p.versions) {
+      if (v.from === childId) v.from = targetId;
+      if (v.base === childId) v.base = targetId;
+      if (v.was === childId) v.was = targetId;
+    }
+    if (child.chosen && (!shown || shown.id === childId)) target.chosen = child.chosen;
+    p.versions = p.versions.filter((v) => v.id !== childId);
+    const keepId = shown && shown.id !== childId ? shown.id : targetId;
+    p.pick = Math.max(0, p.versions.findIndex((v) => v.id === keepId));
+    const byV = c.checks && c.checks[pid];
+    if (byV) {
+      const sig = hashText(String(target.text || ''));
+      if (byV[childId] && byV[childId].sig === sig) byV[targetId] = byV[childId];
+      else if (byV[targetId] && byV[targetId].sig !== sig) delete byV[targetId];
+      delete byV[childId];
+    }
+    for (const [k, d] of Object.entries(c.duels || {})) if (d && d.pid === pid && (d.x === childId || d.y === childId)) delete c.duels[k];
+    for (const r of c.retired || []) if (r && r.key === `${pid}:${childId}`) r.key = `${pid}:${targetId}`;
   },
   pick: (pid, vid) => (c) => {
     const p = findPassage(c, pid);

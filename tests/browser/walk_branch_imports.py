@@ -106,8 +106,10 @@ async def scenario(browser):
         before = await saved_records(pg)
         writes.clear()
         # Clear the earlier transient message by its normal timeout before
-        # checking that the Settings route raises its own visible error.
-        await pg.locator('#toast.on').wait_for(state='hidden', timeout=9000)
+        # checking that the Settings route raises its own visible error. The
+        # app's own hint (Add a connection…) waits for a line showing to go
+        # and then has its own time (2.12.2), so up to 7 s + 6.5 s.
+        await pg.locator('#toast.on').wait_for(state='hidden', timeout=16000)
         await choose_copy(pg, pg.get_by_role('button', name='Bring a copy back', exact=True))
         await pg.get_by_role('button', name='Add its books to the shelf', exact=True).click()
         await pg.locator('#toast.on').filter(has_text='conflicting owners').wait_for()
@@ -125,6 +127,31 @@ async def scenario(browser):
         await pg.context.close()
 
 
+async def hint_waits(browser):
+    """The app's own hint, said 0.9 s after it opens with no connection, never
+    covers a line already showing (the walk above once saw it take the place
+    of the import's error); it comes once that line goes."""
+    logs = []
+    pg = await H.page(browser, logs)
+    try:
+        await pg.goto(f'http://127.0.0.1:{H.PORT}/')
+        await pg.locator('#shelf:not([hidden])').wait_for()
+        await pg.evaluate("import('/js/ui/dom.js').then(d => d.toast('That copy could not be read. No books were added.', 3000))")
+        await pg.wait_for_timeout(1700)
+        shown = await pg.locator('#toast').inner_text()
+        check('a line showing is never covered by the app’s own hint', 'No books were added' in shown, shown)
+        hint = pg.locator('#toast.on').filter(has_text='Add a connection in Settings')
+        try:
+            await hint.wait_for(timeout=9000)
+            came = True
+        except Exception:
+            came = False
+        check('the hint comes once that line has gone', came, await pg.locator('#toast').inner_text())
+        check('the hint makes no page or console errors', not logs, logs)
+    finally:
+        await pg.context.close()
+
+
 async def main():
     with H.Env():
         async with async_playwright() as pw:
@@ -132,6 +159,7 @@ async def main():
             browser = await pw.chromium.launch(**options)
             try:
                 await scenario(browser)
+                await hint_waits(browser)
             except Exception:
                 traceback.print_exc()
                 check('damaged imports run to completion', False, traceback.format_exc()[-700:])

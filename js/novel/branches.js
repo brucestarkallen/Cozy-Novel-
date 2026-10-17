@@ -3,7 +3,7 @@
  * A chapter alone cannot own a different future: notes belong to the book. */
 import { newId } from '../util.js';
 import { NOTE_KINDS, CARD_FIELDS, hisCard, hisField, keptFor, countBook } from './shape.js';
-import { notesAtPoint, readingOf } from './readings.js';
+import { notesAtPoint, readingOf, readingAt } from './readings.js';
 
 const clone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const fail = (message) => { throw new Error(message); };
@@ -90,7 +90,7 @@ function trimMemory(memory, chapters, also) {
   /* A retained passage can point to a combined reading stored on one that
    * was cut off. It becomes unread, rather than silently staying read. */
   for (const [pid, versions] of Object.entries(readings)) for (const [vid, reading] of Object.entries(versions)) {
-    if (reading.in && readings[reading.in.pid]?.[reading.in.vid]?.sig !== reading.in.sig) { delete versions[vid]; unmarked.add(pid); }
+    if (reading.in && !readingAt(readings[reading.in.pid], reading.in.vid, reading.in.sig)) { delete versions[vid]; unmarked.add(pid); }
   }
   const seen = Object.fromEntries(Object.values(chapters).map((chapter) => [chapter.id,
     Object.fromEntries(Object.entries(memory.seen?.[chapter.id] || {}).filter(([pid]) => retained.has(pid) && !unmarked.has(pid)))]));

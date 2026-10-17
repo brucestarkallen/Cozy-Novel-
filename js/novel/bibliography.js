@@ -184,7 +184,20 @@ export function makeFinder(forms) {
     return out;
   };
   const refsOf = (key) => (keyOf.get(key) || { refs: [] }).refs;
-  return { sig, find, refsOf, size: list.length };
+  /* the names marked in some words, as a print — the page draws a passage again only when its own marks change, never
+   * because a name came that it does not hold (his report, 2.12.2: the app lags) — kept per words while this finder lasts */
+  const seen = new Map();
+  const marksOf = (text) => {
+    const t = String(text || '');
+    if (!t) return '';
+    const was = seen.get(t);
+    if (was !== undefined) return was;
+    const got = find(t).map((x) => `${x.start}:${x.end}:${x.key}`).join(',');
+    if (seen.size > 3000) seen.clear();
+    seen.set(t, got);
+    return got;
+  };
+  return { sig, find, refsOf, marksOf, size: list.length };
 }
 
 /* ------------------------------------------------------------ what rides */

@@ -22,9 +22,9 @@ import { connFor, connName, recount } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, NOTE_KINDS, matchCard } from './shape.js';
 import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN } from './prompts.js';
-import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop } from './textshape.js';
-import { numberedText } from './context.js';
-import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot, renamedTarget } from './changes.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup } from './textshape.js';
+import { numberedText, partnerCut } from './context.js';
+import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, statusNow, sinceWords, changeShort, madeGone, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot, renamedTarget } from './changes.js';
 import { searchBook } from './search.js';
 import { listModules } from './modules.js';
 import { nameKey } from '../util.js';
@@ -61,13 +61,16 @@ function bookNow(novelId) {
  * sceneStretchUp) before any is let go: the fewest summed up that fit. */
 export const SCENE_SHORT = 'The scene so far, in short — its earliest turns, summed up:';
 export const SCENE_ON = 'Then, turn by turn:';
-export function turnsFor(record, { upto = null, conn, openWith = '', after = null } = {}) {
+/* share: of the model's room the talk may take (the book open comes first: runTurn gives it less when the chapter open
+ * would be cut) */
+export function turnsFor(record, { upto = null, conn, openWith = '', after = null, share = 0.25 } = {}) {
   const out = [];
   const list = record.turns || [];
   const from = after ? list.findIndex((t) => t.id === after) + 1 : 0;
   /* what came of the partner's changes, told with his next message */
   let told = '';
   const scene = Boolean(record.who !== undefined || record.chapterId);
+  const bookId = record.novelId || record.id || null;
   for (const t of list.slice(Math.max(0, from))) {
     if (upto && t.id === upto) break;
     const v = picked(t);
@@ -79,11 +82,13 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
     if (!text && !tell) continue;
     if (t.by === 'you') {
       const mine = [text, tell].filter(Boolean).join('\n\n');
-      out.push({ role: 'user', content: told ? `${told}\n\n${mine}` : mine, turn: t.id });
+      /* as it was told when he sent it (2.12.2) — the talk is never rewritten after; kept from before, as it stands now */
+      const said = v && typeof v.told === 'string' ? v.told : told;
+      out.push({ role: 'user', content: said ? `${said}\n\n${mine}` : mine, turn: t.id });
       told = '';
     } else {
       out.push({ role: 'assistant', content: text, turn: t.id });
-      told = outcomeWords(v.changes);
+      told = outcomeWords(v.changes, bookId);
     }
   }
   if (told && out.length && upto) {
@@ -91,7 +96,16 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
     const last = out[out.length - 1];
     if (last.role === 'user') last.content = `${told}\n\n${last.content}`;
   }
-  const cap = Math.floor(contextOf(conn) * 0.25);
+  /* the answer asked for again: what its earlier answers changed is in the book, said (his report, 2.12.2) */
+  if (upto && !scene && out.length && out[out.length - 1].role === 'user') {
+    const t = list.find((x) => x.id === upto);
+    const made = ((t && t.versions) || []).filter((v) => !v.streaming).flatMap((v) => v.changes || []).filter((c) => c.status === 'made' && !c.superseded && !madeGone(bookId, c));
+    if (made.length) {
+      const last = out[out.length - 1];
+      last.content = `(From your earlier answer to this, these changes were made and are in the book as it reads now: ${made.slice(-12).map((c) => `${c.label}${changeShort(c)}`).join('; ')}${made.length > 12 ? `; and ${made.length - 12} more` : ''}.)\n\n${last.content}`;
+    }
+  }
+  const cap = Math.floor(contextOf(conn) * share);
   let total = out.reduce((a, m) => a + estimateTokens(m.content), 0);
   /* a long scene: its earliest stretches by their summaries — summed up as their turns read now, from the first turn sent, before the point answered — the fewest that fit */
   let short = '';
@@ -119,7 +133,8 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
     }
   }
   let dropped = 0;
-  while (out.length > 2 && total > cap) { total -= estimateTokens(out[0].content); out.shift(); dropped++; }
+  const droppedTurns = [];
+  while (out.length > 2 && total > cap) { total -= estimateTokens(out[0].content); droppedTurns.push(out[0].turn); out.shift(); dropped++; }
   /* the scene so far in short opens it — with his first turn after it, or as his message before the narrator's — and says what after it is left out */
   if (short) {
     const head = `${SCENE_SHORT}\n\n${short}${dropped ? '\n\n(Some turns after these are left out here, to save room.)' : ''}`;
@@ -133,8 +148,11 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
     if (openWith) out.unshift({ role: 'user', content: openWith });
     else while (out.length && out[0].role !== 'user') out.shift();
   }
-  /* the oldest talk let go for room is said, never silently missing (Cozy Tavern's M265) */
-  if (dropped && out.length && out[0].role === 'user') out[0] = { ...out[0], content: `${scene ? '(The earliest turns of this scene are left out here, to save room.)' : '(The earliest part of our talk is left out here, to save room.)'}\n\n${out[0].content}` };
+  /* the oldest talk let go for room is said, never silently missing (Cozy Tavern's M265) — with the changes made in it
+   * that the book still has (2.12.2: it must know they are in the book) */
+  const madeThen = scene ? [] : list.filter((t) => t.by === 'ai' && droppedTurns.includes(t.id)).flatMap((t) => (picked(t) || {}).changes || []).filter((c) => c.status === 'made' && !c.superseded && !madeGone(bookId, c));
+  const thenWords = madeThen.length ? ` Your changes in it that the book has now: ${madeThen.slice(-12).map((c) => `${c.label}${changeShort(c)}`).join('; ')}${madeThen.length > 12 ? `; and ${madeThen.length - 12} more` : ''}.` : '';
+  if (dropped && out.length && out[0].role === 'user') out[0] = { ...out[0], content: `${scene ? '(The earliest turns of this scene are left out here, to save room.)' : `(The earliest part of our talk is left out here, to save room.${thenWords})`}\n\n${out[0].content}` };
   return out.map(({ turn, ...m }) => m);
 }
 
@@ -185,7 +203,9 @@ export function shapeTelling(words, { cut = false, notes = null } = {}) {
   if (head.removed) say(`${head.plan && head.heading ? 'The narrator’s plan and a heading above the telling were' : head.plan ? 'The narrator’s plan, written above the telling, was' : 'A heading above the telling was'} taken off — Put back what was taken off brings ${head.plan && head.heading ? 'them' : 'it'} back.`);
   const unglued = dropGluedStrays(head.text);
   if (unglued.changed) say('A stray character of another script, stuck to the front of a word, was taken off.');
-  const fin = finishTail(joinSoftWraps(unglued.text));
+  const unmarked = dropMarkup(unglued.text);
+  if (unmarked.changed) say(`Web page or code markup the narrator left in the telling (${unmarked.taken.slice(0, 3).map((x) => `“${x}”`).join(', ')}) was taken off.`);
+  const fin = finishTail(joinSoftWraps(unmarked.text));
   if (fin.removed) {
     const what = fin.kinds.includes('tracking') && fin.kinds.includes('note') ? 'A block of tracking and a note to you' : fin.kinds.includes('tracking') ? 'A block of tracking' : 'A note to you';
     say(`${what} after the telling ${fin.kinds.length > 1 ? 'were' : 'was'} taken off — Put back what was taken off brings ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
@@ -232,7 +252,8 @@ export function hisLast(record, upto = null) {
  * the middle said to be left out. Never more than the budget. tokens: what
  * the chapters' words come to as sent. */
 const CUT_MARK = '[… the middle of this chapter is left out here: the whole of it is more than fits beside everything else …]';
-export function fitRead(rows, budget) {
+/* cutRow(row, room): a chapter's own cut, at its passages' edges, each left out named (context.js partnerCut) — or null */
+export function fitRead(rows, budget, cutRow = null) {
   const cost = rows.map((r) => (r.missing ? 0 : estimateTokens(r.text)));
   const whole = cost.reduce((a, b) => a + b, 0);
   if (whole <= budget) return { rows, cut: false, tokens: whole };
@@ -247,6 +268,8 @@ export function fitRead(rows, budget) {
   let tokens = 0;
   const out = rows.map((r, i) => {
     if (r.missing || share[i] >= cost[i]) { tokens += cost[i]; return r; }
+    const own = cutRow && r.chapterId ? cutRow(r, Math.max(200, share[i])) : null;
+    if (own) { tokens += estimateTokens(own); return { ...r, text: own }; }
     const room = share[i] - estimateTokens(CUT_MARK) - 10;
     if (room < 120) { tokens += estimateTokens(CUT_MARK); return { ...r, text: CUT_MARK }; }
     const chars = Math.floor((r.text.length * room) / cost[i]);
@@ -268,7 +291,11 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   const rounds = [];
   const readSome = () => rounds.some((x) => x.rows);
   const extraOf = (budget = Infinity) => {
-    const f = fitRead(rounds.filter((x) => x.rows).flatMap((x) => x.rows), budget);
+    const f = fitRead(rounds.filter((x) => x.rows).flatMap((x) => x.rows), budget, (row, room) => {
+      const c = store.peek('chapter', row.chapterId);
+      const n = store.peek('novel', novelId);
+      return c && n ? partnerCut(n, c, c.passages || [], room) : null;
+    });
     let k = 0;
     const messages = [];
     let tokens = f.tokens;
@@ -296,6 +323,8 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   let shortCards = new Set();
   /* the oldest chapters its room left out even as summaries — said under the answer (Cozy Tavern M265: no silent cut) */
   let leftOut = 0;
+  /* the passages of the chapter open its room left out (each named where it stood, with how to read it) — said too */
+  let openLeft = [];
   const cardsRead = new Set();
   /* the thinking of every round, kept whole (Cozy Tavern's M77/M80): what
    * each round thought, and between them what happened next */
@@ -355,10 +384,21 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           numbers = numbersOf(novel);
           snapshot = kind === 'talk' ? snapshotForChanges(novelId) : null;
           const rec = store.peek(kind, id);
-          const args = buildArgs(rec, c);
+          let args = buildArgs(rec, c);
           const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length, notesKept: archivist.keepingNotes(novelId) });
           let extra = extraOf();
           let a = made(extra);
+          /* the book open comes before old talk (his report, 2.12.2: a passage of the chapter open left out while the
+           * oldest talk rode whole): the talk gives way — its earliest part said to be left out — before a passage does */
+          if (kind === 'talk' && (a.stats.openLeft || []).length) {
+            for (const share of [0.12, 0.05]) {
+              const was = args;
+              args = buildArgs(rec, c, share);
+              const fewer = made(extra);
+              if ((fewer.stats.openLeft || []).length < a.stats.openLeft.length) a = fewer; else args = was;
+              if (!(a.stats.openLeft || []).length) break;
+            }
+          }
           if (readSome()) {
             /* what it asked to read, beside everything else that has to go —
              * his words, the book's words and notes, the chapter open (down
@@ -374,6 +414,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           seen = new Set([...(a.stats.wholeIds || []), ...(a.stats.wholePassages || []), ...(extra.whole || [])]);
           shortCards = new Set((a.stats.shortCards || []).filter((x) => !cardsRead.has(x)));
           leftOut = a.stats.omitted || 0;
+          openLeft = a.stats.openLeft || [];
           return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: replyRoom(c, kind, length), refuse: a.refuse, least };
         },
         stream: true,
@@ -435,6 +476,9 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     out = await askReading();
     const leakNotes = [];
     if (leftOut > 0) leakNotes.push(leftOutWords(leftOut, kind === 'play' ? 'the narrator' : 'your partner'));
+    /* (read since, in this answer: it had them) */
+    const stillLeft = openLeft.filter((n) => !read.some((r) => r.startsWith(chapterLabelOf(novelId, n))));
+    if (kind === 'talk' && stillLeft.length) leakNotes.push(`To fit your partner’s room, ${stillLeft.length === 1 ? `passage ${stillLeft[0]} of the chapter open was` : `passages ${stillLeft.slice(0, 6).join(', ')}${stillLeft.length > 6 ? ' and more' : ''} of the chapter open were`} left out of what it was sent — each named where it stood, with how to read it.`);
     const firstWords = cleanAnswer(kind, id, turnId, finalWords(out, text), leakNotes);
     if (!firstWords.trim()) {
       const why = out.stopped ? 'stopped before any words came'
@@ -818,6 +862,8 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
   /* copied from another conversation: it is that conversation's to apply or undo */
   if (c.copied) return { ok: false, said: 'that change is the conversation’s it was made in — undo or apply it there' };
   const write = (changes) => store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes }), { now: true });
+  /* a change made fresh on Apply keeps how it was last told to the partner — so its being applied since is news */
+  const told = (x) => (x.toldAs !== undefined ? { toldAs: x.toldAs } : {});
   /* one of a group is applied, left or undone with the others of it — a
    * swap is never made, or taken back, by half */
   if (c.group && c.status === 'waiting' && (how === 'apply' || how === 'skip')) {
@@ -826,7 +872,7 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
     if (how === 'skip') byId = new Map(members.map((x) => [x.id, { ...x, status: 'skipped' }]));
     else {
       const made = makeTogether(novelId, members.map((x) => (x.id === c.id && patch ? withEdits(x.op, patch) : x.op)), { ids: members.map((x) => x.id) });
-      byId = new Map(made.map((r, j) => [members[j].id, { ...r, group: c.group, ...(patch && members[j].id === c.id ? { edited: true } : {}) }]));
+      byId = new Map(made.map((r, j) => [members[j].id, { ...r, group: c.group, ...told(members[j]), ...(patch && members[j].id === c.id ? { edited: true } : {}) }]));
     }
     write(list.map((x) => byId.get(x.id) || x));
     const mine = byId.get(c.id);
@@ -853,7 +899,7 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
   };
   const at = c.where ? { where: c.where } : {};
   if (drift) next = { ...c, status: 'refused', said: drift };
-  else if (how === 'apply' && c.status === 'waiting') next = patch ? { ...makeChange(novelId, withEdits(c.op, patch), { id: c.id, where: c.where || null }), ...at, edited: true } : { ...makeChange(novelId, c.op, { id: c.id, where: c.where || null }), ...at };
+  else if (how === 'apply' && c.status === 'waiting') next = patch ? { ...makeChange(novelId, withEdits(c.op, patch), { id: c.id, where: c.where || null }), ...at, ...told(c), edited: true } : { ...makeChange(novelId, c.op, { id: c.id, where: c.where || null }), ...at, ...told(c) };
   else if (how === 'skip' && c.status === 'waiting') next = { ...c, status: 'skipped' };
   else if (how === 'undo' && c.status === 'made') {
     /* a passage it wrote anew, read by the helper since: those words are kept for the helper, so what came only from them goes too */
@@ -908,12 +954,16 @@ export async function partnerSay({ novelId, chapterId, text }) {
   if (talkBusy('talk', novelId)) return { ok: false, error: 'a reply is already on its way — Stop it first', giveBack: t };
   const current = store.peek('talk', novelId);
   if (!current || !store.peek('novel', novelId) || (rec.convId || null) !== (current.convId || null)) return { ok: false, error: 'the conversation changed while it was opening', giveBack: t };
-  const mine = newTurn('you', t);
+  /* what came of its changes, told with this message and kept with it as told (his report, 2.12.2: it took a change
+   * it had made for one still waiting) — the answer before's, what changed since of the others', and what the answers
+   * he asked again for left in the book */
+  const news = changesNews(novelId, current, heldCut.get(novelId));
+  const mine = newTurn('you', t, news.told ? { told: news.told } : {});
   const reply = newTurn('ai', '', { streaming: true });
   store.change('talk', novelId, inConversation(rec, turnSteps.addTurn(mine)));
   store.change('talk', novelId, inConversation(rec, turnSteps.addTurn(reply)), { now: true });
   const out = await runTurn({ kind: 'talk', id: novelId, novelId, turnId: reply.id, versionId: reply.versions[0].id, role: 'partner',
-    buildArgs: (rec, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(rec, { upto: reply.id, conn: c }), request: '', moment: hisLast(rec, reply.id) }) });
+    buildArgs: (rec, c, share) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(rec, { upto: reply.id, conn: c, share }), request: '', moment: hisLast(rec, reply.id) }) });
   if (out.gone) return { ...out, giveBack: t };
   if (!out.ok && !replied('talk', novelId, reply.id)) {
     try { store.change('talk', novelId, turnSteps.removeTurn(mine.id), { now: true }); } catch (_) { /* gone */ }
@@ -928,7 +978,62 @@ export async function partnerSay({ novelId, chapterId, text }) {
     return { ...out, giveBack: t };
   }
   heldCut.delete(novelId);
+  /* told: each change marked as it stood when this message went (an answer that never came tells it again next time) */
+  store.change('talk', novelId, inConversation(rec, (d) => markTold(d, news.marks)), { now: true });
   return out;
+}
+/* What came of the partner's changes, for his next message: the answer
+ * right before it — every change of it, as it stands; the others' — each
+ * that changed since it was last told (applied, undone, left, or no longer
+ * on the page: he put back the words before, or another version is on
+ * show); and what the answers he let go with Edit and ask again made, still
+ * in the book. {told, marks} */
+function changesNews(novelId, rec, held = null) {
+  const turns = (rec && rec.turns) || [];
+  const lastAi = [...turns].reverse().find((t) => t.by === 'ai');
+  const parts = [];
+  const before = lastAi ? outcomeWords((picked(lastAi) || {}).changes, novelId) : '';
+  if (before) parts.push(before);
+  const since = [];
+  for (const t of turns) {
+    if (t.by !== 'ai' || t === lastAi) continue;
+    for (const c of (picked(t) || {}).changes || []) {
+      if (!c || c.superseded || c.copied) continue;
+      /* (one kept from before 2.12.2, never marked: the message after its answer says where it stands now, as it always did) */
+      if (c.toldAs === undefined) continue;
+      if (c.toldAs === statusNow(novelId, c)) continue;
+      since.push(c);
+    }
+  }
+  if (since.length) parts.push(`(Since then, of your earlier changes: ${since.slice(-12).map((c) => sinceWords(novelId, c)).join('; ')}${since.length > 12 ? `; and ${since.length - 12} more` : ''}.)`);
+  if (held && held.convId === ((rec && rec.convId) || null)) {
+    const kept = (held.cut || []).filter((t) => t.by === 'ai').flatMap((t) => (t.versions || []).flatMap((v) => v.changes || [])).filter((c) => c && c.status === 'made' && !c.superseded && !madeGone(novelId, c));
+    if (kept.length) parts.push(`(The answers I asked again for made these changes, and the book has them now: ${kept.slice(-12).map((c) => `${c.label}${changeShort(c)}`).join('; ')}${kept.length > 12 ? `; and ${kept.length - 12} more` : ''}.)`);
+  }
+  /* how each change of the talk stands as this is told */
+  const marks = [];
+  for (const t of turns) {
+    if (t.by !== 'ai') continue;
+    for (const v of t.versions || []) for (const c of v.changes || []) if (c && !c.copied) marks.push([t.id, v.id, c.id, statusNow(novelId, c)]);
+  }
+  return { told: parts.join('\n\n'), marks };
+}
+/* each change marked as it was told */
+function markTold(d, marks) {
+  for (const [tid, vid, cid, as] of marks || []) {
+    const t = (d.turns || []).find((x) => x.id === tid);
+    const v = t && (t.versions || []).find((x) => x.id === vid);
+    const c = v && (v.changes || []).find((x) => x.id === cid);
+    if (c) c.toldAs = as;
+  }
+}
+
+/* the label of a chapter by a passage's number ("1.2" → "Chapter One"), as read rows are labelled */
+function chapterLabelOf(novelId, n) {
+  const novel = store.peek('novel', novelId);
+  const id = novel && (novel.order || [])[Number(String(n).split('.')[0]) - 1];
+  const c = id && store.peek('chapter', id);
+  return c ? chapterLabel(novel, c) : '\u0000';
 }
 /* did any words of this reply stay? */
 function replied(kind, id, turnId) {
@@ -1095,7 +1200,7 @@ export async function partnerAgain({ novelId, chapterId, turnId }) {
   const v = newVersion({ streaming: true });
   store.change('talk', novelId, inConversation(rec, turnSteps.addVersion(turnId, v)), { now: true });
   return runTurn({ kind: 'talk', id: novelId, novelId, turnId, versionId: v.id, role: 'partner',
-    buildArgs: (r, c) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(r, { upto: turnId, conn: c }), request: '', moment: hisLast(r, turnId) }) });
+    buildArgs: (r, c, share) => ({ purpose: 'partner', target: { chapterId }, turns: turnsFor(r, { upto: turnId, conn: c, share }), request: '', moment: hisLast(r, turnId) }) });
 }
 
 /* ---------------------------------------------------------------- play */

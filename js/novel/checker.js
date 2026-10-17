@@ -29,14 +29,15 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain, rewriteSelection as writeSpanAgain } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, newVersion, endOf, rootOf, keptTail, writtenWith, howOf, bornOf, chapterText, duelMatches } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, howOf, bornOf, chapterText, duelMatches, writtenOf, mixedHands, autoBaseOf } from './shape.js';
+import { changeInPlace } from './inplace.js';
 import { numberedText, shortOf, notesBehind, passagesAfter } from './context.js';
 import { bibItems, ridingItems } from './bibliography.js';
 import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
 import { findIn } from './search.js';
 import { stockIn, repeatsIn } from './stock.js';
-import { straysIn } from './textshape.js';
+import { straysIn, markupAt, unmarked } from './textshape.js';
 import { contextOf } from '../model/providers.js';
 import { hashText, countWords, newId, plural, estimateTokens, cutWords } from '../util.js';
 
@@ -481,7 +482,8 @@ export async function runCheck(novelId) {
         const batch = nextBatch(novelId, limit, { one: narrowC.has(novelId) });
         if (!batch) { narrowC.delete(novelId); break; }
         /* the same words again means nothing could be kept for them: never asked in a loop */
-        const asking = batch.passages.map((p) => picked(p).id).join(',');
+        /* (by its words too: a version keeps its id as its words change on the page, 2.12.2) */
+        const asking = batch.passages.map((p) => `${picked(p).id}:${sigOf(picked(p))}`).join(',');
         if (asking === lastAsked) break;
         /* a whole long book: the rest in a moment, a run at a time */
         if (n >= 60) { schedule(novelId, 2000); break; }
@@ -1008,10 +1010,11 @@ function foundHere(a, avoid, left) {
   for (const x of a.items) if (x.kind === 'avoid' && x.replace === null) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} on your list of words to avoid`;
   /* stock wording counted that no fix here takes away: its sentence offered to be written again, the same way */
   for (const hit of a.stock) {
-    if (a.items.some((x) => overlaps(x, hit))) continue;
     const s = sentenceAround(a.text, hit.start, hit.end);
+    /* (a second stock wording in a sentence already offered is named on its card — looked for first: the card itself overlaps it) */
     const same = a.items.find((x) => x.stock && x.start === s.start && x.end === s.end);
     if (same) { if (!same.phrases.includes(hit.words)) same.phrases.push(hit.words); continue; }
+    if (a.items.some((x) => overlaps(x, hit))) continue;
     const sentence = a.text.slice(s.start, s.end);
     if (a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
     a.items.push({ id: newId('sg'), kind: 'humanize', find: sentence, replace: null, stock: true, phrases: [hit.words], start: s.start, end: s.end });
@@ -1025,6 +1028,19 @@ function foundHere(a, avoid, left) {
     if (a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
     a.items.push({ id: newId('sg'), kind: 'grammar', find: sentence, replace: null, stray: true, phrases: [a.text.slice(hit.start, hit.end)], why: 'a stray character of another script stands here', start: s.start, end: s.end });
   }
+  /* a web page's or code's markup in the story ("…paid for.</code>", his report 2.12.2): the sentence as it reads
+   * without it — the fix is known, no model asked, so it is put in by itself when he lets fixes go in by themselves */
+  for (const hit of markupAt(a.text)) {
+    const s = sentenceAround(a.text, hit.start, hit.end);
+    const same = a.items.find((x) => x.markup && x.start === s.start && x.end === s.end);
+    if (same) { if (!same.phrases.includes(hit.words)) same.phrases.push(hit.words); continue; }
+    if (a.items.some((x) => overlaps(x, hit))) continue;
+    const sentence = a.text.slice(s.start, s.end);
+    const bare = unmarked(sentence);
+    if (bare === sentence || a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
+    a.items.push({ id: newId('sg'), kind: 'grammar', find: sentence, replace: bare, markup: true, phrases: [hit.words], start: s.start, end: s.end });
+  }
+  for (const x of a.items) if (x.markup) x.why = `web page or code markup (${quoted(x.phrases, 'and')}) stands in the story`;
 }
 const ownFind = (x) => x.replace === null && (x.kind === 'avoid' || x.stock || x.stray);
 
@@ -1081,24 +1097,22 @@ export function keepGrades(novelId) {
   return n;
 }
 
-function keepWords(novelId, w, next, rest) {
+/* THE FIXES GO IN ON THE PAGE ITSELF (his word, 2.12.2: "Grammarly always
+ * change directly the page … rewrite is the only thing who create new
+ * version"): the version on show takes them — where it stops goes with it
+ * (cut short, stopped: its Go on stays, Tavern M511-1), the words before
+ * are kept on it (⋯ → Put back the words before), and what still waits is
+ * found in the new words. Through 2.12.1 each checking's fixes made a
+ * version of their own. {before, after, versionId} or null. */
+function keepWords(novelId, w, next, rest, { auto = false } = {}) {
   const { chapter, p, v, e } = w;
   const sig = hashText(next);
   const entry = { round: e.round, sig, at: Date.now(), items: stillWaiting(w, next, rest), ...gradeKept(e) };
-  if (v.how === 'suggested' && v.round === e.round) {
-    /* the helper had read these words: it is told what they were */
-    archivist.retireIfSeen(novelId, chapter.id, p.id, v.id);
-    store.change('chapter', chapter.id, chapterSteps.setVersion(p.id, v.id, { text: next, words: countWords(next) }), { now: true });
-    store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, v.id, entry), { now: true });
-  } else {
-    /* words fixed in place: where the version stops goes with them (cut short, stopped — its Go on stays: Tavern M511-1) */
-    const version = newVersion({ text: next, how: 'suggested', round: e.round, from: v.id, words: countWords(next), ...(v.ask ? { ask: v.ask } : {}), ...endOf(v), ...rootOf(v), ...keptTail(v), ...writtenWith(v) });
-    store.change('chapter', chapter.id, chapterSteps.addVersion(p.id, version), { now: true });
-    store.change('chapter', chapter.id, chapterSteps.setCheck(p.id, version.id, entry), { now: true });
-  }
-  store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
+  const made = changeInPlace({ novelId, chapterId: chapter.id, passageId: p.id, versionId: v.id, next, by: 'checker', check: entry, extra: auto ? { auto: true } : {} });
+  if (!made) return null;
   recount(novelId);
   archivist.nudge(novelId, 8000);
+  return made;
 }
 
 /* ------------------------------------------------------------ head to head */
@@ -1114,7 +1128,9 @@ function momentOf(v) {
   if (v.how === 'rewrite') return 'r' + JSON.stringify([v.from || '', ask.note || '']);
   return '';
 }
-const duelable = (v) => Boolean(v && !v.streaming && !v.cut && !v.carried && v.model && String(v.text || '').trim() && momentOf(v));
+/* head to head reads each writer's own words (shape.js writtenOf): a fix put in since, or his edit, is not the writer's */
+const duelable = (v) => Boolean(v && !v.streaming && !v.cut && !v.carried && v.model && writtenOf(v).trim() && momentOf(v));
+const writtenSig = (v) => hashText(writtenOf(v));
 const duelKey = (pid, a, b) => `${pid}:${[a, b].sort().join('|')}`;
 /* pairs that could not be judged just now: not asked again until the app starts again */
 const duelTried = new Set();
@@ -1142,7 +1158,7 @@ export function duelsDue(novelId) {
         seen.add(u.model);
         if (Math.max(madeAt(v), madeAt(u)) < from) continue;
         const key = duelKey(p.id, v.id, u.id);
-        const tryKey = `${key}:${[v, u].sort((a, b) => a.id.localeCompare(b.id)).map(sigOf).join(':')}`;
+        const tryKey = `${key}:${[v, u].sort((a, b) => a.id.localeCompare(b.id)).map(writtenSig).join(':')}`;
         if (duelMatches(p, c.duels && c.duels[key]) || duelTried.has(tryKey)) continue;
         out.push({ chapterId: c.id, pid: p.id, x: v.id, y: u.id, key, tryKey });
       }
@@ -1192,13 +1208,13 @@ async function duel(novelId, conn, d, choice) {
   const vx = p && (p.versions || []).find((v) => v.id === d.x);
   const vy = p && (p.versions || []).find((v) => v.id === d.y);
   if (!novel || !vx || !vy) return null;
-  const snapshot = { pid: p.id, x: vx.id, y: vy.id, xSig: sigOf(vx), ySig: sigOf(vy), xModel: vx.model, yModel: vy.model };
+  const snapshot = { pid: p.id, x: vx.id, y: vy.id, xSig: writtenSig(vx), ySig: writtenSig(vy), xModel: vx.model, yModel: vy.model };
   const currentPair = () => {
     const n = store.peek('novel', novelId), c = store.peek('chapter', chapter.id);
     const live = c && (c.passages || []).find((x) => x.id === p.id);
     return Boolean(n && (n.order || []).includes(chapter.id) && duelMatches(live, snapshot) && !(live.versions || []).some((v) => (v.id === snapshot.x || v.id === snapshot.y) && v.streaming));
   };
-  const pages = evenUp(String(vx.text || ''), String(vy.text || ''));
+  const pages = evenUp(writtenOf(vx), writtenOf(vy));
   /* the notes as everyone reads them, fitted to its model (S06-G3, M262) */
   const view = namedBook(standingNotes(novel), house);
   const notesFit = archivist.notesRoomOf(conn);
@@ -1267,7 +1283,8 @@ async function runDuels(novelId, conn, choice) {
 /* stock wording counted in a version, kept for it while its words stay */
 const stockSeen = new WeakMap();
 function stockCount(v) {
-  const t = String((v && v.text) || '');
+  /* the writer's own words: what a fix took out since is still the writer's to count */
+  const t = writtenOf(v);
   const was = stockSeen.get(v);
   if (was && was.text === t) return was.n;
   /* never a kind of stock wording his own words for it asked for (Cozy Tavern M355) */
@@ -1281,7 +1298,8 @@ function stockCount(v) {
  * what was brought in from a file */
 const MIXED = ['suggested', 'partner', 'edit', 'selection', 'imported'];
 function authorOf(v) {
-  if (!v || v.streaming || v.carried || MIXED.includes(v.how)) return '';
+  /* (fixes put in on its page leave it the writer's; his words or his partner's in it do not — 2.12.2) */
+  if (!v || v.streaming || v.carried || MIXED.includes(v.how) || mixedHands(v)) return '';
   return v.model || 'your own words';
 }
 
@@ -1299,14 +1317,18 @@ export function gradesOf(novelId) {
   const rows = [];
   const by = new Map();
   const row = (k) => { if (!by.has(k)) by.set(k, { model: k, n: 0, sum: 0, words: 0, stock: 0, win: 0, loss: 0, tie: 0 }); return by.get(k); };
+  /* what no one writer wrote whole — his words or his partner's in it, carried on by another writer, brought in — has
+   * a row of its own: a grade is never left out of the table (his report, 2.12.2: "Who wrote it" empty under a grade) */
+  const MIXED_ROW = '\u0000mixed';
   const fails = new Map();
   let duels = 0;
   for (const c of chaptersOf(novelId)) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       const v = picked(p);
-      const who = authorOf(v);
-      if (who) { const r = row(who); r.words += countWords(v.text); r.stock += stockCount(v); }
+      const who = authorOf(v) || (v && !v.streaming && String(v.text || '').trim() ? MIXED_ROW : '');
+      if (who === MIXED_ROW) { const r = row(who); r.words += countWords(v.text); r.stock += stockIn(String(v.text || ''), { not: askWords(v) }).length; }
+      else if (who) { const r = row(who); r.words += countWords(writtenOf(v)); r.stock += stockCount(v); }
       const e = entryFor(c, p);
       /* (a grade from before the ten checks, 2.4.1–2.4.2, was one number on another scale: its
        * card still shows, but it is not averaged with these) */
@@ -1327,10 +1349,10 @@ export function gradesOf(novelId) {
     }
   }
   const models = [...by.values()].map((r) => ({
-    model: r.model, n: r.n, average: r.n ? Math.round((r.sum / r.n) * 10) / 10 : null,
+    model: r.model === MIXED_ROW ? '' : r.model, mixed: r.model === MIXED_ROW, n: r.n, average: r.n ? Math.round((r.sum / r.n) * 10) / 10 : null,
     words: r.words, stock: r.stock, per1000: r.words ? Math.round((r.stock / r.words) * 10000) / 10 : null,
     win: r.win, loss: r.loss, tie: r.tie, self: Boolean(judgeModel) && r.model === judgeModel,
-  })).sort((a, b) => ((b.average === null ? -1 : b.average) - (a.average === null ? -1 : a.average)) || ((b.win - b.loss) - (a.win - a.loss)) || (b.words - a.words));
+  })).sort((a, b) => (Number(a.mixed) - Number(b.mixed)) || ((b.average === null ? -1 : b.average) - (a.average === null ? -1 : a.average)) || ((b.win - b.loss) - (a.win - a.loss)) || (b.words - a.words));
   return {
     rows, models, duels,
     fails: JUDGE_CHECKS.map(([k, name]) => ({ check: k, name, n: fails.get(k) || 0 })).filter((x) => x.n).sort((a, b) => b.n - a.n),
@@ -1352,9 +1374,9 @@ export function applyOne(novelId, chapterId, passageId, itemId) {
     return { ok: false, said: /more than one place/.test(spot.why) ? 'those words stand in more than one place now' : 'those words are not there any more' };
   }
   const next = text.slice(0, spot.start) + item.replace + text.slice(spot.end);
-  keepWords(novelId, w, next, w.e.items.filter((x) => x.id !== itemId));
+  const made = keepWords(novelId, w, next, w.e.items.filter((x) => x.id !== itemId));
   tell(novelId);
-  return { ok: true };
+  return made ? { ok: true, ...made } : { ok: false, said: 'the passage is being written just now' };
 }
 
 /* HOW MUCH A FIX MAY CHANGE BY ITSELF (Cozy Tavern M259, M275): a mend is
@@ -1412,13 +1434,49 @@ function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) 
     spots.push({ ...spot, item });
   }
   if (!spots.length) return 0;
-  let next = text;
-  for (const s of [...spots].sort((a, b) => b.start - a.start)) next = next.slice(0, s.start) + s.item.replace + next.slice(s.end);
-  /* by itself, all of them together are a small mend too, or none goes in */
-  if (byItself && !smallMend(text, next)) return 0;
-  keepWords(novelId, w, next, rest);
-  return spots.length;
+  const put = (list) => { let t = text; for (const s of [...list].sort((a, b) => b.start - a.start)) t = t.slice(0, s.start) + s.item.replace + t.slice(s.end); return t; };
+  /* by itself, all that go in together are a small mend too — with what went in by itself before them, measured from
+   * the words before any of it (autoBaseOf): each in turn, from the top of the passage, goes in while they still are;
+   * one that would make them more waits for him (through 2.12.1 one too many held them all back) */
+  let going = spots;
+  if (byItself) {
+    const base = autoBaseOf(w.v);
+    going = [];
+    for (const s of [...spots].sort((a, b) => a.start - b.start)) {
+      if (smallMend(base, put([...going, s]))) going.push(s); else rest.push(s.item);
+    }
+    if (!going.length) return 0;
+  }
+  const next = put(going);
+  if (!keepWords(novelId, w, next, rest, { auto: byItself })) return 0;
+  return going.length;
 }
+
+/* Why a suggestion is not put in by itself, in his words ('' when it will be) — said on its card while "Apply the
+ * checker's fixes by themselves" is on (his report, 2.12.2: 27 waiting, and not one said why) */
+export function waitsWhy(chapterId, passageId, item) {
+  const house = store.peek('house', 'house') || {};
+  if (autoOf(house).fix === null || !item || item.kind === 'grade') return '';
+  const w = where(chapterId, passageId);
+  if (w.why) return '';
+  const { p, v } = w;
+  if (v.cut) return 'the passage stopped partway — what goes in by itself waits for its Go on';
+  if (editingNow.has(passageId)) return 'the passage is open in your edit box';
+  if (v.fixesBack && v.fixesBack === sigOf(v)) return 'you put these words back yourself, so nothing goes in on them by itself';
+  if (howOf(v) === 'imported') return 'words you brought in from a file are never changed by themselves';
+  if (typeof item.replace !== 'string') {
+    if ((v.spanFailed || []).includes(item.find)) return 'written again by itself, it did not come — Write it again asks for it';
+    if (spansOf(p) >= MAX_SPANS) return `${numberWord(MAX_SPANS)} sentences of this passage were written again by itself already — Write it again does this one`;
+    return '';
+  }
+  if (item.kind === 'continuity') return 'it holds the page to the notes, and the notes may be what is wrong';
+  const text = String(v.text || '');
+  if (!smallFix(item, text)) return 'it rewrites a large stretch of the passage';
+  const spot = locate(text, item.find);
+  if (!spot.why && !smallMend(autoBaseOf(v), text.slice(0, spot.start) + item.replace + text.slice(spot.end))) return text === autoBaseOf(v) ? 'it would change too much of the passage at once' : 'with the fixes put in by themselves already, it would change too much of the passage';
+  return '';
+}
+const numberWord = (n) => (['no', 'one', 'two', 'three', 'four', 'five'][n] || String(n)).replace(/^./, (c) => c.toUpperCase());
 
 /* all of them — in one chapter, or the whole book: how many were applied */
 export function applyAll(novelId, chapterId = null) {
@@ -1488,7 +1546,8 @@ const since = (v, from) => howOf(v) !== 'imported' && bornOf(v) >= from;
  * away: with the fixes going in by themselves, written again by itself too, one at a time, twice at most for a
  * passage; each once for the words it was found in, and one that failed for a real reason never again */
 export const MAX_SPANS = 2;
-const spansOf = (p) => (p.versions || []).filter((v) => v.spanAuto);
+/* (a sentence written again by itself goes in on the version it was written for, 2.12.2: counted there) */
+const spansOf = (p) => (p.versions || []).reduce((n, v) => n + (v.spanAuto ? 1 : 0) + (Number(v.spans) || 0), 0);
 const spanTried = new Set();
 /* A temporary writing failure is not a completed attempt. Keep its own
  * backoff: successful proofreading must not reset the writer's wait. */
@@ -1531,11 +1590,13 @@ const checkOf = (c, p, v) => { const e = c.checks && c.checks[p.id] && c.checks[
  *    and the version they came from stays on show, once (a version he picks
  *    afterwards is his). "Leave it" on its grade stops it.
  *  - otherwise, with "Apply the fixes by themselves" on: every small fix
- *    with words to put in goes in, one new version for the checking (Apply
- *    all, for that passage); then a sentence to write again that is left on
- *    it (a word on his list, stock wording, a stray of another script) is
- *    written again by itself, one at a time, twice at most for a passage.
- *    A slip against the notes, and a fix too large, wait for him.
+ *    with words to put in goes in, on the page itself (2.12.2), while what
+ *    went in by itself stays a small change; then a sentence to write again
+ *    that is left on it (a word on his list, stock wording, a stray of
+ *    another script) is written again by itself, on the page too, one at a
+ *    time, twice at most for a passage. A slip against the notes, and a fix
+ *    too large, wait for him — on every passage checked, never words he put
+ *    back himself or brought in from a file.
  * His own words too, once he switched it on (his word, 2.6.2).
  * One writing at a time, only while the writer is free; anything he asks the
  * writer meanwhile goes first (writer.js yieldAuto). */
@@ -1552,9 +1613,10 @@ function autoAfter(novelId) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       let v = picked(p);
-      /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) — nor under his hand in the edit box,
-       * nor on a version he put on show himself (the arrows, or the one on show removed): his choice stands, its suggestions wait for him */
-      if (!v || v.streaming || v.cut || v.chosen || editingNow.has(p.id)) continue;
+      /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) — nor under his hand in the edit box;
+       * a version he put on show himself (the arrows, or the one on show removed) is never written again by itself (below), and
+       * words he put back himself get nothing by themselves (fixesBack) */
+      if (!v || v.streaming || v.cut || editingNow.has(p.id)) continue;
       let e = checkOf(c, p, v);
       if (!e) continue;
       if (a.lift !== null && judge) {
@@ -1583,13 +1645,16 @@ function autoAfter(novelId) {
         const g = e.grade;
         const card = (e.items || []).find((x) => x.kind === 'grade');
         const under = g && g.of && g.overall < judge.target && card;
-        if (under && since(v, a.lift) && liftsOf(p).length < MAX_LIFTS && !liftTried.has(v.id) && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
+        if (under && !v.chosen && since(v, a.lift) && liftsOf(p).length < MAX_LIFTS && !liftTried.has(`${v.id}|${sigOf(v)}`) && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
           if (!next) next = { chapterId: c.id, passageId: p.id, v, note: card.lift || g.lift, lift: liftsOf(p).length + 1 };
           /* its fixes wait for the passage written again */
           continue;
         }
       }
-      if (a.fix !== null && since(v, a.fix)) {
+      /* the fixes: on every passage checked, from the moment he switches it on (his report, 2.12.2: "27 suggestions and
+       * it doesn't automatically change it" — through 2.12.1 only passages written after) — never on words he put
+       * back himself, nor words he brought in from a file */
+      if (a.fix !== null && howOf(v) !== 'imported' && v.fixesBack !== sigOf(v)) {
         if ((e.items || []).some((x) => typeof x.replace === 'string') && applyPassage(novelId, c.id, p.id, { byItself: true })) {
           /* the version the fixes made, with what still waits on it */
           const now = store.peek('chapter', c.id);
@@ -1598,18 +1663,19 @@ function autoAfter(novelId) {
           e = v ? checkOf(now, np, v) : null;
           if (!e) continue;
         }
-        const span = (e.items || []).find((x) => x.replace === null && x.kind !== 'grade' && x.find && stands(x) && !spanTried.has(`${v.id}|${x.find}`) && !(v.spanFailed || []).includes(x.find));
+        const span = (e.items || []).find((x) => x.replace === null && x.kind !== 'grade' && x.find && stands(x) && !spanTried.has(`${v.id}|${hashText(String(v.text || ''))}|${x.find}`) && !(v.spanFailed || []).includes(x.find));
         const cur = ((store.peek('chapter', c.id) || c).passages || []).find((x) => x.id === p.id) || p;
-        if (span && !next && spansOf(cur).length < MAX_SPANS) next = { span: true, chapterId: c.id, passageId: p.id, v, item: span };
+        if (span && !next && spansOf(cur) < MAX_SPANS) next = { span: true, chapterId: c.id, passageId: p.id, v, item: span };
       }
     }
   }
   if (next && next.span && !writerBusy(novelId) && !lifting.has(novelId)) {
-    const key = `${next.v.id}|${next.item.find}`;
+    /* (the version keeps its id as its words change in place: tried once for these words) */
+    const key = `${next.v.id}|${hashText(String(next.v.text || ''))}|${next.item.find}`;
     spanTried.add(key);
     const spot = locate(String(next.v.text || ''), next.item.find);
     if (!spot.why) {
-      const job = writeSpanAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, start: spot.start, end: spot.end, note: spanNote(next.item), fromVersion: next.v, auto: true })
+      const job = writeSpanAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, start: spot.start, end: spot.end, note: spanNote(next.item), fromVersion: next.v, auto: true, fix: true })
         .then((out) => {
           if (out && out.ok) archivist.nudge(novelId);
           /* failed for a real reason: kept on the version, never tried by itself again */
@@ -1624,7 +1690,8 @@ function autoAfter(novelId) {
       lifting.set(novelId, job);
     }
   } else if (next && !next.span && !writerBusy(novelId) && !lifting.has(novelId)) {
-    liftTried.add(next.v.id);
+    const liftKey = `${next.v.id}|${sigOf(next.v)}`;
+    liftTried.add(liftKey);
     const job = writeAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, note: next.note, fromVersion: next.v, lift: next.lift })
       .then((out) => {
         if (out && out.ok) archivist.nudge(novelId);
@@ -1635,7 +1702,7 @@ function autoAfter(novelId) {
         return out;
       })
       .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
-      .then((out) => afterAutomatic(novelId, liftTried, next.v.id, out))
+      .then((out) => afterAutomatic(novelId, liftTried, liftKey, out))
       .finally(() => lifting.delete(novelId));
     lifting.set(novelId, job);
   }

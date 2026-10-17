@@ -70,7 +70,22 @@ function placeToast() {
   const t = $('#toast');
   if (t) (focusedSheet()?.box || document.body).append(t);
 }
-function hideToast(t) { t.classList.remove('on'); t.inert = true; t.setAttribute('aria-hidden', 'true'); }
+function hideToast(t) {
+  t.classList.remove('on'); t.inert = true; t.setAttribute('aria-hidden', 'true');
+  /* a hint that waited for this line to go comes now */
+  const w = hintWaiting;
+  hintWaiting = null;
+  if (w) toast(w.words, w.ms);
+}
+/* A hint said by itself (the app's own, on a timer) never covers a line
+ * already showing — an import's error, the books brought along, a mend said
+ * on open: it waits until that line goes. */
+let hintWaiting = null;
+export function hintToast(words, ms = 3200) {
+  const t = $('#toast');
+  if (t && t.classList.contains('on')) { hintWaiting = { words, ms }; return; }
+  toast(words, ms);
+}
 /* One line at the bottom, for a moment. With an action (Undo), it stays a
  * little longer; whichever line came last is the one shown, for its own time. */
 export function toast(words, ms = 3200, action = null) {

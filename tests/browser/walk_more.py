@@ -684,7 +684,9 @@ async def scenario_checker(b):
         await pg.wait_for_timeout(250)
     check('the new words are checked, and what he left is not offered again: green', states[-1] == 'clean', states)
     ctl = await pg.inner_text('#passages .passage >> nth=-1 >> .pctl')
-    check('each change is a version of its own, the words before one arrow away', '3 / 3' in ctl, ctl)
+    # (each change was a version of its own through 2.12.1 — since 2.12.2 the fix and the sentence written again go in on the page itself)
+    befores = await pg.evaluate("(async () => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const n = s.peek('novel', location.hash.split('/')[2]); const c = s.peek('chapter', n.order[0]); const p = c.passages[c.passages.length - 1]; const v = sh.picked(p); return [p.versions.length, (v.before || []).length]; })()")
+    check('each change goes in on the page itself, the words before kept to put back — no new version', '/' not in ctl.split('\n')[0] and befores == [1, 2], (ctl, befores))
     # his own words, read as Grammarly reads: a sentence in a weak passive is a Clarity card
     await pg.fill('#direction', 'The choice was made by her to stay.'); await pg.click('#mineBtn')
     await pg.wait_for_function("document.querySelector('#checkBubble').dataset.state === 'found'", timeout=15000)
@@ -974,26 +976,31 @@ async def scenario_versions(b):
     n = await until(lambda n: 'The second take' in lore(n))
     check('the edit, read as new, has its own notes', lore(n) == ['The bottle', 'The second take'], lore(n))
     before = readings()
-    # the arrows back to the first take: its notes come back, with no reading
+    # Put back the words before the edit: their notes come back, with no reading
+    # (2.12.2: the edit is on the page itself — through 2.12.1 it was a version, and the arrows brought the first back)
     # (the passage is still open from the edit; a click on its middle could land on Another take)
     if not await pg.locator('.passage.selected').count():
         await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
-    await pg.click('.passage.selected button[aria-label="The version before"]')
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    await pg.click('.menu-pop button:has-text("Put back the words before")')
     n = await until(lambda n: 'The second take' not in lore(n), 6000)
     await pg.wait_for_timeout(1200)
-    check('the arrows bring the first take’s notes back at once', lore(n) == ['The bottle'], lore(n))
+    check('Put back the words before brings their notes back at once', lore(n) == ['The bottle'], lore(n))
     check('and cost no reading', readings() == before, (before, readings()))
-    # the readings list: both versions, one in the notes, one an earlier version
+    # the readings list: both readings of the passage, one in the notes, one of the words it had for a while
     await pg.click('#notesBtn'); await pg.wait_for_timeout(400)
     await pg.click('#sidePane .sechead:has(h3:text-is("Each version’s notes"))'); await pg.wait_for_timeout(300)
     tags = await pg.locator('#sidePane .card.reading .ctag').all_inner_texts()
-    check('the readings list shows each version: one in the notes, one an earlier version', sorted(t.lower() for t in tags) == ['earlier version', 'in the notes'], tags)
+    check('the readings list shows each reading: one in the notes, one of its earlier words', sorted(t.lower() for t in tags) == ['earlier words', 'in the notes'], tags)
     # several versions taken out at once, with Undo
     await pg.click('#sideClose'); await pg.wait_for_timeout(300)
     if not await pg.locator('.passage.selected').count():
         await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
-    await pg.click('.passage.selected .pctl button:has-text("Another take")')
-    await pg.wait_for_function("(() => { const v = document.querySelector('.passage.selected .pctl .ver > span'); return v && /3 \\/ 3/.test(v.textContent) && !document.querySelector('.passage.streaming'); })()", timeout=15000)
+    # (two takes more: an edit is no version of its own since 2.12.2)
+    for k in (2, 3):
+        await pg.click('.passage.selected .pctl button:has-text("Another take")')
+        await pg.wait_for_function(f"(() => {{ const v = document.querySelector('.passage.selected .pctl .ver > span'); return v && /{k} \\/ {k}/.test(v.textContent) && !document.querySelector('.passage.streaming'); }})()", timeout=15000)
+        await pg.wait_for_timeout(300)
     await pg.wait_for_timeout(600)
     await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
     await pg.click('.menu-pop button:has-text("Remove versions")')
@@ -1520,7 +1527,27 @@ async def scenario_suggestions_more(b):
     got = await pg.evaluate("""async () => { const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
       const D = (await import('/js/ui/desk.js')).deskState(); const nid = D.novelId; const cid = D.chapterId; const p = store.peek('chapter', cid).passages[0];
       return { n: p.versions.length, text: shape.picked(p).text, from: shape.picked(p).from, before: p.versions[1].text }; }""")
-    check('his edit is made on the words he opened, the version that came meanwhile one arrow back — and said', got['n'] == 3 and got['text'] == 'Mara climbed the stair slowly. The lamp was lit.' and got['from'] == opened and got['before'] == 'Mara climbed the long stair. The lamp was lit.' and 'Another version came while you edited — it is one arrow back.' in toast, (got, toast))
+    # (2.12.2: his edit goes on the version he opened itself — the version that came meanwhile one arrow away)
+    got2 = await pg.evaluate("""async () => { const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const p = store.peek('chapter', D.chapterId).passages[0];
+      return { id: shape.picked(p).id, texts: p.versions.map((v) => v.text) }; }""")
+    check('his edit is made on the words he opened, the version that came meanwhile one arrow away — and said', got['n'] == 2 and got['text'] == 'Mara climbed the stair slowly. The lamp was lit.' and got2['id'] == opened and got2['texts'][1] == 'Mara climbed the long stair. The lamp was lit.' and 'Another version came while you edited — it is one arrow away' in toast, (got, got2, toast))
+    # words changed on the page while his box was open (his partner's change): his Save is on the page, and those words are among the words before — said
+    await pg.click('.passage.selected .pctl button:has-text("Edit")')
+    await pg.wait_for_selector('.editbox')
+    await pg.evaluate("""async () => { const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js'); const ip = await import('/js/novel/inplace.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const p = store.peek('chapter', D.chapterId).passages[0];
+      ip.changeInPlace({ novelId: D.novelId, chapterId: D.chapterId, passageId: p.id, versionId: shape.picked(p).id, next: 'Mara went up the stair slowly. The lamp was lit.', by: 'partner' }); }""")
+    await pg.wait_for_timeout(300)
+    check('the box keeps the words it was opened on while they change on the page', await pg.input_value('.editbox') == 'Mara climbed the stair slowly. The lamp was lit.', await pg.input_value('.editbox'))
+    await pg.fill('.editbox', 'Mara climbed the stair very slowly. The lamp was lit.')
+    await pg.click('.editrow button:has-text("Save")')
+    await pg.wait_for_timeout(400)
+    toast = await pg.inner_text('#toast')
+    got3 = await pg.evaluate("""async () => { const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const D = (await import('/js/ui/desk.js')).deskState(); const v = shape.picked(store.peek('chapter', D.chapterId).passages[0]);
+      return { text: v.text, before: (v.before || []).map((b) => b.text) }; }""")
+    check('his Save over words changed meanwhile: his on the page, theirs among the words before — said', got3['text'] == 'Mara climbed the stair very slowly. The lamp was lit.' and got3['before'][-1] == 'Mara went up the stair slowly. The lamp was lit.' and 'These words were changed while you edited' in toast, (got3, toast))
     # nothing goes in by itself under his open box: the fixes wait, and go in once it closes
     # As the switch does in the app, begin with newly written pages. A zero
     # date also rewrites the earlier stock-wording fixture, leaving the
@@ -1543,15 +1570,19 @@ async def scenario_suggestions_more(b):
         if shown['found'] and shown['bubble'] == 'found': break
         await pg.wait_for_timeout(250)
     count = "(async () => { const store = await import('/js/store.js'); const D = (await import('/js/ui/desk.js')).deskState(); const c = store.peek('chapter', D.chapterId); const p = c.passages[c.passages.length - 1]; return [p.versions.length, p.versions[p.versions.length - 1].how]; })()"
+    fixedNow = "(async () => { const store = await import('/js/store.js'); const D = (await import('/js/ui/desk.js')).deskState(); const c = store.peek('chapter', D.chapterId); const p = c.passages[c.passages.length - 1]; return (p.versions[0].hands || []).includes('checker'); })()"
     held = shown['versions']
     check('a fix found while his box is open waits behind the bubble, never put in under his hand', held == [1, 'write'] and shown['found'] and shown['bubble'] == 'found', shown)
     await pg.click('.editrow button:has-text("Cancel")')
     went = held
+    fixed = False
     for i in range(40):
         went = await pg.evaluate(count)
-        if went[0] == 2: break
+        fixed = await pg.evaluate(fixedNow)
+        if fixed: break
         await pg.wait_for_timeout(250)
-    check('once the box is closed, it goes in by itself', went == [2, 'suggested'], went)
+    # (a new version through 2.12.1 — since 2.12.2 on the page itself)
+    check('once the box is closed, it goes in by itself, on the page itself', went == [1, 'write'] and fixed, (went, fixed))
     # (the house as it was, for the walks after)
     await pg.evaluate("import('/js/store.js').then((s) => s.change('house', 'house', (h) => { delete h.autoFix; delete h.judge; }, { now: true }))")
     await pg.wait_for_timeout(300)
@@ -1576,7 +1607,13 @@ async def scenario_page_whole(b):
     check('the passage’s menu offers it back, saying what it does', await item.count() == 1 and 'What the writer put above the story — a heading, or its plan' in hint, hint)
     await item.click(); await pg.wait_for_timeout(500)
     prose = await pg.inner_text('#passages .passage >> nth=-1 >> .prose')
-    check('Put back puts the heading back at the top, as a new version', 'Chapter Three: The Storm' in prose.split('\n')[0] and '2 / 2' in await pg.inner_text('.passage.selected .pctl'), prose[:160])
+    # (as a new version through 2.12.1 — on the page itself since 2.12.2, Put back the words before takes it off again)
+    ctl = await pg.inner_text('.passage.selected .pctl')
+    check('Put back puts the heading back at the top, on the page itself', 'Chapter Three: The Storm' in prose.split('\n')[0] and ' / ' not in ctl.split('\n')[0], (prose[:160], ctl[:120]))
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    await pg.locator('.menu-pop button:has-text("Put back the words before")').click(); await pg.wait_for_timeout(400)
+    prose = await pg.inner_text('#passages .passage >> nth=-1 >> .prose')
+    check('Put back the words before takes it off again', 'Chapter Three: The Storm' not in prose and prose.strip().startswith('Rain hammered'), prose[:120])
     # a page kept from before, with tracking and a note after it: mended once, when the book opens
     await pg.evaluate("""async () => {
       const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
@@ -1946,28 +1983,31 @@ async def scenario_auto(b):
         prose = await pg.inner_text('#passages .passage >> nth=-1')
         if 'patient, unhurried' in prose: break
         await pg.wait_for_timeout(250)
-    check('the checker’s fix goes in by itself, the words before one arrow away', 'patient, unhurried' in prose and '2 / 2' in await pg.inner_text('#passages .passage >> nth=-1 >> .pctl'), prose[:200])
+    # (a version of its own through 2.12.1 — since 2.12.2 on the page itself, the words before kept to put back)
+    check('the checker’s fix goes in by itself, on the page itself', 'patient, unhurried' in prose and await pg.locator('#passages .passage >> nth=-1 >> .pctl .ver').count() == 0, prose[:200])
     # the fixed version still says what wrote it, and what the judge said of it
     await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]'); await pg.wait_for_timeout(200)
     items = await pg.locator('.menu-pop button').all_inner_texts()
     await pg.click('.menu-pop button:has-text("What the judge said")'); await pg.wait_for_timeout(400)
     said = await pg.inner_text('.sheet.on >> nth=-1')
     rows = await pg.locator('.sheet.on ul.judged li').count()
-    check('the version the fixes made keeps What the writer was sent, and What the judge said shows its ten checks', any('What the writer was sent' in t for t in items) and 'Graded 10 of 10' in said and rows == 10, (items, said[:120], rows))
+    check('the page the fix went into keeps What the writer was sent, offers Put back the words before, and What the judge said shows its ten checks', any('What the writer was sent' in t for t in items) and any('Put back the words before' in t for t in items) and 'Graded 10 of 10' in said and rows == 10, (items, said[:120], rows))
     await close_sheet(pg)
-    # he goes back to the words before with the arrows: his choice stands (looked at again below, after more checking)
+    # he puts back the words before the fix: his choice stands (looked at again below, after more checking)
     await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
-    await pg.click('.passage.selected button[aria-label="The version before"]'); await pg.wait_for_timeout(400)
+    await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
+    await pg.click('.menu-pop button:has-text("Put back the words before")'); await pg.wait_for_timeout(400)
     # his own words: fixed by themselves too (his word, 2.6.2)
     await pg.fill('#direction', 'My own page: Mara kept no letters anymore.'); await pg.click('#mineBtn')
     for i in range(120):
         mine = await pg.inner_text('#passages .passage >> nth=-1')
         if 'letters any more' in mine: break
         await pg.wait_for_timeout(250)
-    check('his own words get the checker’s fix by themselves, the words before one arrow away', 'letters any more' in mine and '2 / 2' in await pg.inner_text('#passages .passage >> nth=-1 >> .pctl'), mine[:200])
-    # he takes the fixed version away: the words that come back on show are his choice too (looked at again below)
+    check('his own words get the checker’s fix by themselves, on the page itself', 'letters any more' in mine and await pg.locator('#passages .passage >> nth=-1 >> .pctl .ver').count() == 0, mine[:200])
+    # he takes the fix back out: the words that come back are his choice too (looked at again below)
+    await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
     await pg.click('.passage.selected .pctl button[aria-label="More for this passage"]')
-    await pg.click('.menu-pop button:has-text("Remove this version")'); await pg.wait_for_timeout(500)
+    await pg.click('.menu-pop button:has-text("Put back the words before")'); await pg.wait_for_timeout(500)
     # a page under the mark: written again by itself, toward it
     await write(pg, 'He gave her a look that meant he was sorry. And she knew, at last, that she was home.')
     for i in range(160):
@@ -1984,12 +2024,12 @@ async def scenario_auto(b):
     first = await pg.inner_text('#passages .passage >> nth=0')
     await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
     ctl = await pg.inner_text('.passage.selected .pctl')
-    check('the version he went back to stays as he chose it, through every checking after — its fix waits for him', 'patient and unhurried' in first and '1 / 2' in ctl, (first[:160], ctl))
+    check('the words he put back stay as he put them, through every checking after — its fix waits for him', 'patient and unhurried' in first and await pg.locator('.passage.selected .pctl .ver').count() == 0, (first[:160], ctl))
     own = await pg.inner_text('#passages .passage >> nth=1')
     await pg.click('#passages .passage >> nth=1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
     vl = '.passage.selected .pctl .ver > span'
     ver = await pg.inner_text(vl) if await pg.locator(vl).count() else '1 / 1'
-    check('and the words that came back when he took the fixed version away stay too', 'letters anymore' in own and '1 / 1' in ver, (own[:160], ver))
+    check('and the words that came back when he took the fix back out stay too', 'letters anymore' in own and '1 / 1' in ver, (own[:160], ver))
     # both off again, for the walks after (the house is shared)
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
     await pg.wait_for_selector('.sheet.on')

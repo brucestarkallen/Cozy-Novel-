@@ -11,7 +11,7 @@
 import * as store from '../store.js';
 import { h, icon, toast, undoToast, openSheet, confirmIt, field, pickFile, download } from './dom.js';
 import { picked, novelSteps } from '../novel/shape.js';
-import { bibItems, itemForms, nameForms, makeFinder, formKey, ENTRY_KINDS, KIND_TITLE, RIDES, RIDES_WORDS, newEntry, tidyEntry, entriesOf, nameTaken, entriesFromLorebook, lorebookOf } from '../novel/bibliography.js';
+import { bibItems, itemForms, nameForms, makeFinder, formKey, codexNow, ENTRY_KINDS, KIND_TITLE, RIDES, RIDES_WORDS, newEntry, tidyEntry, entriesOf, nameTaken, entriesFromLorebook, lorebookOf } from '../novel/bibliography.js';
 import { bibAutoOn } from '../novel/context.js';
 import { nowLabelOf } from '../novel/prompts.js';
 import { plural, nameKey, slug } from '../util.js';
@@ -37,11 +37,14 @@ function namesPrint(novel, chapters) {
   const rows = [];
   for (const e of entriesOf(novel)) rows.push(`e${e.id}:${e.name}:${(e.aka || []).join(',')}:${e.kind}`);
   for (const kind of ['people', 'places', 'lore']) for (const c of ((novel.notes || {})[kind] || [])) rows.push(`c${c.id}:${c.name}:${(c.aka || []).join(',')}`);
-  /* the facts on show: each version's, by its words and the names its facts give (a passage read again over the same words may give others) */
+  /* the names the facts on show give, and their kinds — only these decide what the page marks: facts laid on a passage
+   * that name no one new mark nothing new, and the finder is not built again (2.12.2: the app lagged) */
+  const named = new Set();
   for (const id of novel.order || []) {
     const ch = chapters[id];
-    for (const p of (ch && ch.passages) || []) { const v = picked(p); const c = v && v.codex; if (c && c.fp) rows.push(`${v.id}:${c.fp}:${(Array.isArray(c.facts) ? c.facts : []).map((f) => (f ? `${f.name}/${f.kind}` : '')).join(',')}`); }
+    for (const p of (ch && ch.passages) || []) { const c = codexNow(picked(p)); if (c) for (const f of c.facts) if (f && typeof f.name === 'string') named.add(`${f.name}/${f.kind}`); }
   }
+  rows.push(...[...named].sort());
   return rows.join('|');
 }
 function mergeForms(...lists) {
@@ -65,7 +68,10 @@ export function pageNames(novelId) {
   if (was && was.sig === sig) return was.finder;
   const items = bibItems(novel, chapters, { facts: true });
   const forms = mergeForms(itemForms(items), nameForms([], novel.notes || {}));
-  const finder = forms.length ? makeFinder(forms) : null;
+  let finder = forms.length ? makeFinder(forms) : null;
+  /* the same names marked as before (a passage read again, its facts the same names): the same finder — what it found
+   * in each passage's words is kept, and nothing on the page is drawn again */
+  if (finder && was && was.finder && was.finder.sig === finder.sig) finder = was.finder;
   finders.set(novelId, { sig, finder });
   return finder;
 }

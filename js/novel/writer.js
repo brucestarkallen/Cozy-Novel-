@@ -13,12 +13,13 @@
 import * as store from '../store.js';
 import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
-import { newId, countWords, numberWords } from '../util.js';
+import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn } from './textshape.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup } from './textshape.js';
 import { renameIn } from './names.js';
+import { changeInPlace, foldVersion, grownFields } from './inplace.js';
 
 /* -------------------------------------------------------------- roles */
 
@@ -238,6 +239,12 @@ function overlapAtEnd(after, text, min = 5, max = 600) {
  * words; or the whole passage again, with or without the marks; or the new
  * words with a little of what stands around them. What it repeated from
  * around the selection is taken off, so nothing is ever doubled. */
+/* what was taken off, in his words: the marks themselves, a few */
+export function markupNote(taken = []) {
+  const shown = taken.slice(0, 3).map((x) => `“${x}”`).join(', ');
+  return `Web page or code markup the writer left in the story${shown ? ` (${shown})` : ''} was taken off.`;
+}
+
 export function spliceSelection(fullText, start, end, answer) {
   let a = tidyAnswer(answer).trim();
   const before = fullText.slice(0, start);
@@ -439,6 +446,15 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
         notes.push(`${what} after the story ${fin.kinds.length > 1 ? 'were' : 'was'} taken off the page — the passage’s menu puts ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
       }
     }
+    /* a web page's or code's markup left in the new words ("…paid for.</code>",
+     * his report 2.12.2) is never the story: taken off before the page is kept —
+     * the words only, his own around a selection never touched */
+    if (how === 'selection') {
+      const lead = answer.match(/^\s*/)[0];
+      const trail = answer.match(/\s*$/)[0];
+      const marked = dropMarkup(answer.trim());
+      if (marked.changed) { answer = lead + marked.text + trail; notes.push(markupNote(marked.taken)); }
+    }
     let finalText = splice ? splice(answer).text : base + answer;
     /* the marks a model left open closed, and a stray of another script
      * stuck to the front of a word taken off — marks only, never a word, and
@@ -448,7 +464,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       const from = mode === 'append' && original ? original.text.length : 0;
       const unglued = dropGluedStrays(finalText, { from });
       if (unglued.changed) notes.push('A stray character of another script, stuck to the front of a word, was taken off.');
-      finalText = mendMarks(unglued.text, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
+      const unmarked = dropMarkup(unglued.text, { from });
+      if (unmarked.changed) notes.push(markupNote(unmarked.taken));
+      finalText = mendMarks(unmarked.text, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
       /* one standing loose ("the 틀 door") is not taken off by itself — a word may hang on it: said, for the checker to mend or for him (Cozy Tavern M119) */
       const loose = straysIn(finalText).filter((x) => x.start >= from);
       if (loose.length) notes.push(`A stray character of another script stands in it (“…${loose[0].words}…”) — ${someoneChecks(h) ? 'the checker offers to mend it, or Edit takes it out' : 'Edit takes it out'}.`);
@@ -520,6 +538,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       ...(topOff ? { tookOffTop: topOff } : {}),
       words: countWords(finalText),
       done: Date.now(),
+      /* carried on: the words as the writer wrote them, and the words before a change in place, carry on too */
+      ...(mode === 'append' && original && finalText.startsWith(original.text) ? grownFields({ ...(versionNow(chapterId, passageId, versionId) || {}), text: original.text }, finalText.slice(original.text.length)) : {}),
     };
     store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, patch), { checkpoint: true, now: true });
     store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
@@ -730,8 +750,13 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
 /* Only the words he selected, rewritten; the rest of the passage untouched. */
 /* auto: the app writing it by itself (a sentence the checker found, with
  * "Apply the checker's fixes by themselves" on) — it gives way to anything he
- * asks, and the version it was written from is on show again */
-export async function rewriteSelection({ novelId, chapterId, passageId, start, end, note = '', fromVersion = null, auto = false }) {
+ * asks, and the version it was written from is on show again.
+ * fix: a sentence the checker found, written again (its Write it again, or by
+ * itself) — a fix like any other: once written, it goes in on the version it
+ * was written for, the words before kept on it (his word, 2.12.2: only a
+ * rewrite or another take is a new version). His own Rewrite of words he
+ * selected stays a version of its own. */
+export async function rewriteSelection({ novelId, chapterId, passageId, start, end, note = '', fromVersion = null, auto = false, fix = false }) {
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -750,11 +775,24 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
   /* (given way to him, it is taken away whole — runVersion's undo — and the version on show before it is on show again) */
-  return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
+  const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
     splice: (answer) => spliceSelection(full, start, end, answer),
     /* the passage it is written into was cut at its end: so is this version, and Go on still carries it on */
     keepEnd: cutAtEnd(baseV) ? endOf(baseV) : null,
     build: { target: { chapterId, mark: passageId }, request, moment }, auto });
+  /* a fix: on the version it was written for, while that still reads as it did (else it stays a version of its own, one arrow away) */
+  if ((fix || auto) && out && out.ok) {
+    const live = store.peek('chapter', chapterId);
+    const lp = live && (live.passages || []).find((x) => x.id === passageId);
+    const target = lp && (lp.versions || []).find((x) => x.id === baseV.id);
+    const made = lp && (lp.versions || []).find((x) => x.id === version.id);
+    if (target && made && !made.cut && hashText(String(target.text || '')) === hashText(full)
+      && foldVersion({ novelId, chapterId, passageId, childId: version.id, targetId: baseV.id, by: 'checker' })) {
+      await store.flush('chapter', chapterId);
+      return { ...out, inPlace: true, versionId: baseV.id };
+    }
+  }
+  return out;
 }
 
 /* The words a carried-on passage gets. The model was asked to begin by
@@ -857,40 +895,48 @@ export function addBreak({ chapterId, after = null }) {
 }
 
 /* What was taken off a page — a heading above it, a note to him or a block
- * of tracking after it — put back where it stood, as it came: a new version,
- * the page without it one arrow away. */
+ * of tracking after it — put back where it stood, as it came, on the page
+ * itself (2.12.2): Put back the words before takes it off again. */
 export function putBackTail({ novelId, chapterId, passageId }) {
   const chapter = store.peek('chapter', chapterId);
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   const now = p && picked(p);
   const top = String((now && now.tookOffTop) || '').trim();
   const end = String((now && now.tookOff) || '').trim();
-  if (!now || (!top && !end)) return false;
+  if (!now || now.streaming || (!top && !end)) return false;
   const body = String(now.text || '').replace(/\s+$/, '');
   const t = `${top ? `${top}\n\n` : ''}${body}${end ? `\n\n${now.tookOff}` : ''}`;
-  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...writtenWith(now) });
-  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
-  store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
+  if (!changeInPlace({ novelId, chapterId, passageId, versionId: now.id, next: t, by: 'you', tail: true })) return false;
   recount(novelId);
   return true;
 }
 
-/* His edit, kept as a new version made from the version his box was opened
- * on (fromId) — another that came meanwhile (a fix, his partner) stays one
- * arrow back (Cozy Tavern M429). Whether a version was made. */
-export function saveEdit({ novelId, chapterId, passageId, text, fromId = null }) {
+/* His edit, on the page itself (his word, 2.12.2: only a rewrite or another
+ * take is a new version): the version his box was opened on (fromId) takes
+ * his words, the words before kept on it — Put back the words before. A
+ * change that came while he edited (his partner's) is in those words before.
+ * Whether anything changed. */
+export function saveEdit({ novelId, chapterId, passageId, text, fromId = null, opened = null }) {
   const chapter = store.peek('chapter', chapterId);
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   if (!p) return false;
   const now = (fromId && p.versions.find((x) => x.id === fromId)) || picked(p) || {};
   const t = String(text || '').replace(/\s+$/, '');
-  if (t === String(now.text || '')) return false;
+  /* nothing he changed in the box (the words it opened on) is no edit — never a change made meanwhile taken away */
+  if (!now.id || t === String(now.text || '') || (opened !== null && t === String(opened).replace(/\s+$/, ''))) return false;
   if (!t.trim()) return false;
   /* his words changed inside a passage cut short: it still stops where it stopped, and Go on stays — unless he wrote its end himself (Tavern M511-1) */
-  /* (what wrote the words he changed stays with them: What the writer was sent, and its thinking) */
-  const version = newVersion({ text: t, how: 'edit', from: now.id, words: countWords(t), ...(now.ask ? { ask: now.ask } : {}), ...(sameEnd(now.text, t) ? { ...endOf(now), ...keptTail(now) } : {}), ...writtenWith(now) });
-  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
-  store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
+  /* (an end he wrote himself: what was taken off after the old end is not this page's any more — kept with the words before) */
+  const same = sameEnd(now.text, t);
+  if (!changeInPlace({ novelId, chapterId, passageId, versionId: now.id, next: t, by: 'you', keepEnd: same, tail: !same && Boolean(String(now.tookOff || '').trim() || String(now.tookOffTop || '').trim()) })) return false;
+  /* the version his box was opened on is on show with his words */
+  store.change('chapter', chapterId, chapterSteps.pick(passageId, now.id), { now: true });
   recount(novelId);
   return true;
+}
+
+function versionNow(chapterId, passageId, versionId) {
+  const c = store.peek('chapter', chapterId);
+  const p = c && (c.passages || []).find((x) => x.id === passageId);
+  return p && (p.versions || []).find((x) => x.id === versionId);
 }

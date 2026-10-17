@@ -958,20 +958,20 @@ function readingsSection(rows = archivist.readingsList(P.novelId)) {
   const head = h('button.sechead', { 'aria-expanded': String(open), onclick: () => { const now = sec.classList.toggle('open'); head.setAttribute('aria-expanded', String(now)); keep(key, now ? 'open' : 'closed'); } },
     h('span.chev', icon('chev', 14)), h('h3', 'Each version’s notes'), h('span.count', String(rows.length)));
   const box = h('div.cards');
-  box.append(h('p.notekey', 'Newest first. The arrows on a passage bring its version’s notes back by themselves.'));
+  box.append(h('p.notekey', 'Newest first. The arrows on a passage bring its version’s notes back by themselves, and so does Put back the words before.'));
   if (!rows.length) box.append(h('p.notekey', 'None kept yet — each reading from now on is.'));
   /* the newest few; the rest one tap away */
   const all = P.readingsAll === P.novelId;
   /* Show all is all of them (it drew sixty, the rest out of reach and unsaid — Cozy Tavern M134) */
   for (const r of all ? rows : rows.slice(0, 8)) {
     const what = r.changed.length ? r.changed.slice(0, 6).map((c) => `${c.how === 'new' ? 'new' : c.how === 'gone' ? 'took out' : 'updated'} ${c.name}`).join(', ') + (r.changed.length > 6 ? '…' : '') : 'changed nothing';
-    const state = r.live ? 'in the notes now' : r.shown ? 'the version on show — not read into the notes yet' : 'an earlier version — its notes come back when you pick it';
+    const state = r.live ? 'in the notes now' : r.shown ? 'the version on show — not read into the notes yet' : r.earlier ? 'its words before a change — their notes come back with Put back the words before' : 'an earlier version — its notes come back when you pick it';
     box.append(h('div.card.reading' + (r.live ? '.fresh' : ''),
-      h('div.nm', r.label, h('span.ctag' + (r.live ? '.lit' : ''), r.live ? 'in the notes' : r.shown ? 'on show' : 'earlier version')),
+      h('div.nm', r.label, h('span.ctag' + (r.live ? '.lit' : ''), r.live ? 'in the notes' : r.shown ? 'on show' : r.earlier ? 'earlier words' : 'earlier version')),
       h('div.ab', { title: state }, `${timeAgo(r.at)} · ${what}`),
       r.live ? h('div.row', { style: { display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' } },
-        h('button.btn.small.quiet', { title: 'Takes out only what this reading changed; a card changed since stays as it is.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid)) toast('What that reading changed is put back — anything changed since stays as it is.'); drawSide(); } }, 'Put back'),
-        h('button.btn.small.quiet', { title: 'Puts it back, then the helper reads that passage afresh.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid, { readAgain: true })) toast('Put back — the helper reads that passage again in a moment.'); drawSide(); } }, 'Read again')) : null));
+        h('button.btn.small.quiet', { title: 'Takes out only what this reading changed; a card changed since stays as it is.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid, { sig: r.sig })) toast('What that reading changed is put back — anything changed since stays as it is.'); drawSide(); } }, 'Put back'),
+        h('button.btn.small.quiet', { title: 'Puts it back, then the helper reads that passage afresh.', onclick: (e) => { e.stopPropagation(); if (archivist.putBackReading(P.novelId, r.pid, r.vid, { readAgain: true, sig: r.sig })) toast('Put back — the helper reads that passage again in a moment.'); drawSide(); } }, 'Read again')) : null));
   }
   if (!all && rows.length > 8) box.append(h('button.btn.quiet.small', { title: `Shows every one of the ${rows.length} kept.`, onclick: () => { P.readingsAll = P.novelId; drawSide(); } }, `Show all ${rows.length}`));
   sec.append(head, box);
