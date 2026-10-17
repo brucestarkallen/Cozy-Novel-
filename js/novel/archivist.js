@@ -1103,10 +1103,12 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       const f = q ? foldedText(q) : null;
       const inBook = f && mine.book && (mine.book.loose.includes(' ' + f.loose.trim() + ' ') || mine.book.tight.includes(' ' + f.tight.trim() + ' '));
       /* the quote is the book's, and what the account beside his words already tells (never a contradiction made up out of other words) */
-      const inSince = q && heldIn(q, String(c.since || '')) >= 0.5;
+      /* (a card with no Since then — a thread of his, judged for itself — is held to its own telling) */
+      const inSince = q && heldIn(q, String(c.since || c.about || '')) >= 0.5;
       if (!inBook || !inSince) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, q ? 'the words it gave for the book saying otherwise are not the book’s' : 'it said the book says otherwise without the book’s words'); continue; }
       const whyNow = cleanText(row.why, 400) || `the book now says “${clipQuote(q)}”`;
-      if (truthOf(row.gone) === true) {
+      /* a thread is a storyline set up: the book overturning it leaves nothing to tell — it goes, whatever "about" it offers (2.12.13) */
+      if (truthOf(row.gone) === true || row.kind === 'threads') {
         if (written.has(c.id)) continue;
         touch(row.kind, c);
         whys[c.id] = whyNow;
@@ -1190,14 +1192,16 @@ export function mineToJudge(novel, only = null) {
     for (const c of ((novel && novel.notes) || {})[kind] || []) {
       if (only && !only.has(c.id)) continue;
       const since = String(c.since || '').trim();
-      if (!since || !hisField(c, 'about')) continue;
+      /* and every thread of his — he or his partner set it up, closed it or named it: a storyline the book may since have overturned, judged once for what it says (2.12.13) */
+      const thread = kind === 'threads' && his(c);
+      if (!thread && (!since || !hisField(c, 'about'))) continue;
       const m = done[c.id];
-      const h = hashText(since);
+      const h = hashText(thread ? [c.name, c.about, since].join('\n') : since);
       if (m && m.h === h && (m.held || (m.n || 0) >= 3)) continue;
       out.push({ kind, id: c.id, name: c.name, h });
     }
   }
-  return out;
+  return out.slice(0, 40);
 }
 /* the words he changed himself, folded (foldNotes' `hisWords`): every version on show that is his (shape.js hisChange) */
 export function hisWordsFolded(novel, chapters) {
@@ -2989,7 +2993,7 @@ export const AUDIT_EVERY = 6;
  * person's card is a short portrait, its lasting details in the bibliography
  * (2.12). Notes checked under an earlier one are checked again once, by
  * themselves — once the bibliography holds the book's facts (owedCheck). */
-export const AUDIT_V = 5;
+export const AUDIT_V = 6;
 export function auditDue(novel) {
   const m = (novel && novel.memory) || {};
   const notes = (novel && novel.notes) || {};
@@ -3010,7 +3014,7 @@ export function firstCheck(novelId) {
   /* owed once the bibliography holds the book's facts (owedCheck): notes checked by the check of 2.4–2.11 only for the
    * portrait — so not where the bibliography is not filled from the book; older ones in any case; notes checked under 3 owe nothing there */
   const owed = !has ? null : a && (a.v || 1) >= 3 ? null : a && (a.v || 1) >= 2 ? 'portrait' : 'all';
-  /* 4–5 (2.12.11–12): a card of his with "Since then" not yet judged against his words is held against the book, soon */
+  /* 4–6 (2.12.11–13): a card of his with "Since then", or a thread of his, not yet judged against the book is held against it, soon */
   const sinceHis = has && mineToJudge(novel).length > 0;
   store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, ...(owed ? { owed } : {}) }, ...(sinceHis ? { auditAsked: true } : {}) }), { now: true });
   return has;

@@ -1890,6 +1890,11 @@ await test('every card of his with “Since then” is judged by the notes’ ch
   assert.equal(b.novel().memory.mine['lo-1'].n, 3);
   sent = await ask({});
   assert.ok(!sent.includes('The lamp (lore)'), 'not asked a fourth time');
+  /* a thread of his already rewritten into the book's account (as 2.12.12 could leave one): judged for itself; overturned, it goes — whatever "about" it offers (2.12.13) */
+  store.change('novel', b.novelId, (d) => { d.notes.threads.push({ id: 'th-2', name: 'Jovan’s choice to ask for Emilia', about: 'Jovan did not ask for Emilia and did not choose her. The marriage was arranged and presented as a decision already made.', open: false, updated: { by: 'you', his: ['name', 'open'], chapterId: '', at: 2 } }); }, { now: true });
+  sent = await ask({ mine: [{ kind: 'threads', name: 'Jovan’s choice to ask for Emilia', holds: false, contradicts: 'Jovan learned of it as a decision already made', about: 'The marriage was arranged.', why: 'he never chose' }] });
+  assert.ok(sent.includes('Jovan’s choice to ask for Emilia (threads)') && sent.includes('it goes, never rewritten into a thread about something else'));
+  assert.equal(n().threads.some((c) => c.id === 'th-2'), false, 'a thread overturned goes');
   /* a book checked under 2.12.11: opened, nothing left to judge asks nothing; a Since then that changed is judged again, at open */
   store.change('novel', b.novelId, shape.novelSteps.setMemory({ audit: { ...b.novel().memory.audit, v: 4 }, auditAsked: false }), { now: true });
   archivist.firstCheck(b.novelId);

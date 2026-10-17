@@ -1220,10 +1220,11 @@ ${mine.length ? `${mineAsk(mine)}
  * beside the book's account that says the opposite) */
 function mineAsk(mine) {
   const names = mine.map((x) => `${x.name} (${x.kind})`).join(', ');
-  return `My cards with "Since then" beside my words — what the book told after I wrote them: ${names}. Judge each one, and answer in "mine" for every one of them:
-- {"kind": "…", "name": "…", "holds": true} when what is told since only adds to my words, or tells the same — my words stand.
+  return `My cards to judge against the book — those with "Since then" beside my words (what the book told after I wrote them), and my threads: ${names}. Judge each one, and answer in "mine" for every one of them:
+- {"kind": "…", "name": "…", "holds": true} when the book still bears it out — what is told since only adds to my words, or tells the same; a thread the book still sets up (closed or open).
+- A thread of mine whose storyline the book no longer has — what its name and words say happened did not happen in the book as it stands: {"kind": "threads", "name": "…", "holds": false, "contradicts": "the book’s own words that say otherwise, quoted exactly", "why": "…"} — it goes, never rewritten into a thread about something else.
 - {"kind": "…", "name": "…", "holds": false, "contradicts": "the book’s own words that say otherwise, quoted exactly", "about": "the card as the book has it now, whole", "why": "…"} when the book now says the opposite of my words — not merely more; not someone’s lie, joke or mistaken belief; not a secret the book has yet to reveal. I changed the book after I wrote the card: the book is my newer word.
-- The same with "gone": true in place of "about" when nothing of what the card is about is in the book any more (a thread about a thing that no longer happens).`;
+- The same with "gone": true in place of "about" when nothing of what the card is about is in the book any more (a thing or a place the book no longer has).`;
 }
 
 /* Written whole, for a book set to Automatic (when it has none yet, or he
