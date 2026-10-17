@@ -71,13 +71,11 @@ async def scenario_book(browser):
 
     about = pg.locator('.booksheet.on .keptfield').first
     await about.locator('.keptbox summary').click()
-    correction = 'The letter belongs to Mara.\n  Her correction stays exactly.  '
-    await about.locator('.keptbox textarea').fill(correction)
+    # (2.12.19) the helper's account is only to read: his words go in his own box above, which wins
+    check('the helper’s account is only to read', await about.locator('.keptbox textarea').get_attribute('readonly') is not None)
     await pg.locator('.booksheet.on .covers button[aria-label="moss"]').click()
-    check('a cover change cannot erase a pending helper correction', await about.locator('.keptbox textarea').input_value() == correction)
     await close_sheet(pg)
     await open_book(pg)
-    check('the pending helper correction survives closing and reopening', await pg.get_by_role('textbox', name='What it’s about — kept by the helper', exact=True).input_value() == correction)
     await pg.get_by_role('textbox', name='Title', exact=True).fill('The Lantern Keeper')
     await pg.get_by_role('textbox', name='Under the title', exact=True).fill('Letters from the storm coast')
     await close_sheet(pg)
@@ -85,11 +83,11 @@ async def scenario_book(browser):
     await harness.settled_reload(pg)
     await pg.wait_for_selector('#desk:not([hidden])')
     await open_book(pg)
-    check('book edits survive a full page reload', await pg.get_by_role('textbox', name='What it’s about — your words', exact=True).input_value() == own and await pg.get_by_role('textbox', name='What it’s about — kept by the helper', exact=True).input_value() == correction and await pg.locator('.covers button[aria-label="moss"]').get_attribute('aria-pressed') == 'true')
+    check('book edits survive a full page reload', await pg.get_by_role('textbox', name='What it’s about — your words', exact=True).input_value() == own and await pg.locator('.covers button[aria-label="moss"]').get_attribute('aria-pressed') == 'true')
     await about.locator('.segmented button:text-is("Manual")').click()
     check('Manual hides the helper section and preserves your words', await about.locator('.keptbox').is_hidden() and await about.locator('textarea.tall').input_value() == own)
     await about.locator('.segmented button:text-is("Automatic")').click()
-    check('Automatic restores the helper correction', await about.locator('.keptbox textarea').input_value() == correction)
+    check('Automatic shows the helper’s account again', await about.locator('.keptbox').is_visible())
     await about.locator('.keptbox summary').click()
     await pg.wait_for_timeout(350)
     await pg.evaluate("document.querySelector('#toast')?.remove()")
@@ -118,10 +116,10 @@ async def scenario_book(browser):
 
 
 async def scenario_kept_again(browser):
-    """A helper rewrite keeps the correction just typed until its answer lands."""
+    """Write it from the book again: what stands is used until the helper's answer lands; an account frozen before 2.12.19 is handed back at open."""
     logs = []
     pg = await harness.page(browser, logs)
-    await harness.new_book(pg, title='The Correction That Waited')
+    await harness.new_book(pg, title='The Account That Waited')
     await pg.fill('#direction', 'Mara opened the letter at the lighthouse. The rain waited at the window.')
     await pg.click('#mineBtn')
     gate, started = asyncio.Event(), asyncio.Event()
@@ -131,39 +129,40 @@ async def scenario_kept_again(browser):
         await gate.wait()
         await route.continue_()
 
-    await pg.route('**/api/call', held)
     await pg.evaluate("""async port => {
       const s = await import('/js/store.js'), shape = await import('/js/novel/shape.js');
       const id = location.hash.split('/')[2];
-      for (const key of ['about', 'style']) s.change('novel', id, shape.novelSteps.setKept(key, {text:'Earlier saved ' + key, by:'you', at:Date.now()}));
+      s.change('novel', id, shape.novelSteps.setKept('about', {text:'An account frozen by a correction typed into it.', by:'you', at:Date.now()}), {now:true});
+      s.change('novel', id, shape.novelSteps.setKept('style', {text:'Earlier saved style', at:Date.now()}), {now:true});
       s.change('house', 'house', h => {
         h.connections.push({id:'test-helper', name:'Test helper', url:`http://127.0.0.1:${port}/v1`, model:'fake-writer', key:'test-key'});
         h.roles = {...h.roles, helper:'test-helper', checker:'off'};
       }, {now:true});
-      (await import('/js/ui/book.js')).openBook(id);
+      await s.flush();
     }""", harness.PROV)
+    await pg.route('**/api/call', held)
+    # the book opened afresh: the frozen account is handed back to the helper — what it said used until its new words land, and kept on record
+    await harness.settled_reload(pg)
+    await pg.wait_for_selector('#desk:not([hidden])')
+    kept = await pg.evaluate("import('/js/store.js').then(s=>s.peek('novel',location.hash.split('/')[2]).kept.about)")
+    check('an account frozen before is handed back to the helper at open, its words kept until the new ones land', kept.get('again') and kept.get('by') is None and kept['text'] == 'An account frozen by a correction typed into it.' and kept['was']['text'] == kept['text'], kept)
+    await pg.evaluate("import('/js/ui/book.js').then(m=>m.openBook(location.hash.split('/')[2]))")
     await pg.wait_for_selector('.booksheet.on')
-    correction = 'New correction typed immediately before asking again.'
-    # One event-loop turn: a user can ask again before the 600ms save lands.
-    result = await pg.evaluate("""async correction => {
-      const field = document.querySelector('.booksheet .keptfield');
-      const text = field.querySelector('.keptbox textarea');
-      text.value = correction; text.dispatchEvent(new Event('input', {bubbles:true}));
-      field.querySelector('.keptbox button').click();
-      const s = await import('/js/store.js'), id = location.hash.split('/')[2];
-      return {kept:s.peek('novel', id).kept.about, visible:text.value};
-    }""", correction)
-    check('asking the helper again first keeps the correction just typed', result['kept']['text'] == correction and result['visible'] == correction and result['kept']['again'], result)
+    style = pg.locator('.booksheet.on .keptfield').nth(1)
+    # (the account opens already shown when it has words — never clicked shut)
+    await style.locator('.keptbox').evaluate('(d) => { d.open = true; }')
+    await style.locator('.keptbox button:has-text("Write it from the book again")').click()
     try:
-        await asyncio.wait_for(started.wait(), timeout=10)
+        await asyncio.wait_for(started.wait(), timeout=15)
         await pg.wait_for_timeout(800)
-        kept = await pg.evaluate("import('/js/store.js').then(s=>s.peek('novel',location.hash.split('/')[2]).kept.about)")
-        check('the latest correction stays while the helper response is delayed', kept['text'] == correction and kept.get('again'), kept)
+        kept = await pg.evaluate("import('/js/store.js').then(s=>s.peek('novel',location.hash.split('/')[2]).kept.style)")
+        check('Write it from the book again: what stands is used while the helper’s answer is on its way', kept['text'] == 'Earlier saved style' and kept.get('again'), kept)
     finally:
         gate.set()
-    await pg.wait_for_function("!document.querySelector('.booksheet .keptfield .keptbox .say').textContent.includes('Being written again')", timeout=30000)
-    kept = await pg.evaluate("import('/js/store.js').then(s=>s.peek('novel',location.hash.split('/')[2]).kept.about)")
-    check('the new helper words replace the correction only after they arrive', 'lighthouse keeper' in kept['text'] and not kept.get('again'), kept)
+    await pg.evaluate("import('/js/store.js').then(s=>{window.__store=s})")
+    await pg.wait_for_function("(() => { const k = window.__store.peek('novel', location.hash.split('/')[2]).kept; return Boolean(k.about && !k.about.again && k.style && !k.style.again); })()", timeout=30000)
+    kept = await pg.evaluate("import('/js/store.js').then(s=>s.peek('novel',location.hash.split('/')[2]).kept)")
+    check('the helper’s new words replace both only after they arrive, never frozen again', 'lighthouse keeper' in kept['about']['text'] and not kept['about'].get('again') and kept['about'].get('by') is None and not kept['style'].get('again'), kept)
     check('asking the helper again produces no page errors', not [x for x in logs if x.startswith('PAGEERROR')], logs)
     await pg.context.close()
 

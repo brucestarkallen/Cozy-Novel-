@@ -2086,6 +2086,22 @@ await test('his card’s Since then (2.12.18): judged again when he changes his 
   await putAway(b);
 });
 
+await test('what the helper keeps of the book, frozen before 2.12.19 by a correction typed into it, is handed back at open: its words used until the helper’s new ones land, and kept on record; on Manual it is left alone (2.12.19)', async () => {
+  const b = await makeBook([['Mara Venn kept the light.']]);
+  markAllSeen(b);
+  store.change('novel', b.novelId, shape.novelSteps.setKept('about', { text: 'JOVAN CHOSE HER FROM A FIELD.', at: 1, by: 'you' }), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.setKept('style', { text: 'HIS STYLE CORRECTION.', at: 1, by: 'you' }), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.setAuto('style', false), { now: true });
+  archivist.firstCheck(b.novelId);
+  const k = b.novel().kept;
+  assert.deepEqual([k.about.text, k.about.again, k.about.by, k.about.was.text], ['JOVAN CHOSE HER FROM A FIELD.', true, undefined, 'JOVAN CHOSE HER FROM A FIELD.']);
+  assert.deepEqual([k.style.text, k.style.by], ['HIS STYLE CORRECTION.', 'you'], 'Manual: not the helper’s to keep');
+  await script([{ text: JSON.stringify({ about: 'The fathers arranged the marriage between their houses. Neither heir was asked.' }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual([b.novel().kept.about.text, Boolean(b.novel().kept.about.again), b.novel().kept.about.by], ['The fathers arranged the marriage between their houses. Neither heir was asked.', false, undefined]);
+  await putAway(b);
+});
+
 await test('his other words the writer reads as true — What it’s about, Where it’s headed, a chapter’s plan, an entry for a name the book has — are judged by the notes’ check: overturned and quoted from the book, given whole as the book has them; held, left; unfounded, left; Undo puts them back (2.12.15)', async () => {
   /* (the page as his partner wrote it anew: the story he changed — his own words are put right only from those, never from the writer's own page) */
   const b = await makeBook([[{ text: 'Reginald and Harrison arranged the marriage; Jovan learned of it as a decision already made.', how: 'partner' }], ['']], { brief: 'Jovan chose Emilia from a shortlist, to spite his father.', manual: true });
@@ -3356,7 +3372,8 @@ await test('the same paragraph is never added twice to what the book is about; a
   assert.match(made.said, /there already/);
   made = changes.makeChange(b.novelId, { book: 'about', find: 'KEPT WORDS', replace: 'KEPT LINES' });
   assert.equal(made.status, 'made', made.said);
-  assert.deepEqual([b.novel().kept.about.text, b.novel().kept.about.by], ['A keeper and KEPT LINES here.', 'you']);
+  /* (put right, and still the helper's — kept current from the book, never frozen as his own: 2.12.19) */
+  assert.deepEqual([b.novel().kept.about.text, b.novel().kept.about.by], ['A keeper and KEPT LINES here.', undefined]);
   assert.equal(changes.undoChange(b.novelId, made).ok, true);
   assert.equal(b.novel().kept.about.text, 'A keeper and KEPT WORDS here.');
   await putAway(b);

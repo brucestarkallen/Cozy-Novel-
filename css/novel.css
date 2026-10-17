@@ -613,6 +613,9 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .keptbox { padding: 10px 12px 4px; border-radius: 14px; border: 1px dashed rgba(216,150,58,.4); background: rgba(216,150,58,.05); }
 .keptlabel { display: block; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px; }
 .keptbox .say { margin: 6px 0 0; }
+/* the helper's account: only to read (2.12.19) — no caret, no field look */
+.keptbox textarea[readonly] { cursor: default; background: transparent; border-style: dashed; color: var(--chrome-soft); }
+.keptbox textarea[readonly]:focus { outline: none; box-shadow: none; }
 .toggle { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
 .toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
 .toggle span { flex: 1; font-size: 14px; }

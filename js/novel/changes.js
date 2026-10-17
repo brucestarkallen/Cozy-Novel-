@@ -1106,7 +1106,8 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const words = newWords(op);
       if (words === null) return refuse('it gave no new words for them');
       const spot = locateNamed(String(k.text), op.find, names);
-      const after = { text: putIn(String(k.text), spot, words), at, by: 'you' };
+      /* (the helper's account put right — still the helper's, kept current from the book: never frozen as his own, 2.12.19) */
+      const after = { text: putIn(String(k.text), spot, words), at };
       put('novel', novelId, novelSteps.setKept(keyOf, after), { now: true });
       return { ...base, status: 'made', undo: { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [{ key: keyOf, before: clone(k), after: clone(after) }] }, before: k.text, after: after.text };
     }

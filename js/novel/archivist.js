@@ -28,7 +28,7 @@ import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
 import { picked, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisChange, unrender, cleanCard, PRIOR_KEEP } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
-import { helperFrame, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
+import { autoOn, helperFrame, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook, bibAutoOn } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep } from './timeline.js';
@@ -3217,6 +3217,13 @@ export function firstCheck(novelId) {
   /* cards whose words carry the notes' own lines, put right at open (shape.js cleanCard) — their mark as it was */
   const mended = NOTE_KINDS.flatMap((k) => ((novel0.notes || {})[k] || []).map((c) => [k, cleanCard(c, k)]).filter(([, c]) => c));
   if (mended.length) store.change('novel', novelId, (n) => { for (const [k, c] of mended) n.notes[k] = (n.notes[k] || []).map((x) => (x.id === c.id ? c : x)); }, { now: true });
+  /* what the helper keeps of the book, frozen before 2.12.19 by a correction typed into it (or his partner's): handed back to the
+   * helper, to be written afresh from the book beside his words — what it said used until then, and kept in the book's record */
+  for (const key of ['about', 'style']) {
+    const k = novel0.kept && novel0.kept[key];
+    if (!k || k.by !== 'you' || !autoOn(novel0, key)) continue;
+    store.change('novel', novelId, novelSteps.setKept(key, { text: String(k.text || ''), at: k.at || Date.now(), again: true, was: { text: String(k.text || ''), at: k.at || 0 } }), { now: true });
+  }
   const novel = store.peek('novel', novelId);
   const a = (novel.memory && novel.memory.audit) || null;
   if (a && (a.v || 1) >= AUDIT_V) return false;
