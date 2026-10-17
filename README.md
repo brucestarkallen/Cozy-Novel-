@@ -1,5 +1,8 @@
 # Cozy-Novel-
 
+> # ⚠️ TO ANYONE FIXING THIS APP: MINUTES, NOT HOURS ⚠️
+> ## Find the root cause by reading the code. Run ONLY the tests your change reaches — never the whole repo for a small fix, never the same suite twice. Ship, then say what you didn't run. The owner is waiting. Full rule at the top of [AGENTS.md](AGENTS.md).
+
 A quiet little room for writing a novel with a model beside you — on your phone, in Termux, in any browser.
 
 Choose your writing world: **Academy of Ink**, a magical library with arched windows and drifting ink; **Neon Tokyo**, a rain-wet street of glowing signs, its last train and rain moving through it, the page and its buttons lit like the signs at night and plain by day; or **Original Study**, the familiar picture of a lamplit room and rainy window. Academy and Tokyo are drawn from shapes and lines. Original Study frames its portrait picture on narrow screens and its wider room on unfolded phones and desktops. All three have light and dark interfaces. Switch worlds from the shelf, or **More → Your writing room** while writing. Ambient animation can be paused and respects reduced-motion preferences; the room can also be hidden for an uninterrupted page.

@@ -1,5 +1,21 @@
 # Working on Cozy Novel
 
+# ⚠️ THE OWNER'S TIME COMES FIRST — NO HOURS OF TESTING ⚠️
+
+## A FIX THAT TAKES HOURS IS A FAILED FIX. HE IS WAITING, AND THE WAIT HURTS HIM.
+
+**An update takes MINUTES, not hours.** He has waited five hours for one fix
+while every suite in the repo ran over and over, and then the fix still did not
+work. Making sure there is no bug or regression matters — but a long run of
+tests that the change cannot reach proves nothing and costs him everything.
+
+- **FIND THE ROOT CAUSE FIRST, BY READING THE CODE.** Tests do not find the cause; reading does.
+- **RUN ONLY THE TESTS THE CHANGE REACHES.** A new test for the change, the tests named for that feature (`ONLY=words node tests/app.mjs`), and the one or two suites for that part of the app. **NEVER the whole repo for a small fix.** Never every browser walk.
+- **NEVER RUN THE SAME SUITE TWICE "TO BE SURE".** Once, on the final code.
+- **A TEST THAT FAILS ON THE CODE ALREADY PUSHED IS NOT YOURS** — say so in one line and ship.
+- **SHIP, THEN SAY WHAT YOU DID NOT RUN.** He would rather know what was skipped than wait for it.
+- **ANSWER HIS QUESTION FIRST, THEN WORK.** Never go silent for an hour.
+
 Read this before changing anything. It is the map of the code and the rules the
 owner keeps. The owner reads plain words, not jargon: name things the way the
 screen names them.
