@@ -1,3 +1,30 @@
+# What the phone keeps apart to move a room — 2.12.5
+
+Every earlier pass below measured the page's own thread (layouts, paints) and found
+the rooms cheap there. What was never measured is the phone's graphics side: the
+pictures it keeps apart to move a room (composited layers), each blended again every
+frame while anything moves, and dropped — the words drawn again as he scrolls — once
+they outgrow what the browser keeps for pictures. Chromium's layer tree, at 412×915
+and three device pixels per CSS pixel, the desk in dark mode with movement on, the
+page's own scrolling words left out:
+
+| Room | 2.12.4 | 2.12.5 |
+| --- | ---: | ---: |
+| Academy of Ink | 125 MB, six pictures the size of the screen | 46 MB, two |
+| Neon Tokyo | 140 MB, seven (the rain at 1.4 screens each, with a mask each) | 72 MB, two and the rain at the screen's own size |
+| Original Study | 77 MB, five | 42 MB, two |
+
+How: every room is one still drawing with its moving pieces laid *after* it (and the
+desk's veil before them); a moving piece in the middle of a drawing makes the phone
+keep a screen-sized picture of everything drawn after it. The document never scrolls
+(the shelf and the page scroll in their own boxes), so a phone browser's bar never
+slides the room with a swipe. A chapter's save no longer hashes every letter on the
+page's thread, the phone keeps the records it handled last parsed in memory and writes
+a save's words as they came (a 2.6 MB chapter: 105 → 59 ms), and the writer keeps a
+streaming page every three to twelve seconds by the chapter's size. The fonts are
+fetched at boot, so no word is drawn in another face and swapped.
+`tests/browser/walk_performance_worlds.py` holds every room to 90 MB and fails on 2.12.4.
+
 # Animation and reading-colour audit — 2.10.4
 
 The reported issue was the transition into Settings and the feeling of pressing

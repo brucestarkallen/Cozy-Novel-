@@ -32,6 +32,9 @@ const A = { novelId: null, chapterId: null, booting: true, updateWaiting: false,
 /* ------------------------------------------------------------- boot */
 
 async function boot() {
+  /* every face the page is set in, fetched now, beside the records — not when the first word in it is drawn: a word
+   * drawn in another face and swapped once its own arrives is a flash (an italic, a bold, a chapter's name) */
+  warmFonts(['18px Literata', 'italic 18px Literata', '600 18px Literata', 'italic 600 18px Literata', '500 18px Cormorant', 'italic 500 18px Cormorant', '600 18px Cormorant']);
   /* a reload with a sheet open left its step in the history: it is stepped
    * back over, so the first Back does what it says */
   const st = history.state;
@@ -113,6 +116,11 @@ async function boot() {
   if (!(house.connections || []).length) setTimeout(() => hintToast('Add a connection in Settings to let a writer write with you — your own words need none.', 6500), 900);
 }
 
+function warmFonts(faces) {
+  if (!document.fonts || typeof document.fonts.load !== 'function') return;
+  for (const f of faces) { try { document.fonts.load(f).catch(() => {}); } catch (_) { /* an older browser: the faces come when a word needs them */ } }
+}
+
 /* ------------------------------------------------------------- routes */
 /* #/                 the shelf
  * #/n/<novel>        a book, at the chapter last open
@@ -139,6 +147,8 @@ async function showShelf() {
   document.body.classList.add('shelfview');
   $('#desk').hidden = true;
   $('#shelf').hidden = false;
+  /* the shelf opens at its top, where he left off is (the box keeps where it was scrolled, even hidden) */
+  $('#shelf').scrollTop = 0;
   document.title = 'Cozy Novel';
   await refreshShelf();
 }

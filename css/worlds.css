@@ -152,17 +152,23 @@
 .world-art { display: block; width: 100%; height: 100%; }
 /* Local cached motion surfaces preserve the SVG's drawing order and clipping.
  * The outer bounds stay still; only the small HTML child is animated. */
-.world-motion-surface, .world-motion, .world-motion > svg { overflow: visible; }
+.world-motion, .world-motion > svg { overflow: visible; }
 .world-motion { width: 100%; height: 100%; }
 .world-motion > svg { display: block; }
 
-.room::after {
+/* The veil over the room. On the shelf it is the shade the words need, laid
+ * over everything (.over). On the desk it is a light tint, laid between the
+ * still drawing and what moves (.under, js/ui/worlds.js), so it is part of
+ * the one picture the phone draws once: a tint over the moving pieces would
+ * be a screen-sized picture of its own, drawn every frame. */
+.world-veil {
+  position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 79%, transparent) 0%, color-mix(in srgb, var(--bg) 57%, transparent) 34%, color-mix(in srgb, var(--bg) 9%, transparent) 79%, transparent 100%),
     linear-gradient(0deg, color-mix(in srgb, var(--bg) 94%, transparent) 0%, color-mix(in srgb, var(--bg) 18%, transparent) 45%, transparent 78%);
 }
-body:not(.shelfview) .room::after { background: color-mix(in srgb, var(--bg) 15%, transparent); }
+body:not(.shelfview) .world-veil { background: color-mix(in srgb, var(--bg) 15%, transparent); }
+body:not(.shelfview) .world-veil.over, body.shelfview .world-veil.under { display: none; }
 :root[data-room="off"] .world-scene { display: none; }
-:root[data-room="off"] .room::after { background: none; }
 body { color: var(--chrome-ink); }
 ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; }
 
@@ -428,7 +434,7 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
   #modeToggle { min-width: 86px; font-size: 11px; }
   .shelf-intro, .shelf-intro:not(.has-resume) { grid-template-columns: minmax(0, 1fr); min-height: 0; padding-top: 26px; padding-bottom: 32px; gap: 26px; }
   .shelf-intro:not(.has-resume) { padding-top: 32px; padding-bottom: 38px; }
-  .room::after { background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 73%, transparent), color-mix(in srgb, var(--bg) 28%, transparent)), linear-gradient(0deg, color-mix(in srgb, var(--bg) 94%, transparent), transparent 90%); }
+  .world-veil { background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 73%, transparent), color-mix(in srgb, var(--bg) 28%, transparent)), linear-gradient(0deg, color-mix(in srgb, var(--bg) 94%, transparent), transparent 90%); }
   .shelf-welcome { padding-top: 0; }
   #shelfGreeting { font-size: 45px; }
   .shelf-invitation { max-width: 340px; }

@@ -114,10 +114,15 @@
 /* ------------------------------------------------------------- base */
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; }
-/* The document itself is the shelf's scroll root. Contain still permits
- * Android's edge stretch/glow; none keeps the room from flashing through. */
-html { background: var(--bg); overscroll-behavior: none; }
-body:not(.shelfview) { overflow: hidden; }
+/* The document itself never scrolls: the shelf and the page each scroll inside
+ * their own box, as Cozy Tavern's do. On a phone's browser the bar at the top
+ * hides and shows with the document's scrolling, and the whole screen — the
+ * room behind everything — slid up and down with it on every swipe (his
+ * report, 2.12.5). With nothing for the document to scroll, the bar stays
+ * where it is and nothing slides but what he swiped. none keeps Android's
+ * edge stretch/glow and pull-to-refresh from the room too. */
+html { background: var(--bg); overscroll-behavior: none; overflow: hidden; }
+body { overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--chrome-ink);
@@ -136,11 +141,12 @@ a { color: var(--accent); }
 
 /* the room behind everything */
 .room {
-  position: fixed; inset: 0 0 auto; height: 100vh; height: 100lvh; z-index: 0; pointer-events: none;
-  /* Browser bars may slide while the shelf scrolls. Keep the drawing's crop
-   * tied to the large viewport, not the changing visible bottom edge. One
-   * isolated background layer keeps the shelf from repainting its artwork. */
-  transform: translateZ(0);
+  position: absolute; inset: 0 0 auto; height: 100vh; height: 100lvh; z-index: 0; pointer-events: none;
+  /* Sized to the large viewport, so the drawing's crop never follows a browser
+   * bar. The document never scrolls, so the room is not fixed: a fixed box is
+   * a screen-sized picture of its own, while this one's still drawing is
+   * painted once with the page's own background, and only its moving pieces
+   * are pictures the phone keeps apart. */
   background: var(--room-veil), var(--room-img) center / cover no-repeat, var(--bg);
 }
 body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / cover no-repeat, var(--bg); }
@@ -180,11 +186,17 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .chip > span { flex: none; }
 
 /* ------------------------------------------------------------- shelf */
+/* The shelf scrolls inside its own box. It stands one pixel taller than the
+ * screen on purpose: a scrolling box exactly the screen's size is taken by
+ * Chrome on Android for the document itself, and the browser's bar would
+ * hide and show with it again — the very thing this avoids. The extra pixel
+ * lies under the screen's bottom edge, where nothing is drawn. */
 #shelf {
-  position: relative; z-index: 1; min-height: 100%;
+  position: absolute; left: 0; right: 0; top: 0; height: calc(100% + 1px); z-index: 1;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: none; -webkit-overflow-scrolling: touch;
   padding: calc(var(--safe-t) + 28px) 20px calc(var(--safe-b) + 40px);
-  max-width: 1100px; margin: 0 auto;
 }
+.shelf-inner { max-width: 1100px; margin: 0 auto; }
 .shelf-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 26px; }
 .brand h1 { font: 600 44px/1 var(--display); margin: 0; letter-spacing: .01em; color: #fbf1df; text-shadow: 0 2px 24px rgba(0,0,0,.5); }
 [data-theme="day"] .brand h1 { color: #2e2219; text-shadow: none; }
@@ -241,7 +253,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 /* ------------------------------------------------------------- desk */
 #desk { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; }
 .deskbar {
-  position: relative; z-index: 6; flex: none;
+  position: relative; z-index: 6; flex: none; will-change: transform;
   display: flex; align-items: center; gap: 4px;
   padding: calc(var(--safe-t) + 6px) 8px 6px;
   background: var(--chrome); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
@@ -367,7 +379,7 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 
 /* composer */
 .composer {
-  position: relative; z-index: 6; flex: none;
+  position: relative; z-index: 6; flex: none; will-change: transform;
   padding: 8px 10px calc(var(--safe-b) + 8px);
   background: var(--chrome); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
   border-top: 1px solid var(--line);
@@ -636,9 +648,10 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
   position: fixed; left: 50%; bottom: calc(var(--safe-b) + 110px); z-index: 80; transform: translateX(-50%) translateY(20px);
   width: max-content; max-width: min(92vw, 520px); padding: 11px 16px; border-radius: 14px;
   background: rgba(20,16,12,.94); color: #f5ecdc; font-size: 14px; line-height: 1.4; box-shadow: var(--shadow);
-  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s var(--ease);
+  /* gone once it has faded (not merely clear): a clear toast still kept a picture of itself on the phone */
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .2s, transform .2s var(--ease), visibility 0s .2s;
 }
-.toast.on { opacity: 1; transform: translateX(-50%); }
+.toast.on { opacity: 1; visibility: visible; transform: translateX(-50%); transition: opacity .2s, transform .2s var(--ease), visibility 0s; }
 .toast .toastact { pointer-events: none; margin-left: 6px; padding: 4px 8px; border-radius: 8px; color: #f6c271; font-weight: 600; }
 .toast.on .toastact { pointer-events: auto; }
 .toast .toastact:hover, .toast .toastact:focus-visible { background: rgba(255,255,255,.1); }
@@ -881,19 +894,19 @@ ul.judged .link.quote { font: italic 14px/1.45 var(--serif); text-align: left; p
  * All colours follow the chosen room; all movement yields to reduced motion. */
 :root { --room-panel: color-mix(in srgb, var(--chrome-solid) 94%, transparent); }
 body { background-color: var(--bg); }
-.room::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
+.world-veil {
   background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 72%, transparent), transparent 85%),
     linear-gradient(0deg, color-mix(in srgb, var(--bg) 85%, transparent), transparent 65%);
 }
-body:not(.shelfview) .room::after { background: color-mix(in srgb, var(--bg) 38%, transparent); }
+body:not(.shelfview) .world-veil { background: color-mix(in srgb, var(--bg) 38%, transparent); }
 .btn, .chip, .icon { touch-action: manipulation; }
 .btn:focus-visible, .chip:focus-visible, .icon:focus-visible { outline-offset: 4px; }
 .btn.primary { box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 16%, transparent), inset 0 1px rgba(255,255,255,.2); }
 input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 3px;
 }
-#shelf { max-width: 1160px; padding: calc(var(--safe-t) + 34px) 36px calc(var(--safe-b) + 56px); }
+#shelf { padding: calc(var(--safe-t) + 34px) 36px calc(var(--safe-b) + 56px); }
+.shelf-inner { max-width: 1160px; }
 .shelf-head { align-items: center; padding-bottom: 24px; margin: 0; border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 15px; }
 .brand-mark { display: grid; place-items: center; flex: none; width: 48px; height: 54px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 14px 14px 5px 5px; color: var(--accent); background: var(--room-panel); font: 30px/1 var(--display); box-shadow: inset 0 0 0 4px var(--chrome-solid); }

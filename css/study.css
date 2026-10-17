@@ -73,24 +73,30 @@
 .study-picture, .study-photo { display: block; width: 100%; height: 100%; }
 .study-picture { position: absolute; inset: 0; }
 .study-photo { object-fit: cover; object-position: 62% 50%; }
+/* The lamp's glow breathes on a surface of its own (its opacity moves on the
+ * compositor); the surface is only the corner the glow reaches, never the whole
+ * screen — the same ellipse as before, in that corner's own measures. Over the
+ * desk it is drawn above the desk's tint (worlds.css), so it is that much fainter
+ * there, to read as it did under it. */
 .study-glow {
-  position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(ellipse at 86% 13%, rgba(255, 194, 94, .12), transparent 33%);
+  position: absolute; left: 44%; top: 0; width: 56%; height: 56%; pointer-events: none; will-change: opacity;
+  --study-glow-a: .12;
+  background: radial-gradient(ellipse 71.4% 72.5% at 75% 23.2%, rgba(255, 194, 94, var(--study-glow-a)), transparent);
   opacity: .65;
   animation: study-lamplight 9s ease-in-out infinite alternate;
 }
+body:not(.shelfview) .study-glow { --study-glow-a: .086; }
 @keyframes study-lamplight { from { opacity: .35; } to { opacity: .8; } }
-:root[data-world="study"] .room::after {
+:root[data-world="study"] .world-veil {
   background: linear-gradient(90deg, rgba(32, 25, 19, .87) 0%, rgba(32, 25, 19, .73) 36%, rgba(32, 25, 19, .3) 64%, rgba(32, 25, 19, .1) 100%),
     linear-gradient(0deg, rgba(32, 25, 19, .95), rgba(32, 25, 19, .25) 38%, transparent 72%);
 }
-:root[data-world="study"][data-mode="light"] .room::after {
+:root[data-world="study"][data-mode="light"] .world-veil {
   background: linear-gradient(90deg, rgba(238, 229, 213, .96) 0%, rgba(238, 229, 213, .89) 35%, rgba(238, 229, 213, .48) 66%, rgba(238, 229, 213, .19) 100%),
     linear-gradient(0deg, rgba(238, 229, 213, .99), rgba(238, 229, 213, .52) 40%, transparent 78%);
 }
-:root[data-world="study"] body:not(.shelfview) .room::after { background: rgba(32, 25, 19, .28); }
-:root[data-world="study"][data-mode="light"] body:not(.shelfview) .room::after { background: rgba(238, 229, 213, .3); }
-:root[data-world="study"][data-room="off"] .room::after { background: none; }
+:root[data-world="study"] body:not(.shelfview) .world-veil { background: rgba(32, 25, 19, .28); }
+:root[data-world="study"][data-mode="light"] body:not(.shelfview) .world-veil { background: rgba(238, 229, 213, .3); }
 :root[data-world="study"] .brand-mark { border-radius: 13px 13px 5px 5px; }
 :root[data-world="study"] .brand p { font-style: italic; }
 :root[data-world="study"] .resume-card { border-radius: 14px; }
@@ -112,19 +118,19 @@
 }
 @media (max-width: 599px), (max-aspect-ratio: 4/5) {
   .study-photo { object-position: 50% 45%; }
-  .study-glow { background: radial-gradient(ellipse at 78% 65%, rgba(255, 194, 94, .1), transparent 40%); }
-  :root[data-world="study"] .room::after {
+  .study-glow { left: 32%; top: 26%; width: 68%; height: 74%; --study-glow-a: .1; background: radial-gradient(ellipse 64.9% 49.7% at 67.6% 52.7%, rgba(255, 194, 94, var(--study-glow-a)), transparent); }
+  body:not(.shelfview) .study-glow { --study-glow-a: .072; }
+  :root[data-world="study"] .world-veil {
     background: linear-gradient(90deg, rgba(32, 25, 19, .7), rgba(32, 25, 19, .48)),
       linear-gradient(0deg, rgba(32, 25, 19, .97), rgba(32, 25, 19, .24) 58%, rgba(32, 25, 19, .17));
   }
-  :root[data-world="study"][data-mode="light"] .room::after {
+  :root[data-world="study"][data-mode="light"] .world-veil {
     background: linear-gradient(90deg, rgba(238, 229, 213, .84), rgba(238, 229, 213, .68)),
       linear-gradient(0deg, rgba(238, 229, 213, .98), rgba(238, 229, 213, .24) 58%, rgba(238, 229, 213, .13));
   }
-  :root[data-world="study"] body:not(.shelfview) .room::after { background: rgba(32, 25, 19, .28); }
-  :root[data-world="study"][data-mode="light"] body:not(.shelfview) .room::after { background: rgba(238, 229, 213, .3); }
-  :root[data-world="study"][data-room="off"] .room::after { background: none; }
-}
+  :root[data-world="study"] body:not(.shelfview) .world-veil { background: rgba(32, 25, 19, .28); }
+  :root[data-world="study"][data-mode="light"] body:not(.shelfview) .world-veil { background: rgba(238, 229, 213, .3); }
+  }
 @media (max-width: 759px) {
   :root[data-world="study"] .shelf-intro { gap: 22px; padding-top: 23px; padding-bottom: 27px; }
   :root[data-world="study"] #shelfGreeting { font-size: 43px; line-height: 1.02; }

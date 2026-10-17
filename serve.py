@@ -48,7 +48,7 @@ try:
 except ImportError:  # not Linux or Android: nothing to lock the folder with
     fcntl = None
 
-VERSION = "2.12.4"
+VERSION = "2.12.5"
 ROOT = Path(__file__).resolve().parent
 SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
@@ -144,6 +144,41 @@ def record_path(kind, rid):
     return STORE / kind / (rid + ".json")
 
 
+# The records handled last, parsed, with the file's time they were read or
+# written at: a chapter of a few megabytes is read and parsed from the phone's
+# flash for every save of it (every few seconds while a page is written), and
+# that parse held the whole server — the words streaming through the relay
+# waited on it (2.12.5). A record is served from here only while its file is
+# the one it was read from; a caller never changes what it is handed.
+_parsed = {}                  # (kind, rid) -> (mtime_ns, size, rec)
+PARSED_KEPT = 8
+
+
+def _parsed_get(kind, rid, p):
+    hit = _parsed.get((kind, rid))
+    if not hit:
+        return None
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    if hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        _parsed[(kind, rid)] = _parsed.pop((kind, rid))   # newest last
+        return hit[2]
+    return None
+
+
+def _parsed_put(kind, rid, p, rec):
+    try:
+        st = p.stat()
+    except OSError:
+        return
+    _parsed.pop((kind, rid), None)
+    _parsed[(kind, rid)] = (st.st_mtime_ns, st.st_size, rec)
+    while len(_parsed) > PARSED_KEPT:
+        _parsed.pop(next(iter(_parsed)))
+
+
 def read_record(kind, rid):
     """{"rev", "at", "data"} or None. A file that cannot be read is put back from
     its newest earlier copy (the unreadable one is kept beside it), so a book is
@@ -151,10 +186,14 @@ def read_record(kind, rid):
     if (kind, rid) in _branch_hidden:
         return None
     p = record_path(kind, rid)
+    kept = _parsed_get(kind, rid, p)
+    if kept is not None:
+        return kept
     try:
         with open(p, "rb") as f:
             rec = json.loads(f.read().decode("utf-8"))
         if isinstance(rec, dict) and isinstance(rec.get("data"), dict):
+            _parsed_put(kind, rid, p, rec)
             return rec
         raise ValueError("not a record")
     except FileNotFoundError:
@@ -309,20 +348,30 @@ def rev_of(kind, rid):
     return rev
 
 
-def write_record(kind, rid, rec):
+def write_record(kind, rid, rec, data_bytes=None):
+    """data_bytes: the record's data as the page sent it, in JSON already — written
+    as it came, around the record's own fields, instead of being turned back into
+    JSON (a chapter of megabytes, every few seconds while it is written)."""
     p = record_path(kind, rid)
-    atomic_write_bytes(p, json.dumps(rec, ensure_ascii=False).encode("utf-8"))
+    if data_bytes is not None:
+        head = json.dumps({k: v for k, v in rec.items() if k != "data"}, ensure_ascii=False).encode("utf-8")
+        out = head[:-1] + b',"data":' + data_bytes + b"}"
+    else:
+        out = json.dumps(rec, ensure_ascii=False).encode("utf-8")
+    atomic_write_bytes(p, out)
+    _parsed_put(kind, rid, p, rec)
     try:
         _revs[(kind, rid)] = (p.stat().st_mtime_ns, int(rec.get("rev") or 0))
     except OSError:
         _revs.pop((kind, rid), None)
 
 
-def put_record(kind, rid, data, base, by="", checkpoint=False, save="", expected_generation=None):
+def put_record(kind, rid, data, base, by="", checkpoint=False, save="", expected_generation=None, data_bytes=None):
     """Save one record. base is the rev the page's copy was made from (0 = it
     believes the record is new). save names the words saved (the page's own
-    fingerprint of them), so a page can later tell whether a save of its
-    landed. Returns (status, payload)."""
+    name for this save), so a page can later tell whether a save of its
+    landed. data_bytes: the data's JSON as the page sent it, written as it came.
+    Returns (status, payload)."""
     with LOCK:
         if (kind, rid) in _branch_hidden:
             return 409, {"error": "that branch is still being made; try again in a moment"}
@@ -343,7 +392,7 @@ def put_record(kind, rid, data, base, by="", checkpoint=False, save="", expected
         if save:
             saves.append([str(save)[:40], str(by)[:64], rev])
         rec = {"rev": rev, "at": now_ms(), "data": data, "saves": saves[-SAVES_KEPT:]}
-        write_record(kind, rid, rec)
+        write_record(kind, rid, rec, data_bytes)
         if cur is None:
             set_gone(kind, rid, 0)
     announce({"kind": kind, "id": rid, "rev": rev, "by": by})
@@ -1566,6 +1615,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:
             return None
 
+    def data_bytes(self):
+        """A save's data exactly as the page sent it, when the body is the page's
+        own shape, {"data":…} and nothing else: those bytes are what the record
+        keeps, never turned back into JSON here."""
+        raw = getattr(self, "_raw", None)
+        if not raw or not raw.startswith(b'{"data":') or not raw.rstrip().endswith(b"}"):
+            return None
+        inner = raw[len(b'{"data":'):raw.rstrip().rfind(b"}")]
+        return inner if inner.lstrip().startswith(b"{") else None
+
     def client(self):
         return str(self.headers.get("X-Client") or "")[:64]
 
@@ -1768,8 +1827,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": "bad base"}, 400)
             checkpoint = (self.headers.get("X-Checkpoint") or "") == "1"
             save = re.sub(r"[^A-Za-z0-9_-]", "", str(self.headers.get("X-Save") or ""))[:40]
+            # the data as sent, only when the body holds nothing but it (the parse above read it whole, so it is sound JSON)
+            raw_data = self.data_bytes() if len(body) == 1 else None
             try:
-                code, payload = put_record(kind, rid, body["data"], base, self.client(), checkpoint, save, expected_generation)
+                code, payload = put_record(kind, rid, body["data"], base, self.client(), checkpoint, save, expected_generation, raw_data)
             except OSError as e:
                 return self.send_json({"error": "the phone could not write it: %s" % e.strerror}, 507 if e.errno == errno.ENOSPC else 500)
             return self.send_json(payload, code)

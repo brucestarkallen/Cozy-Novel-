@@ -158,7 +158,7 @@ async def scenario_worlds(browser):
                 check(f'{world} {mode} shows the original photographic room', await pg.locator('.world-scene[data-world="study"] .study-picture img').is_visible())
             else:
                 check(f'{world} {mode} uses vector artwork without photographs',
-                      await pg.locator('.room .world-art').count() == 1 and await pg.locator('.room .world-art svg').count() >= 1 and
+                      await pg.locator('.room .world-art').count() == 1 and await pg.locator('.room svg.world-art, .room .world-art svg').count() >= 1 and
                       await pg.locator('.room svg image, .room picture, .room img').count() == 0)
             ratios = await pg.evaluate(CONTRAST)
             check(f'{world} {mode} keeps story and controls readable at AA', all(r >= 4.5 for r in ratios.values()), ratios)
@@ -224,10 +224,20 @@ async def scenario_neon(browser):
     await pg.emulate_media(reduced_motion='no-preference')
     await pg.evaluate("async()=>(await import('/js/ui/look.js')).applyLook({theme:'tokyo',mode:'dark',motion:'on'})")
     await pg.wait_for_selector('.world-scene[data-world="tokyo"] .neon-stage')
-    parts = await pg.evaluate("""() => { const s = document.querySelector('.neon-stage');
+    parts = await pg.evaluate("""() => { const s = document.querySelector('.world-scene[data-world="tokyo"]');
       return Object.fromEntries(['.neon-back', '.neon-front', '.neon-train', '.neon-flicker', '.neon-rain-far', '.neon-rain-near', '.neon-mote']
         .map(q => [q, s.querySelectorAll(q).length])); }""")
     check('Neon Tokyo mounts its street, the last train, a stuttering sign, two depths of rain and drifting lights', all(parts.values()), parts)
+    # the street is one still drawing: nothing that moves stands between its two halves, and the train runs only in the
+    # gap between the facades, where the facades ever let it be seen
+    order = await pg.evaluate("""() => { const still = document.querySelector('.neon-stage.neon-still');
+      const track = document.querySelector('.neon-track').getBoundingClientRect(), stage = still.getBoundingClientRect();
+      return { still: [...still.children].map(c => c.className.baseVal || c.className), moving: still.querySelectorAll('[class*=neon-train],[class*=neon-rain],[class*=neon-mote],[class*=neon-flicker]').length,
+               gap: [Math.round((track.left - stage.left) / stage.width * 100), Math.round(track.width / stage.width * 100)],
+               rainOverflow: [...document.querySelectorAll('.neon-rain')].every(r => { const b = r.getBoundingClientRect(); return b.width < innerWidth + 60 && b.height < innerHeight + 200; }),
+               rainMask: [...document.querySelectorAll('.neon-rain')].every(r => getComputedStyle(r).maskImage === 'none') }; }""")
+    check('the street is one still drawing (far city and street together, nothing moving between them), the train in the facades\' gap, the rain the screen\'s own size without a mask',
+          order['still'] == ['neon-back', 'neon-front'] and order['moving'] == 0 and order['gap'] == [40, 20] and order['rainOverflow'] and order['rainMask'], order)
     for width, height in ((320, 640), (412, 915), (853, 1280), (1280, 800), (1920, 1080)):
         await pg.set_viewport_size({'width': width, 'height': height})
         await pg.wait_for_timeout(80)
@@ -408,7 +418,7 @@ async def scenario_foldable(browser):
         await close_settings(pg)
         for width, height in ((768, 864), (360, 874)):
             await pg.set_viewport_size({'width': width, 'height': height})
-        check(f'{world} replaces the photograph with one illustrated scene', await pg.locator('.room .world-art').count() == 1 and await pg.locator('.room .world-art svg').count() >= 1 and
+        check(f'{world} replaces the photograph with one illustrated scene', await pg.locator('.room .world-art').count() == 1 and await pg.locator('.room svg.world-art, .room .world-art svg').count() >= 1 and
               await pg.locator('.room picture, .room img').count() == 0 and (await state(pg))['world'] == world)
         check(f'{world} fold and unfold requests no photographic assets', not photos(requests[request_start:]), photos(requests[request_start:]))
         check(f'{world} after Original Study preserves the draft and writing choices', await pg.input_value('#direction') == draft and

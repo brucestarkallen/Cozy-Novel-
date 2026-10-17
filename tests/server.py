@@ -127,6 +127,38 @@ def run(home):
     check("the phone names the saves it took", st == 200 and [s[0] for s in out.get("saves", [])] == ["h1", "h2"] and out["saves"][1][1] == "tab-test", out)
     st, out = pg.ask("GET", "/api/store/novel/n-none")
     check("a record not there is said plainly", st == 200 and out["data"] is None, out)
+    # the page's own shape, {"data":…} and nothing else: the words are written as they came (never turned back into
+    # JSON on the phone), and read back the same — odd letters, quotes, a space inside the body and a key beside it too
+    odd = {"novelId": "n-t1", "passages": [{"id": "p1", "versions": [{"id": "v1", "text": "“Wait,” she said — a \\ backslash, a \"quote\", an emoji 🙂 and a 틀 door.\nNew line."}]}], "n": 1.5, "nothing": None, "yes": True}
+    raw = ('{"data":' + json.dumps(odd, ensure_ascii=False) + '}').encode("utf-8")
+    st, out = pg.ask("PUT", "/api/store/chapter/c-odd", raw, {"X-Base": "0", "X-Save": "s-odd"})
+    st2, got = pg.ask("GET", "/api/store/chapter/c-odd")
+    kept = json.loads((home / "store" / "chapter" / "c-odd.json").read_text(encoding="utf-8"))
+    check("a save in the page's own shape is kept exactly as sent, and its file reads as one record",
+          st == 200 and st2 == 200 and got["data"] == odd and kept["data"] == odd and kept["rev"] == 1 and kept["saves"][0][0] == "s-odd", (st, st2, got, kept))
+    raw2 = ('{"data":' + json.dumps(dict(odd, n=2), ensure_ascii=False) + ' }  ').encode("utf-8")
+    st, out = pg.ask("PUT", "/api/store/chapter/c-odd", raw2, {"X-Base": "1"})
+    st2, got = pg.ask("GET", "/api/store/chapter/c-odd")
+    check("spaces after the words change nothing", st == 200 and st2 == 200 and got["data"] == dict(odd, n=2), (st, got))
+    raw3 = ('{"data":' + json.dumps(dict(odd, n=3), ensure_ascii=False) + ',"other":1}').encode("utf-8")
+    st, out = pg.ask("PUT", "/api/store/chapter/c-odd", raw3, {"X-Base": "2"})
+    st2, got = pg.ask("GET", "/api/store/chapter/c-odd")
+    check("a body with more than the data beside it is kept the long way, the same", st == 200 and st2 == 200 and got["data"] == dict(odd, n=3) and got["rev"] == 3, (st, got))
+    # a record the phone handled last is served from memory — only while its file is the one it read: a file changed
+    # behind its back (a copy put back by hand) is read anew, and a save from the copy it served is held to the file
+    path = home / "store" / "chapter" / "c-odd.json"
+    behind = json.loads(path.read_text(encoding="utf-8"))
+    behind["rev"] = 9
+    behind["data"]["n"] = 9
+    time.sleep(0.02)
+    path.write_text(json.dumps(behind, ensure_ascii=False), encoding="utf-8")
+    st2, got = pg.ask("GET", "/api/store/chapter/c-odd")
+    check("a record's file changed behind the phone's back is read anew, not served from memory", st2 == 200 and got["rev"] == 9 and got["data"]["n"] == 9, got)
+    st, out = pg.ask("PUT", "/api/store/chapter/c-odd", raw3, {"X-Base": "3"})
+    check("a save made from the copy served before it is refused with the newer one", st == 409 and out["rev"] == 9, out)
+    st, out = pg.ask("DELETE", "/api/store/chapter/c-odd")
+    st2, got = pg.ask("GET", "/api/store/chapter/c-odd")
+    check("a record deleted is gone from memory too", st == 200 and st2 == 200 and got["data"] is None, (st, got))
 
     print("a book's lease: one browser at a time")
     a, b = Page(client="tab-a"), Page(client="tab-b")

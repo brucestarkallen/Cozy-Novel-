@@ -349,6 +349,10 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   let text = '';
   let thinking = '';
   let lastSave = Date.now();
+  /* how often the words so far are kept while they stream: every three seconds for a small chapter, up to twelve for
+   * one of megabytes — each keep sends the whole chapter to the phone, which held the page and the stream for it
+   * (2.12.5); other windows see the page grow at this pace, and a tab Android closes loses at most this much */
+  const keepEvery = () => Math.min(12000, 3000 + Math.round(store.sizeOf('chapter', chapterId) / 300));
   /* carried on: shown once the words it repeats have arrived, so the join never flickers */
   const shown = () => (splice ? (mode === 'append' && text.trim().length < 40 ? splice('').text : splice(text).text) : base + text);
   /* a heartbeat: another window can tell a page being written from one whose
@@ -388,7 +392,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
         if (!automaticAllowed()) return;
         text += s;
         live({ novelId, chapterId, passageId, versionId, text: shown(), thinking: thoughtOf(thinking), phase: 'text' });
-        if (Date.now() - lastSave > 3000) checkpoint();
+        if (Date.now() - lastSave > keepEvery()) checkpoint();
       },
       onThinking: (s) => {
         if (!ownsPage()) { job.gone = true; ctl.abort(); return; }

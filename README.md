@@ -171,7 +171,9 @@ covers writing quality, recovery, saving, exports and the full interface.
 [The performance audit](PERFORMANCE-AUDIT.md) records the fixes for stuttering
 menus, pane changes and background saves, with repeatable browser measurements.
 The room remains visible around the manuscript, with opaque paper behind its words.
-The home background keeps a stable crop while mobile browser controls move. Each narrator
+Nothing scrolls the document itself — the shelf and the page each scroll inside their own box — so
+a phone browser's bar never slides the room up and down with a swipe. Every room is drawn as one
+still picture with its moving pieces laid over it, so the phone keeps few pictures apart (2.12.5). Each narrator
 answer shows how many input tokens were sent; estimates are marked “About.”
 The new-scene name and starting place also survive keyboard resizing and reloads.
 Settings → Appearance includes novel highlight, scene highlight and dialogue colours, with

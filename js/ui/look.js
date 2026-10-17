@@ -60,6 +60,8 @@ export function applyLook(look = {}) {
     if (value) d.style.setProperty(key, value); else d.style.removeProperty(key);
   }
   showWorld(world);
+  /* Neon Tokyo's own face, fetched before a heading is drawn in it (it is never drawn in another face and swapped) */
+  if (world === 'tokyo' && document.fonts && typeof document.fonts.load === 'function') { try { document.fonts.load('18px "Tilt Neon"').catch(() => {}); } catch (_) { /* fine */ } }
   for (const [id, name] of [['worldAcademy', 'academy'], ['worldTokyo', 'tokyo'], ['worldStudy', 'study']]) {
     attribute(document.getElementById(id), 'aria-pressed', String(world === name));
   }

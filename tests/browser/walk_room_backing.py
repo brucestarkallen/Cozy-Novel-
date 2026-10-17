@@ -45,11 +45,11 @@ async def scenario(browser):
                 await pg.evaluate("async()=>{await document.fonts.ready;await Promise.all([...document.images].map(i=>i.decode().catch(()=>{})))}")
                 # Preserve layout and scroll height while comparing only the room.
                 style = await pg.add_style_tag(content='#shelf, #toast { visibility:hidden !important; }')
-                await pg.evaluate('scrollTo(0,0)')
+                await pg.evaluate("document.querySelector('#shelf').scrollTop = 0")
                 before = await pg.screenshot()
-                await pg.evaluate('scrollTo(0,700)')
+                await pg.evaluate("document.querySelector('#shelf').scrollTop = 700")
                 after = await pg.screenshot()
-                check(f'{width} {world} {mode}: scrolling leaves every room pixel still', before == after and await pg.evaluate('scrollY > 0'))
+                check(f'{width} {world} {mode}: scrolling leaves every room pixel still', before == after and await pg.evaluate("document.querySelector('#shelf').scrollTop > 0 && scrollY === 0"))
                 await style.evaluate('(el)=>el.remove()')
     # Height-only changes must not swap between two different photographs.
     for width, expected in [(853, 'desktop.webp'), (412, 'mobile.webp')]:
@@ -59,7 +59,7 @@ async def scenario(browser):
             await pg.evaluate("async()=>{await document.querySelector('.study-photo').decode()}")
             sources.append(await pg.locator('.study-photo').evaluate('e=>e.currentSrc'))
         check(f'{width}: height changes retain the same study photograph', all(src.endswith(expected) for src in sources))
-    await pg.evaluate('scrollTo(0,0)')
+    await pg.evaluate("document.querySelector('#shelf').scrollTop = 0")
     await pg.get_by_role('button', name='Open A room to return to', exact=True).click()
     await pg.wait_for_selector('#desk:not([hidden]) .page')
     for width in [360, 412, 853]:

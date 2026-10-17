@@ -70,8 +70,10 @@
   background: #c9c3e8;
 }
 
-/* The drawing keeps its own shape (9 × 16) and covers the screen: the
- * moving layers are placed in the drawing's own measures and stay on it. */
+/* The drawing keeps its own shape (9 × 16) and covers the screen. The stage
+ * is laid twice to the same measure: once still (the drawing, under the
+ * veil), once for the moving pieces placed in the drawing's own measures. */
+.world-scene[data-world="tokyo"] .tokyo-art { position: absolute; inset: 0; overflow: hidden; }
 .world-scene[data-world="tokyo"] .neon-stage {
   position: absolute; left: 50%; top: 50%; width: max(100vw, calc(100lvh * 900 / 1600)); height: auto; aspect-ratio: 900 / 1600;
   transform: translate(-50%, -50%); overflow: hidden;
@@ -79,8 +81,10 @@
 .neon-stage > svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .neon-stage svg text { paint-order: stroke; }
 
-/* the last train, between the far city and the street */
-.neon-train { position: absolute; left: 0; top: 51.3%; width: 100%; height: .5%; will-change: transform; animation: neon-train 23s linear infinite; }
+/* the last train, between the far city and the street — seen only in the gap between the facades (its track), as the
+ * facades hid the rest; it runs the width of the whole street, so its journey is the one it had */
+.neon-track { position: absolute; top: 51.3%; height: .5%; overflow: hidden; }
+.neon-train { position: absolute; left: -200%; top: 0; width: 500%; height: 100%; will-change: transform; animation: neon-train 23s linear infinite; }
 .neon-train i { position: absolute; top: 0; width: 6%; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--neon-amber), #fff1d6); box-shadow: 0 0 6px var(--neon-amber); }
 .neon-train i:nth-child(1) { left: 0; } .neon-train i:nth-child(2) { left: 6.6%; } .neon-train i:nth-child(3) { left: 13.2%; } .neon-train i:nth-child(4) { left: 19.8%; }
 @keyframes neon-train { 0%, 55% { transform: translateX(-30%); opacity: 0; } 58% { opacity: 1; } 92% { opacity: 1; } 96%, 100% { transform: translateX(110%); opacity: 0; } }
@@ -93,22 +97,20 @@
   62% { opacity: .25; } 64.5% { opacity: .55; } 65% { opacity: .2; }
 }
 
-/* rain in two depths: tiled streaks moved down by the compositor */
-.neon-rain { position: absolute; left: -10%; right: -10%; top: -20%; height: 140%; will-change: transform; pointer-events: none; }
-.neon-rain-far {
-  background-image: repeating-linear-gradient(100deg, transparent 0 14px, var(--neon-rain) 14px 15px, transparent 15px 61px);
-  -webkit-mask-image: repeating-linear-gradient(180deg, #000 0 22px, transparent 22px 71px); mask-image: repeating-linear-gradient(180deg, #000 0 22px, transparent 22px 71px);
-  opacity: .32; animation: neon-rain-far 1.9s linear infinite;
-}
-.neon-rain-near {
-  background-image: repeating-linear-gradient(103deg, transparent 0 40px, var(--neon-rain) 40px 41.5px, transparent 41.5px 127px);
-  -webkit-mask-image: repeating-linear-gradient(180deg, #000 0 46px, transparent 46px 163px); mask-image: repeating-linear-gradient(180deg, #000 0 46px, transparent 46px 163px);
-  opacity: .5; animation: neon-rain-near 1.05s linear infinite;
-}
+/* rain in two depths: tiled streaks (js/ui/worlds/tokyo.js RAIN) moved down by the compositor — each tile the screen
+ * plus the distance of one fall, the fall ending where the next begins, so nothing bigger than the screen is kept */
+.neon-rain { position: absolute; left: 0; will-change: transform; pointer-events: none; display: block; }
+.neon-rain-far { top: -71px; width: calc(100% + 12px); height: calc(100% + 71px); opacity: .32; animation: neon-rain-far 1.9s linear infinite; }
+.neon-rain-near { top: -163px; width: calc(100% + 38px); height: calc(100% + 163px); opacity: .5; animation: neon-rain-near 1.05s linear infinite; }
+/* over the desk the rain falls above its veil (a tint of 30 %): dimmed by the same shade itself */
+body:not(.shelfview) .neon-rain-far { opacity: .22; }
+body:not(.shelfview) .neon-rain-near { opacity: .35; }
 @keyframes neon-rain-far { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-12px, 71px, 0); } }
 @keyframes neon-rain-near { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-38px, 163px, 0); } }
 :root[data-mode="light"] .neon-rain-far { opacity: .18; }
 :root[data-mode="light"] .neon-rain-near { opacity: .26; }
+:root[data-mode="light"] body:not(.shelfview) .neon-rain-far { opacity: .13; }
+:root[data-mode="light"] body:not(.shelfview) .neon-rain-near { opacity: .18; }
 
 /* light drifting up from the street */
 .neon-motes { position: absolute; inset: 0; }

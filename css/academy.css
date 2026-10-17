@@ -41,9 +41,8 @@
 :root[data-mode="light"] .academy-night-moon,
 :root[data-mode="light"] .academy-stars { opacity: 0; }
 :root[data-mode="light"] .academy-candle-glow { opacity: .35; }
-.academy-cloud, .academy-ivy, .academy-quill, .academy-ink-ribbon, .academy-ink-sparks, .academy-flame, .academy-candle-glow { transform-box: fill-box; transform-origin: center; }
-.academy-cloud-far { animation: academy-cloud-drift 38s ease-in-out infinite alternate; }
-.academy-cloud-near { animation: academy-cloud-drift 49s ease-in-out -14s infinite alternate-reverse; }
+.academy-ivy, .academy-quill, .academy-ink-ribbon, .academy-ink-sparks, .academy-flame, .academy-candle-glow { transform-box: fill-box; transform-origin: center; }
+/* The clouds stand still (2.12.5): they drifted 25 px in 40 s behind the window's frame, and a moving piece behind still ones costs a screen-sized picture of everything over it. */
 .academy-ivy { transform-origin: 55% 0%; animation: academy-leaf-sway 19s ease-in-out infinite alternate; }
 .academy-ink-ribbon { transform-origin: 100% 100%; animation: academy-ink-rise 12s ease-in-out infinite alternate; }
 .academy-ink-sparks { animation: academy-spark-glimmer 9s ease-in-out infinite alternate; }
@@ -51,7 +50,6 @@
 .academy-flame { transform-origin: 50% 100%; animation: academy-candle-flicker 3.7s ease-in-out infinite alternate; }
 .academy-flame-two { animation-delay: -1.8s; animation-duration: 4.3s; }
 .academy-candle-glow { animation: academy-candle-breathe 6.7s ease-in-out infinite alternate; }
-@keyframes academy-cloud-drift { from { transform: translateX(-10px); } to { transform: translateX(15px); } }
 @keyframes academy-leaf-sway { from { transform: rotate(-.3deg); } to { transform: rotate(.5deg); } }
 @keyframes academy-ink-rise { from { transform: translateY(3px) rotate(-1deg); opacity: .6; } to { transform: translateY(-5px) rotate(1deg); opacity: 1; } }
 @keyframes academy-spark-glimmer { from { transform: translateY(2px); opacity: .3; } to { transform: translateY(-5px); opacity: .85; } }
@@ -60,6 +58,9 @@
 @keyframes academy-candle-breathe { from { opacity: var(--academy-glow-low); } to { opacity: var(--academy-glow-high); } }
 .world-scene[hidden] .academy-art *, :root:not([data-world="academy"]) .academy-art *, :root[data-motion="off"] .academy-art * { animation: none; }
 @media (prefers-reduced-motion: reduce) { .academy-art * { animation: none !important; } }
+/* The moving pieces, lifted out of the drawing (js/ui/worlds.js liftMotion), on a second drawing laid exactly over it. Each sits on its own small surface, cut at that surface's edge. */
+.academy-motion { position: absolute; top: 0; right: 0; width: 100%; height: 100%; }
+.world-motion-surface { overflow: hidden; }
 /* A portrait window crops to the story outside, rather than the quiet center wall. */
 @media (max-width: 700px) and (orientation: portrait) {
   .world-scene[data-world="academy"] .academy-art {

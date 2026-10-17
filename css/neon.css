@@ -96,11 +96,11 @@
 
 /* ------------------------------------------------------- the room itself */
 /* the street is the picture on the shelf: only its foot is darkened for the words */
-:root[data-world="tokyo"] body.shelfview .room::after,
-:root[data-world="tokyo"] .room::after {
+:root[data-world="tokyo"] body.shelfview .world-veil,
+:root[data-world="tokyo"] .world-veil {
   background: linear-gradient(0deg, color-mix(in srgb, var(--bg) 92%, transparent) 0%, color-mix(in srgb, var(--bg) 55%, transparent) 38%, color-mix(in srgb, var(--bg) 8%, transparent) 70%, transparent 100%);
 }
-:root[data-world="tokyo"] body:not(.shelfview) .room::after { background: color-mix(in srgb, var(--bg) 30%, transparent); }
+:root[data-world="tokyo"] body:not(.shelfview) .world-veil { background: color-mix(in srgb, var(--bg) 30%, transparent); }
 
 /* ------------------------------------------------------------ the shelf */
 :root[data-world="tokyo"] .brand h1 { font: 400 30px/1.05 var(--display); letter-spacing: .01em; color: #ffe6f4; text-shadow: var(--glow-m); }

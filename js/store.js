@@ -14,7 +14,7 @@
  * which takes the new copy the same way — the same book everywhere, live.
  */
 
-import { newId, sleep, hashText } from './util.js';
+import { newId, sleep } from './util.js';
 
 export const CLIENT = newId('tab');
 const recs = new Map();            /* 'kind/id' -> rec */
@@ -249,6 +249,11 @@ export function peek(kind, id) {
   const r = recs.get(keyOf(kind, id));
   return r && r.loaded ? r.data : undefined;
 }
+/* how big a record's last saved copy is, in characters of JSON (0 when it has not been saved from here) */
+export function sizeOf(kind, id) {
+  const r = recs.get(keyOf(kind, id));
+  return r && typeof r.baseJson === 'string' ? r.baseJson.length : 0;
+}
 export function revOf(kind, id) {
   const r = recs.get(keyOf(kind, id));
   return r ? r.rev : 0;
@@ -399,6 +404,9 @@ function saveNow(r, { keepalive = false } = {}) {
         const checkpoint = ops.every((o) => o.checkpoint);
         const json = JSON.stringify(r.data);
         const body = `{"data":${json}}`;
+        /* this save's own name, for the phone's list of the saves it took (the journal asks later whether it landed):
+         * a name, not a print of every letter — hashing a chapter of megabytes held the page for each save (2.12.5) */
+        r.sent = { json, id: newId('s') };
         let res;
         try {
           /* as the page is put away, a small record rides even if the page
@@ -406,7 +414,7 @@ function saveNow(r, { keepalive = false } = {}) {
           res = await api('PUT', `/api/store/${r.kind}/${r.id}`, {
             body,
             keepalive: ride && bytesOf(body) < 60000,
-            headers: { 'X-Base': String(r.rev), 'X-Save': hashText(json), ...(checkpoint ? { 'X-Checkpoint': '1' } : {}) },
+            headers: { 'X-Base': String(r.rev), 'X-Save': r.sent.id, ...(checkpoint ? { 'X-Checkpoint': '1' } : {}) },
           });
         } catch (e) {
           if (epoch !== libraryEpoch) continue;
@@ -787,9 +795,10 @@ function journal(r) {
   if (!r.loaded || !r.data || r.deleted) return;
   r.journaled = true;
   const json = JSON.stringify(r.data);
-  /* its fingerprint is the one its save carries: the phone's list of the
-   * saves it took tells later whether this one landed */
-  Journal.put({ k: journalKey(r), tab: CLIENT, kind: r.kind, id: r.id, base: r.rev, baseJson: r.baseJson, json, hash: hashText(json), gen: generation, at: Date.now() });
+  /* the name of the save that carried these very words, when one did (the phone's list of the saves it took tells
+   * later whether it landed); words changed since any save get a name no save carried, so they are always handed over */
+  const hash = r.sent && r.sent.json === json ? r.sent.id : newId('j');
+  Journal.put({ k: journalKey(r), tab: CLIENT, kind: r.kind, id: r.id, base: r.rev, baseJson: r.baseJson, json, hash, gen: generation, at: Date.now() });
 }
 function unjournal(r) {
   if (!r.journaled) return;

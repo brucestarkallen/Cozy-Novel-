@@ -80,11 +80,11 @@ export function academyArt() {
     <g class="academy-stars" opacity=".8">${stars}<path d="M1199 174v10m-5-5h10m214 176v12m-6-6h12" stroke="var(--academy-star)" stroke-width="1"/></g>
     <path class="academy-night-moon" d="M1406 162C1370 147 1339 176 1348 208C1356 236 1390 247 1415 226C1387 230 1368 206 1377 181C1382 168 1393 163 1406 162Z" fill="var(--academy-moon)"/>
     <circle class="academy-day-sun" cx="1378" cy="204" r="35" fill="var(--academy-moon)"/>
-    <g class="academy-cloud academy-cloud-far" fill="var(--academy-cloud)" opacity=".2">
+    <g fill="var(--academy-cloud)" opacity=".2">
       <path d="M1028 289c54-5 77-19 116-16 39 3 44 18 84 13 42-6 78-8 119 6l-319 11Z"/>
       <path d="M1241 354c44-15 68-8 103-12 37-4 67-23 93-15 26 7 58 20 116 14v16Z"/>
     </g>
-    <g class="academy-cloud academy-cloud-near" fill="var(--academy-cloud)" opacity=".12"><path d="M1074 430c58-9 89-22 143-18 55 4 66 16 117 8 51-8 94-5 140 12Z"/></g>
+    <g fill="var(--academy-cloud)" opacity=".12"><path d="M1074 430c58-9 89-22 143-18 55 4 66 16 117 8 51-8 94-5 140 12Z"/></g>
     <path d="M1027 666c58-72 103-74 152-59 55-69 114-67 176-15 74-40 123-21 192 34v226h-520Z" fill="var(--academy-hills-far)"/>
     <path d="M1027 708c93-71 157-35 229-59 91-32 187-10 291 56v147h-520Z" fill="var(--academy-hills)"/>
 

@@ -1,12 +1,19 @@
 /* Neon Tokyo — a rain-wet street canyon at night, drawn here line by line.
  *
- * Two still drawings and a few moving layers between and above them: the
- * far city and its railway behind, the street and its signs in front, the
- * last train passing between the two, rain, a sign that stutters, light
- * drifting up. Only plain HTML layers move, and only by transform and
- * opacity, so the phone's compositor moves cached pictures — nothing is
- * laid out or painted again while the room is alive. Every window is placed
- * by a seeded hand: the same city every time. */
+ * One still drawing (the far city and its railway, the street and its signs
+ * — the phone draws it once), the desk's veil over it, then what moves above
+ * both: the last train, a sign that stutters, light drifting up, rain in two
+ * depths — and the shelf's veil over everything (js/ui/worlds.js). Only plain
+ * HTML layers move, and only by transform and opacity, so
+ * the phone's compositor slides cached pictures — nothing is laid out or
+ * painted again while the room is alive, and nothing still is drawn after
+ * anything that moves (a moving layer makes the phone keep a screen-sized
+ * picture of everything drawn after it, 2.12.5). The train runs between the
+ * far city and the street: the facades hid its ends before; now it is cut to
+ * the gap between them, where it was ever seen. The rain is two screen-sized
+ * tiles of dashed streaks (a pattern, no mask), each the screen plus the
+ * distance it falls in one cycle, so the fall loops without a seam. Every
+ * window is placed by a seeded hand: the same city every time. */
 
 const W = 900, H = 1600;
 const VP = { x: 450, y: 900 };               /* where the street runs to */
@@ -154,17 +161,42 @@ function build() {
   return { back, front, flick, box };
 }
 
-export function tokyoArt() {
+/* a depth of rain: streaks `gap` apart, leaning `lean` degrees off the vertical (the way they fall), `dash` long out of
+ * every `period` of their fall — one tile, repeated; the tile's height is the distance of one fall, so each cycle lands
+ * the pattern on itself */
+export const RAIN = {
+  far: { gap: 61, dash: 22, width: 1, dx: -12, dy: 71 },
+  near: { gap: 127, dash: 46, width: 1.5, dx: -38, dy: 163 },
+};
+function rainMarkup(depth) {
+  const r = RAIN[depth];
+  const fall = Math.hypot(r.dx, r.dy);
+  const lean = (Math.atan2(-r.dx, r.dy) * 180) / Math.PI;
+  return `<svg class="neon-rain neon-rain-${depth}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+  <defs><pattern id="neon-rain-${depth}-tile" width="${r.gap}" height="${f1(fall)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${f1(lean)})"><rect width="${r.width}" height="${r.dash}" fill="var(--neon-rain)"/></pattern></defs>
+  <rect width="100%" height="100%" fill="url(#neon-rain-${depth}-tile)"/>
+</svg>`;
+}
+
+export function tokyoArt(veilUnder = '', veilOver = '') {
   if (!cache) cache = build();
   const { back, front, flick, box } = cache;
   const motes = Array.from({ length: 9 }, (_, i) => `<i class="neon-mote" style="--x:${8 + ((i * 37) % 84)}%;--d:${-i * 2.3}s;--s:${(0.6 + ((i * 7) % 5) / 6).toFixed(2)}"></i>`).join('');
-  return `<div class="world-art tokyo-art neon-stage" aria-hidden="true">
+  /* the gap between the facades' far edges, where the far city shows: INNER of the half-width either side of the vanishing point */
+  const gap = { left: f1((VP.x - 450 * INNER) / W * 100), width: f1((900 * INNER) / W * 100) };
+  return `<div class="world-art tokyo-art" aria-hidden="true">
+  <div class="neon-stage neon-still">
   ${back}
-  <div class="neon-train" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
   ${front}
+  </div>
+  ${veilUnder}
+  <div class="neon-stage neon-moving">
+  <div class="neon-track" style="left:${gap.left}%;width:${gap.width}%"><div class="neon-train" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
   <div class="neon-flicker" style="left:${f1(box.left)}%;top:${f1(box.top)}%;width:${f1(box.width)}%;height:${f1(box.height)}%">${flick}</div>
-  <div class="neon-rain neon-rain-far"></div>
-  <div class="neon-rain neon-rain-near"></div>
   <div class="neon-motes">${motes}</div>
+  </div>
+  ${rainMarkup('far')}
+  ${rainMarkup('near')}
+  ${veilOver}
 </div>`;
 }

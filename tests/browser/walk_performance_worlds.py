@@ -60,6 +60,45 @@ async def running(pg):
       .getAnimations({subtree:true}).filter(a => a.playState === 'running').length""")
 
 
+async def layer_cost(pg, dpr):
+    """The pictures the phone keeps apart to move the room (composited layers):
+    how much memory they hold at this pixel density, and how many are the size
+    of the screen. The page's own scrolling words are left out: the browser
+    keeps only what is near the screen of those."""
+    session = await pg.context.new_cdp_session(pg)
+    got = asyncio.get_running_loop().create_future()
+    session.on('LayerTree.layerTreeDidChange', lambda ev: got.done() or got.set_result(ev['layers']))
+    await session.send('DOM.enable')
+    await session.send('LayerTree.enable')
+    await pg.evaluate("document.body.style.setProperty('--walk-poke', String(Math.random()))")
+    layers = await asyncio.wait_for(got, 5)
+    await session.send('LayerTree.disable')
+    screen = await pg.evaluate('[innerWidth, innerHeight]')
+    page = await pg.evaluate("(() => { const w = document.querySelector('#pageWrap'); return [w.clientWidth, w.scrollHeight]; })()")
+    total, big, rows = 0, 0, []
+    for layer in layers:
+        if not layer.get('drawsContent'):
+            continue
+        name = '?'
+        try:
+            node = (await session.send('DOM.describeNode', {'backendNodeId': layer['backendNodeId']}))['node']
+            attrs = node.get('attributes', [])
+            name = node['nodeName'] + ''.join(f' {attrs[i]}={attrs[i + 1][:24]}' for i in range(0, len(attrs) - 1, 2) if attrs[i] in ('id', 'class'))
+        except Exception:
+            pass
+        w, h = layer.get('width', 0), layer.get('height', 0)
+        if 'id=pageWrap' in name or (abs(w - page[0]) <= 1 and abs(h - page[1]) <= 2):
+            continue  # the page's own words (the scrolling box and what scrolls in it): the browser keeps only what is near the screen of those
+        mb = w * h * dpr * dpr * 4 / 1e6
+        total += mb
+        if w * h >= screen[0] * screen[1] * .9:
+            big += 1
+        rows.append((round(mb, 1), int(w), int(h), name))
+    await session.detach()
+    rows.sort(reverse=True)
+    return {'mb': round(total), 'screenSized': big, 'rows': rows[:8]}
+
+
 async def scenario(browser):
     logs = []
     pg = await H.page(browser, logs, w=360, hgt=844)
@@ -115,6 +154,36 @@ async def scenario(browser):
     check('performance checks make no model calls', len(H.reqs()) == 0)
     check('world performance checks have no page errors', not logs, logs)
     await pg.context.close()
+
+    # The desk at a phone's pixel density: the pictures the phone keeps apart for
+    # the room must stay small. Before 2.12.5 the rooms kept 72–130 MB of them,
+    # four or five the size of the screen (the room, its veil, the drawing split
+    # by its moving pieces, the rain at 1.4 screens with a mask each) — on a
+    # phone the words were dropped and drawn again as he scrolled: the flashing.
+    dense = await browser.new_context(viewport={'width': 412, 'height': 915}, is_mobile=True, has_touch=True, device_scale_factor=3)
+    pg = await dense.new_page()
+    pg.on('pageerror', lambda e: logs.append(f'PAGEERROR: {e}'))
+    await H.new_book(pg, 'A Room Kept Light')
+    for world in ('academy', 'tokyo', 'study'):
+        await look(pg, theme=world, mode='dark', motion='on')
+        await frames(pg, 30)
+        cost = await layer_cost(pg, 3)
+        print(f'       {world} desk layers at 3x: {cost}', flush=True)
+        check(f'{world}: the desk keeps at most 90 MB of pictures apart for the room at a phone\'s density, no more than two the size of the screen beside the rain',
+              cost['mb'] <= 90 and cost['screenSized'] <= (4 if world == 'tokyo' else 2), cost)
+    # the shelf scrolls in its own box: the document never moves, so the browser's bar never slides the room with it
+    await pg.evaluate("location.hash='#/'")
+    await pg.wait_for_selector('#shelf:not([hidden]) #books > *:not(.shelfwait)')
+    await frames(pg, 10)
+    shelf = await pg.evaluate("""async () => { const s = document.querySelector('#shelf');
+      const st = getComputedStyle(document.documentElement);
+      s.scrollTop = 300; await new Promise(r => requestAnimationFrame(r));
+      return { boxScrolled: s.scrollTop, documentScrolled: scrollY, documentOverflow: st.overflowY, bodyOverflow: getComputedStyle(document.body).overflowY,
+               tallerThanScreen: s.getBoundingClientRect().height > innerHeight, roomTop: document.querySelector('.room').getBoundingClientRect().top }; }""")
+    check('the shelf scrolls inside its own box; the document never scrolls and the room stays put',
+          shelf['boxScrolled'] > 0 and shelf['documentScrolled'] == 0 and shelf['documentOverflow'] == 'hidden' and shelf['bodyOverflow'] == 'hidden' and shelf['tallerThanScreen'] and shelf['roomTop'] == 0, shelf)
+    check('dense-screen checks have no page errors', not logs, logs)
+    await dense.close()
 
 
 async def main():
