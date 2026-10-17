@@ -1220,8 +1220,8 @@ ${mine.length ? `${mineAsk(mine)}
  * beside the book's account that says the opposite) */
 function mineAsk(mine) {
   const names = mine.map((x) => `${x.name} (${x.kind})`).join(', ');
-  return `Cards to judge against the book — mine with "Since then" beside my words (what the book told after I wrote them), and every thread, whoever wrote it: ${names}. Judge each one, and answer in "mine" for every one of them:
-- {"kind": "…", "name": "…", "holds": true} when the book still bears it out — what is told since only adds to my words, or tells the same.
+  return `Cards to judge against the book — mine (in my words or my partner's, some with "Since then" beside them: what the book told after they were written), and every thread, whoever wrote it: ${names}. Judge each one, and answer in "mine" for every one of them:
+- {"kind": "…", "name": "…", "holds": true} when the book bears it out, or has not come to it yet — what is told since only adds to my words, or tells the same.
 - A thread is what the book sets up — nothing the notes or anyone added from nowhere. It holds only when all of it does: its name (what storyline it is), its words, and whether it is open or closed — {"kind": "threads", "name": "…", "holds": true, "evidence": "the book’s own words that set it up, quoted exactly"}.
 - A thread partly told from nowhere — a cause, a person, a place, a "why" the book never gives — or closed though the book leaves it unresolved (open though resolved): {"kind": "threads", "name": "…", "holds": false, "evidence": "the book’s own words that set it up, quoted exactly", "about": "the thread’s own words with what the book never gives taken out — nothing new added", "open": true, "why": "what was not in the book"}.
 - A thread no words of the book set up at all: {"kind": "threads", "name": "…", "never": true, "why": "…"} — it goes.

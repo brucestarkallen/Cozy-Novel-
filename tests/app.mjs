@@ -17,8 +17,9 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 18650;
-const PROV = 18652;
+/* APP_PORT=… runs a second copy beside the first without the two sharing a server (the provider is the port after next) */
+const PORT = Number(process.env.APP_PORT) || 18650;
+const PROV = PORT + 2;
 const BASE = `http://127.0.0.1:${PORT}`;
 const PROVIDER = `http://127.0.0.1:${PROV}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1957,6 +1958,32 @@ await test('every thread is held to the book’s own words that set it up: one n
   assert.equal(th('t-x').about, 'Harrison signed the papers.', '“never set up”, but its words stand in the book: kept');
   assert.equal(th('t-h').about, 'The meeting in the study.', 'a cut that brings words of its own: refused — the check never writes a thread');
 
+  await putAway(b);
+});
+
+await test('a card in his words or his partner’s with no Since then is judged against the book once too: the opposite, quoted from the book and naming it, puts it right; a quote about someone else changes nothing; held, it is not asked again (2.12.17)', async () => {
+  const b = await makeBook([['Damien Thorne had never bid for Vanderbilt Pharmaceuticals; he sold ships.']], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => {
+    n.notes.people.push({ id: 'pe-d', name: 'Damien Thorne', aka: [], about: 'Lost the bid for Vanderbilt Pharmaceuticals.', ties: '', now: '', updated: { by: 'you', at: 1 } });
+    n.notes.people.push({ id: 'pe-a', name: 'Alaric Thorne', aka: [], about: 'His son.', ties: '', now: '', updated: { by: 'you', at: 1 } });
+    n.notes.lore.push({ id: 'lo-s', name: 'The ships', about: 'Damien’s fleet.', updated: { by: 'you', at: 1 } });
+  }, { now: true });
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', mine: [
+    { kind: 'people', name: 'Damien Thorne', holds: false, contradicts: 'Damien Thorne had never bid for Vanderbilt Pharmaceuticals', about: 'Never bid for Vanderbilt Pharmaceuticals; sells ships.' },
+    { kind: 'people', name: 'Alaric Thorne', holds: false, contradicts: 'he sold ships', about: 'A shipping man.' },
+    { kind: 'lore', name: 'The ships', holds: true },
+  ] }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((c) => c.includes(prompts.AUDIT_ASK)) || '';
+  assert.ok(sent.includes('Damien Thorne (people)') && sent.includes('Alaric Thorne (people)') && sent.includes('The ships (lore)') && sent.includes('or has not come to it yet'));
+  const p = (id) => b.novel().notes.people.find((c) => c.id === id);
+  assert.deepEqual([p('pe-d').about, shape.hisField(p('pe-d'), 'about')], ['Never bid for Vanderbilt Pharmaceuticals; sells ships.', false]);
+  assert.equal(p('pe-a').about, 'His son.', 'a quote that does not name him is no ground');
+  assert.equal(b.novel().memory.mine['lo-s'].held, true);
+  assert.equal(archivist.mineToJudge(b.novel()).some((x) => x.id === 'lo-s'), false, 'held: not asked again');
   await putAway(b);
 });
 

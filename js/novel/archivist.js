@@ -1145,8 +1145,10 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       const q = cleanText(row.contradicts, 600);
       const inBook = bookHas(q);
       /* the quote is the book's, and what the account beside his words already tells (never a contradiction made up out of other words) */
-      /* (a card with no Since then — a thread of his, judged for itself — is held to its own telling) */
-      const inSince = q && heldIn(q, String(c.since || c.about || '')) >= 0.5;
+      /* (a card with no Since then is held to its own subject: the quote names it — never a contradiction made of words about someone else) */
+      const inSince = q && (String(c.since || '').trim() ? heldIn(q, String(c.since)) >= 0.5
+        : row.kind === 'threads' ? heldIn(q, String(c.about || '')) >= 0.5
+          : [c.name, ...(c.aka || [])].some((x) => x && nameInText(foldedText(q), x)));
       if (!inBook || !inSince) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, q ? 'the words it gave for the book saying otherwise are not the book’s' : 'it said the book says otherwise without the book’s words'); continue; }
       const whyNow = cleanText(row.why, 400) || `the book now says “${clipQuote(q)}”`;
       /* a thread is judged whole — its name (the storyline), its words, open or closed (2.12.14): overturned, it is the
@@ -1337,12 +1339,14 @@ export function mineToJudge(novel, only = null) {
     for (const c of ((novel && novel.notes) || {})[kind] || []) {
       if (only && !only.has(c.id)) continue;
       const since = String(c.since || '').trim();
-      /* and every thread — the helper's, his, his partner's: held to the book's own words that set it up, once for what it says (2.12.13; every thread, 2.12.16) */
+      /* and every thread — the helper's, his, his partner's: held to the book's own words that set it up, once for what it says (2.12.13; every thread, 2.12.16);
+       * and every card in his words or his partner's, Since then or none: held against the book once for what it says — his partner's cards checked too (2.12.17) */
       const thread = kind === 'threads';
-      if (!thread && (!since || !hisField(c, 'about'))) continue;
+      if (!thread && !hisField(c, 'about')) continue;
+      if (!thread && !since && !String(c.about || '').trim()) continue;
       const m = done[c.id];
       /* (a thread judged whole since 2.12.14 — name, words, open — so every one is judged once again under that) */
-      const h = hashText(thread ? ['t3', c.name, c.about, since, c.open === false ? 'closed' : 'open'].join('\n') : since);
+      const h = hashText(thread ? ['t3', c.name, c.about, since, c.open === false ? 'closed' : 'open'].join('\n') : since || ['c1', c.about].join('\n'));
       if (m && m.h === h && (m.held || (m.n || 0) >= 3)) continue;
       out.push({ kind, id: c.id, name: c.name, h });
     }
@@ -3130,7 +3134,7 @@ export const AUDIT_EVERY = 6;
  * person's card is a short portrait, its lasting details in the bibliography
  * (2.12). Notes checked under an earlier one are checked again once, by
  * themselves — once the bibliography holds the book's facts (owedCheck). */
-export const AUDIT_V = 9;
+export const AUDIT_V = 10;
 export function auditDue(novel) {
   const m = (novel && novel.memory) || {};
   const notes = (novel && novel.notes) || {};
