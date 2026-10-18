@@ -146,6 +146,9 @@ def answer_for(body):
     # a writer that titles its page anyway (the page takes the heading off and keeps it)
     if "HEADING PLEASE" in last_user:
         words.insert(0, "# Chapter Three: The Storm")
+    # Super automatic (2.12.28): asked whether this part ends the chapter, a premise with CLOSE IT in it does
+    if "CLOSE IT" in last_user and "on a line of its own after the last words" in last_user:
+        words.append("END OF CHAPTER")
     return "\n\n".join(words)
 
 

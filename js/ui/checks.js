@@ -99,7 +99,7 @@ function reviewInputs() {
   const n = store.peek('novel', C.novelId);
   const hs = store.peek('house', 'house') || {};
   const conn = checker.checkerConn(hs);
-  const out = [C.novelId, C.chapterId, n?.meta?.title, hs.checksFrom,
+  const out = [C.novelId, C.chapterId, n?.meta?.title, checker.checksFromOf(hs),
     conn?.id, conn?.model, JSON.stringify(checker.judgeOf(hs)), JSON.stringify(avoidList(hs)),
     JSON.stringify(checker.autoOf(hs))];
   for (const id of n?.order || []) {

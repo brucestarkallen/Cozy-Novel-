@@ -13,6 +13,7 @@ import * as archivist from '../novel/archivist.js';
 import { h, openSheet, field, toast, confirmIt, download, group } from './dom.js';
 import { novelSteps, COVERS, soundOf, POVS, TENSES, povOf, tenseOf } from '../novel/shape.js';
 import { autoOn, bookHasMacro, bookNames } from '../novel/prompts.js';
+import { superActive } from '../novel/auto.js';
 import { connFor, stopIn } from '../novel/writer.js';
 import { stopTalk } from '../novel/talk.js';
 import { toMarkdown, toText, toPrintable, toEpub, fileName } from '../novel/files.js';
@@ -93,8 +94,12 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder, 
     const on = autoOn(n, key);
     manual.setAttribute('aria-pressed', String(!on));
     auto.setAttribute('aria-pressed', String(on));
+    /* Super automatic keeps it Automatic in every book (auto.js): said, and Manual waits until it is off */
+    const ruled = superActive();
+    manual.disabled = ruled;
+    auto.disabled = ruled;
     keptBox.hidden = !on;
-    ownHint.textContent = on ? 'Your words — sent to the writer, partner and narrator exactly as you write them; the helper never changes them. Below, the helper’s own account of the book goes with them; where the two differ, your words win.' : 'Only your words are sent, exactly as written, to the writer, partner and narrator.';
+    ownHint.textContent = (on ? 'Your words — sent to the writer, partner and narrator exactly as you write them; the helper never changes them. Below, the helper’s own account of the book goes with them; where the two differ, your words win.' : 'Only your words are sent, exactly as written, to the writer, partner and narrator.') + (ruled ? ' Automatic with Super automatic on (Settings → Who does what).' : '');
     const k = (n.kept && n.kept[key]) || null;
     kept.value = (k && k.text) || '';
     const helper = connFor(store.peek('house', 'house') || {}, 'helper');

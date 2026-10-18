@@ -23,14 +23,15 @@
 import { newId, nameKey, estimateTokens, hashText } from '../util.js';
 import { picked, matchCard, chapterLabel } from './shape.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
+import { superActive } from './auto.js';
 
 export const ENTRY_KINDS = ['people', 'places', 'things', 'groups', 'lore'];
 export const KIND_TITLE = { people: 'People', places: 'Places', things: 'Things', groups: 'Groups', lore: 'Lore' };
 export const KIND_ONE = { people: 'person', places: 'place', things: 'thing', groups: 'group', lore: 'piece of lore' };
-/* when the writer reads it */
+/* when the writer reads it ('named': with every page while there is room, and first when it comes up — 2.12.28) */
 export const RIDES = ['named', 'always', 'never'];
 export const RIDES_WORDS = {
-  named: 'When it comes up',
+  named: 'When there’s room',
   always: 'Always',
   never: 'Never — it’s only for me',
 };
@@ -217,8 +218,12 @@ export function entryWords(e) {
 }
 
 /* the share of the room the entries named here may take */
+/* (2.12.28: a fifth of what is free beside his words, the talk and the answer, at most 48,000 tokens — was 12%, at
+ * most 16,000 — so a whole bibliography goes with every page on any model that holds it, as Cozy Tavern's brief does) */
+export const BIB_PART = 0.2;
+export const BIB_MOST = 48000;
 export function bibShare(free) {
-  return Math.max(600, Math.min(16000, Math.floor(Math.max(0, free) * 0.12)));
+  return Math.max(600, Math.min(BIB_MOST, Math.floor(Math.max(0, free) * BIB_PART)));
 }
 
 /* every entry by its name and line (the partner's view of the whole), fitted to `budget` tokens */
@@ -668,7 +673,7 @@ function namedOrder(usable, his, near) {
   return { his: refsIn(his, false), near: refsIn(near, true) };
 }
 
-export function ridingItems(items, { his = '', near = '', picked = [], budget = 4000, skip = null, purpose = 'write', factsMost = Infinity } = {}) {
+export function ridingItems(items, { his = '', near = '', picked = [], rest = false, budget = 4000, skip = null, purpose = 'write', factsMost = Infinity } = {}) {
   const forPartner = purpose === 'partner';
   const usable = usableFor(items, purpose);
   const always = forPartner ? [] : usable.filter((it) => it.rides === 'always');
@@ -680,56 +685,87 @@ export function ridingItems(items, { his = '', near = '', picked = [], budget = 
   /* what the page needs that no word here names (pickRows): after his words' names, before the ones near the point */
   take(forPartner ? [] : picked || []);
   take(found.near);
+  /* THE REST OF THE BIBLIOGRAPHY, AS MUCH AS THERE IS ROOM FOR (his word, 2.12.28: "when I press Continue it needs as
+   * much context as it can have — what if something only mentioned is important and isn't sent?"): after the ones
+   * named or needed, every other entry of his — those sharing the most words with the moment first — then what the book
+   * itself says of the names not named here, so the whole of it goes with every page while it fits, and only a
+   * bibliography bigger than its share is cut to what matters here */
+  const restFrom = order.length;
+  if (rest && !forPartner) {
+    const moment = topicWords(`${his}\n${near}`);
+    const others = usable.map((it, i) => ({ it, i })).filter((x) => !seen.has(x.it.ref) && (x.it.entry || (x.it.facts || []).length)).map((x) => {
+      const about = x.it.entry ? `${pickHead(x.it)}\n${String(x.it.entry.text || '').slice(0, 800)}` : `${x.it.name} ${(x.it.aka || []).join(' ')}\n${x.it.facts.slice(0, 12).map((f) => f.fact).join('\n')}`;
+      let score = 0;
+      for (const w of topicWords(about)) if (moment.has(w)) score++;
+      return { ...x, score };
+    }).sort((a, b) => (a.it.entry ? 0 : 1) - (b.it.entry ? 0 : 1) || b.score - a.score || a.i - b.i);
+    take(others.map((x) => x.it.ref));
+  }
   const byRef = new Map(usable.map((it) => [it.ref, it]));
-  const queue = [...always, ...order.map((r) => byRef.get(r)).filter(Boolean)];
+  const asItems = (refs) => refs.map((r) => byRef.get(r)).filter(Boolean);
   /* each part costed as the very words that ride: its first line (with the other names), his words, the facts' heading, each fact */
   const cost = (t) => estimateTokens(t) + 1;
   const rows = [];
   let spent = 0;
   let left = 0;
-  for (const it of queue) {
-    const facts = (it.facts || []).filter((f) => !(skip && skip.has(f.passageId)));
-    const own = itemWords(it, { facts: [] });
-    if (!own && !facts.length) continue;
-    /* WHICH FACTS FIRST, WHEN THE SHARE RUNS OUT (2.12.18): from both ends of
-     * the book toward its middle — what first told who they are, then what the
-     * book told of them last (a lost hand, a new rank) — never only the
-     * earliest, so a long book's newest lasting facts are not the ones that
-     * wait; those chosen are told in the book's order */
-    const ends = [];
-    for (let i = 0, j = facts.length - 1; i <= j; i++, j--) { ends.push(i); if (j !== i) ends.push(j); }
-    const row = { it, facts, ends, own: Boolean(own), n: 0, on: false };
-    if (own) {
-      const c = cost(own) + 3;
-      if (spent + c > budget) { left++; continue; }
-      spent += c;
-      row.on = true;
-    }
-    rows.push(row);
-  }
   /* (factsMost: what the facts may add past his words, at most) */
   let factsSpent = 0;
-  for (let more = true; more;) {
-    more = false;
-    for (const x of rows) {
-      if (x.full || x.n >= x.facts.length) continue;
-      const c = cost(factLine(x.facts[x.ends[x.n]])) + (x.n ? 0 : cost(toldHead(x.it))) + (x.on ? 0 : cost(headOf(x.it)) + 3);
-      if (spent + c > budget || factsSpent + c > factsMost) { x.full = true; continue; }
-      spent += c;
-      factsSpent += c;
-      x.n++;
-      x.on = true;
-      more = true;
+  /* what this page names or needs first — his words, then the book's facts of them — and only then the rest, its
+   * words, then its facts: the rest never takes the room of a fact about who is on the page */
+  for (const tier of [[...always, ...asItems(order.slice(0, restFrom))], asItems(order.slice(restFrom))]) {
+    const these = [];
+    for (const it of tier) {
+      const facts = (it.facts || []).filter((f) => !(skip && skip.has(f.passageId)));
+      const own = itemWords(it, { facts: [] });
+      if (!own && !facts.length) continue;
+      /* WHICH FACTS FIRST, WHEN THE SHARE RUNS OUT (2.12.18): from both ends of
+       * the book toward its middle — what first told who they are, then what the
+       * book told of them last (a lost hand, a new rank) — never only the
+       * earliest, so a long book's newest lasting facts are not the ones that
+       * wait; those chosen are told in the book's order */
+      const ends = [];
+      for (let i = 0, j = facts.length - 1; i <= j; i++, j--) { ends.push(i); if (j !== i) ends.push(j); }
+      const row = { it, facts, ends, own: Boolean(own), n: 0, on: false };
+      if (own) {
+        const c = cost(own) + 3;
+        if (spent + c > budget) { left++; continue; }
+        spent += c;
+        row.on = true;
+      }
+      these.push(row);
     }
+    for (let more = true; more;) {
+      more = false;
+      for (const x of these) {
+        if (x.full || x.n >= x.facts.length) continue;
+        const c = cost(factLine(x.facts[x.ends[x.n]])) + (x.n ? 0 : cost(toldHead(x.it))) + (x.on ? 0 : cost(headOf(x.it)) + 3);
+        if (spent + c > budget || factsSpent + c > factsMost) { x.full = true; continue; }
+        spent += c;
+        factsSpent += c;
+        x.n++;
+        x.on = true;
+        more = true;
+      }
+    }
+    rows.push(...these);
   }
   const out = [];
   const words = [];
+  let cut = false;
   for (const x of rows) {
     if (!x.on) { left++; continue; }
+    if (x.n < x.facts.length) cut = true;
     out.push(x.it);
     words.push(itemWords(x.it, { facts: x.ends.slice(0, x.n).sort((p, q) => p - q).map((i) => x.facts[i]) }));
   }
-  return { items: out, words, cost: spent, left };
+  /* allEntries: every entry of his the writer may read went, with its own words (the pick has nothing to bring);
+   * whole: all of it — every name with something to give here, each with every fact it has; rest: how many went only as the rest */
+  const went = new Set(out.map((it) => it.ref));
+  const gives = (it) => Boolean(itemWords(it, { facts: [] })) || (it.facts || []).some((f) => !(skip && skip.has(f.passageId)));
+  const allEntries = usable.every((it) => !it.entry || !itemWords(it, { facts: [] }) || went.has(it.ref));
+  const whole = !cut && usable.every((it) => went.has(it.ref) || !gives(it));
+  const restRefs = new Set(order.slice(restFrom));
+  return { items: out, words, cost: spent, left, whole, allEntries, rest: out.filter((it) => restRefs.has(it.ref)).length };
 }
 
 /* ------------------------------------------------- what a page needs */
@@ -741,8 +777,8 @@ export function ridingItems(items, { his = '', near = '', picked = [], budget = 
  * point against his entries that would not ride, each by its name and line, and names the ones the page needs
  * (bibpick.js). Only names: what rides is his entry, word for word, as a named one does. */
 export const PICK_MAX = 5;
-/* Bibliography → Smart recall (Cozy Tavern's own name for it, M510-50): on unless he turned it off for the book */
-export const recallOn = (novel) => !(novel && novel.prefs && novel.prefs.bibRecall === 'off');
+/* Bibliography → Smart recall (Cozy Tavern's own name for it, M510-50): on unless he turned it off for the book (Super automatic: on) */
+export const recallOn = (novel) => superActive() || !(novel && novel.prefs && novel.prefs.bibRecall === 'off');
 
 /* the words that tell what something is about: letters only, four or more, the commonest left out */
 const COMMON = new Set(['that', 'this', 'with', 'from', 'they', 'them', 'their', 'there', 'then', 'than', 'have', 'had', 'has', 'were', 'what', 'when', 'where', 'which', 'while', 'will', 'would', 'could', 'should', 'into', 'onto', 'over', 'under', 'about', 'after', 'before', 'again', 'just', 'like', 'only', 'some', 'more', 'most', 'much', 'very', 'been', 'being', 'each', 'every', 'other', 'others', 'your', 'yours', 'mine', 'here', 'still', 'even', 'back', 'down', 'through', 'once', 'also', 'away', 'upon', 'does', 'done', 'make', 'made', 'said', 'says', 'know', 'knew', 'come', 'came', 'goes', 'went', 'gone', 'take', 'took', 'look', 'looks', 'looked', 'want', 'wants', 'something', 'nothing', 'anything', 'everything', 'someone', 'because', 'though', 'without', 'against', 'between', 'around', 'until', 'these', 'those', 'himself', 'herself', 'itself', 'themselves']);
@@ -764,10 +800,14 @@ function pickHead(it) {
  * with words to give, that his words and the words near the point do not name — numbered, each by pickHead; the ones
  * that share the most words with the moment first, fitted to `cap` tokens, then numbered in the bibliography's order.
  * riding — his entries that ride anyway (always, or named here), for the helper to know what the page has. Pure. */
-export function pickRows(items, { his = '', near = '', cap = 6000 } = {}) {
+export function pickRows(items, { his = '', near = '', cap = 6000, rode = null } = {}) {
   const usable = usableFor(items, 'write');
-  const found = namedOrder(usable, his, near);
-  const named = new Set([...found.his, ...found.near]);
+  /* rode: the entries the request carries without a pick (context.js stats.entries) — else the ones it names */
+  let named = rode;
+  if (!named) {
+    const found = namedOrder(usable, his, near);
+    named = new Set([...found.his, ...found.near]);
+  }
   const riding = usable.filter((it) => it.entry && (it.rides === 'always' || named.has(it.ref)));
   const open = (items || []).filter((it) => it.entry && ridesOf(it.rides) === 'named' && !named.has(it.ref) && String(it.entry.text || it.entry.line || '').trim());
   if (!open.length) return { rows: [], riding };

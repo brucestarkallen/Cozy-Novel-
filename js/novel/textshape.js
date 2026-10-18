@@ -511,3 +511,24 @@ export function straysIn(text) {
   }
   return out;
 }
+
+/* SUPER AUTOMATIC — THE CHAPTER ENDS HERE (prompts.js closeLine): the writer's line after the last words of a part
+ * that ends its chapter, taken off — "END OF CHAPTER", in brackets, dashes, stars or as a heading, "The end of the
+ * chapter", "Chapter ends here". {text, found, ended, before, after}: the words without the line (what came after
+ * it kept, to be judged as anything after a page is: finishTail); found, the line was there; ended, it came at the end —
+ * nothing after it but a short note (writer.js also takes it as the end when all that follows is what finishTail takes
+ * off the page); before and after, the words on either side of it. A part that goes on past the line with the story
+ * itself never ends there: the line is taken off and every word of the story stays. */
+const END_LINE = /^[\s\[(⟦*_~#—–-]*(?:the\s+)?(?:end\s+of\s+(?:the\s+)?chapter(?:\s+\w+)?|chapter\s+ends(?:\s+here)?)[\s.!\])⟧*_~—–-]*$/i;
+export function chapterEnds(text) {
+  const t = String(text || '');
+  const lines = t.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!END_LINE.test(lines[i])) continue;
+    const after = lines.slice(i + 1).join('\n').trim();
+    const before = lines.slice(0, i).join('\n').replace(/\s+$/, '');
+    const words = after ? after.split(/\s+/).filter(Boolean).length : 0;
+    return { text: before + (after ? `\n\n${after}` : ''), found: true, ended: Boolean(before.trim()) && words <= 40, before, after };
+  }
+  return { text: t, found: false, ended: false, before: t, after: '' };
+}

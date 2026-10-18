@@ -61,8 +61,8 @@ export function initDesk(elements, appHooks) {
   ui.lengthBtn.addEventListener('click', () => lengthMenu());
   ui.outcomeBtn.addEventListener('click', () => outcomeMenu());
   ui.writerBtn.addEventListener('click', () => hooks.writerMenu(ui.writerBtn));
-  /* Tap names switched on or off, here or in another window */
-  store.subscribe('house', 'house', () => namesMoved());
+  /* Tap names switched on or off, here or in another window — and Super automatic, which says at a chapter's end where the next page goes */
+  store.subscribe('house', 'house', () => { namesMoved(); if (ui && S.chapterId && chapter() && novel()) drawEnd(); });
   ui.wrap.addEventListener('scroll', onScroll, { passive: true });
   F = follower(ui.wrap, { tail: () => tailTop(S.followId), active: busy, onChange: (on) => { ui.followBtn.hidden = on || !busy(); } });
   initScroller();
@@ -203,6 +203,8 @@ export function rewritePassage({ chapterId, passageId, note = '' }) {
 }
 /* the checker looks now (Settings: what goes in by itself was switched on) */
 export function nudgeChecker() { if (S.novelId) checker.schedule(S.novelId, 300); }
+/* the helper of the book open, asked to read now (Super automatic switched on) */
+export function nudgeHelper() { if (S.novelId) archivist.nudge(S.novelId, 1500); }
 /* some words of a passage written again (a word he never wants) */
 export function rewriteSpan({ chapterId, passageId, start, end, note = '' }) {
   if (busy()) { toast('The writer is busy — try again once it has finished.'); return; }
@@ -796,8 +798,11 @@ function drawEnd() {
   if (err && err.ids && (c.passages || []).some((p) => !err.ids.has(p.id))) { S.errors.delete(c.id); err = null; }
   const at = n.order.indexOf(c.id);
   const next = store.peek('chapter', n.order[at + 1]);
+  /* Super automatic: the writer ended this chapter — the next page goes in the next one (writer.js closedGoesOn, the
+   * very answer Write and Add as my words go by) */
+  const goes = writer.closedGoesOn(n.id, c.id);
   const key = [n.id, c.id, Boolean(list.length), hasText, at, n.order.length, n.order[at + 1], next && next.name, busy(), S.making,
-    err, err && err.words, err && err.thought, err && err.stopped, err && err.needsConnection];
+    err, err && err.words, err && err.thought, err && err.stopped, err && err.needsConnection, goes && goes.number];
   if (endDrawn && sameParts(endDrawn, key)) return;
   endDrawn = key;
   ui.end.textContent = '';
@@ -824,6 +829,7 @@ function drawEnd() {
     ui.end.append(card);
   }
   if (hasText && !busy()) {
+    if (goes) ui.end.append(h('p.say.quiet.chapterended', `The chapter ends here — your next page goes in Chapter ${numberWords(goes.number)}.`));
     if (at === n.order.length - 1) {
       ui.end.append(h('div.nextchapter', h('button.btn', { disabled: S.making, onclick: () => newChapterAfter(c.id) }, `Start Chapter ${numberWords(at + 2)} `, icon('right', 16))));
     } else {
@@ -831,6 +837,12 @@ function drawEnd() {
       ui.end.append(h('div.nextchapter', h('button.btn.quiet', { onclick: () => hooks.goChapter(n.order[at + 1]) }, `On to Chapter ${numberWords(at + 2)}${name} `, icon('right', 16))));
     }
   }
+}
+
+/* a chapter opened, and the page drawn, before what comes next (a few seconds at most) */
+async function openThen(chapterId) {
+  hooks.goChapter(chapterId);
+  for (let i = 0; i < 60 && !(S.chapterId === chapterId && ui.end); i++) await new Promise((r) => setTimeout(r, 50));
 }
 
 /* one tap, one chapter */
@@ -1031,17 +1043,26 @@ async function onWrite() {
   const direction = ui.direction.value.trim();
   const after = S.insertAfter || null;
   S.insertAfter = null;
+  if (!after) await toNextIfEnded();
   const out = await run(() => writer.writeNext({ novelId: S.novelId, chapterId: S.chapterId, direction, length: (n.prefs && n.prefs.length) || 'scene', after }));
   if (out && out.ok) {
     if (ui.direction.value.trim() === direction) { ui.direction.value = ''; ui.direction.dispatchEvent(new Event('input')); }
   }
 }
 
-function onMine() {
+/* SUPER AUTOMATIC: the next page of a chapter the writer ended — his premise's or his own words — goes in the next
+ * chapter, opened first so it is written where he reads it (writer.js chapterAfterClose) */
+async function toNextIfEnded() {
+  const next = await writer.chapterAfterClose(S.novelId, S.chapterId);
+  if (next && next !== S.chapterId) await openThen(next);
+}
+
+async function onMine() {
   const text = ui.direction.value;
   if (!text.trim()) { toast('Write your words in the box first.'); ui.direction.focus(); return; }
   const after = S.insertAfter || null;
   S.insertAfter = null;
+  if (!after) await toNextIfEnded();
   const id = writer.addMine({ novelId: S.novelId, chapterId: S.chapterId, text, after });
   if (id) {
     ui.direction.value = '';

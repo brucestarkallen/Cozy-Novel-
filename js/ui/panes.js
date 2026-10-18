@@ -2117,7 +2117,9 @@ async function toProse(p0, fromStart) {
   /* his hand first: a page the app is writing by itself stops and is taken away whole (the same door as the desk's) */
   await writer.yieldAuto(P.novelId);
   const n = store.peek('novel', P.novelId);
-  const chapterId = n.order.includes(p.chapterId) ? p.chapterId : n.order[n.order.length - 1];
+  let chapterId = n.order.includes(p.chapterId) ? p.chapterId : n.order[n.order.length - 1];
+  /* Super automatic: a scene set where a chapter the writer ended ends is the next chapter's page, as Write's would be (writer.js chapterAfterClose) */
+  if (writer.setAtEnd(store.peek('chapter', chapterId), p)) chapterId = (await writer.chapterAfterClose(P.novelId, chapterId)) || chapterId;
   if (!wide()) closeRight();
   hooks.goChapter(chapterId);
   toast('Writing the scene into the chapter…');

@@ -280,6 +280,16 @@ export function passageText(passage) {
 export function hasWords(passage) {
   return Boolean(passage && passage.by !== 'break' && String((picked(passage) || {}).text || '').trim());
 }
+/* SUPER AUTOMATIC (auto.js): the chapter the writer ended — its last passage with words is, on show, a version that
+ * ends it (writer.js `closes`). Anything written after it, or another version on show, and it goes on. */
+export function chapterClosed(chapter) {
+  const list = (chapter && chapter.passages) || [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (!hasWords(list[i])) continue;
+    return Boolean((picked(list[i]) || {}).closes);
+  }
+  return false;
+}
 
 /* The words of his that set a passage going — what wakes a rule for what is
  * written from it (crafts.js wakesOn). A passage he typed is his words (one

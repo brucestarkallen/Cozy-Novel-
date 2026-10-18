@@ -1104,7 +1104,8 @@ async def scenario_versions(b):
     house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
     check('and its Undo brings back what was typed', house['instructions'].get('system') == 'TYPED JUST NOW.' and await pg.input_value(sysbox) == 'TYPED JUST NOW.', house['instructions'].get('system'))
     # the note at the end switched off: kept, not sent
-    await pg.uncheck('.sheet.on .switchrow >> nth=0 >> input'); await pg.wait_for_timeout(800)
+    # (by its own name: since 2.12.22 the teller's "Say it again at the end" is a switch row above it)
+    await pg.uncheck('.sheet.on .switchrow:has(span:text-is("Send it")) >> nth=0 >> input'); await pg.wait_for_timeout(800)
     house = (await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json())"))['data']
     check('Send it, unticked, switches the book’s note at the end off', house['instructions'].get('lateOff') is True, house['instructions'])
     # how each note at the end rides: Sent as, the book's and the scenes' each its own
@@ -2132,6 +2133,95 @@ async def scenario_auto(b):
     check('no page errors (by itself)', not errs, errs[:5])
     await pg.close()
 
+async def scenario_super(b):
+    """Super automatic: one switch, and the chapters by themselves (2.12.28)"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Book That Runs Itself')
+    await add_conn(pg)
+    await write(pg, 'A first page.')
+    nid = (await pg.evaluate('location.hash')).split('/')[2]
+    one = await pg.evaluate("import('/js/ui/desk.js').then((d) => d.deskState().chapterId)")
+    grp = '.sheet.on .group[data-key="set.roles"]'
+    async def roles():
+        await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
+        await pg.wait_for_selector('.sheet.on')
+        await settings_part(pg, 'Who does what'); await pg.wait_for_timeout(200)
+    await roles()
+    # a checker chosen after Nobody begins then: writing from before waits to be asked for
+    began = await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json()).then((x) => x.data.checksFrom)")
+    sel = pg.locator(f'{grp} .field:has(> span:text-is("The checker")) select')
+    await sel.select_option('off'); await pg.wait_for_timeout(300)
+    await sel.select_option(''); await pg.wait_for_timeout(500)
+    now_from = await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json()).then((x) => x.data.checksFrom)")
+    check('a checker chosen after Nobody begins when it is chosen', isinstance(began, (int, float)) and isinstance(now_from, (int, float)) and now_from > began, (began, now_from))
+    sup = pg.locator(f'{grp} label.toggle:has-text("Super automatic") input')
+    first = await pg.evaluate("() => { const g = document.querySelector('.sheet.on .group[data-key=\"set.roles\"] .gbody, .sheet.on .settings-roles'); const f = g && g.querySelector('.field'); return f ? f.textContent.slice(0, 40) : ''; }")
+    check('Who does what opens on Super automatic, off to begin with', await sup.count() == 1 and not await sup.is_checked() and first.startswith('Super automatic'), first)
+    await sup.check(); await pg.wait_for_timeout(500)
+    await pg.screenshot(path=os.path.join(SHOTS, 'super-settings.png'))
+    fix = pg.locator(f'{grp} label.toggle:has-text("Apply the checker’s fixes by themselves") input')
+    fixsay = await pg.locator(f'{grp} .field:has(label.toggle:has-text("Apply the checker’s fixes by themselves")) em').inner_text()
+    hs = await pg.evaluate("fetch('/api/store/house/house').then((r) => r.json()).then((x) => x.data.superAuto || null)")
+    check('on: kept on the phone, and the checker’s fixes switch shows on, held by it', bool(hs and hs.get('on')) and await fix.is_checked() and await fix.is_disabled() and fixsay.startswith('On with Super automatic.'), (hs, fixsay[:80]))
+    await settings_part(pg, 'Your instructions'); await pg.wait_for_timeout(200)
+    lands = await pg.locator('.sheet.on .field:has(> span:text-is("Your partner’s changes land"))').inner_text() if await pg.locator('.sheet.on .field:has(> span:text-is("Your partner’s changes land"))').count() else await pg.inner_text('.sheet.on')
+    check('the partner’s changes land at once, said where he chooses it', 'At once, with Undo — Super automatic is on' in lands, lands[-200:])
+    await close_sheet(pg)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("About this book")')
+    await pg.wait_for_selector('.sheet.on')
+    modes = await pg.evaluate("[...document.querySelectorAll('.sheet.on .keptrow .segmented button')].map((b) => [b.textContent, b.disabled, b.getAttribute('aria-pressed')])")
+    hint = await pg.inner_text('.sheet.on .keptfield em >> nth=0')
+    check('About this book: What it’s about and How it reads Automatic, Manual waiting until it is off, said', len(modes) == 4 and all(m[1] for m in modes) and [m[2] for m in modes] == ['false', 'true', 'false', 'true'] and 'Automatic with Super automatic on' in hint, (modes, hint[-120:]))
+    await close_sheet(pg)
+    await pg.click('#notesBtn')
+    await pg.wait_for_selector('[data-notes-view=bibliography]')
+    await pg.click('[data-notes-view=bibliography]')
+    await pg.wait_for_selector('.bibview'); await pg.wait_for_timeout(300)
+    toggles = await pg.evaluate("[...document.querySelectorAll('.bibview label.toggle')].filter((l) => /Fill it from the book|Smart recall/.test(l.textContent)).map((l) => [l.textContent, l.querySelector('input').checked, l.querySelector('input').disabled])")
+    intro = await pg.inner_text('.bibview .bibintro')
+    check('the bibliography fills itself and Smart recall is on, both held, said', len(toggles) == 2 and all(t[1] and t[2] for t in toggles) and 'Super automatic keeps both switches on.' in intro, (toggles, intro[-160:]))
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    # the writer ends the chapter: the line comes off, the chapter's end says where the next page goes
+    reset()
+    await write(pg, 'She leaves the lighthouse. CLOSE IT')
+    last = await pg.inner_text('#passages .passage >> nth=-1')
+    asked = [x for x in completions() if 'CLOSE IT' in json.dumps(x['body'].get('messages') or [])]
+    end = await pg.inner_text('#deskEnd, .deskend, #end') if await pg.locator('#deskEnd, .deskend, #end').count() else ''
+    said = await pg.locator('.chapterended').inner_text() if await pg.locator('.chapterended').count() else ''
+    if said: await pg.locator('.chapterended').scroll_into_view_if_needed(); await pg.screenshot(path=os.path.join(SHOTS, 'super-chapter-end.png'))
+    check('asked to end the chapter where the story would; its END OF CHAPTER off the page; the chapter’s end says the next page goes in Chapter Two', len(asked) == 1 and 'END OF CHAPTER' not in last and said == 'The chapter ends here — your next page goes in Chapter Two.', (len(asked), last[-120:], said, end[:120]))
+    # switched off and on again from Settings: the chapter's end follows at once
+    seen = []
+    for want in (False, True):
+        await roles()
+        box = pg.locator(f'{grp} label.toggle:has-text("Super automatic") input')
+        if want: await box.check()
+        else: await box.uncheck()
+        await pg.wait_for_timeout(400)
+        await close_sheet(pg)
+        seen.append(await pg.locator('.chapterended').count())
+    check('the chapter’s end follows the switch: off, no line; on again, the line', seen == [0, 1], seen)
+    await write(pg, 'Morning on the cliffs.')
+    await pg.wait_for_timeout(400)
+    where = await pg.evaluate("import('/js/ui/desk.js').then((d) => d.deskState().chapterId)")
+    book = await pg.evaluate("""async (nid) => { const s = await import('/js/store.js'); await s.flush(); const n = s.peek('novel', nid);
+      return n.order.map((id) => (s.peek('chapter', id).passages || []).map((p) => (p.versions[p.pick || 0] || {}).text || '')); }""", nid)
+    check('the next page goes in a new Chapter Two, opened for him; Chapter One keeps its end', where != one and len(book) == 2 and len(book[0]) == 2 and len(book[1]) == 1 and 'Morning on the cliffs' in book[1][0] and (await pg.evaluate('location.hash')).endswith(where), (where, one, [len(c) for c in book], await pg.evaluate('location.hash')))
+    await pg.evaluate(f"import('/js/app.js').then((m) => m.goChapter('{one}'))")
+    await pg.wait_for_function(f"document.location.hash.endsWith('{one}')")
+    await pg.wait_for_timeout(500)
+    check('back in Chapter One, Chapter Two written: no line — Write goes on where he is', await pg.locator('.chapterended').count() == 0 and await pg.locator('.nextchapter button:has-text("On to Chapter Two")').count() == 1)
+    # off again: every switch as he set it
+    await roles()
+    await pg.locator(f'{grp} label.toggle:has-text("Super automatic") input').uncheck(); await pg.wait_for_timeout(500)
+    fix = pg.locator(f'{grp} label.toggle:has-text("Apply the checker’s fixes by themselves") input')
+    check('off: the checker’s fixes switch is his again, off as he left it', not await fix.is_checked() and not await fix.is_disabled())
+    await close_sheet(pg)
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (Super automatic)', not errs, errs[:5])
+    await pg.close()
+
 QUIET_NOW = "import('/js/app.js').then((m) => m.quietNow())"
 CONTRAST = r"""(async () => {
   const {applyLook} = await import('/js/ui/look.js');
@@ -2513,7 +2603,7 @@ async def main():
             async def offline(b):
                 """the server stops under an open page, then comes back"""
                 await scenario_offline(b, env)
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_heads_in_reach, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_suggestions_more, scenario_page_whole, scenario_rest, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_heads_in_reach, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_suggestions_more, scenario_page_whole, scenario_rest, scenario_auto, scenario_super, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

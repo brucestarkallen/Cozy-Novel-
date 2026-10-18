@@ -36,6 +36,10 @@ import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withC
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
 import { setHelperHooks } from './inplace.js';
 import { applyCheck, checkSig, checkedNow } from './summarycheck.js';
+import { readHouseWith } from './auto.js';
+
+/* Super automatic (auto.js): the book's own switches read the house where they are */
+readHouseWith(() => store.peek('house', 'house'));
 
 const lights = new Map();          /* novelId -> {state, words, at} */
 const timers = new Map();

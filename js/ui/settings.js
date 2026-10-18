@@ -21,7 +21,8 @@ import { booksFromLibrary } from '../novel/files.js';
 import { bringOldBackup } from '../legacy.js';
 import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './look.js';
 import { colourPicker } from './colour-picker.js';
-import { draftNow, nudgeChecker } from './desk.js';
+import { draftNow, nudgeChecker, nudgeHelper } from './desk.js';
+import { superOn } from '../novel/auto.js';
 
 let sheet = null;
 let editingId = null;
@@ -568,14 +569,24 @@ function rolesGroup(hs, open) {
   checkSel.append(h('option', { value: '', selected: !curCheck }, 'The same as the helper'));
   for (const c of conns) checkSel.append(h('option', { value: c.id, selected: curCheck === c.id }, connName(c)));
   checkSel.append(h('option', { value: 'off', selected: curCheck === 'off' }, 'Nobody — don’t check'));
-  checkSel.addEventListener('change', () => changeHouse((x) => { x.roles = x.roles || {}; if (checkSel.value) x.roles.checker = checkSel.value; else delete x.roles.checker; }, { now: true }));
+  checkSel.addEventListener('change', () => {
+    changeHouse((x) => {
+      x.roles = x.roles || {};
+      /* a checker chosen after Nobody begins now: writing from before waits to be asked for (checker.js checksFromOf) */
+      if (x.roles.checker === 'off' && checkSel.value !== 'off') x.checksFrom = Date.now();
+      if (checkSel.value) x.roles.checker = checkSel.value; else delete x.roles.checker;
+    }, { now: true });
+    /* (with Super automatic on, Nobody is said to check all the same: the line under it follows) */
+    if (superOn(house())) draw();
+  });
   g.body.classList.add('settings-roles');
   g.body.append(
+    superField(hs),
     h('p.settings-intro', 'A small circle of help for your book. One connection can do every part, or you can choose a different one for each.'),
     roleSel('writer', 'The writer', 'Writes the pages, the other takes, the rewrites, and narrates the scenes you play. The writer button under the page switches it too.', false),
     roleSel('partner', 'The partner', 'Talks the book over with you.', true),
     roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true),
-    field('The checker', checkSel, 'Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. Writing from before it began is checked only when you ask. A quick, inexpensive model is perfect here.'),
+    field('The checker', checkSel, `Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. Writing from before it began is checked only when you ask. A quick, inexpensive model is perfect here.${superOn(hs) && curCheck === 'off' ? ' With Super automatic on, the helper’s connection checks even though this says Nobody.' : ''}`),
     judgeField(hs),
     ...autoFields(hs),
     ideasField(hs));
@@ -597,17 +608,34 @@ function ideasField(hs) {
     field('How many ideas', sel));
 }
 
+/* SUPER AUTOMATIC (auto.js): one switch for everything that can happen by itself — his word, 2.12.28: "one
+ * universal button to make everything automatic … except the rewrite or the score judge" */
+function superField(hs) {
+  const on = h('input', { type: 'checkbox', checked: superOn(hs) });
+  on.addEventListener('change', () => {
+    changeHouse((x) => { x.superAuto = on.checked ? { on: true, from: Date.now() } : { on: false }; }, { now: true });
+    /* on: the checker looks at once, and the helper of the book open reads now (What it's about and How it reads kept from the book) */
+    if (on.checked) { nudgeChecker(); nudgeHelper(); }
+    draw();
+  });
+  return h('div.field.superauto',
+    h('label.toggle', on, h('span', 'Super automatic')),
+    h('em', 'Everything that can happen by itself does — you write the premises and read, and play a scene now and then. In every book the helper keeps What it’s about and How it reads, the bibliography fills itself from the pages, and Smart recall brings in what a page needs that nothing on it names. The writer ends a chapter where the story would, and your next page goes in the next one. The checker checks each passage, and its fixes go in by themselves, from now on. Your partner’s changes land at once, with Undo. Your notes are kept as always — your own cards too: what the book adds goes beside your words, and the notes’ check puts right what the book contradicts. Never by itself: a passage under your mark written again (its own switch, below) and your mark. Off: every switch is as you set it; what was written meanwhile stays.'));
+}
+
 /* what happens by itself: the checker's fixes, and a passage under his mark
  * written again — each from when he switches it on (checker.js autoAfter) */
 function autoFields(hs) {
   const row = (key, label, say) => {
-    const on = h('input', { type: 'checkbox', checked: Boolean(hs[key] && hs[key].on) });
+    /* the checker's fixes go in by themselves with Super automatic on, whatever this says (checker.js autoOf) */
+    const ruled = key === 'autoFix' && superOn(hs);
+    const on = h('input', { type: 'checkbox', checked: ruled || Boolean(hs[key] && hs[key].on), disabled: ruled });
     on.addEventListener('change', () => {
       changeHouse((x) => { x[key] = on.checked ? { on: true, from: Date.now() } : { on: false }; }, { now: true });
       /* switched on: the checker looks at once, and what waits goes in (his report, 2.12.2: on, and nothing happened) */
       if (on.checked) nudgeChecker();
     });
-    return h('div.field', h('label.toggle', on, h('span', label)), h('em', say));
+    return h('div.field', h('label.toggle', on, h('span', label)), h('em', ruled ? `On with Super automatic. ${say}` : say));
   };
   return [
     row('autoFix', 'Apply the checker’s fixes by themselves',
@@ -814,10 +842,12 @@ function wordsGroup(hs) {
       ['user', 'A user message — your notes'],
       ['assistant', 'An assistant message — a notebook'],
     ], hs.notesAs, 'What the book is about, its chapters and its notes, after your instructions — for the writer, the narrator and the partner alike, as in Cozy Tavern. As your notes they open “Bruce here. Here’s where our book stands…”; as a notebook they are the writer’s own (“My notebook for…”), before what you ask.', 'The book and its notes ride as'),
-    choose('partnerApplies', [
-      ['now', 'At once, with Undo (the default)'],
-      ['wait', 'When I press Apply'],
-    ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.', 'Your partner’s changes land'));
+    superOn(hs)
+      ? field('Your partner’s changes land', h('p.quiet', 'At once, with Undo — Super automatic is on (Settings → Who does what).'), 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.')
+      : choose('partnerApplies', [
+        ['now', 'At once, with Undo (the default)'],
+        ['wait', 'When I press Apply'],
+      ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.', 'Your partner’s changes land'));
   return g;
 }
 

@@ -159,7 +159,7 @@ async def scenario(browser):
     await pg.locator('.bibview label.toggle', has_text='Smart recall').locator('input').click()
     await pg.wait_for_timeout(400)
     kept_on = await pg.evaluate("nid => fetch('/api/store/novel/' + nid).then((r) => r.json()).then((x) => (x.data.prefs || {}).bibRecall || '')", nid)
-    check('Smart recall is on by itself and says what it does; off for the book is kept on the phone, and the card says names only', on_at_first and 'with Smart recall, when a page needs it' in said_on and 'with Smart recall' not in said_off and kept_off == 'off' and kept_on == '', (on_at_first, said_off[-160:], kept_off, kept_on))
+    check('Smart recall is on by itself and says what it does; off for the book is kept on the phone, and the card says names only', on_at_first and 'with Smart recall, those the page needs though nothing there names them' in said_on and 'with Smart recall' not in said_off and kept_off == 'off' and kept_on == '', (on_at_first, said_off[-160:], kept_off, kept_on))
     async with pg.expect_download() as dl:
         await pg.locator('.bibview button', has_text='Take it out as a lorebook').click()
     d = await dl.value

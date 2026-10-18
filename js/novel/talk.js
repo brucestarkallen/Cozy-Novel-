@@ -34,6 +34,7 @@ import { tellerOf, toTeller } from './teller.js';
 import { scenePlan } from './stretches.js';
 import { entriesOf, entryNamed, entryWords, KIND_TITLE } from './bibliography.js';
 import { pickEntries } from './bibpick.js';
+import { appliesOf } from './auto.js';
 
 const running = new Map();        /* 'talk/<id>' | 'play/<id>' -> job */
 const jobFns = new Set();
@@ -387,7 +388,9 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       try {
         const { novel, chapters } = bookNow(novelId);
         const args = buildArgs(store.peek(kind, id), conn);
-        picks = (await pickEntries({ conn: connFor(house, 'helper'), house, novel, chapters, purpose: args.purpose, target: args.target, request: args.request || '', moment: args.moment || '', turns: args.turns || [], play: args.play, signal: ctl.signal })).refs || [];
+        picks = (await pickEntries({ conn: connFor(house, 'helper'), house, novel, chapters, purpose: args.purpose, target: args.target, request: args.request || '', moment: args.moment || '', turns: args.turns || [], play: args.play, signal: ctl.signal,
+          /* (the telling as it would go without a pick: when the whole bibliography is in it, nothing is asked) */
+          dry: () => assemble({ house, novel, chapters, conn, ...args, turns: args.turns || [], length, notesKept: archivist.keepingNotes(novelId) }).stats })).refs || [];
       } catch (e) { console.error(e); picks = []; }
     }
     let out;
@@ -703,7 +706,7 @@ function readRows(novelId, asked) {
 function settleChanges(novelId, turnId, versionId, text, house, before = [], seen = null, numbers = null, short = null, snapshot = null) {
   const ops = opsOf(text);
   if (!ops.length) return [];
-  const wait = house && house.partnerApplies === 'wait';
+  const wait = appliesOf(house) === 'wait';
   const novel = store.peek('novel', novelId);
   const changed = ops.map((op) => changedSinceSnapshot(novelId, op, snapshot, { where: whereOf(novel, op, numbers), numbers }));
   /* changes across the book that touch each other are made together, in one

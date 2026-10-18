@@ -13,6 +13,7 @@ import { h, icon, toast, undoToast, openSheet, confirmIt, field, pickFile, downl
 import { picked, novelSteps } from '../novel/shape.js';
 import { bibItems, itemForms, nameForms, makeFinder, formKey, codexNow, ENTRY_KINDS, KIND_TITLE, RIDES, RIDES_WORDS, newEntry, tidyEntry, entriesOf, nameTaken, entriesFromLorebook, lorebookOf, recallOn } from '../novel/bibliography.js';
 import { bibAutoOn } from '../novel/context.js';
+import { superActive } from '../novel/auto.js';
 import { nowLabelOf } from '../novel/prompts.js';
 import { plural, nameKey, slug } from '../util.js';
 import * as archivist from '../novel/archivist.js';
@@ -133,7 +134,7 @@ function nameSection(novelId, novel, { it, card, cardKind }, { many, close, said
   const entry = it && it.entry;
   if (entry && entry.line) box.append(h('p.namecard-line', entry.line));
   if (entry && entry.text) box.append(h('div.namecard-text', ...paragraphs(entry.text)));
-  if (entry) box.append(h('p.namecard-note', entry.rides === 'always' ? 'Your entry — the writer always reads it.' : entry.rides === 'never' ? 'Your entry — only for you; the writer never reads it.' : `Your entry — the writer reads it when ${name} comes up${recallOn(novel) ? ', by name or because a page needs it' : ''}.`));
+  if (entry) box.append(h('p.namecard-note', entry.rides === 'always' ? 'Your entry — the writer always reads it.' : entry.rides === 'never' ? 'Your entry — only for you; the writer never reads it.' : `Your entry — the writer reads it with every page while there’s room, and first when ${name} comes up${recallOn(novel) ? ' or a page needs it' : ''}.`));
   /* where it stands now: the notes' own card (the notes are the story as it stands) */
   if (card) {
     const notes = h('div.namecard-notes', h('h4', 'In the notes'));
@@ -216,7 +217,7 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
   s.body.append(field('What it is', kindBox));
   s.body.append(field('In a line', lineBox));
   s.body.append(field('The entry', textBox, 'What it means — for you to read when you tap the name, and for the writer as background. People in the story still know only what they have lived.'));
-  s.body.append(field('The writer reads it', ridesBox, 'When it comes up: when its name is said near the page — or, with Smart recall on (in the Bibliography), when the page needs it without naming it — so the request stays small. Always for what every page needs; Never keeps it for you alone.'));
+  s.body.append(field('The writer reads it', ridesBox, 'When there’s room: with every page while the bibliography has room beside the book — when it hasn’t, first when its name is said near the page or, with Smart recall, when the page needs it. Always: with every page, before anything else. Never keeps it for you alone.'));
   const typed = () => Object.fromEntries(Object.keys(boxes).filter((k) => boxes[k].value !== opened[k]).map((k) => [k, boxes[k].value]));
   let done = false;
   const keepDraft = () => {
@@ -279,7 +280,7 @@ export function bibliographyPrint(novelId) {
   if (!novel) return '';
   const chapters = chaptersOf(novel);
   /* (not the words he filters by: the list under the box follows them by itself) */
-  return JSON.stringify([novel.bibliography || [], novel.notes || {}, (novel.prefs || {}).bibAuto || '', (novel.prefs || {}).bibRecall || '', lookOf().names || '', namesPrint(novel, chapters), archivist.bibDue ? archivist.bibDue(novelId).length : 0]);
+  return JSON.stringify([novel.bibliography || [], novel.notes || {}, (novel.prefs || {}).bibAuto || '', (novel.prefs || {}).bibRecall || '', superActive(), lookOf().names || '', namesPrint(novel, chapters), archivist.bibDue ? archivist.bibDue(novelId).length : 0]);
 }
 
 export function bibliographyView(novelId, { redraw = () => {} } = {}) {
@@ -293,14 +294,14 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
   const mine = items.filter((it) => it.entry).length;
   root.dataset.count = plural(items.length, 'name');
   root.append(h('div.lightcard.bibintro',
-    h('p.notekey', 'What each name in the book means — tap one to read it. ', auto ? 'The helper fills it from the pages as it reads them, each fact from the passage that says it; your own entries stand beside them. ' : 'The helper adds nothing to it just now — what it found stays with the passages that say it, and goes with them when they change; your own entries stand beside them. ', 'The notes say where everything stands now; the writer reads an entry here when its name comes up', recall ? ' — and, with Smart recall, when a page needs it though nothing there names it: before each page and each telling of a scene the helper brings those in, eight seconds at most.' : '.'),
-    h('label.toggle', h('input', { type: 'checkbox', checked: auto, onchange: (e) => {
+    h('p.notekey', 'What each name in the book means — tap one to read it. ', auto ? 'The helper fills it from the pages as it reads them, each fact from the passage that says it; your own entries stand beside them. ' : 'The helper adds nothing to it just now — what it found stays with the passages that say it, and goes with them when they change; your own entries stand beside them. ', 'The notes say where everything stands now. The whole bibliography goes to the writer with every page while there is room beside the book; when there isn’t, what this page needs goes first — the entries set to Always and those named in your words or near the page', recall ? ' and, with Smart recall, those the page needs though nothing there names them (the helper brings them in before each page and each telling of a scene, eight seconds at most)' : '', ' — then as much of the rest as fits.', superActive() ? ' Super automatic keeps both switches on.' : ''),
+    h('label.toggle', h('input', { type: 'checkbox', checked: auto, disabled: superActive(), onchange: (e) => {
       store.change('novel', novelId, novelSteps.setPref('bibAuto', e.target.checked ? '' : 'off'), { now: true });
       if (e.target.checked) { archivist.nudge(novelId); toast('The helper fills the bibliography from the book — pages read before are filled in a few at a time.'); }
       redraw();
     } }), h('span', 'Fill it from the book by itself')),
     /* Cozy Tavern's Smart recall (M510-50), for the bibliography (bibpick.js) */
-    h('label.toggle', h('input', { type: 'checkbox', checked: recall, onchange: (e) => {
+    h('label.toggle', h('input', { type: 'checkbox', checked: recall, disabled: superActive(), onchange: (e) => {
       store.change('novel', novelId, novelSteps.setPref('bibRecall', e.target.checked ? '' : 'off'), { now: true });
       redraw();
     } }), h('span', 'Smart recall')),

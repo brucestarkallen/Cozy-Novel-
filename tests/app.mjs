@@ -10445,7 +10445,7 @@ function bibBook() {
   return { novel, chapters: { [c1.id]: c1, [c2.id]: c2, [c3.id]: c3 }, c1, c2, c3 };
 }
 
-await test('the writer reads an entry only when its name comes up — or always, as he set it, never one kept for him — and the book’s facts only from chapters it is not reading word for word, never from after the point', () => {
+await test('the writer reads the whole bibliography while it fits — Always first, never one kept for him — and the book’s facts only from chapters it is not reading word for word, never from after the point', () => {
   const b = bibBook();
   const sent = (room, request, target = { chapterId: b.c3.id }, purpose = 'write') => {
     const a = context.assemble({ house: quietHouse(), novel: b.novel, chapters: b.chapters, conn: { ...CONN, context: room, maxTokens: 1000 }, purpose, ...(purpose === 'partner' ? { turns: [] } : {}), target, request });
@@ -10453,7 +10453,9 @@ await test('the writer reads an entry only when its name comes up — or always,
   };
   let { t } = sent(200000, 'They walk on.');
   assert.ok(t.includes('THE THIRTEEN SQUADS.'), 'always rides');
-  assert.ok(!t.includes('THE FINAL RELEASE'), 'not named: not sent');
+  /* (2.12.28: "what if it's only mentioned but it's important, and not sent?" — the room holds it: it goes) */
+  assert.ok(t.includes('THE FINAL RELEASE') && t.includes(prompts.BIB_LEAD_WHOLE), 'not named, and the room holds it: the whole bibliography goes, said so');
+  assert.ok(t.indexOf('THE THIRTEEN SQUADS.') < t.indexOf('THE FINAL RELEASE'), 'Always first');
   assert.ok(!t.includes('SPOILER WORDS'), 'his alone: never the writer’s');
   ({ t } = sent(200000, 'Rukia uses her bankai.'));
   assert.ok(t.includes('THE FINAL RELEASE'), 'named in his words, in small letters or with a capital: sent');
@@ -10479,6 +10481,22 @@ await test('the writer reads an entry only when its name comes up — or always,
   /* the partner: every entry of his by name and line, the one kept for him marked, and the ones named whole */
   const p = sent(200000, 'What about the Secret Ending?', { chapterId: b.c3.id }, 'partner');
   assert.ok(p.t.includes(prompts.BIB_INDEX) && p.t.includes('- Secret Ending [only for me — the writer never reads it]') && p.t.includes('SPOILER WORDS'), p.t.slice(p.t.indexOf(prompts.BIB_INDEX), p.t.indexOf(prompts.BIB_INDEX) + 400));
+});
+
+await test('past its share, the bibliography keeps his words’ names, then the nearest, then the rest that shares the most words with the moment — and says when all of it went', () => {
+  const long = 'WORD '.repeat(3000);
+  const novel = { bibliography: ['Ann', 'Bo', 'Cy', 'Dee'].map((n) => bib.tidyEntry(bib.newEntry({ name: n, kind: 'people', text: `${n.toUpperCase()}-ENTRY ${n === 'Bo' ? 'lantern harbour ' : ''}${long}` }))) };
+  const items = bib.bibItems(novel, {}, { facts: false });
+  const cost = (name) => util.estimateTokens(bib.itemWords(items.find((x) => x.name === name), { facts: [] })) + 4;
+  const args = { his: 'Cy lights the lantern.', near: 'Ann sat by the harbour.', rest: true };
+  let ride = bib.ridingItems(items, { ...args, budget: cost('Cy') + cost('Ann') + cost('Bo') + 2 });
+  assert.deepEqual(ride.items.map((x) => x.name), ['Cy', 'Ann', 'Bo'], 'his words, the nearest, then the one sharing “lantern” and “harbour” — Dee gives way');
+  assert.deepEqual([ride.whole, ride.rest, ride.left], [false, 1, 1]);
+  ride = bib.ridingItems(items, { ...args, budget: cost('Cy') + cost('Ann') + cost('Bo') + cost('Dee') + 4 });
+  assert.deepEqual([ride.items.map((x) => x.name), ride.whole, ride.left], [['Cy', 'Ann', 'Bo', 'Dee'], true, 0], 'all of it, said so');
+  /* without the rest (the checker, the partner): only what is named */
+  ride = bib.ridingItems(items, { his: args.his, near: args.near, budget: 1e9 });
+  assert.deepEqual(ride.items.map((x) => x.name), ['Cy', 'Ann']);
 });
 
 await test('an entry crowds out nothing: past its share of the room the farthest named entries give way, his words’ names first, the nearest next', () => {
@@ -11830,8 +11848,22 @@ const WORLD = '<changes>['
   + '{"entry": "The Tide Choir", "kind": "groups", "line": "Singers who calm the storms", "text": "CHOIR ENTRY: they sing from the lighthouse at the harbour mouth.", "why": "e"}'
   + ']</changes>\nThe world, in five entries.';
 const sentWords = (x) => x.body.messages.map((m) => String(m.content || '')).join('\n');
+/* A ROOM TOO SMALL FOR THE WHOLE BIBLIOGRAPHY (2.12.28): the share's least, 600 tokens — the always entry and his words'
+ * names fit, and of the two long entries nobody names only one: the one sharing words with the moment, "the city guard" */
+const SMALL_ROOM = [{ context: 4000, maxTokens: 500 }, CRAFTS_OFF];
+const LONG = (tag) => `${tag}: ` + 'grey cloaks and the old oaths of the port '.repeat(30);
+async function portBook({ always = true } = {}) {
+  const b = await makeBook([['The harbour bell rang twice.']], { title: 'Salt and Iron' });
+  for (const e of [
+    { name: 'The Weave', kind: 'lore', line: 'How magic works', rides: always ? 'always' : 'named', text: 'WEAVE ENTRY.' },
+    { name: 'Kael Varro', kind: 'people', line: 'A smuggler', text: 'KAEL ENTRY.' },
+    { name: 'The Iron Covenant', kind: 'groups', line: 'The order that rules the port', text: LONG('COVENANT ENTRY') + ' The city guard answers to it.' },
+    { name: 'The Tide Choir', kind: 'groups', line: 'Singers who calm the storms', text: LONG('CHOIR ENTRY') },
+  ]) store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry(e))), { now: true });
+  return b;
+}
 
-await test('before the opening the partner builds the world into the bibliography; the opening page takes the entries his words name, the one set always and the one the helper picks for what the page needs — never one nobody named or picked; another take of it asks nothing again', async () => {
+await test('before the opening the partner builds the world into the bibliography; the opening page takes the whole of it while it fits — no helper asked, no wait — said as the whole; another take the same', async () => {
   await setHouse();
   const b = await makeBook([[]], { title: 'Salt and Iron', brief: 'A port city ruled by an order of iron-sworn knights.' });
   await reset();
@@ -11842,79 +11874,98 @@ await test('before the opening the partner builds the world into the bibliograph
   assert.deepEqual(v.changes.map((c) => c.status), ['made', 'made', 'made', 'made', 'made'], JSON.stringify(v.changes.map((c) => c.said || '')));
   assert.deepEqual(bib.entriesOf(b.novel()).map((e) => [e.name, e.kind, e.rides]), [['The Iron Covenant', 'groups', 'named'], ['Kael Varro', 'people', 'named'], ['Saltmarket', 'places', 'named'], ['The Weave', 'lore', 'always'], ['The Tide Choir', 'groups', 'named']]);
   assert.equal((await pickAsks()).length, 0, 'the partner sees every entry: it never asks for a pick');
-  /* the opening: his words name Kael and the Saltmarket, the Weave rides always; the Covenant and the Choir are named nowhere */
+  /* the opening: his words name Kael and the Saltmarket, the Weave rides always — and the room holds all five */
   await reset();
-  await script([{ pick: true, text: '{"entries": [1]}' }, { text: 'The opening page.' }]);
+  await script([{ text: 'The opening page.' }]);
   const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro slips through the Saltmarket at dawn while the city guard searches the stalls.', length: 'scene' });
   assert.equal(out.ok, true, out.error);
-  const asks = await pickAsks();
-  assert.equal(asks.length, 1, 'one pick, before the page');
-  const ask = asks[0].body.messages.at(-1).content;
-  assert.ok(ask.includes('Kael Varro slips through the Saltmarket at dawn'), 'it reads his words for the page');
-  assert.ok(ask.includes('1. The Iron Covenant — group: The knightly order that rules the port') && ask.includes('2. The Tide Choir — group: Singers who calm the storms'), ask);
-  assert.ok(!/\d\. (Kael Varro|Saltmarket|The Weave)/.test(ask), 'named in his words, or always: never on the list');
-  assert.ok(/Entries the writer has with it already: .*Kael Varro/.test(ask) && /already: .*The Weave/.test(ask) && /already: .*Saltmarket/.test(ask), ask);
-  assert.ok(ask.includes('Nothing is written before it in this chapter yet.') && ask.includes('A port city ruled by an order of iron-sworn knights.'), 'the opening: no words before it, what the book is about');
-  const page = (await requests()).find((x) => sentWords(x).includes('The opening') || x.body.messages.at(-1).content.includes('Kael Varro slips'));
-  const sent = sentWords(page);
-  for (const w of ['COVENANT ENTRY', 'KAEL ENTRY', 'SALTMARKET ENTRY', 'WEAVE ENTRY']) assert.ok(sent.includes(w), w);
-  assert.ok(!sent.includes('CHOIR ENTRY'), 'neither named nor picked: not sent');
-  assert.ok(sent.includes(prompts.BIB_LEAD_PICKED) && !sent.includes(prompts.BIB_LEAD), 'said to be what is named here and what else it needs');
-  assert.ok(sent.indexOf('WEAVE ENTRY') < sent.indexOf('KAEL ENTRY') && sent.indexOf('KAEL ENTRY') < sent.indexOf('SALTMARKET ENTRY') && sent.indexOf('SALTMARKET ENTRY') < sent.indexOf('COVENANT ENTRY'), 'always, then his words’ names, then what the page needs');
+  assert.equal((await pickAsks()).length, 0, 'the whole bibliography goes: nothing to pick, nobody asked');
+  const sent = sentWords((await requests()).find((x) => x.body.messages.at(-1).content.includes('Kael Varro slips')));
+  for (const w of ['COVENANT ENTRY', 'KAEL ENTRY', 'SALTMARKET ENTRY', 'WEAVE ENTRY', 'CHOIR ENTRY']) assert.ok(sent.includes(w), w);
+  assert.ok(sent.includes(prompts.BIB_LEAD_WHOLE), 'said to be the whole of it');
+  assert.ok(sent.indexOf('WEAVE ENTRY') < sent.indexOf('KAEL ENTRY') && sent.indexOf('KAEL ENTRY') < sent.indexOf('SALTMARKET ENTRY') && sent.indexOf('SALTMARKET ENTRY') < sent.indexOf('COVENANT ENTRY'), 'always, then his words’ names, then the rest');
   assert.equal(picked(b.ch().passages[0]).text, 'The opening page.');
-  /* another take of the same page: the same moment — what it named the first time, and no call */
+  /* another take of the same page: the whole of it again, and no call */
   await reset();
   await script([{ text: 'Another opening.' }]);
   const again = await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id });
   assert.equal(again.ok, true, again.error);
-  assert.equal((await pickAsks()).length, 0, 'asked nothing again');
-  const take = (await requests()).find((x) => sentWords(x).includes('WEAVE ENTRY'));
-  assert.ok(take && sentWords(take).includes('COVENANT ENTRY') && !sentWords(take).includes('CHOIR ENTRY'), 'the take has what the page needs too');
+  assert.equal((await pickAsks()).length, 0);
+  assert.ok(sentWords((await requests()).find((x) => sentWords(x).includes('WEAVE ENTRY'))).includes('CHOIR ENTRY'));
   await setHouse();
   await putAway(b);
 });
 
-await test('a pick that fails or is slow leaves the page as it would have gone — with the names alone; a book with nothing to pick from asks nothing at all', async () => {
+await test('a bibliography bigger than its share: Always and his words’ names first, then what the helper picks for the page, then the rest as there is room — the helper asked only of the entries that would be left out; another take asks nothing again', async () => {
+  await setHouse(...SMALL_ROOM);
+  const b = await portBook();
+  await reset();
+  await script([{ pick: true, text: '{"entries": [1]}' }, { text: 'A page.' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro runs for the boats while the city guard searches the stalls.', length: 'scene' });
+  assert.equal(out.ok, true, out.error);
+  const asks = await pickAsks();
+  assert.equal(asks.length, 1, 'one pick, before the page');
+  const ask = asks[0].body.messages.at(-1).content;
+  assert.ok(ask.includes('Kael Varro runs for the boats'), 'it reads his words for the page');
+  assert.ok(ask.includes('1. The Tide Choir — group: Singers who calm the storms') && !/\d\. (The Iron Covenant|Kael Varro|The Weave)/.test(ask), 'only the one the page would go without: the Covenant goes as the rest, sharing “the city guard”');
+  assert.ok(/Entries the writer has with it already: .*Kael Varro/.test(ask) && /already: .*The Iron Covenant/.test(ask), ask);
+  const sent = sentWords((await requests()).at(-1));
+  assert.ok(sent.includes('WEAVE ENTRY') && sent.includes('KAEL ENTRY') && sent.includes('CHOIR ENTRY'), 'Always, his words’ names, what the page needs');
+  assert.ok(!sent.includes('COVENANT ENTRY'), 'what the helper picked goes before the rest: the rest gives way');
+  assert.ok(sent.includes(prompts.BIB_LEAD_PICKED), 'said as named here and what else this part needs');
+  assert.ok(sent.indexOf('KAEL ENTRY') < sent.indexOf('CHOIR ENTRY'));
+  /* another take: the same moment — what it named, no second call */
+  await reset();
+  await script([{ text: 'Another page.' }]);
+  await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages.at(-1).id });
+  assert.equal((await pickAsks()).length, 0, 'asked nothing again');
+  assert.ok(sentWords((await requests()).at(-1)).includes('CHOIR ENTRY'));
   await setHouse();
-  const b = await makeBook([['The harbour bell rang twice.']], { title: 'Salt and Iron' });
-  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'The Iron Covenant', kind: 'groups', line: 'The order that rules the port', text: 'COVENANT ENTRY.' }))), { now: true });
-  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'Kael Varro', kind: 'people', line: 'A smuggler', text: 'KAEL ENTRY.' }))), { now: true });
+  await putAway(b);
+});
+
+await test('a pick that fails, answers nothing it can read or is slow leaves the page as it would have gone; nothing left out, or no bibliography, and nothing is asked at all', async () => {
+  await setHouse(...SMALL_ROOM);
+  const b = await portBook();
   /* refused */
   await reset();
   await script([{ pick: true, status: 500, message: 'down' }, { text: 'A page.' }]);
-  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro runs for the boats.', length: 'scene' });
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro runs for the boats while the city guard searches the stalls.', length: 'scene' });
   assert.equal(out.ok, true, out.error);
   assert.equal((await pickAsks()).length, 1, 'it was asked');
   let sent = sentWords((await requests()).at(-1));
-  assert.ok(sent.includes('KAEL ENTRY') && !sent.includes('COVENANT ENTRY') && sent.includes(prompts.BIB_LEAD) && !sent.includes(prompts.BIB_LEAD_PICKED), 'the names alone, said as named here');
+  assert.ok(sent.includes('KAEL ENTRY') && sent.includes('COVENANT ENTRY') && !sent.includes('CHOIR ENTRY'), 'as it would go without it: the rest by its shared words');
+  assert.ok(!sent.includes(prompts.BIB_LEAD_PICKED) && !sent.includes(prompts.BIB_LEAD_WHOLE), 'never said to be what the page needs, nor the whole');
   assert.equal(picked(b.ch().passages.at(-1)).text, 'A page.');
-  /* an answer it cannot read, or a number not on the list: nothing */
+  /* an answer it cannot read: nothing */
   await reset();
-  await script([{ pick: true, text: 'The order, I think.' }, { text: 'Another page.' }]);
-  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro hides under the pier.', length: 'scene' });
+  await script([{ pick: true, text: 'The singers, I think.' }, { text: 'Another page.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro hides under the pier while the city guard searches.', length: 'scene' });
   sent = sentWords((await requests()).at(-1));
-  assert.ok(!sent.includes('COVENANT ENTRY') && sent.includes('KAEL ENTRY'), 'unreadable: none');
+  assert.ok(!sent.includes('CHOIR ENTRY') && sent.includes('KAEL ENTRY'), 'unreadable: none');
   /* an answer written only in its thinking is read from there */
   await reset();
-  /* (the list is in the bibliography's order: 1. Kael Varro, 2. The Iron Covenant) */
-  await script([{ pick: true, think: 'The page needs the order: {"entries": [2]}', text: 'Done.' }]);
-  const thought = await bibpick.pickEntries({ conn: CONN, house: store.peek('house', 'house'), novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'x', moment: 'Grey cloaks fill the square.' });
-  assert.deepEqual(thought.refs, [bib.entriesOf(b.novel()).find((e) => e.name === 'The Iron Covenant')].map((e) => `e:${e.id}`), JSON.stringify(thought));
+  await script([{ pick: true, think: 'The page needs the singers: {"entries": [1]}', text: 'Done.' }]);
+  const house = store.peek('house', 'house');
+  const conn = house.connections[0];
+  const thought = await bibpick.pickEntries({ conn, house, novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'x', moment: 'Grey cloaks fill the square while the city guard watches.',
+    dry: () => context.assemble({ house, novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'x', moment: 'Grey cloaks fill the square while the city guard watches.' }).stats });
+  assert.deepEqual(thought.refs, [bib.entriesOf(b.novel()).find((e) => e.name === 'The Tide Choir')].map((e) => `e:${e.id}`), JSON.stringify(thought));
   /* slow: it waits as long as it is given, then the page goes without it */
   await reset();
   await script([{ pick: true, hang_after: '{"entries": [' }]);
   const t0 = Date.now();
-  const { novel, chapters } = { novel: b.novel(), chapters: { [b.ids[0]]: b.ch() } };
-  const slow = await bibpick.pickEntries({ conn: CONN, house: store.peek('house', 'house'), novel, chapters, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'x', moment: 'The bell rings a third time.', timeoutMs: 400 });
+  const slow = await bibpick.pickEntries({ conn, house, novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'x', moment: 'The bell rings a third time.', timeoutMs: 400 });
   assert.deepEqual(slow.refs, []);
   assert.ok(Date.now() - t0 < 4000, `it waited ${Date.now() - t0} ms`);
-  /* nothing to pick from: both named here — no call */
+  /* a room that holds them all: nothing left out, nothing asked */
+  await setHouse();
   await reset();
-  await script([{ text: 'Both named.' }]);
+  await script([{ text: 'Room for all.' }]);
   await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro bows to the Iron Covenant.', length: 'scene' });
-  assert.equal((await pickAsks()).length, 0, 'every entry rides by its name: nothing asked');
+  assert.equal((await pickAsks()).length, 0, 'the whole of it goes: nothing asked');
   sent = sentWords((await requests()).at(-1));
-  assert.ok(sent.includes('COVENANT ENTRY') && sent.includes('KAEL ENTRY'), '“The Iron Covenant” is found as “the Iron Covenant” in the middle of a sentence');
+  assert.ok(sent.includes('COVENANT ENTRY') && sent.includes('CHOIR ENTRY') && sent.includes(prompts.BIB_LEAD_WHOLE));
   /* nor in a book with no bibliography */
   const plain = await makeBook([['A quiet morning.']]);
   await reset();
@@ -11922,17 +11973,15 @@ await test('a pick that fails or is slow leaves the page as it would have gone �
   await writer.writeNext({ novelId: plain.novelId, chapterId: plain.ids[0], direction: 'She makes tea.', length: 'scene' });
   assert.equal((await pickAsks()).length, 0, 'no bibliography: nothing asked');
   await putAway(plain);
-  await setHouse();
   await putAway(b);
 });
 
 await test('Stop while the helper picks: the page stops right there — never asked, nothing left behind — and the next page goes', async () => {
-  await setHouse();
-  const b = await makeBook([['The harbour bell rang twice.']], { title: 'Salt and Iron' });
-  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'The Iron Covenant', kind: 'groups', line: 'The order that rules the port', text: 'COVENANT ENTRY.' }))), { now: true });
+  await setHouse(...SMALL_ROOM);
+  const b = await portBook();
   await reset();
   await script([{ pick: true, hang_after: '{"entries": [' }, { text: 'NEVER WRITTEN.' }]);
-  const run = writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael runs for the boats.', length: 'scene' });
+  const run = writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro runs for the boats.', length: 'scene' });
   await sleep(700);
   assert.equal(writer.busy(b.novelId), true, 'the page is being written while the helper picks');
   const t0 = Date.now();
@@ -11941,22 +11990,20 @@ await test('Stop while the helper picks: the page stops right there — never as
   assert.ok(Date.now() - t0 < 2000, `stopped in ${Date.now() - t0} ms`);
   assert.equal(out.ok, false);
   assert.equal(writer.busy(b.novelId), false);
-  assert.equal((await requests()).filter((x) => sentWords(x).includes('Kael runs for the boats.')).length, 0, 'the page was never asked');
+  assert.equal((await requests()).filter((x) => sentWords(x).includes('Kael Varro runs for the boats.')).length, 0, 'the page was never asked');
   assert.deepEqual(b.ch().passages.map((p) => picked(p).text), ['The harbour bell rang twice.'], 'no empty passage left');
   await reset();
   await script([{ pick: true, text: '{"entries": []}' }, { text: 'The next page.' }]);
-  const next = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael runs for the boats.', length: 'scene' });
+  const next = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro runs for the boats.', length: 'scene' });
   assert.equal(next.ok, true, next.error);
   assert.equal(picked(b.ch().passages.at(-1)).text, 'The next page.');
   await setHouse();
   await putAway(b);
 });
 
-await test('Smart recall off for a book: no pick is asked, the page goes with the names alone, and the writer and the partner are told an entry rides only by its name', async () => {
-  await setHouse();
-  const b = await makeBook([['The harbour bell rang twice.']], { title: 'Salt and Iron' });
-  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'The Iron Covenant', kind: 'groups', line: 'The order that rules the port', text: 'COVENANT ENTRY.' }))), { now: true });
-  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'Kael Varro', kind: 'people', line: 'A smuggler', text: 'KAEL ENTRY.' }))), { now: true });
+await test('Smart recall off for a book: no pick is asked, the page goes with what fits, and the writer and the partner are told an entry rides by its name when the room is short', async () => {
+  await setHouse(...SMALL_ROOM);
+  const b = await portBook();
   store.change('novel', b.novelId, shape.novelSteps.setPref('bibRecall', 'off'), { now: true });
   assert.equal(bib.recallOn(b.novel()), false);
   await reset();
@@ -11964,40 +12011,37 @@ await test('Smart recall off for a book: no pick is asked, the page goes with th
   const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Kael Varro runs for the boats.', length: 'scene' });
   assert.equal(out.ok, true, out.error);
   assert.equal((await pickAsks()).length, 0, 'off: nothing asked');
-  const sent = sentWords((await requests()).at(-1));
-  assert.ok(sent.includes('KAEL ENTRY') && !sent.includes('COVENANT ENTRY') && sent.includes(prompts.BIB_LEAD));
+  await setHouse();
   await reset();
   await script([{ text: 'Talk.' }]);
   await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'What rules the port?' });
   const partner = sentWords((await requests()).at(-1));
-  assert.ok(partner.includes('The writer reads an entry only when its name comes up, unless I say always or never:') && !partner.includes('or a page needs it'), 'told as it is: by name only');
+  assert.ok(partner.includes('The writer reads an entry with every page while there’s room beside the book — and when there isn’t, first when its name comes up, unless I say always or never:') && !partner.includes('or a page needs it'), 'told as it is: by name when the room is short');
   /* on again: the partner is told a page's needs bring entries in too */
   store.change('novel', b.novelId, shape.novelSteps.setPref('bibRecall', ''), { now: true });
   await reset();
   await script([{ text: 'Talk again.' }]);
   await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'And now?' });
   const again = sentWords((await requests()).at(-1));
-  assert.ok(again.includes(prompts.BIB_INDEX) && again.includes('The writer reads an entry when its name comes up or a page needs it, and writes from it'), 'on: said so');
-  await setHouse();
+  assert.ok(again.includes(prompts.BIB_INDEX) && again.includes('first when its name comes up or a page needs it, and writes from it'), 'on: said so');
   await putAway(b);
 });
 
 await test('a scene’s telling takes what it needs from the bibliography by what his move means — the pick reads his move', async () => {
-  await setHouse();
-  const b = await makeBook([['The harbour bell rang twice.']], { title: 'Salt and Iron' });
-  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'The Iron Covenant', kind: 'groups', line: 'The order that rules the port; its banner is grey', text: 'COVENANT ENTRY.' }))), { now: true });
+  await setHouse(...SMALL_ROOM);
+  const b = await portBook();
   const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Kael' });
   await reset();
   await script([{ pick: true, text: '{"entries": []}' }, { text: 'The stalls are quiet.' }, { pick: true, text: '{"entries": [1]}' }, { text: 'The guard turns, and sees the grey cloth.' }]);
   await talk.playSay({ playId, text: '' });
-  await talk.playSay({ playId, text: 'I raise the grey banner over the stalls.' });
+  await talk.playSay({ playId, text: 'I sing the old storm song over the stalls.' });
   const asks = await pickAsks();
   assert.equal(asks.length, 2, 'one pick before each telling');
-  assert.ok(asks[1].body.messages.at(-1).content.includes('My newest moves in it:') && asks[1].body.messages.at(-1).content.includes('I raise the grey banner over the stalls.'), asks[1].body.messages.at(-1).content);
+  assert.ok(asks[1].body.messages.at(-1).content.includes('My newest moves in it:') && asks[1].body.messages.at(-1).content.includes('I sing the old storm song over the stalls.'), asks[1].body.messages.at(-1).content);
   const tellings = (await requests()).filter((x) => sentWords(x).includes('Kael'));
-  assert.ok(!sentWords(tellings[0]).includes('COVENANT ENTRY'), 'the opening: nothing picked, nothing named');
-  assert.ok(sentWords(tellings.at(-1)).includes('COVENANT ENTRY'), 'his move: what it means brings the order in');
-  assert.deepEqual(store.peek('play', playId).turns.map((t) => picked(t).text), ['The stalls are quiet.', 'I raise the grey banner over the stalls.', 'The guard turns, and sees the grey cloth.']);
+  const picked1 = asks[1].body.messages.at(-1).content.match(/^1\. (.+?) —/m)[1];
+  assert.ok(sentWords(tellings.at(-1)).includes(picked1 === 'The Tide Choir' ? 'CHOIR ENTRY' : 'COVENANT ENTRY'), 'his move: what it means brings it in');
+  assert.deepEqual(store.peek('play', playId).turns.map((t) => picked(t).text), ['The stalls are quiet.', 'I sing the old storm song over the stalls.', 'The guard turns, and sees the grey cloth.']);
   await setHouse();
   await putAway(b);
 });
@@ -12034,6 +12078,262 @@ await test('what the helper names is read carefully — only numbers on its list
   /* the partner is never handed picks */
   const forPartner = bib.ridingItems(items, { his: 'Rukia waits.', near: '', picked: [items.find((it) => it.name === 'Zanpakuto').ref], budget: 100000, purpose: 'partner' });
   assert.ok(!forPartner.items.some((it) => it.name === 'Zanpakuto'));
+});
+
+heading('Super automatic, and the chapters by themselves (2.12.28)');
+const auto = await import(path.join(ROOT, 'js/novel/auto.js'));
+const SUPER = () => ({ superAuto: { on: true, from: Date.now() } });
+/* the page's own request: its last message (his request for the page) */
+const pageAsk = async () => String((await requests()).at(-1).body.messages.at(-1).content);
+
+await test('one switch reads before every book’s own: What it’s about and How it reads Automatic, the bibliography filled, Smart recall on, the checker checking where he said Nobody, the fixes going in from when it was switched on, the partner’s changes landing at once — off again, everything as he set it, nothing of his changed', async () => {
+  await setHouse({}, { roles: { writer: 'c-w', checker: 'off' }, partnerApplies: 'wait' });
+  const b = await makeBook([['The lamp was cold.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.setPref('bibAuto', 'off'), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.setPref('bibRecall', 'off'), { now: true });
+  const read = () => {
+    const n = b.novel();
+    const hs = store.peek('house', 'house');
+    return { about: prompts.autoOn(n, 'about'), style: prompts.autoOn(n, 'style'), kept: prompts.keptByHelper(n), fill: context.bibAutoOn(n), recall: bib.recallOn(n),
+      checker: (checker.checkerConn(hs) || {}).id || null, holds: (writer.holderOf(hs, 'checker') || {}).id || null, applies: auto.appliesOf(hs), fix: checker.autoOf(hs).fix, lift: checker.autoOf(hs).lift };
+  };
+  const off = { about: false, style: false, kept: [], fill: false, recall: false, checker: null, holds: null, applies: 'wait', fix: null, lift: null };
+  assert.deepEqual(read(), off);
+  const from = Date.now();
+  store.change('house', 'house', (x) => { x.superAuto = { on: true, from }; }, { now: true });
+  assert.deepEqual(read(), { about: true, style: true, kept: ['about', 'style'], fill: true, recall: true, checker: 'c-w', holds: 'c-w', applies: 'now', fix: from, lift: null });
+  /* his own switches stand as he set them underneath */
+  const n = b.novel();
+  const hs = store.peek('house', 'house');
+  assert.deepEqual([n.auto, n.prefs.bibAuto, n.prefs.bibRecall, hs.roles.checker, hs.partnerApplies, hs.autoFix], [{ about: false, style: false }, 'off', 'off', 'off', 'wait', undefined]);
+  /* his own fixes switch from earlier: the earlier of the two; a passage under his mark stays his own switch */
+  store.change('house', 'house', (x) => { x.autoFix = { on: true, from: from - 5000 }; }, { now: true });
+  assert.equal(checker.autoOf(store.peek('house', 'house')).fix, from - 5000);
+  store.change('house', 'house', (x) => { x.superAuto = { on: false }; delete x.autoFix; }, { now: true });
+  assert.deepEqual(read(), off, 'off: as he set it');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('Super automatic checking where he chose Nobody begins when it is switched on: a page written before waits to be asked for, a page after is checked by itself', async () => {
+  const long = Date.now() - 100000;
+  await setHouse({}, { roles: { writer: 'c-w', checker: 'off' }, checksFrom: long, judge: { on: false } });
+  const b = await makeBook([['An old page from before.']]);
+  await sleep(5);
+  const from = Date.now();
+  store.change('house', 'house', (x) => { x.superAuto = { on: true, from }; }, { now: true });
+  const hs = () => store.peek('house', 'house');
+  assert.equal(checker.checksFromOf(hs()), from, 'Nobody chosen: it begins with Super automatic');
+  await sleep(5);
+  await checker.runCheck(b.novelId);
+  const isCheck = (x) => String(x.body.messages.at(-1).content).includes('Check these passages from');
+  assert.equal((await requests()).filter(isCheck).length, 0, 'the page from before is not checked by itself');
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'A new page of mine.' });
+  await reset();
+  await checker.runCheck(b.novelId);
+  const asks = (await requests()).filter(isCheck);
+  assert.equal(asks.length, 1);
+  const ask = String(asks[0].body.messages.at(-1).content);
+  assert.ok(ask.includes('[1.2] A new page of mine.') && !ask.includes('[1.1]'), ask.slice(-400));
+  /* a checker of his own: its own start, as ever */
+  store.change('house', 'house', (x) => { x.roles.checker = 'c-w'; }, { now: true });
+  assert.equal(checker.checksFromOf(hs()), long);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('with Super automatic on, a sentence the checker has written again by itself runs to its end and goes in on the page — with neither switch on it is let go at once, nothing changed', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['She walked slowly to the door and waited.']]);
+  const p = b.ch().passages[0];
+  const text = picked(p).text;
+  const start = text.indexOf('slowly');
+  await script([{ text: 'quietly' }]);
+  const out = await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id, start, end: start + 'slowly'.length, note: 'Write it again without “slowly”.', auto: true, fix: true });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(picked(b.ch().passages[0]).text, 'She walked quietly to the door and waited.');
+  /* off: the house without Super automatic and without the checker's fixes switched on */
+  await setHouse();
+  await script([{ text: 'softly' }]);
+  const now = picked(b.ch().passages[0]).text;
+  const at = now.indexOf('quietly');
+  const out2 = await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id, start: at, end: at + 'quietly'.length, note: 'x', auto: true, fix: true });
+  assert.equal(out2.ok, false);
+  assert.equal(out2.yielded, true, JSON.stringify(out2));
+  assert.equal(picked(b.ch().passages[0]).text, 'She walked quietly to the door and waited.');
+  await putAway(b);
+});
+
+await test('Super automatic: the writer is asked to end the chapter where the story would; its END OF CHAPTER comes off the page, the page is kept as the one that ends it, and the next page goes in a new chapter — made once, found again while it is empty, and not once the chapter after it is written', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The lamp was cold.']]);
+  await script([{ text: 'She closed the door behind her.\n\nEND OF CHAPTER' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She leaves the lighthouse.', length: 'scene' });
+  assert.equal(out.ok, true, out.error);
+  const ask = await pageAsk();
+  assert.ok(ask.includes('If this part brings Chapter One to where it should end') && ask.includes(`put ${prompts.CHAPTER_ENDS} on a line of its own`), ask);
+  assert.ok(ask.includes(`nothing before or after it but ${prompts.CHAPTER_ENDS} where it ends the chapter`), 'the story-only line carries the one line it may');
+  const v = picked(b.ch().passages.at(-1));
+  assert.equal(v.text, 'She closed the door behind her.');
+  assert.equal(v.closes, true);
+  assert.equal(shape.chapterClosed(b.ch()), true);
+  assert.deepEqual(writer.closedGoesOn(b.novelId, b.ids[0]), { fresh: true, number: 2 });
+  const next = await writer.chapterAfterClose(b.novelId, b.ids[0]);
+  assert.ok(next && next !== b.ids[0]);
+  assert.deepEqual(b.novel().order, [b.ids[0], next]);
+  /* asked again while it is empty: the same one, nothing new made */
+  assert.equal(await writer.chapterAfterClose(b.novelId, b.ids[0]), next);
+  assert.deepEqual(writer.closedGoesOn(b.novelId, b.ids[0]), { chapterId: next, number: 2 });
+  assert.equal(b.novel().order.length, 2);
+  /* the page in the new chapter: its opening — no close asked of it */
+  await script([{ text: 'Morning on the cliffs.' }]);
+  const o2 = await writer.writeNext({ novelId: b.novelId, chapterId: next, direction: '', length: 'scene' });
+  assert.equal(o2.ok, true, o2.error);
+  assert.ok(!(await pageAsk()).includes(prompts.CHAPTER_ENDS), 'an opening page is never asked to end its chapter');
+  assert.equal(writer.closedGoesOn(b.novelId, b.ids[0]), null, 'the chapter after it is written: the next page goes where he is');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('nothing is asked about the chapter’s end with Super automatic off, between two passages, or on a chapter’s opening page; the rest of a chapter written whole ends it with nothing said', async () => {
+  await setHouse();
+  const b = await makeBook([['The lamp was cold.', 'The sea was grey.']]);
+  await script([{ text: 'A page.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  assert.ok(!(await pageAsk()).includes(prompts.CHAPTER_ENDS), 'off: not asked');
+  assert.equal(picked(b.ch().passages.at(-1)).closes, undefined);
+  await setHouse({}, SUPER());
+  await reset();
+  await script([{ text: 'Between them.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene', after: b.ch().passages[0].id });
+  assert.ok(!(await pageAsk()).includes(prompts.CHAPTER_ENDS), 'between two passages: not asked');
+  /* the rest of the chapter: written to its end — it ends it, with no line asked */
+  await reset();
+  await script([{ text: 'The rest of it.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'chapter' });
+  assert.ok(!(await pageAsk()).includes(prompts.CHAPTER_ENDS));
+  assert.equal(picked(b.ch().passages.at(-1)).closes, true);
+  /* an empty chapter's opening page, at a page's length: not asked; the whole of a chapter at once: it ends it */
+  const c = await makeBook([[]]);
+  await reset();
+  await script([{ text: 'The first page.' }]);
+  await writer.writeNext({ novelId: c.novelId, chapterId: c.ids[0], direction: '', length: 'scene' });
+  assert.ok(!(await pageAsk()).includes(prompts.CHAPTER_ENDS));
+  assert.equal(picked(c.ch().passages[0]).closes, undefined);
+  const d = await makeBook([[]]);
+  await reset();
+  await script([{ text: 'A whole chapter.' }]);
+  await writer.writeNext({ novelId: d.novelId, chapterId: d.ids[0], direction: '', length: 'chapter' });
+  assert.equal(picked(d.ch().passages[0]).closes, true);
+  await setHouse();
+  for (const x of [b, c, d]) await putAway(x);
+});
+
+await test('the end line is never the story: story written after it stays on the page and the chapter goes on; the writer’s tracking after it comes off and the chapter ends; a page cut short never ends one', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The lamp was cold.']]);
+  const more = 'Morning came over the hills and the town woke slowly to the sound of gulls. '.repeat(6).trim();
+  await script([{ text: `She closed the door.\n\nEND OF CHAPTER\n\n${more}` }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  let v = picked(b.ch().passages.at(-1));
+  assert.equal(v.text, `She closed the door.\n\n${more}`, 'every word of the story kept, the line off');
+  assert.equal(v.closes, undefined);
+  const story = 'She closed the door behind her and stood a long moment in the dark hallway, listening to the rain against the glass and the far bell of the harbour. Somewhere below, the keeper’s dog turned in its sleep, and the lamp at the top of the stairs went on burning.';
+  const pulse = '{PULSE}\n' + 'Mara: tired, worried, alone at the inn, thinking of the letter and of her brother far away. '.repeat(4).trim() + '\n{/PULSE}';
+  await reset();
+  await script([{ text: `${story}\n\nEND OF CHAPTER\n\n${pulse}` }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  v = picked(b.ch().passages.at(-1));
+  assert.equal(v.text, story);
+  assert.equal(v.closes, true, 'what followed the line was the writer’s tracking: it ended there');
+  await reset();
+  await script([{ text: 'She ran for the cliff path.\n\nEND OF CHAPTER', finish: 'length' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  v = picked(b.ch().passages.at(-1));
+  assert.equal(v.cut, true);
+  assert.equal(v.closes, undefined, 'cut short: it never ends the chapter');
+  assert.equal(shape.chapterClosed(b.ch()), false);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a rewrite of the page that ends a chapter ends it too; another take that does not end it lets the chapter go on', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The lamp was cold.', { text: 'She closed the door.', closes: true }]]);
+  assert.equal(shape.chapterClosed(b.ch()), true);
+  const pid = b.ch().passages[1].id;
+  await script([{ text: 'She shut the door.' }]);
+  const r = await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'Shorter.' });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(picked(b.ch().passages[1]).text, 'She shut the door.');
+  assert.equal(picked(b.ch().passages[1]).closes, true, 'rewritten: it still ends the chapter');
+  assert.equal(shape.chapterClosed(b.ch()), true);
+  /* another take of a page that ended it, which does not */
+  const c = await makeBook([['The lamp was cold.', { text: 'She closed the door.', closes: true }]]);
+  await reset();
+  await script([{ text: 'She left the door open and went on down.' }]);
+  const t = await writer.anotherTake({ novelId: c.novelId, chapterId: c.ids[0], passageId: c.ch().passages[1].id });
+  assert.equal(t.ok, true, t.error);
+  assert.ok((await pageAsk()).includes(prompts.CHAPTER_ENDS), 'another take of the last page may end it as the page could');
+  assert.equal(picked(c.ch().passages[1]).closes, undefined);
+  assert.equal(shape.chapterClosed(c.ch()), false, 'the take on show does not end it: the chapter goes on');
+  assert.equal(writer.closedGoesOn(c.novelId, c.ids[0]), null);
+  await setHouse();
+  for (const x of [b, c]) await putAway(x);
+});
+
+await test('a scene played where an ended chapter ends goes in as the next chapter’s opening, told so; a scene set before its end goes in where it was set', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The lamp was cold.', { text: 'She closed the door.', closes: true }]]);
+  const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+  await script([{ text: 'The narrator opens on the stair.' }]);
+  await talk.playSay({ playId, text: '' });
+  const p = store.peek('play', playId);
+  assert.equal(writer.setAtEnd(b.ch(), p), true);
+  const next = await writer.chapterAfterClose(b.novelId, b.ids[0]);
+  assert.ok(next);
+  await script([{ text: 'Prose of the stair.' }]);
+  const out = await writer.playToProse({ novelId: b.novelId, chapterId: next, play: p, transcript: talk.transcriptOf(p).text });
+  assert.equal(out.ok, true, out.error);
+  assert.deepEqual(store.peek('chapter', next).passages.map((x) => picked(x).text), ['Prose of the stair.']);
+  assert.equal(b.ch().passages.length, 2, 'the ended chapter keeps its end');
+  const ask = await pageAsk();
+  assert.ok(ask.includes('the opening of Chapter Two') && ask.includes('where the chapter before stops') && ask.includes('where the chapter before Chapter Two leaves off'), ask.slice(0, 600));
+  /* set before its end: in the middle of the chapter, never sent on */
+  const c = await makeBook([['One.', 'Two.', { text: 'Three.', closes: true }]]);
+  const id2 = await talk.newPlay({ novelId: c.novelId, chapterId: c.ids[0], who: 'Mara' });
+  store.change('play', id2, (d) => { d.after = c.ch().passages[0].id; }, { now: true });
+  assert.equal(writer.setAtEnd(c.ch(), store.peek('play', id2)), false);
+  await setHouse();
+  for (const x of [b, c]) await putAway(x);
+});
+
+await test('the bibliography past its share: what the page names, with the book’s facts of it, before any of the rest; then his other entries, then the book’s own names; all of it said only when all of it went', () => {
+  const novel = { bibliography: ['Ann', 'Bo'].map((n) => bib.tidyEntry(bib.newEntry({ name: n, kind: 'people', text: `${n.toUpperCase()}-ENTRY ` + 'word '.repeat(200) }))) };
+  const base = bib.bibItems(novel, {}, { facts: false });
+  const fact = (name, i) => ({ id: `f${name}${i}`, name, fact: `${name} FACT ${i}: ` + 'told '.repeat(20), label: 'Chapter One, passage 1', passageId: 'p1' });
+  const ann = { ...base.find((x) => x.name === 'Ann'), facts: [1, 2, 3, 4].map((i) => fact('Ann', i)) };
+  const bo = base.find((x) => x.name === 'Bo');
+  const cy = { ref: 'n:cy', name: 'Cy', aka: [], kind: 'people', rides: 'named', line: '', text: '', entry: null, card: null, facts: [1, 2].map((i) => fact('Cy', i)), kinds: {} };
+  const items = [ann, bo, cy];
+  const near = 'Ann waited by the door.';
+  const all = bib.ridingItems(items, { near, rest: true, budget: 1e9 });
+  assert.deepEqual(all.items.map((x) => x.name), ['Ann', 'Bo', 'Cy'], 'named, his other entry, the book’s own name');
+  assert.deepEqual([all.whole, all.allEntries, all.rest, all.left], [true, true, 2, 0]);
+  assert.ok(all.words[0].includes('Ann FACT 4'));
+  /* room for Ann with every fact of hers, and not for Bo: Bo gives way — never a fact of the one on the page */
+  const annFull = bib.ridingItems([ann], { near, budget: 1e9 }).cost;
+  const boOwn = bib.ridingItems([bo], { his: 'Bo', budget: 1e9 }).cost;
+  const tight = bib.ridingItems(items, { near, rest: true, budget: annFull + boOwn - 1 });
+  assert.deepEqual(tight.items.map((x) => x.name), ['Ann', 'Cy'], 'Bo gives way; the book’s two facts of Cy still fit beside');
+  assert.ok([1, 2, 3, 4].every((i) => tight.words[0].includes(`Ann FACT ${i}`)), 'every fact of the one on the page');
+  assert.deepEqual([tight.whole, tight.allEntries, tight.left], [false, false, 1]);
+  /* every entry of his went, the book’s own name did not: no pick is owed, but it is not the whole */
+  const mine = bib.ridingItems(items, { near, rest: true, budget: annFull + boOwn + 2 });
+  assert.deepEqual(mine.items.map((x) => x.name), ['Ann', 'Bo']);
+  assert.deepEqual([mine.whole, mine.allEntries], [false, true]);
+  /* without the rest (the checker, the partner): only what is named, whatever the room */
+  assert.deepEqual(bib.ridingItems(items, { near, budget: 1e9 }).items.map((x) => x.name), ['Ann']);
 });
 
 /* ------------------------------------------------------------ done */

@@ -27,6 +27,7 @@ import { numberWords, estimateTokens, cutWords } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
 import { tellerOf, toTeller } from './teller.js';
 import { PICK_MAX, recallOn } from './bibliography.js';
+import { superActive, appliesOf } from './auto.js';
 
 /* ------------------------------------------------- the starting words */
 /* What the boxes in Settings → Your instructions start with, and what
@@ -377,7 +378,8 @@ export function standingNotes(novel) {
 /* What it's about and how it reads: his own words, set by hand ("Manual"),
  * or — set to Automatic — his words (if he wrote any) and what the helper
  * keeps of the book as it stands. */
-export function autoOn(novel, key) { return !(novel.auto && novel.auto[key] === false); }
+/* (Super automatic keeps both, whatever the book says: auto.js) */
+export function autoOn(novel, key) { return superActive() || !(novel.auto && novel.auto[key] === false); }
 export function keptText(novel, key) {
   const k = novel.kept && novel.kept[key];
   return autoOn(novel, key) && k && String(k.text || '').trim() ? String(k.text).trim() : '';
@@ -530,15 +532,20 @@ export const BIB_LEAD = `Who and what is named here, from my bibliography of the
 export const BIB_FOR_A_READER = 'From the book’s bibliography — who and what these passages name, as the book set them down before them, and my own entries. Where the notes say how things stand now, the notes are right:';
 /* …and with the entries the page needs that no word here names (bibpick.js) among them */
 export const BIB_LEAD_PICKED = `Who and what is named here, and what else this part needs, from my bibliography of the book — background for the writing. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
-/* when the writer reads an entry set to ride when it comes up: by its name — and, with Smart recall on, when a page needs it */
-const READS_WHEN = (recall) => (recall ? 'when its name comes up or a page needs it' : 'when its name comes up');
-export const BIB_INDEX = `My bibliography of the book — every entry by its name and line. The writer reads an entry ${READS_WHEN(true)}, unless I say always or never:`;
-const bibIndexLead = (recall) => (recall ? BIB_INDEX : `My bibliography of the book — every entry by its name and line. The writer reads an entry only ${READS_WHEN(false)}, unless I say always or never:`);
+/* when the writer reads an entry (2.12.28): with every page while the bibliography has room beside the book — and when
+ * it hasn't, first by its name, and with Smart recall on, when a page needs it */
+const READS_WHEN = (recall) => `with every page while there’s room beside the book — and when there isn’t, first when its name comes up${recall ? ' or a page needs it' : ''}`;
+const bibIndexLead = (recall) => `My bibliography of the book — every entry by its name and line. The writer reads an entry ${READS_WHEN(recall)}, unless I say always or never:`;
+export const BIB_INDEX = bibIndexLead(true);
 export const BIB_NAMED = 'The entries named here, whole:';
-export function bibPart(rows, { index = '', indexLeft = 0, picked = false, recall = true } = {}) {
+/* …and the whole of it, or as much more of it as there is room for (2.12.28) */
+export const BIB_LEAD_WHOLE = `My bibliography of the book, whole — the world behind it, background for the writing: draw on what this part needs, and let nothing in it come onto the page only because it is written here. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
+const bibLeadMore = (picked) => `Who and what is named here${picked ? ', what else this part needs' : ''}, and as much more of my bibliography of the book as there is room for — background for the writing: draw on what this part needs, and let nothing in it come onto the page only because it is written here. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
+export function bibPart(rows, { index = '', indexLeft = 0, picked = false, recall = true, whole = false, rest = false } = {}) {
   const parts = [];
   if (index) parts.push(`${bibIndexLead(recall)}\n${index}${indexLeft ? `\n(and ${numberWords(indexLeft).toLowerCase()} more — ask for one by its name to read it)` : ''}`);
-  if (rows.length) parts.push(`${index ? BIB_NAMED : picked ? BIB_LEAD_PICKED : BIB_LEAD}\n\n${rows.join('\n\n')}`);
+  const lead = index ? BIB_NAMED : whole ? BIB_LEAD_WHOLE : rest ? bibLeadMore(picked) : picked ? BIB_LEAD_PICKED : BIB_LEAD;
+  if (rows.length) parts.push(`${lead}\n\n${rows.join('\n\n')}`);
   return parts.join('\n\n');
 }
 
@@ -658,7 +665,17 @@ const STORY_ONLY = 'Just the story itself — it goes straight onto the page aft
 const STORY_ONLY_FIRST = 'Just the story itself — it goes straight onto the page, so no chapter title, no notes, nothing before or after it.';
 const STORY_ONLY_BETWEEN = 'Just the story itself — it goes straight onto the page between the two, so no chapter title, no notes, nothing before or after it.';
 
-export function writeRequest({ chapterLabel, direction, length, empty, firstOfBook, between, outcome = 'writer' }) {
+/* SUPER AUTOMATIC — THE CHAPTERS BY THEMSELVES (auto.js): the writer ends a chapter where the story would end one,
+ * and says so on a line of its own after the last words (textshape.js chapterEnds) — the next page then goes on in
+ * the next chapter. close: {words} — how long the chapter runs so far — or null. */
+export const CHAPTER_ENDS = 'END OF CHAPTER';
+export function closeLine(chapterLabel, { words = 0 } = {}) {
+  return `If this part brings ${chapterLabel} to where it should end — what this chapter is for is done, or the story has come to the kind of turn a chapter closes on — end it right there, on that moment, and put ${CHAPTER_ENDS} on a line of its own after the last words; the next part then opens the next chapter. If it doesn't, end this part as you would and leave that line out.${words > 0 ? ` ${chapterLabel} runs to about ${(Math.round(words / 100) * 100 || words).toLocaleString('en-US')} words so far.` : ''}`;
+}
+/* (the story-only line, with the one line it may carry after the story) */
+const STORY_ONLY_CLOSING = `Just the story itself — it goes straight onto the page after the last line, so no chapter title, no notes, nothing before or after it but ${CHAPTER_ENDS} where it ends the chapter.`;
+
+export function writeRequest({ chapterLabel, direction, length, empty, firstOfBook, between, outcome = 'writer', close = null }) {
   const d = String(direction || '').trim();
   const lines = [];
   if (empty) {
@@ -675,7 +692,10 @@ export function writeRequest({ chapterLabel, direction, length, empty, firstOfBo
   /* between two passages, what follows settles it */
   if (!between) lines.push(outcomeWords(outcome, length, { chosen: !d }));
   lines.push(empty ? openingWords(length, { outcome }) : lengthWords(length, { between, outcome, chosen: !d }));
-  lines.push(empty ? STORY_ONLY_FIRST : between ? STORY_ONLY_BETWEEN : STORY_ONLY);
+  /* (the rest of the chapter is written to its end: nothing to say) */
+  const closing = Boolean(close) && !empty && !between && length !== 'chapter';
+  if (closing) lines.push(closeLine(chapterLabel, close));
+  lines.push(empty ? STORY_ONLY_FIRST : between ? STORY_ONLY_BETWEEN : closing ? STORY_ONLY_CLOSING : STORY_ONLY);
   return lines.join('\n\n');
 }
 
@@ -736,7 +756,7 @@ export function selectionRequest({ chapterLabel, note, marked }) {
  * action at its size, no words he did not write), so the craft's rules for the wording of a premise never take them */
 const hisLinesStand = (w) => `My lines are what ${w} actually said and did in the scene — not ideas for it, the way what I type for the next page is. So everything ${w} said is said on the page in ${w}’s own words, written as the book writes speech, with only the spelling and grammar mended; what I wrote as what ${w} meant to say (“I tell him to back off”) is told as said; and everything ${w} did is done, at the size I wrote it. Leave none of it out, and don’t give ${w} words I didn’t write. Where your telling already showed one of my lines, that’s one moment — write it once.`;
 
-export function goOnRequest({ chapterLabel, between = false, tail = '', direction = '', change = '', held = [], outcome = 'writer', transcript = '', who = '' }) {
+export function goOnRequest({ chapterLabel, between = false, tail = '', direction = '', change = '', held = [], outcome = 'writer', transcript = '', who = '', close = null }) {
   const d = String(direction || '').trim();
   const c = String(change || '').trim();
   const h = (held || []).map((x) => String(x || '').trim()).filter(Boolean);
@@ -749,19 +769,22 @@ export function goOnRequest({ chapterLabel, between = false, tail = '', directio
     d || c ? YOURS_ONLY : '',
     `Carry on from exactly where it stops. Start by repeating its last few words exactly as they are${tail ? '' : ' (from the start of its last sentence)'}, then keep going — I’ll trim the repeat and join the rest straight on, so don’t start over or retell anything.${between ? ' What comes after the passage is already written, so bring it to where that picks up.' : ''}`,
     between || !outcome ? '' : outcomeWords(outcome),
-    'Just the story itself — no notes, nothing before or after it.',
+    close && !between ? closeLine(chapterLabel, close) : '',
+    close && !between ? `Just the story itself — no notes, nothing before or after it but ${CHAPTER_ENDS} where it ends the chapter.` : 'Just the story itself — no notes, nothing before or after it.',
   ].filter(Boolean).join('\n\n');
 }
 
-export function playToProseRequest({ chapterLabel, who, transcript, length, between = false }) {
+export function playToProseRequest({ chapterLabel, who, transcript, length, between = false, opens = false }) {
   const w = String(who || '').trim() || 'my character';
-  /* between: the scene was set before passages written since, and goes in where it was set (Cozy Tavern M548) */
+  /* between: the scene was set before passages written since, and goes in where it was set (Cozy Tavern M548);
+   * opens: it is the first of a chapter after the chapters written (a new chapter, one the writer's last ended — 2.12.28) */
+  const open = !between && opens;
   return [
-    `We played a scene picking up ${between ? `at the point in ${chapterLabel} where it was set` : `where ${chapterLabel} leaves off`}: I took ${w}’s part, and you told everything else. Here’s how it went — my lines are the ones marked “${w}:”, yours are marked “Narrator:”.`,
+    `We played a scene picking up ${between ? `at the point in ${chapterLabel} where it was set` : open ? `where the chapter before ${chapterLabel} leaves off` : `where ${chapterLabel} leaves off`}: I took ${w}’s part, and you told everything else. Here’s how it went — my lines are the ones marked “${w}:”, yours are marked “Narrator:”.`,
     fence(transcript),
-    `Now write it into the book as ${between ? `the part of ${chapterLabel} that comes there` : `the next part of ${chapterLabel}`} — real prose in the book's own voice, not a transcript. Keep what happened and what was said; smooth it, give it room, let it read like the rest of the novel.${length === 'paragraphs' ? ' Keep it short.' : ''}`,
+    `Now write it into the book as ${between ? `the part of ${chapterLabel} that comes there` : open ? `the opening of ${chapterLabel}` : `the next part of ${chapterLabel}`} — real prose in the book's own voice, not a transcript. Keep what happened and what was said; smooth it, give it room, let it read like the rest of the novel.${length === 'paragraphs' ? ' Keep it short.' : ''}`,
     hisLinesStand(w),
-    `It has to read as one book with what comes before: its first lines carry straight on from ${between ? 'the passage before it' : `where ${chapterLabel} stops now`} — nothing told twice.${between ? ' What comes after it is already written, so bring it to where that picks up.' : ''} Tell it from the point of view and in the tense chosen for the book, whoever I played: if the book sees through someone else’s eyes, it stays behind theirs, and ${w}’s thoughts come only as the book would give them. Where the book stays behind one person’s eyes at a time, change whose only at a scene break (* * *), and make plain whose eyes we’re behind now; a book told from above everyone can move between minds on purpose, without the break.`,
+    `It has to read as one book with what comes before: its first lines carry straight on from ${between ? 'the passage before it' : open ? 'where the chapter before stops' : `where ${chapterLabel} stops now`} — nothing told twice.${between ? ' What comes after it is already written, so bring it to where that picks up.' : ''} Tell it from the point of view and in the tense chosen for the book, whoever I played: if the book sees through someone else’s eyes, it stays behind theirs, and ${w}’s thoughts come only as the book would give them. Where the book stays behind one person’s eyes at a time, change whose only at a scene break (* * *), and make plain whose eyes we’re behind now; a book told from above everyone can move between minds on purpose, without the break.`,
     between ? STORY_ONLY_BETWEEN : STORY_ONLY,
   ].join('\n\n');
 }
@@ -832,7 +855,7 @@ export function partnerFrame(house, novel, { notesAs = 'system', tools = true, n
     `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner. The book comes to you fresh with every message of mine, just as it reads right now — any change of yours that went in is already there, and I never paste pages to you. Where some of it is cut short or left out to save room, it says so right there, with how to read it. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. Keep what the pages actually say apart from what you’re guessing at or suggesting. ${tools ? 'Before a change that hangs on words you can’t see here, read those pages first; if you can’t, tell me what’s still uncertain.' : 'Go only by what’s here, and never claim to have read pages you haven’t.'} ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
     PROSE_GUIDE,
     /* Ideas reads nothing more and changes nothing: it is never told it could (Cozy Tavern's M241) */
-    tools ? partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now', recallOn(novel)) : '',
+    tools ? partnerChanges(appliesOf(house), recallOn(novel)) : '',
     notesAs === 'system' ? hereIs('partner') : '',
   ].filter(Boolean).join('\n\n');
 }

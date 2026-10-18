@@ -33,6 +33,7 @@ import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, nove
 import { changeInPlace } from './inplace.js';
 import { numberedText, shortOf, notesBehind, passagesAfter } from './context.js';
 import { bibItems, ridingItems } from './bibliography.js';
+import { superOn, superFrom, autoOf } from './auto.js';
 import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
 import { findIn } from './search.js';
@@ -63,7 +64,8 @@ export const CHECK_NAME = Object.fromEntries(JUDGE_CHECKS.map(([k, name]) => [k,
 
 export function checkerConn(house) {
   const roles = (house && house.roles) || {};
-  if (roles.checker === 'off') return null;
+  /* (Super automatic checks whatever he set here: auto.js) */
+  if (roles.checker === 'off' && !superOn(house)) return null;
   const own = roles.checker ? connById(house, roles.checker) : null;
   return own || connFor(house, 'helper');
 }
@@ -111,6 +113,17 @@ export function entryFor(chapter, p) {
 /* checked, but with no grade on the ten checks (never one it would not give: graded false) */
 const needsGrade = (e) => Boolean(e) && !e.aside && e.graded !== false && !(e.grade && Number.isFinite(e.grade.overall) && e.grade.of);
 
+/* WHEN CHECKING BEGAN HERE: Settings' own start (set when the house was made, and again when he chooses a checker
+ * after Nobody: settings.js) — or, with Nobody chosen and Super automatic checking for him, when Super automatic was
+ * switched on: writing from before it began waits, as ever, to be asked for (`checkAll`), never all checked at once */
+export function checksFromOf(house) {
+  const from = house && house.checksFrom;
+  const roles = (house && house.roles) || {};
+  const all = roles.checker === 'off' ? superFrom(house) : null;
+  if (all === null) return from;
+  return Number.isFinite(from) ? Math.max(from, all) : all;
+}
+
 function wanted(house, chapter, p) {
   if (p.by === 'break') return false;
   const v = picked(p);
@@ -128,7 +141,7 @@ function wanted(house, chapter, p) {
   /* by itself, only a finished page: one cut short or stopped waits for its Go on (Cozy Tavern M552) */
   if (v.cut) return false;
   if (howOf(v) === 'imported') return false;
-  const from = house && house.checksFrom;
+  const from = checksFromOf(house);
   return Number.isFinite(from) && bornOf(v) >= from;
 }
 
@@ -238,7 +251,7 @@ export function unchecked(novelId, chapterId = null) {
 }
 /* a new page that stopped partway: checked once Go on finishes it — never "older writing" (S11-G11) */
 function waitsForGoOn(house, v) {
-  const from = house && house.checksFrom;
+  const from = checksFromOf(house);
   return Boolean(v && v.cut) && howOf(v) !== 'imported' && Number.isFinite(from) && bornOf(v) >= from;
 }
 function cutWaiting(novelId) {
@@ -1561,11 +1574,9 @@ export function checkBook(novelId) {
 
 /* What he switched on to happen by itself (Settings → Who does what), each
  * from when he switched it on: passages written before are never changed by
- * themselves. null when off. */
-export function autoOf(house) {
-  const on = (x) => (x && x.on && Number.isFinite(x.from) ? x.from : null);
-  return { fix: on(house && house.autoFix), lift: on(house && house.autoLift) };
-}
+ * themselves. null when off. (auto.js autoOf: his two switches, and Super
+ * automatic for the fixes) */
+export { autoOf };
 /* what happens by itself happens to his own words too, once he switches it on (his word, 15 October:
  * "automatically change my word — my own writing is ok too"): a passage under his mark is written again
  * whoever wrote it — the writer, his partner, or he himself — twice at most; every version stays one
