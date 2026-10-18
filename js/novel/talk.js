@@ -30,6 +30,7 @@ import { listModules } from './modules.js';
 import { nameKey } from '../util.js';
 import * as archivist from './archivist.js';
 import { convSteps, conversationsOf, freeName, openName, cleanConvName, markedName } from './conversations.js';
+import { tellerOf, toTeller } from './teller.js';
 import { scenePlan } from './stretches.js';
 import { entriesOf, entryNamed, entryWords, KIND_TITLE } from './bibliography.js';
 
@@ -299,13 +300,15 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     let k = 0;
     const messages = [];
     let tokens = f.tokens;
+    /* what the app asks again in his turn is said to the teller by its name (teller.js) — a chapter sent back opens on the chapter */
+    const teller = tellerOf(store.peek('house', 'house') || {}, kind === 'play' ? 'play' : 'partner').name;
     for (const x of rounds) {
       if (x.rows) {
         const rows = f.rows.slice(k, k + x.rows.length);
         k += x.rows.length;
         messages.push({ role: 'assistant', content: x.said }, { role: 'user', content: readBack(rows, { cut: f.cut, notSent: x.notSent || [] }) + (x.last ? `\n\n${READ_LAST}` : '') });
       } else {
-        messages.push({ role: 'assistant', content: x.said }, { role: 'user', content: x.ask });
+        messages.push({ role: 'assistant', content: x.said }, { role: 'user', content: toTeller(x.ask, teller) });
         tokens += estimateTokens(x.said) + estimateTokens(x.ask);
       }
     }
@@ -415,7 +418,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           shortCards = new Set((a.stats.shortCards || []).filter((x) => !cardsRead.has(x)));
           leftOut = a.stats.omitted || 0;
           openLeft = a.stats.openLeft || [];
-          return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: replyRoom(c, kind, length), refuse: a.refuse, least };
+          return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: replyRoom(c, kind, length), refuse: a.refuse, least, seed: a.seed };
         },
         stream: true,
         signal: ctl.signal,
@@ -1188,7 +1191,7 @@ export async function nextIdeas({ novelId, chapterId, count = 4, signal = null, 
     build: (c) => {
       const { novel, chapters } = bookNow(novelId);
       const a = assemble({ house, novel, chapters, conn: c, purpose: 'partner', target: { chapterId }, turns: [], request: ideasRequest(count, { not }), tools: false });
-      return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, 'scene') : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least };
+      return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, 'scene') : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least, seed: a.seed };
     },
     stream: true,
     signal,

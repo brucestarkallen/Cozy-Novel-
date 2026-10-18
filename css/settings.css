@@ -70,3 +70,13 @@
 .colour-save .btn { flex: none; }
 .reading-colours .fieldrow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .reading-colours .fieldrow .field { min-width: 0; }
+
+/* Who is telling, beside each box (teller.js): folded, what is set said on its line */
+.settings-sheet .tellerbox { margin: -4px 0 22px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--chrome-ink) 2%, transparent); }
+.settings-sheet .tellerbox > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 12px 0; cursor: pointer; font: 600 13px/1.4 var(--ui); color: var(--chrome-ink); }
+.settings-sheet .tellerbox > summary .tellerline { font-weight: 400; color: var(--chrome-soft); }
+.settings-sheet .tellerbox[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.settings-sheet .tellerbox > em { display: block; margin: -6px 0 14px; font-size: 12px; line-height: 1.6; color: var(--chrome-soft); }
+.settings-sheet .voicefound { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.6; color: var(--chrome-soft); }
+.settings-sheet .voicefound li { margin: 0 0 6px; overflow-wrap: anywhere; }
+.settings-sheet .voicecheck { white-space: normal; text-align: left; height: auto; max-width: 100%; }

@@ -4,8 +4,9 @@
  * Settings → Your instructions → Presets. "Save current preset" keeps,
  * together, everything that makes the writer who it is: How you like it
  * written, How the narrator tells scenes, How the partner talks, both notes
- * at the end, Words to avoid, your name, and your words in the storyteller's
- * own voice. Using one writes every one of
+ * at the end, Words to avoid, your name, your words in the storyteller's
+ * own voice, and who is telling each — its name, its grounding phrase, how
+ * it thinks, whether it is said again at the end (teller.js). Using one writes every one of
  * them back exactly — a box it kept empty is emptied. The switches (whether
  * each note at the end is sent) and the modules are not a voice: they stay as
  * they are, as in Cozy Tavern. A name already used is that preset, saved
@@ -18,6 +19,7 @@
 
 import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, startingNow } from './prompts.js';
 import { cleanOwn } from './ownwords.js';
+import { cleanTellers } from './teller.js';
 
 /* the boxes a preset holds, by their keys in house.instructions */
 export const VOICE_BOXES = ['system', 'narrator', 'partner', 'late', 'lateNarrator', 'avoid'];
@@ -37,20 +39,22 @@ export function voiceOf(house) {
     else boxes[k] = STARTING[k];
   }
   /* and his words in the storyteller's own voice, as in Cozy Tavern's voices (2.6.4) */
-  return { boxes, name: String((house && house.you && house.you.name) || ''), own: cleanOwn(house && house.ownWords) };
+  return { boxes, name: String((house && house.you && house.you.name) || ''), own: cleanOwn(house && house.ownWords), tellers: cleanTellers(house && house.tellers) };
 }
 /* (a preset saved before 2.6.4 holds none: it leaves his own-voice words as they are) */
 const sameOwn = (a, b) => !Array.isArray(a) || !Array.isArray(b) || JSON.stringify(cleanOwn(a)) === JSON.stringify(cleanOwn(b));
+/* (and one saved before 2.12.22 holds no tellers: it leaves them as they are) */
+const sameTellers = (a, b) => !a || !b || JSON.stringify(cleanTellers(a)) === JSON.stringify(cleanTellers(b));
 
 /* two voices alike, box for box */
 export function sameVoice(a, b) {
   if (!a || !b) return false;
-  return VOICE_BOXES.every((k) => String((a.boxes || {})[k] ?? '') === String((b.boxes || {})[k] ?? '')) && String(a.name || '') === String(b.name || '') && sameOwn(a.own, b.own);
+  return VOICE_BOXES.every((k) => String((a.boxes || {})[k] ?? '') === String((b.boxes || {})[k] ?? '')) && String(a.name || '') === String(b.name || '') && sameOwn(a.own, b.own) && sameTellers(a.tellers, b.tellers);
 }
 
 /* the app's own voice: every box with its starting words */
 export function startingVoice(name = '') {
-  return { boxes: { ...STARTING }, name, own: [] };
+  return { boxes: { ...STARTING }, name, own: [], tellers: {} };
 }
 
 /* A voice read from a file or the house: only what a preset holds, each in
@@ -65,7 +69,7 @@ export function cleanVoice(v) {
   let any = false;
   for (const k of VOICE_BOXES) { if (typeof src[k] === 'string') { boxes[k] = startingNow(k, src[k]); any = true; } else boxes[k] = ''; }
   if (!any) return null;
-  return { boxes, name: typeof v.name === 'string' ? v.name.trim().slice(0, 60) : '', ...(Array.isArray(v.own) ? { own: cleanOwn(v.own) } : {}) };
+  return { boxes, name: typeof v.name === 'string' ? v.name.trim().slice(0, 60) : '', ...(Array.isArray(v.own) ? { own: cleanOwn(v.own) } : {}), ...(v.tellers && typeof v.tellers === 'object' ? { tellers: cleanTellers(v.tellers) } : {}) };
 }
 
 /* the presets, newest saved first */
@@ -93,6 +97,8 @@ export function voiceLine(voice) {
   const first = v.boxes.system.trim().split('\n')[0];
   bits.push(v.boxes.system === DEFAULT_WRITING ? 'the starting writing words' : first ? `“${first.length > 60 ? first.slice(0, 60).replace(/\s+\S*$/, '') + '…' : first}”` : 'no writing words');
   if (v.name) bits.push(`your name: ${v.name}`);
+  const telling = v.tellers ? [...new Set(['write', 'play', 'partner'].map((k) => (v.tellers[k] || {}).name).filter(Boolean))] : [];
+  if (telling.length) bits.push(`${telling.join(' and ')} telling`);
   if (v.boxes.late.trim() || v.boxes.lateNarrator.trim()) bits.push('notes at the end');
   if (v.boxes.avoid.trim()) bits.push('words to avoid');
   if (Array.isArray(v.own) && v.own.some((w) => w.on && w.text.trim())) bits.push('words in the storyteller’s own voice');
@@ -129,6 +135,7 @@ export const presetSteps = {
     for (const k of VOICE_BOXES) house.instructions[k] = v.boxes[k];
     house.you = { ...(house.you || {}), name: v.name };
     if (Array.isArray(v.own)) house.ownWords = JSON.parse(JSON.stringify(v.own));
+    if (v.tellers) house.tellers = JSON.parse(JSON.stringify(v.tellers));
     if (id) house.presetOn = id; else delete house.presetOn;
   },
 };

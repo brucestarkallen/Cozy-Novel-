@@ -382,7 +382,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
         const { novel, chapters } = bookNow(novelId);
         const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '' });
         told = a.stats;
-        return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least };
+        return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least, seed: a.seed };
       },
       stream: true,
       signal: ctl.signal,

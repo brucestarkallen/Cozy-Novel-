@@ -540,7 +540,7 @@ export async function ask(conn, opts = {}) {
   /* what the model is, asked of its provider the first time (a moment at most) */
   await learnIdentityWithin(conn);
   /* asked without his page's started reply (the partner, Ideas, Go on): never given one (Tavern M328, M585) */
-  let flags = { noPrefill: Boolean(opts.noPrefill), noUsage: false, maxCap: 0, noStructured: Boolean(opts.noStructured) };
+  let flags = { noPrefill: Boolean(opts.noPrefill), noSeed: false, noUsage: false, maxCap: 0, noStructured: Boolean(opts.noStructured) };
   let lessons = 0;
   let keyMended = false;
   let madeWay = false;
@@ -557,7 +557,7 @@ export async function ask(conn, opts = {}) {
     /* a request the builder knows cannot fit this model (its room, as a
      * lesson may just have taught it) is never sent: the builder's reason is */
     if (shape && shape.refuse) return { ok: false, text: '', thinking: '', notes, error: shape.refuse, status: lastStatus || 0, permanent: true };
-    const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined, noStructured: flags.noStructured, noSearch: Boolean(opts.noSearch) });
+    const req = buildRequest(conn, { ...shape, stream, worker: Boolean(opts.worker), noPrefill: flags.noPrefill, noSeed: flags.noSeed, noUsage: flags.noUsage, maxCap: flags.maxCap || undefined, noStructured: flags.noStructured, noSearch: Boolean(opts.noSearch) });
     if (req.prefill && req.prefill.note && !notes.includes(req.prefill.note)) notes.push(req.prefill.note);
     /* (said once: after the refusal's own lesson, the same is not said again) */
     if (req.voiceNote && !notes.some((n) => n.includes('storyteller’s own voice'))) notes.push(req.voiceNote);
@@ -709,14 +709,16 @@ export async function ask(conn, opts = {}) {
          * address without the prefill; only a no that names the prefix is
          * remembered, and only against the prefill. */
         const betaBase = req.prefill && req.prefill.applied && prefillProfile(conn) === 'deepseek' ? deepseekBetaBase(conn.url) : '';
-        if (betaBase && String(req.url).startsWith(betaBase) && !flags.noPrefill && (fourHundred || lastStatus === 404)) {
+        /* (the start that went may be only his grounding phrase, the first words of the thinking — teller.js) */
+        const seedOnly = Boolean(req.prefill && req.prefill.grounding);
+        if (betaBase && String(req.url).startsWith(betaBase) && !(seedOnly ? flags.noSeed : flags.noPrefill) && (fourHundred || lastStatus === 404)) {
           if (fourHundred && PREFILL_REFUSAL.test(lastError)) {
             learn(conn, { prefillDownAt: Date.now() });
-            notes.push('This model would not continue a started reply, so it was sent without the prefill — and it is not offered one from now on.');
+            notes.push(seedOnly ? 'This model would not continue a started thought, so it was sent without your grounding phrase in its thinking — and it is not offered one from now on.' : 'This model would not continue a started reply, so it was sent without the prefill — and it is not offered one from now on.');
           } else {
-            notes.push(`DeepSeek’s beta address would not take this request (${lastStatus}), so it went to the ordinary address without the prefill this once.`);
+            notes.push(`DeepSeek’s beta address would not take this request (${lastStatus}), so it went to the ordinary address without ${seedOnly ? 'your grounding phrase in its thinking' : 'the prefill'} this once.`);
           }
-          flags = { ...flags, noPrefill: true };
+          flags = seedOnly ? { ...flags, noSeed: true } : { ...flags, noPrefill: true, noSeed: true };
           lessons++;
           continue;
         }
@@ -840,10 +842,10 @@ export async function ask(conn, opts = {}) {
           lessons++;
           continue;
         }
-        if (req.prefill && req.prefill.applied && PREFILL_REFUSAL.test(lastError) && !flags.noPrefill) {
+        if (req.prefill && req.prefill.applied && PREFILL_REFUSAL.test(lastError) && !(req.prefill.grounding ? flags.noSeed : flags.noPrefill)) {
           learn(conn, { prefillDownAt: Date.now() });
-          notes.push('This model would not continue a started reply, so it was sent without the prefill — and it is not offered one from now on.');
-          flags = { ...flags, noPrefill: true };
+          notes.push(req.prefill.grounding ? 'This model would not continue a started thought, so it was sent without your grounding phrase in its thinking — and it is not offered one from now on.' : 'This model would not continue a started reply, so it was sent without the prefill — and it is not offered one from now on.');
+          flags = req.prefill.grounding ? { ...flags, noSeed: true } : { ...flags, noPrefill: true, noSeed: true };
           lessons++;
           continue;
         }
@@ -928,7 +930,7 @@ export async function ask(conn, opts = {}) {
     if (movedAll && !text.trim() && !emptySaid) emptySaid = 'every word it wrote stood before a closing thinking mark (“</think>”), so all of it was read as its thinking — it is kept under What it thought, to copy, or write it again';
     /* his thinking seed that left no page (Tavern M590, M596): said, never asked again by itself */
     if (!decoder && !text.trim() && thinking.trim() && req.prefill && req.prefill.applied && req.prefill.seed && out.finish === 'stop' && !out.quiet && /^(?:stop|end_turn|stop_sequence|eos)?$/i.test(String(out.reason || ''))) {
-      emptySaid = 'the model thought on from your thinking prefill (the <think> words) and stopped there, with no page after it — nothing was cut here, so write it again when you like';
+      emptySaid = req.prefill.grounding ? 'the model thought on from your grounding phrase and stopped there, with no page after it — nothing was cut here, so write it again when you like' : 'the model thought on from your thinking prefill (the <think> words) and stopped there, with no page after it — nothing was cut here, so write it again when you like';
     }
     /* a request whose thinking seed opened the thinking on purpose says nothing about Off */
     const opened = Boolean(req.prefill && req.prefill.applied && req.prefill.keepThinkingOpen && (conn.thinking === 'off' || conn.thinking === false));

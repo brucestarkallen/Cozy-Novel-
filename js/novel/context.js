@@ -25,6 +25,7 @@ import { estimateTokens, countWords, numberWords } from '../util.js';
 import { contextOf, thinksOn, thinkingFloor, learnedFacts } from '../model/providers.js';
 import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, passageNumbers, picked } from './shape.js';
 import { ownWordsFor } from './ownwords.js';
+import { tellerOf, personFor, hasSelf, toTeller, groundingWeave, groundingSeed, oneYouAre, naturalLook, swapPerson, headsInPerson } from './teller.js';
 import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook, bibPart, READ_OPEN, READ_CLOSE } from './prompts.js';
 import { entriesOf, entryIndex, bibShare, bibItems, ridingItems } from './bibliography.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
@@ -572,10 +573,21 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const ride = ridingFor(house, novel, purpose, wakesOn(moment));
   /* his words and the modules with the names in them — never {{user}} or {{char}} (Tavern M361) */
   const names = macroNames(house, purpose, play);
-  const woken = withMacros(ride.woken.join('\n\n'), names);
+  /* WHO IS TELLING (teller.js, Cozy Tavern's The frame): the teller's name, its grounding phrase, the person it
+   * thinks in. In the first person the app's own standing words — the rules, the lines between his words and the
+   * book — are the teller's notes to itself, and he is "you" in them; his own box is never touched. A teller with
+   * a self (named in Who is telling, or a box in the first person) turns the scene over like a person, never as a
+   * checklist. With nothing set, every word is what it was. */
+  const teller = tellerOf(house, purpose);
+  const person = personFor(teller, own);
+  const self = hasSelf(teller, person);
+  const inPerson = (text) => (person === 'first' ? swapPerson(text) : text);
+  const woken = inPerson(withMacros(ride.woken.map((m) => naturalLook(m, self)).join('\n\n'), names));
   /* his own words first, then the words he never wants (when he listed any),
-   * then the modules that always ride, then the frame */
-  const head = withHis(withMacros([String(own || ''), avoidLine(avoidList(house)), ...ride.always].filter((text) => String(text || '').trim()).join('\n\n'), names), frame);
+   * then the modules that always ride, then the frame — his grounding phrase woven through them */
+  const ownPart = withMacros(oneYouAre(String(own || ''), teller), names);
+  const standing = inPerson(withMacros([avoidLine(avoidList(house)), ...ride.always.map((m) => naturalLook(m, self))].filter((text) => String(text || '').trim()).join('\n\n'), names));
+  const head = groundingWeave(withHis([ownPart, standing].filter((text) => String(text || '').trim()).join('\n\n'), inPerson(frame)), teller.phrase, person);
   const opening = notesAs === 'system' ? '' : notesOpening(house, novel, notesAs, purpose);
   /* his note at the end: the writer's, or the scenes' own (prompts.js lateFor), as he chose it to ride — the
    * storyteller's own voice marked, for the model layer to send it as the setup's words where it cannot go so */
@@ -586,7 +598,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const ownMsg = (w) => ({ role: w.role, content: w.text, ...(w.role === 'assistant' ? { voice: true } : {}) });
   const after = [];
   for (const t of turns) after.push({ role: t.role, content: t.content });
-  if (request) after.push({ role: 'user', content: request });
+  /* what the app asks in his turn is said to the teller by its name: "Tony — pick Chapter Two up…" */
+  if (request) after.push({ role: 'user', content: toTeller(request, teller.name) });
   /* right before what he asks: his request, or his last move — with nothing of his to stand before, at the end */
   const beforeYours = voiced.filter((w) => w.place === 'before-your-message').map(ownMsg);
   if (beforeYours.length) {
@@ -595,6 +608,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     if (at === -1) after.push(...beforeYours); else after.splice(at, 0, ...beforeYours);
   }
   after.push(...voiced.filter((w) => w.place === 'after-your-message').map(ownMsg));
+  /* Say it again at the end (Cozy Tavern M21): his box once more, just before the note at the end */
+  if (teller.echo && ownPart.trim()) after.push({ role: 'system', content: groundingWeave(ownPart, teller.phrase, person) });
   if (late) after.push({ role: lateRole, content: late, ...(lateRole === 'assistant' ? { voice: true } : {}) });
   /* after the book and its notes, before the story */
   const beforePages = voiced.filter((w) => w.place === 'before-pages').map(ownMsg);
@@ -709,8 +724,10 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     else fit = fitBook({ novel, chapters, chapterId: chapter.id, current: cur, room: Math.max(0, room), numbered: purpose === 'partner', plans: purpose === 'partner' });
   }
   const joinParts = (arr) => arr.filter((x) => String(x || '').trim()).join('\n\n\n');
-  const stableBook = joinParts([about, earlierText(fit.book)]);
-  const moving = joinParts([bib.text, notesPart, currentText(fit.book)]);
+  /* in the system message, a teller in the first person reads his ownership lines there as his: "your plans" */
+  const heads = (text) => (notesAs === 'system' ? headsInPerson(text, person) : text);
+  const stableBook = heads(joinParts([about, earlierText(fit.book)]));
+  const moving = heads(joinParts([bib.text, notesPart, currentText(fit.book)]));
   let system;
   let systemParts;
   const messages = [];
@@ -737,7 +754,7 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   const ours = messages.length ? messages[0].role === 'assistant' : Boolean(beforePages.length) && beforePages[0].role === 'assistant';
   if (ours) {
     const written = Object.values(chapters || {}).some((c) => c && chapterText(c).trim());
-    messages.unshift({ role: 'user', content: written ? PICK_UP : PICK_UP_FIRST });
+    messages.unshift({ role: 'user', content: toTeller(written ? PICK_UP : PICK_UP_FIRST, teller.name) });
   }
   messages.push(...beforePages, ...after);
   const tokens = estimateTokens(system) + messages.reduce((a, m) => a + estimateTokens(m.content), 0);
@@ -783,6 +800,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
     /* a model whose room cannot hold what has to go with the least of the
      * book is never sent this: the reason, in plain words (call.js) */
     refuse: tooBig ? tooSmallWords(tooBig) : '',
+    /* the first words of the teller's own thinking, where its model continues a started thought (providers.js) */
+    seed: groundingSeed(teller.phrase),
   };
 }
 

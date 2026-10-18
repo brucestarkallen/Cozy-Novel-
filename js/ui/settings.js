@@ -10,9 +10,11 @@ import { listModels, tryConnection, testPrefill, learnIdentity } from '../model/
 import { costOf, addRow } from '../model/usage.js';
 import { STRUCTURED_PRESETS, fillPreset, presetWords, bannedPattern, MIN_AFTER_DEFAULT } from '../model/structured.js';
 import { connFor, connName, partsOf, partsWords, holderOf } from '../novel/writer.js';
-import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER } from '../novel/prompts.js';
+import { DEFAULT_WRITING, DEFAULT_NARRATOR, DEFAULT_PARTNER, macroNames, withMacros } from '../novel/prompts.js';
 import { voiceOf, presetsOf, presetInUse, presetSteps, cleanVoice, cleanName, voiceLine, startingVoice, FORMAT as PRESET_FORMAT } from '../novel/presets.js';
 import { listModules, moduleOf, builtinOf, moduleSteps, rideLine, READERS, READER_WORDS, RIDES, RIDES_WORDS } from '../novel/modules.js';
+import { tellerOf, cleanTeller, framePerson } from '../novel/teller.js';
+import { readStandingWords, groupFindings, findingsText } from '../novel/plainvoice.js';
 import { cleanOwn, ownLine, ownSteps, OWN_ROLES, OWN_PLACES, OWN_TO } from '../novel/ownwords.js';
 import { newId, debounce, timeAgo, plural, numberTyped, markTyped } from '../util.js';
 import { booksFromLibrary } from '../novel/files.js';
@@ -790,10 +792,14 @@ function wordsGroup(hs) {
     field('Your name', name, 'How your notes and the helper speak of you (“Bruce here.”, “a novel Bruce is writing”).'),
     field('How you like it written', sys, 'Sent first, word for word, to the writer — like the main prompt of a SillyTavern preset. Who the writer is, your voice, your rules, a persona if you like. The novel craft rides right after it (Modules, below).'),
     back(sys, 'system'),
+    tellerField(hs, 'write', sys),
     field('How the narrator tells scenes', narr, 'Sent first, word for word, when you play a scene — the narrator’s own voice and rules, a persona if you like. The scene craft rides right after it. Empty: nothing of yours is sent.'),
     back(narr, 'narrator'),
+    tellerField(hs, 'play', narr),
     field('How the partner talks', partner, 'Sent first, word for word, to your partner. Empty: nothing of yours is sent.'),
     back(partner, 'partner'),
+    tellerField(hs, 'partner', partner),
+    voiceCheckField(hs),
     modulesField(hs),
     field('A note at the end — the book', box('late', 3, 'Optional. Rides after your request, like post-history instructions.'), 'Sent after your request each time the writer writes the book: a new page, Another take, Rewrite, Go on, a scene turned into prose. Empty, or Send it off: nothing is sent.'),
     sendIt('lateOff', ins.lateOff, 'Send it', 'Off: your words stay in the box, and nothing is sent until you switch it back on.'),
@@ -813,6 +819,95 @@ function wordsGroup(hs) {
       ['wait', 'When I press Apply'],
     ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.', 'Your partner’s changes land'));
   return g;
+}
+
+/* ------------------------------------------------------- who is telling */
+/* Cozy Tavern's The frame, beside each box (teller.js): Who is telling, the Grounding phrase, The teller thinks as,
+ * Say it again at the end — folded until he opens it, what is set said on its line */
+const TELLER_WHO = { write: 'the writer', play: 'the narrator', partner: 'your partner' };
+function tellerField(hs, purpose, boxTa) {
+  const t = tellerOf(hs, purpose);
+  const save = (patch) => changeHouse((x) => {
+    x.tellers = x.tellers && typeof x.tellers === 'object' ? x.tellers : {};
+    const next = cleanTeller({ ...cleanTeller(x.tellers[purpose]), ...patch });
+    if (!next.name && !next.phrase && next.person === 'follow' && !next.echo) delete x.tellers[purpose]; else x.tellers[purpose] = next;
+  });
+  const name = h('input', { type: 'text', maxlength: '40', autocomplete: 'off', spellcheck: 'false', value: t.name, placeholder: 'e.g. Tony Stark — empty for no name' });
+  const phrase = h('input', { type: 'text', maxlength: '80', autocomplete: 'off', spellcheck: 'false', value: t.phrase, placeholder: 'e.g. Autobots, roll out! — empty for none' });
+  const person = h('select');
+  for (const [v, l] of [['follow', 'Follow the box above'], ['first', 'I — “I am Tony Stark. I write Bruce’s novel…”'], ['second', 'You — “You are Tony Stark. You write Bruce’s novel…”']]) person.append(h('option', { value: v, selected: t.person === v }, l));
+  const echo = h('input', { type: 'checkbox', checked: t.echo });
+  const personNote = h('em');
+  const line = h('small.tellerline');
+  const said = () => {
+    const read = framePerson(boxTa.value) === 'first' ? 'I' : 'You';
+    const now = person.value === 'follow' ? (read === 'I' ? 'first' : 'second') : person.value;
+    personNote.textContent = `${person.value === 'follow' ? `The box above reads as “${read}” — so the app’s own rules are written that way too. ` : `Set by hand (the box above reads as “${read}”). `}${now === 'first'
+      ? 'The rules and the lines between your words and the book become the teller’s own notes to itself, and you are “you” in them: “you bring me premises… I write the novel”.'
+      : 'The rules speak to the teller: “you write the novel… your craft”.'} What you say to it in your turn — the request, your notes — always says “you”, the way you would to a friend.`;
+    const bits = [name.value.trim() || 'nobody named', phrase.value.trim() ? `opens with “${phrase.value.trim()}”` : '', now === 'first' ? 'thinks as I' : '', echo.checked ? 'said again at the end' : ''].filter(Boolean);
+    line.textContent = bits.join(' · ');
+  };
+  name.addEventListener('input', typing(() => save({ name: name.value }), 500));
+  name.addEventListener('input', said);
+  phrase.addEventListener('input', typing(() => save({ phrase: phrase.value }), 500));
+  phrase.addEventListener('input', said);
+  person.addEventListener('change', () => { said(); save({ person: person.value }); });
+  echo.addEventListener('change', () => { said(); save({ echo: echo.checked }); });
+  boxTa.addEventListener('input', said);
+  said();
+  return h('details.tellerbox', { 'data-teller': purpose },
+    h('summary', h('span', 'Who is telling'), line),
+    field('Who is telling', name, `With a name here, everything the app says to ${TELLER_WHO[purpose]} in your turn greets it by that name — “Tony — pick Chapter Two up right where it stops…”, “Tony — Bruce here.” — and {{char}} in your words is that name. It only ever uses the name; who they are is yours to say in the box above.`),
+    field('Grounding phrase', phrase, 'The first words of its thinking, every time. A teller that opens its own thinking in character stays in character through it, instead of sliding into an assistant’s voice on the turns that are mostly instruction. It is woven into the words it is sent — near the top, and again a third of the way down — and planted as the start of the thinking itself where the model takes that (DeepSeek and Kimi with thinking on; never over a prefill of your own). Empty: nothing is asked and nothing is sent.'),
+    field('The teller thinks as', person, ''),
+    personNote,
+    h('div.field.switchrow', h('label.toggle', echo, h('span', 'Say it again at the end')), h('em', 'The box above once more at the end of the request, just before the note at the end — the anchor against a long request’s fade.')));
+}
+
+/* READ MY STANDING WORDS FOR AN ASSISTANT’S VOICE (plainvoice.js, Cozy Tavern M359/M360): his own words read over,
+ * with no model and nothing sent — the lines that name the machine, and the ones that read like a manual */
+function voiceCheckField(hs) {
+  const list = h('ul.voicefound', { hidden: true });
+  const run = () => {
+    landTyping();
+    const now = house();
+    const ins = now.instructions || {};
+    const names = macroNames(now, 'write');
+    const pieces = [
+      { name: 'How you like it written', text: typeof ins.system === 'string' ? ins.system : STARTING.system },
+      { name: 'How the narrator tells scenes', text: typeof ins.narrator === 'string' ? ins.narrator : STARTING.narrator },
+      { name: 'How the partner talks', text: typeof ins.partner === 'string' ? ins.partner : STARTING.partner },
+      { name: 'A note at the end — the book', text: ins.late || '' },
+      { name: 'A note at the end — scenes', text: typeof ins.lateNarrator === 'string' ? ins.lateNarrator : (ins.late || '') },
+      ...cleanOwn(now.ownWords).map((w) => ({ name: w.name.trim() || 'Words in the storyteller’s own voice', text: w.text })),
+      ...listModules(now).map((m) => ({ name: m.name, text: m.text, mine: !m.builtin || Boolean(m.ownWords) })),
+    ];
+    const found = readStandingWords(pieces.map((p) => ({ ...p, text: withMacros(p.text, names) })));
+    const { machine, manual, house: theirs } = groupFindings(found);
+    list.textContent = '';
+    list.hidden = false;
+    const add = (words) => { const li = h('li', words); list.append(li); return li; };
+    if (!machine.length && !manual.length) {
+      add(theirs ? `Nothing in YOUR words sounds like an assistant. (${theirs} in the app’s own modules, which are spoken in your voice when they are sent — not yours to fix.)` : 'Nothing in your words sounds like an assistant.');
+      return;
+    }
+    add(machine.length
+      ? `${machine.length} ${machine.length === 1 ? 'line of YOURS names the machine — this is the one that breaks a teller’s voice:' : 'lines of YOURS name the machine — these are the ones that break a teller’s voice:'}`
+      : 'Nothing of yours names the machine.');
+    for (const f of machine.slice(0, 25)) add(`“${f.words.join('”, “')}” (${f.why}) — ${f.where}: ${f.line}`);
+    if (machine.length > 25) add(`and ${machine.length - 25} more like it.`);
+    if (manual.length) {
+      add(`${manual.length} more read like a manual rather than a person (your call — words that instruct are allowed to sound like it):`);
+      for (const f of manual.slice(0, 10)) add(`“${f.words.join('”, “')}” — ${f.where}: ${f.line}`);
+      if (manual.length > 10) add(`and ${manual.length - 10} more of those.`);
+    }
+    if (theirs) add(`${theirs} more stand in the app’s own modules. Those are spoken in your voice when they are sent, and are not yours to fix.`);
+    list.append(h('li', h('button.btn.quiet.small', { title: 'Copies the lines found, whole, to hand to whoever rewrites them.', onclick: async () => toast(await copyText(findingsText(found)) ? 'Copied.' : 'They could not be copied.') }, 'Copy these lines')));
+  };
+  return h('div.field',
+    h('div.btnrow', h('button.btn.quiet.small.voicecheck', { title: 'Reads your boxes, your notes at the end, your modules and your words in the storyteller’s own voice for words that make a teller sound like an assistant — nothing is sent anywhere, and nothing is changed.', onclick: run }, 'Read my standing words for an assistant’s voice')),
+    list);
 }
 
 /* a note's switch: ticked, it is sent; off, his words wait in the box */

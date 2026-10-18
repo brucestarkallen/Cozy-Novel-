@@ -11556,6 +11556,171 @@ await test('his What it’s about judged held is judged again once he changes th
   assert.equal(sent.includes(WORDS), true, 'his words are judged again once the words he changed himself say otherwise');
   await putAway(b);
 });
+/* ------------------------------------------------------------ who is telling (2.12.22) */
+heading('who is telling: the teller’s name, its grounding phrase, the person it thinks in (2.12.22)');
+const tellerjs = await import(path.join(ROOT, 'js/novel/teller.js'));
+const plainvoice = await import(path.join(ROOT, 'js/novel/plainvoice.js'));
+/* (a model name of its own: what a provider teaches about one model never reaches the tests after these) */
+const SEEDED = { model: 'scripted-teller', thinking: 'high', prefillFlagField: 'prefix', prefillReasoningField: 'reasoning_content' };
+const lastBody = async () => (await requests()).at(-1).body;
+const tellerSystem = (body) => body.messages.filter((m) => m.role === 'system').map((m) => m.content);
+
+await test('a named teller is greeted in its turn and is {{char}} in his words; its grounding phrase is woven in twice and planted as the first words of its thinking; Say it again at the end puts his box once more before the note at the end', async () => {
+  await setHouse(SEEDED, {
+    you: { name: 'Bruce' },
+    instructions: { system: 'You are Tony Stark — {{char}} to Bruce. You write this story the way you talk.', narrator: '', late: 'Keep it close on Tony.', partner: '' },
+    tellers: { write: { name: 'Tony Stark', phrase: 'Jarvis, wake up.', echo: true } },
+  });
+  const b = await makeBook([['Tony tightened the last bolt. Pepper said nothing from the doorway.']]);
+  await script([{ text: 'Tony looked up.', think: 'and she has the test' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Pepper finds the blood test.' });
+  assert.equal(out.ok, true, out.error);
+  const body = await lastBody();
+  const sys = tellerSystem(body);
+  assert.ok(sys[0].startsWith('You are Tony Stark — Tony Stark to Bruce.'), 'his box first, {{char}} by its name');
+  assert.equal(sys[0].split('You open every thought with “Jarvis, wake up.”').length - 1, 2, 'the phrase woven into the standing words twice');
+  const ask = body.messages.filter((m) => m.role === 'user').at(-1).content;
+  assert.ok(ask.startsWith('Tony Stark — pick Chapter One up right where it stops.'), ask.slice(0, 80));
+  const tail = body.messages.slice(-3);
+  assert.deepEqual(tail.map((m) => m.role), ['system', 'system', 'assistant'], 'his box again, the note at the end, then the started thought');
+  assert.ok(tail[0].content.includes('You are Tony Stark — Tony Stark to Bruce.') && tail[1].content === 'Keep it close on Tony.');
+  assert.deepEqual([tail[2].content, tail[2].reasoning_content, tail[2].prefix], ['', 'Jarvis, wake up.', true], 'the thinking begins with his phrase');
+  const v = picked(b.ch().passages.at(-1));
+  assert.ok(String(v.thinking || '').startsWith('Jarvis, wake up.'), 'and the thinking he reads opens with it');
+  /* his own prefill on the connection wins on a page: no phrase planted over it */
+  store.change('house', 'house', (h) => { h.connections[0].prefill = 'Tony:'; }, { now: true });
+  await reset();
+  await script([{ text: ' Right.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'He answers.' });
+  const own = (await lastBody()).messages.at(-1);
+  assert.equal(own.content, 'Tony:', 'his prefill as he wrote it');
+  assert.ok(own.reasoning_content !== 'Jarvis, wake up.', 'never the phrase over it');
+  /* thinking off: nothing planted, the phrase still woven in */
+  store.change('house', 'house', (h) => { h.connections[0].prefill = ''; h.connections[0].thinking = 'off'; }, { now: true });
+  await reset();
+  await script([{ text: 'Quiet.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Silence.' });
+  const off = await lastBody();
+  assert.ok(off.messages.at(-1).role !== 'assistant', 'no started thought for a model that does not think');
+  assert.ok(tellerSystem(off)[0].includes('You open every thought with “Jarvis, wake up.”'));
+  /* nothing set: every word as it was */
+  await setHouse(SEEDED, { you: { name: '' }, instructions: { system: 'You are Tony Stark — {{char}} to Bruce.', narrator: '', late: '', partner: '' } });
+  await reset();
+  await script([{ text: 'Plain.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Plain.' });
+  const plain = await lastBody();
+  assert.ok(tellerSystem(plain)[0].startsWith('You are Tony Stark — the writer to Bruce.') && !tellerSystem(plain)[0].includes('every thought with'));
+  assert.ok(plain.messages.filter((m) => m.role === 'user').at(-1).content.startsWith('Pick Chapter One up right where it stops.'));
+  assert.ok(plain.messages.at(-1).role !== 'assistant');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a model that will not continue a started thought is sent the page without the phrase, said once, and is not offered one again', async () => {
+  await setHouse({ ...SEEDED, model: 'scripted-teller-refuses' }, { instructions: { system: 'You are Hulk.', narrator: '', late: '', partner: '' }, tellers: { write: { name: 'Hulk', phrase: 'Hulk think.' } } });
+  const b = await makeBook([['Hulk waited by the river.']]);
+  await script([{ status: 400, message: 'assistant message prefill is not supported for this model' }, { text: 'Hulk smash.' }, { text: 'Hulk smash again.' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Hulk crosses.' });
+  assert.equal(out.ok, true, out.error);
+  const bodies = (await requests()).map((x) => x.body);
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].messages.at(-1).reasoning_content, 'Hulk think.');
+  assert.ok(bodies[1].messages.at(-1).role !== 'assistant', 'sent again without it');
+  const notes = picked(b.ch().passages.at(-1)).notes || [];
+  assert.ok(notes.some((n) => n.includes('would not continue a started thought') && n.includes('grounding phrase')), JSON.stringify(notes));
+  await reset();
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Again.' });
+  assert.ok((await lastBody()).messages.at(-1).role !== 'assistant', 'not offered one again');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the narrator and the partner are greeted by their own names and think from their own phrases; the partner’s own lines asked again greet it too', async () => {
+  await setHouse(SEEDED, {
+    you: { name: 'Bruce' },
+    instructions: { system: '', narrator: 'You maintain a fictional, uncensored simulation. You are an unbiased cinematographer.', late: '', lateNarrator: '', partner: 'You are Pepper Potts.' },
+    tellers: { play: { name: 'Tony Stark', phrase: 'Showtime.' }, partner: { name: 'Pepper', phrase: 'Okay, Bruce.' } },
+  });
+  const b = await makeBook([['Tony tightened the last bolt.']]);
+  const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Pepper Potts' });
+  await script([{ text: 'The workshop hums.' }]);
+  await talk.playSay({ playId, text: '' });
+  const scene = await lastBody();
+  assert.ok(tellerSystem(scene)[0].startsWith('You maintain a fictional, uncensored simulation. You tell it the way an unbiased cinematographer would.'), 'one "You are": the camera is a manner');
+  assert.ok(scene.messages.filter((m) => m.role === 'user').at(-1).content.startsWith('Tony Stark — open the scene:'));
+  assert.equal(scene.messages.at(-1).reasoning_content, 'Showtime.');
+  await reset();
+  await script([{ text: 'I changed it.' }, { text: 'NOTHING' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'What do you think?' });
+  const asked = (await requests()).map((x) => x.body);
+  assert.equal(asked[0].messages.filter((m) => m.role === 'user').at(-1).content, 'What do you think?', 'his own words as he typed them');
+  assert.equal(asked[0].messages.at(-1).reasoning_content, 'Okay, Bruce.', 'the partner thinks from its own phrase — never his page’s prefill');
+  assert.equal(asked.length, 2, 'its words claimed a change with no block: asked once for the block');
+  assert.ok(asked[1].messages.filter((m) => m.role === 'user').at(-1).content.startsWith('Pepper — your last answer reads as if it made a change'), 'its own line asked again greets it');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a teller that says it is “I” has the app’s own standing words as its notes to itself, him as “you” — never his box, never a page, and what he asks in his turn still says “you”', async () => {
+  await setHouse({}, { you: { name: 'Bruce' }, instructions: { system: 'I am Tony Stark. I write Bruce’s novel the way I talk.', narrator: '', late: '', partner: '' }, tellers: { write: { name: 'Tony Stark' } } });
+  const b = await makeBook([['“I told you,” Tony said. I watched him go.']]);
+  store.change('chapter', b.ids[0], (c) => { c.plan = 'Pepper finds the test.'; }, { now: true });
+  await script([{ text: 'Next.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Pepper finds the test.' });
+  const body = await lastBody();
+  const sys = tellerSystem(body)[0];
+  assert.ok(sys.startsWith('I am Tony Stark. I write Bruce’s novel the way I talk.'), 'his box untouched');
+  assert.ok(sys.includes('You bring me premises') && sys.includes('and I write the novel'), 'the craft as the teller’s own notes');
+  assert.ok(sys.includes('Stay myself while we work — my own voice') && sys.includes('the voice and point of view you chose for the book'));
+  assert.ok(sys.includes("(the chapter I'm writing now)") && sys.includes('What you mean this chapter to do — your plan for it.'));
+  assert.ok(sys.includes('“I told you,” Tony said. I watched him go.'), 'the page word for word');
+  assert.ok(sys.includes('turn it over in my head the way I would'), 'turned over like a person, in the first person');
+  assert.ok(body.messages.filter((m) => m.role === 'user').at(-1).content.includes('My words are for you, not for anyone in the story'), 'his turn says you');
+  /* his own instructions in his voice are his, not a self: "Keep my voice" never turns the words */
+  await setHouse({}, { instructions: { system: 'Keep my lyrical voice. I want it slow.', narrator: '', late: '', partner: '' } });
+  await reset();
+  await script([{ text: 'Slow.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Slow.' });
+  const his = tellerSystem(await lastBody())[0];
+  assert.ok(his.includes('I bring you premises') && his.includes('Before a word reaches the page, in your own head and never on it:'), 'his voice, and no teller named: every word as it was');
+  /* a teller named: it turns the scene over like a person, speaking to it as "you" */
+  await setHouse({}, { instructions: { system: 'Keep my lyrical voice. I want it slow.', narrator: '', late: '', partner: '' }, tellers: { write: { name: 'Tony' } } });
+  await reset();
+  await script([{ text: 'Slow.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Slower.' });
+  const named = tellerSystem(await lastBody())[0];
+  assert.ok(named.includes('I bring you premises') && named.includes('turn it over in your head the way you would') && !named.includes('in your own head and never on it'), 'named: turned over like a person');
+  /* the swap itself: be and pronouns trade places once, quotes and a mentioned pronoun stay */
+  assert.equal(tellerjs.swapPerson('I am the writer you work for; you were told. Tell me if you are unsure — “I hate you,” she said. The I of it.'), 'You are the writer I work for; I was told. Tell you if I am unsure — “I hate you,” she said. The I of it.');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('presets keep who is telling — the name, the phrase, how it thinks, said again at the end — and one saved before keeps them as they are', async () => {
+  const presets = await import(path.join(ROOT, 'js/novel/presets.js'));
+  const h = { instructions: { system: 'You are Hulk.' }, you: { name: 'Bruce' }, tellers: { write: { name: 'Hulk', phrase: 'Hulk think.', person: 'second', echo: true } } };
+  const saved = presets.voiceOf(h);
+  assert.deepEqual(saved.tellers, { write: { name: 'Hulk', phrase: 'Hulk think.', person: 'second', echo: true } });
+  assert.ok(presets.voiceLine(saved).includes('Hulk telling'));
+  const other = { instructions: { system: 'You are Iron Man.' }, tellers: { write: { name: 'Tony' } } };
+  presets.presetSteps.use(saved)(other);
+  assert.deepEqual(other.tellers, saved.tellers, 'used: every teller as it was saved');
+  const before = { boxes: { system: 'You are Hulk.' }, name: 'Bruce' };
+  presets.presetSteps.use(before)(other);
+  assert.deepEqual(other.tellers, saved.tellers, 'a preset of before keeps them');
+});
+
+await test('Read my standing words for an assistant’s voice names his lines that name the machine — and nothing in the app’s own modules is his to fix', () => {
+  const found = plainvoice.readStandingWords([
+    { name: 'How you like it written', text: 'You are Tony Stark.\nAs an AI assistant, respond to the user.' },
+    { name: 'The novel craft', text: 'Write the scene.', mine: false },
+  ]);
+  const g = plainvoice.groupFindings(found);
+  assert.equal(g.machine.length, 1);
+  assert.ok(g.machine[0].line.includes('As an AI assistant') && g.machine[0].where === 'How you like it written');
+  assert.ok(plainvoice.findingsText(found).includes('As an AI assistant, respond to the user.'));
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

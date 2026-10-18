@@ -25,6 +25,7 @@
 import { LENGTHS, soundOf, povOf, tenseOf, hisField, NOTE_KINDS } from './shape.js';
 import { numberWords, estimateTokens, cutWords } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
+import { tellerOf, toTeller } from './teller.js';
 
 /* ------------------------------------------------- the starting words */
 /* What the boxes in Settings → Your instructions start with, and what
@@ -142,18 +143,22 @@ function nameOf(house) { return String((house && house.you && house.you.name) ||
  * sent, and so does this app — template syntax never reaches a model. For a
  * book: {{user}} is him (his name, else "me"), and in a scene the one he plays;
  * {{char}} is whoever the words are for — the writer, the narrator, his
- * partner. Never a raw macro. */
+ * partner — by the name he gave it in Who is telling, when he gave one
+ * (teller.js; Cozy Tavern: {{char}} is the teller). {{teller}} and {{you}},
+ * Cozy Tavern's own two, are the teller and him. Never a raw macro. */
 export function macroNames(house, purpose = 'write', play = null) {
   const name = nameOf(house);
-  if (purpose === 'play') return { user: String((play && play.who) || '').trim() || name || 'the one I play', char: 'the narrator' };
-  if (purpose === 'partner') return { user: name || 'me', char: 'my partner' };
-  return { user: name || 'me', char: 'the writer' };
+  const teller = tellerOf(house, purpose).name;
+  if (purpose === 'play') return { user: String((play && play.who) || '').trim() || name || 'the one I play', char: teller || 'the narrator', you: name || 'me' };
+  if (purpose === 'partner') return { user: name || 'me', char: teller || 'my partner', you: name || 'me' };
+  return { user: name || 'me', char: teller || 'the writer', you: name || 'me' };
 }
 export function withMacros(text, names) {
   const out = String(text == null ? '' : text);
-  if (!/\{\{\s*(?:user|char)\s*\}\}|<(?:USER|BOT)>/i.test(out)) return out;
+  if (!/\{\{\s*(?:user|char|teller|you)\s*\}\}|<(?:USER|BOT)>/i.test(out)) return out;
   const n = names || {};
-  return out.replace(/\{\{\s*user\s*\}\}|<USER>/gi, () => n.user || 'me').replace(/\{\{\s*char\s*\}\}|<BOT>/gi, () => n.char || 'the writer');
+  return out.replace(/\{\{\s*user\s*\}\}|<USER>/gi, () => n.user || 'me').replace(/\{\{\s*char\s*\}\}|<BOT>/gi, () => n.char || 'the writer')
+    .replace(/\{\{\s*teller\s*\}\}/gi, () => n.char || 'the writer').replace(/\{\{\s*you\s*\}\}/gi, () => n.you || n.user || 'me');
 }
 
 /* {{user}} and {{char}} in the book's own words — a plot essential brought
@@ -499,10 +504,13 @@ const WHAT_FOLLOWS = 'what it’s about, who and what is in it so far, and the b
 export const NOTES_KNOW = 'In the story, each person knows only what they’ve lived, seen, been told or could plainly work out — nobody knows a secret, or how a power works and where it stops, just because it’s written down here.';
 export function notesOpening(house, novel, as, purpose = 'write') {
   const name = nameOf(house);
+  /* the teller by the name he gave it (teller.js): "Tony — Bruce here." — its notebook, "Tony Stark’s notebook" */
+  const teller = tellerOf(house, purpose).name;
   const numbered = purpose === 'partner' ? ' — every passage numbered as it is on the page, as it reads right now' : '';
   const know = purpose === 'partner' ? '' : ` ${NOTES_KNOW}`;
-  if (as === 'assistant') return `My notebook for ${titled(novel)} — ${WHAT_FOLLOWS}${numbered}. I keep it so I never lose the thread; nothing in my notes is ever quoted or mentioned on the page.${know}`;
-  return `${name ? `${name} here. ` : ''}Here’s where our book stands — ${WHAT_FOLLOWS}${numbered}. The notes are mine, for you alone: nothing in them is ever quoted or mentioned on the page.${know}`;
+  if (as === 'assistant') return `${teller ? `${teller}’s notebook` : 'My notebook'} for ${titled(novel)} — ${WHAT_FOLLOWS}${numbered}. I keep it so I never lose the thread; nothing in my notes is ever quoted or mentioned on the page.${know}`;
+  const lead = `Here’s where our book stands — ${WHAT_FOLLOWS}${numbered}. The notes are mine, for you alone: nothing in them is ever quoted or mentioned on the page.${know}`;
+  return name ? `${teller ? `${teller} — ` : ''}${name} here. ${lead}` : toTeller(lead, teller);
 }
 /* the line that leads into the book when it rides in the system message */
 function hereIs(purpose) {

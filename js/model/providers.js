@@ -599,6 +599,16 @@ export function deepseekBetaBase(url) {
   return m ? m[1] + '/beta' : '';
 }
 
+/* a started thought is continued — only where the provider has a flag for a reply begun for it and a field for
+ * its thinking, the thinking is on and was never refused, and it never refused a started reply (Tavern M375) */
+export function seedContinues(conn) {
+  if (!conn || prefillProfile(conn) === 'anthropic' || prefillIsDown(conn) || !thinks(conn)) return false;
+  const facts = learnedFacts(conn);
+  if (facts && facts.down) return false;
+  const f = prefillFields(conn);
+  return !f.error && Boolean(f.flag) && Boolean(f.reasoning);
+}
+
 export function prefillIsDown(conn) {
   const facts = learnedFacts(conn);
   return Boolean(facts && facts.prefillDown);
@@ -881,7 +891,14 @@ export function buildRequest(conn, opts = {}) {
   const noPrefill = opts.noPrefill || (worker && (conn.prefillForWorkers !== true || conn.prefillMode === 'structured')) || endsOnAssistant;
   /* structured: his opening is asked of the model through the answer's schema — nothing is handed to it */
   const structured = !noPrefill && !opts.noStructured && !worker ? structuredPlanFor(conn) : null;
-  const pf = noPrefill || structured ? { messages: fitted, applied: false } : applyPrefill(fitted, conn);
+  /* THE GROUNDING PHRASE (teller.js, Cozy Tavern M358/M375): the first words of the teller's own thinking, planted
+   * where the model truly continues a started thought — never over his own started reply on a page (his wins), never
+   * for a helper, never where it would only be an empty extra turn the model reads and reasons about */
+  const ownStarts = !noPrefill && String(conn.prefill || '').trim() !== '';
+  const seedConn = !worker && !opts.noSeed && String(opts.seed || '').trim() && !endsOnAssistant && !ownStarts && seedContinues(conn)
+    ? { ...conn, prefill: `<think>${String(opts.seed).replace(/\s+$/, '')}`, prefillMode: 'written', prefillKeepThinking: true } : null;
+  const pf = seedConn ? { ...applyPrefill(fitted, seedConn), grounding: true }
+    : noPrefill || structured ? { messages: fitted, applied: false } : applyPrefill(fitted, conn);
   /* his prefill after his words in the storyteller's own voice: one started reply, his words first */
   if (pf.applied && pf.messages.length > 1) {
     const before = pf.messages[pf.messages.length - 2];
