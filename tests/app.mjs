@@ -11785,6 +11785,35 @@ await test('in a scene his move is changed where it stands and a telling by his 
   await putAway(b);
 });
 
+/* ------------------------------------------------------------ his lines in a scene written into prose (2.12.24) */
+heading('his lines in a scene written into prose (2.12.24)');
+await test('a scene written into prose: his character’s lines go to the writer as said and done, not as ideas — and so when it goes on from where it stopped', async () => {
+  await setHouse();
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+  await script([{ text: 'A stranger waits at the foot of the steps.' }, { text: 'He smiles. "Someone who read your letter."' }]);
+  await talk.playSay({ playId, text: '' });
+  await talk.playSay({ playId, text: '"Who are you?" I ask, stepping closer.' });
+  await reset();
+  await script([{ text: 'The stranger waited at the foot of the steps. "Who are you?" Mara asked, and', finish: 'length' }, { text: 'and he smiled.' }]);
+  const tr = talk.transcriptOf(store.peek('play', playId));
+  const out = await writer.playToProse({ novelId: b.novelId, chapterId: b.ids[0], play: store.peek('play', playId), transcript: tr.text, mine: tr.mine });
+  assert.equal(out.ok, true, out.error);
+  const page = b.ch().passages.find((x) => x.id === out.passageId);
+  assert.equal(picked(page).cut, true, 'the page stopped partway');
+  const on = await writer.goOn({ novelId: b.novelId, chapterId: b.ids[0], passageId: out.passageId });
+  assert.equal(on.ok, true, on.error);
+  const asks = (await requests()).map(askOf);
+  assert.equal(asks.length, 2);
+  for (const ask of asks) {
+    assert.ok(ask.includes('Mara: "Who are you?" I ask, stepping closer.'), 'his line rides in the scene');
+    assert.ok(ask.includes('My lines are what Mara actually said and did in the scene — not ideas for it') && ask.includes('everything Mara said is said on the page in Mara’s own words') && ask.includes('don’t give Mara words I didn’t write') && ask.includes('write it once'), ask);
+  }
+  assert.ok(picked(b.ch().passages.find((x) => x.id === out.passageId)).text.endsWith('and he smiled.'), 'it went on from where it stopped');
+  await setHouse();
+  await putAway(b);
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

@@ -700,6 +700,11 @@ export function selectionRequest({ chapterLabel, note, marked }) {
  * about how those words are told, never what happens; outcome: who decides how
  * it turns out — '' when nobody is to be told (a rewrite, a scene written into
  * prose, a passage between two) */
+/* A scene he played, written into prose: his lines are his character's own part of it, not premises — what was said is
+ * said in its own words and what was done is done (Cozy Tavern's MC Agency: dialogue only mended, intent told as said,
+ * action at its size, no words he did not write), so the craft's rules for the wording of a premise never take them */
+const hisLinesStand = (w) => `My lines are what ${w} actually said and did in the scene — not ideas for it, the way what I type for the next page is. So everything ${w} said is said on the page in ${w}’s own words, written as the book writes speech, with only the spelling and grammar mended; what I wrote as what ${w} meant to say (“I tell him to back off”) is told as said; and everything ${w} did is done, at the size I wrote it. Leave none of it out, and don’t give ${w} words I didn’t write. Where your telling already showed one of my lines, that’s one moment — write it once.`;
+
 export function goOnRequest({ chapterLabel, between = false, tail = '', direction = '', change = '', held = [], outcome = 'writer', transcript = '', who = '' }) {
   const d = String(direction || '').trim();
   const c = String(change || '').trim();
@@ -709,7 +714,7 @@ export function goOnRequest({ chapterLabel, between = false, tail = '', directio
     d ? `What I asked for in it: ${d}` : '',
     c ? `It was written again with a change, which is now what happens: ${c}` : '',
     h.length ? `Some of its words were written again with ${h.length === 1 ? 'this note' : 'these notes'} — what ${h.length === 1 ? 'it asks' : 'they ask'} holds for the rest of it too:\n${h.map((x) => `- ${x}`).join('\n')}` : '',
-    transcript ? `This passage is a scene we played, being written into prose. Here’s the scene${who ? `, with me taking ${who}’s part` : ''}:\n${fence(transcript)}\nFinish only what’s left of it after the prose so far. Keep what happened and what was said — don’t repeat the part already written, and don’t change how it turned out. How I spoke my moves doesn’t change the book’s point of view.` : '',
+    transcript ? `This passage is a scene we played, being written into prose. Here’s the scene${who ? `, with me taking ${who}’s part` : ''}:\n${fence(transcript)}\nFinish only what’s left of it after the prose so far. Keep what happened and what was said — don’t repeat the part already written, and don’t change how it turned out. ${hisLinesStand(String(who || '').trim() || 'my character')} How I spoke my moves doesn’t change the book’s point of view.` : '',
     d || c ? YOURS_ONLY : '',
     `Carry on from exactly where it stops. Start by repeating its last few words exactly as they are${tail ? '' : ' (from the start of its last sentence)'}, then keep going — I’ll trim the repeat and join the rest straight on, so don’t start over or retell anything.${between ? ' What comes after the passage is already written, so bring it to where that picks up.' : ''}`,
     between || !outcome ? '' : outcomeWords(outcome),
@@ -724,6 +729,7 @@ export function playToProseRequest({ chapterLabel, who, transcript, length, betw
     `We played a scene picking up ${between ? `at the point in ${chapterLabel} where it was set` : `where ${chapterLabel} leaves off`}: I took ${w}’s part, and you told everything else. Here’s how it went — my lines are the ones marked “${w}:”, yours are marked “Narrator:”.`,
     fence(transcript),
     `Now write it into the book as ${between ? `the part of ${chapterLabel} that comes there` : `the next part of ${chapterLabel}`} — real prose in the book's own voice, not a transcript. Keep what happened and what was said; smooth it, give it room, let it read like the rest of the novel.${length === 'paragraphs' ? ' Keep it short.' : ''}`,
+    hisLinesStand(w),
     `It has to read as one book with what comes before: its first lines carry straight on from ${between ? 'the passage before it' : `where ${chapterLabel} stops now`} — nothing told twice.${between ? ' What comes after it is already written, so bring it to where that picks up.' : ''} Tell it from the point of view and in the tense chosen for the book, whoever I played: if the book sees through someone else’s eyes, it stays behind theirs, and ${w}’s thoughts come only as the book would give them. Where the book stays behind one person’s eyes at a time, change whose only at a scene break (* * *), and make plain whose eyes we’re behind now; a book told from above everyone can move between minds on purpose, without the break.`,
     between ? STORY_ONLY_BETWEEN : STORY_ONLY,
   ].join('\n\n');
