@@ -66,12 +66,82 @@ export function icon(name, size = 22) {
 
 /* ------------------------------------------------------------- toast */
 let toastTimer = null;
+/* THE LINE AT THE BOTTOM, WHERE HE IS WORKING (2.12.36 — his report: over a scene, its Undo stood in the middle of the
+ * window, over the scene's own box; on a small phone it lay over Write). It was one place for every screen: the middle
+ * of the window, a fixed height above its foot. Now it lies over the part of the screen he is working in — a sheet,
+ * a pane over the page or over the whole screen, the column beside the page he last touched, or the page — centred
+ * there, and just above what stands at that part's foot: the box and the row of Follow the writing and Suggestions
+ * under the page, a scene's or the partner's own box in the pane. In a sheet it is the sheet's own (its Undo inside
+ * the dialog the keyboard is held in) and stands at the sheet's foot. Placed again while it shows, whenever what
+ * stands at the foot changes size. */
+let touched = null;
+if (typeof document !== 'undefined') {
+  document.addEventListener('pointerdown', (e) => { touched = e.target; }, true);
+  document.addEventListener('focusin', (e) => { touched = e.target; }, true);
+}
+const onScreen = (el) => {
+  if (!el || !el.isConnected || el.hidden) return null;
+  const st = getComputedStyle(el);
+  if (st.display === 'none' || st.visibility === 'hidden') return null;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight ? r : null;
+};
+/* the part of the screen the line belongs to, and what stands at its foot */
+function toastPart() {
+  const right = $('#sidePane');
+  const left = $('#chaptersPane');
+  const pane = (p) => ({ rect: onScreen(p), feet: [p.querySelector(':scope > .talkbox')] });
+  if (right && right.classList.contains('full') && onScreen(right)) return pane(right);
+  const over = $('#scrim')?.classList.contains('on');
+  for (const p of [right, left]) {
+    if (!p || !onScreen(p)) continue;
+    if (over && p.classList.contains('open')) return pane(p);
+    if (!over && touched && p.contains(touched)) return pane(p);
+  }
+  const col = $('.pagecol');
+  const rect = onScreen(col);
+  /* (the page's scroller stands in its right gutter: the line never reaches over it) */
+  if (rect) return { rect, feet: [$('#floatRow'), $('.composer')], gutter: onScreen($('#scroller')) };
+  return { rect: { left: 0, right: innerWidth, width: innerWidth, top: 0, bottom: innerHeight }, feet: [$('.composer')] };
+}
 function placeToast() {
   const t = $('#toast');
-  if (t) (focusedSheet()?.box || document.body).append(t);
+  if (!t) return;
+  const sheet = focusedSheet();
+  /* (moved only when it is not already last where it belongs: placed again while it shows, a move would take the
+   * keyboard off its Undo) */
+  const home = sheet?.box || document.body;
+  if (t.parentElement !== home || t !== home.lastElementChild) home.append(t);
+  if (sheet) { for (const k of ['--toast-x', '--toast-max', '--toast-bottom']) t.style.removeProperty(k); return; }
+  const { rect, feet, gutter } = toastPart();
+  const x = rect.left + rect.width / 2;
+  const half = Math.min(x - rect.left - 12, (gutter ? gutter.left - 8 : rect.right - 12) - x);
+  t.style.setProperty('--toast-max', `${Math.round(Math.min(520, Math.max(180, 2 * half)))}px`);
+  t.style.setProperty('--toast-x', `${Math.round(x)}px`);
+  /* (as wide as its words make it, now that its room is set) */
+  const w = t.getBoundingClientRect().width;
+  let foot = Math.min(rect.bottom, innerHeight);
+  for (const el of feet) {
+    const r = onScreen(el);
+    /* (only what stands where the line would: the row at the page's corner, when the line reaches it) */
+    if (r && r.right > x - w / 2 && r.left < x + w / 2) foot = Math.min(foot, r.top);
+  }
+  t.style.setProperty('--toast-bottom', `${Math.round(innerHeight - foot + 10)}px`);
+}
+/* (placed again while it shows: the box grows with his words, Follow the writing comes and goes, the window turns) */
+let toastWatch = null;
+function watchToast(on) {
+  if (typeof ResizeObserver === 'undefined') return;
+  if (!toastWatch) {
+    toastWatch = new ResizeObserver(() => { if ($('#toast')?.classList.contains('on')) placeToast(); });
+    addEventListener('resize', () => { if ($('#toast')?.classList.contains('on')) placeToast(); });
+  }
+  toastWatch.disconnect();
+  if (on) for (const el of [$('#floatRow'), $('.composer'), $('#sideFoot'), $('#sidePane'), $('.pagecol')]) if (el) toastWatch.observe(el);
 }
 function hideToast(t) {
   t.classList.remove('on'); t.inert = true; t.setAttribute('aria-hidden', 'true');
+  watchToast(false);
   /* a hint that waited for this line to go comes now */
   const w = hintWaiting;
   hintWaiting = null;
@@ -91,11 +161,10 @@ export function hintToast(words, ms = 3200) {
 export function toast(words, ms = 3200, action = null) {
   let t = $('#toast');
   if (!t) { t = h('div.toast', { id: 'toast', role: 'status', 'aria-live': 'polite' }); document.body.append(t); }
-  t.textContent = words;
-  if (action) {
-    t.append(' ', h('button.toastact', { onclick: () => { clearTimeout(toastTimer); hideToast(t); action.run(); } }, action.label));
-  }
+  /* its words, and its action beside them — never wrapped in under the words */
+  t.replaceChildren(h('span.toastwords', words), ...(action ? [h('button.toastact', { onclick: () => { clearTimeout(toastTimer); hideToast(t); action.run(); } }, action.label)] : []));
   placeToast();
+  watchToast(true);
   t.inert = false;
   t.removeAttribute('aria-hidden');
   t.classList.add('on');

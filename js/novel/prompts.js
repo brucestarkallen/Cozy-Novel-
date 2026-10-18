@@ -1284,6 +1284,28 @@ const NOTE_RULES = `Include only entries that are new or changed, and in each on
 - Use "gone" only for an entry that no longer belongs in the book at all (it was only ever in text that's been taken out). Mark a thread "open": false once the story resolves it — by what happens after it was set up, never by the words that set it up (an oath sworn, a plan made, a promise given is open) and never just because time passed.
 - Write only what the book actually says — never invent, never guess.`;
 
+/* HIS PREMISES ARE HIS WORD ON THE BOOK (2.12.36 — his report: "does the notes read my premise too?" — the world his
+ * premise set up was read by the writer of that one page and by nobody after it: the notes read only the page, and the
+ * pages after drifted from it). Shown to the helper beside the passage it was typed for, and to the notes' check and
+ * the helper's telling of the book as a list: what it says holds true of the world and its people for good is the
+ * book's, even where no page says it; what it asks to happen is what he asked for — what happened is the page's. */
+const PREMISE_HOLDS = 'what it says holds true for good — a rule of the world, how a power works and what it takes or costs, how rare something is, a rank or a title, a group and who leads it, who someone is, how they look, where they come from, what they want';
+function premiseRule(codex) {
+  return `- My premise for a passage, shown beside its words, is my own word on the book and counts as the book: ${PREMISE_HOLDS} — goes in the notes as I gave it, even where the passage leaves it unsaid, and a later premise of mine stands over an earlier one. What it asks to happen is only what I asked for: what happened is what the passage tells.${codex ? ' The "bibliography" keeps only what a passage’s own words say.' : ''}`;
+}
+export const PREMISE_ROOM = 6000;
+/* his premises, the book through (shape.js premisesOf), each by the passage it was typed for — a long one by its opening,
+ * said so; `left`: how many more there are, left out to save room */
+export function premisesPart(list, left = 0) {
+  const rows = (list || []).filter((x) => x && String(x.text || '').trim()).map((x) => {
+    const t = String(x.text).replace(/\s+/g, ' ').trim();
+    return `[${x.label}] ${t.length > PREMISE_ROOM ? `${cutWords(t, PREMISE_ROOM)} (the rest of it is left out here to save room)` : t}`;
+  });
+  if (!rows.length) return '';
+  const gone = left ? `\n(${left === 1 ? 'One later premise is' : `${numberWords(left)} later premises are`} left out here to save room.)` : '';
+  return `My premises — what I asked the writer for, as I typed it, each by the passage it was typed for. They are my word on the book and count as the book: ${PREMISE_HOLDS} — stands, even where no passage says it, and a later premise of mine stands over an earlier one; what one asks to happen is only what I asked for, and what happened is what the passages say:\n${rows.join('\n')}${gone}`;
+}
+
 /* the notes' rules as one reading is asked them: with the bibliography kept from the book, a lasting detail and a first description go there, with their words, and a person's card stays a short portrait */
 function noteRules(codex) {
   return NOTE_RULES.replace('{{ABOUT_RULE}}', codex ? PORTRAIT_RULE : ABOUT_RULE)
@@ -1323,10 +1345,14 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   if (at && of && at < of && later) parts.push(`This part is from ${chapterLabel}; the book goes on to Chapter ${numberWords(of)}. Where people are “now” is as of the end of the book, so change a “now” only if this part changes it for good.`);
   else if (goesOn) parts.push(`This part sits in the middle of ${chapterLabel}: the chapter goes on after it, and what follows is already in the notes. Where people are “now” is as of the end of the book, so change a “now” only if this part changes it for good.`);
   if (before && before.trim()) parts.push(`${chapterLabel}, up to the new part (for context — already in the notes):\n${fence(before)}`);
+  /* his premise beside the passage it was typed for (2.12.36) — never beside the words being replaced */
+  const premiseOn = (c) => !c.oldOnly && Boolean(String(c.premise || '').trim());
+  const premised = changes.some(premiseOn);
   for (const c of changes) {
+    const mine = premiseOn(c) ? `My premise for it, as I typed it:\n${fence(c.premise)}\n` : '';
     if (c.oldOnly) parts.push(`This is part of the previous version of a passage in ${chapterLabel} that is being replaced. These words no longer happen as written; take back only what these words alone established. The replacement follows in later parts of this same reading, so do not guess it or treat the chapter as finished:\n${fence(c.old)}`);
-    else if (c.old) parts.push(`${c.source ? `${c.source}\n` : ''}This part of ${chapterLabel} was changed. It used to read:\n${fence(c.old)}\nIt now reads:\n${fence(c.text)}`);
-    else parts.push(`${c.source ? `${c.source}\n` : ''}New in ${chapterLabel}:\n${fence(c.text)}`);
+    else if (c.old) parts.push(`${c.source ? `${c.source}\n` : ''}${mine}This part of ${chapterLabel} was changed. It used to read:\n${fence(c.old)}\nIt now reads:\n${fence(c.text)}`);
+    else parts.push(`${c.source ? `${c.source}\n` : ''}${mine}New in ${chapterLabel}:\n${fence(c.text)}`);
   }
   for (const r of removed) parts.push(`This part was taken out of ${chapterLabel}, so it no longer happens in the book:\n${fence(r)}`);
   for (const r of removedChapters) parts.push(`A whole chapter was taken out of the book, so none of it happens any more. It held:\n${fence(r)}`);
@@ -1347,7 +1373,7 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   "chapterName": "a short name for ${chapterLabel}, only if it has none yet"${keptFields}
 }
 
-${noteRules(codex)}
+${noteRules(codex)}${premised ? `\n${premiseRule(codex)}` : ''}
 - "timeline" traces meaningful developments in these new words: a relationship's beginning or change, a lasting personal change, or a thread set up, advanced or resolved. It is the history behind the notes, not another current account. Give one entry for EVERY source shown with new words, even when "events" is empty. Never extract events from the old words, context, or passages taken out. A passage read in parts contributes only events in the part shown here.
 - Each event has "kind": "relationship", "character", or "thread"; "cards" names existing People or Threads cards, including cards added in this answer. A relationship names both people; a character event names that person; a thread event names its thread. Quote the exact supporting words from that source in "evidence". Give only what those words support, briefly, with the cause when the source gives it. Do not restate an unchanged relationship or turn a note correction into a story event.
 - "stance" is "fact", "belief", "claim", or "intention". For anything other than fact, also give "whose": the person's name, and include their People card. A thought, boast, suspicion or plan does not establish that what they think or say happened. Affection, trust, knowledge and desire can differ on each side of a relationship: never infer reciprocity.
@@ -1362,7 +1388,7 @@ ${noteRules(codex)}
  * whatever the notes still hold from words since rewritten or taken out, or
  * have drifted on, is put right. His own cards keep his words. */
 export const AUDIT_ASK = 'Check every card against the book as it stands';
-export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [] }) {
+export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [], premises = [], premisesLeft = 0 }) {
   const parts = [];
   parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
   if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);
@@ -1372,6 +1398,9 @@ export function auditRequest({ novel, bookText: text, his = [], partial = false,
   const keeps = only ? [] : keptByHelper(novel).filter((k) => String(((novel.kept || {})[k] || {}).text || '').trim());
   for (const k of keeps) parts.push(keptPart(novel, k, k === 'about' ? KEEP_ABOUT : KEEP_STYLE));
   parts.push(`The book as it stands now — only what these words say happens. Anything the notes hold from words that have since been rewritten or taken out no longer happens:\n\n${text || '(nothing written yet)'}`);
+  /* his premises, his word on the book (2.12.36) */
+  const premised = premisesPart(premises, premisesLeft);
+  if (premised) parts.push(premised);
   const one = his.length === 1;
   parts.push(`${AUDIT_ASK}, the way an editor checks a continuity bible:
 - A fact, a line someone said, a name, an event or a secret no passage says any more (it came from words since rewritten or taken out): correct the card to what the book says now, or take the card out with "gone" when nothing of it is in the book.
@@ -1380,7 +1409,8 @@ export function auditRequest({ novel, bookText: text, his = [], partial = false,
 - A thread the book has resolved — by what happens after it was set up, never by the words that set it up: "open": false. One it opened that the notes miss: add it.
 - Whose and who: whose thing it is, who did a deed, who said a line — held against the passages in their order.
 - Someone or something that matters and is missing: add it, described as the book first describes them.
-${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it’s about, how it reads)' : keeps[0] === 'about' ? 'What you keep of what the book is about' : 'What you keep of how the book reads'}: where it has drifted from the book as it stands, give ${keeps.length === 2 ? '"about" or "style"' : `"${keeps[0]}"`} whole again, put right.
+${premised ? `- My premises count as the book, and their words as the book’s own wherever its words are to be quoted: what one says holds true for good stays on its card — never taken out or changed because no passage says it, or because a passage says otherwise; a card that lacks it gets it. What a premise only asks to happen is not the book until a passage tells it.
+` : ''}${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it’s about, how it reads)' : keeps[0] === 'about' ? 'What you keep of what the book is about' : 'What you keep of how the book reads'}: where it has drifted from the book as it stands, give ${keeps.length === 2 ? '"about" or "style"' : `"${keeps[0]}"`} whole again, put right.
 ` : ''}- Cards that say the same thing: each fact belongs on one card — the person it is about, or the thing, place or thread itself. Where several cards repeat it (a limit, a rule, a name kept back, a secret), keep it on the card it belongs to and take it off the others, giving each of them whole without it. Two cards for one person, place or thing become one: give the one to keep whole, with whatever the other held that it lacks (for a person, the other's names among the others they go by), and put the other in "gone". Nothing true is lost in the folding.
 - A name a person is noted as going by that isn't theirs (it is someone else's, or a slip): give their "aka" whole without it. Leave "aka" out wherever their names are right.${codex ? `
 - A person's "about" grown past a short portrait — into a record of what they did, scene by scene: give it whole again as a short portrait of who they are for good. The book's bibliography keeps their lasting details with the words that say them, and the chapters keep what they did; a portrait that leaves out what neither keeps is not taken.` : ''}${his.length ? `
@@ -1440,13 +1470,16 @@ ${shown}
 /* Written whole, for a book set to Automatic (when it has none yet, or he
  * asked for it again from the book): from the book itself, its notes and his
  * words. */
-export function keepRequest({ novel, keeps, bookText: text, notesFit = 0 }) {
+export function keepRequest({ novel, keeps, bookText: text, notesFit = 0, premises = [], premisesLeft = 0 }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit });
   if (notes) parts.push(`The notes as they stand:\n${notes}`);
   const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(`My own words (they stand as they are — never repeat them; keep only what they don’t say):\n\n${about}`);
   parts.push(`The book as it stands:\n\n${text || '(nothing written yet)'}`);
+  /* his premises, his word on the book (2.12.36): what it is about holds them */
+  const premised = premisesPart(premises, premisesLeft);
+  if (premised) parts.push(premised);
   const fields = [
     keeps.includes('about') ? `"about": "${KEEP_ABOUT}"` : '',
     keeps.includes('style') ? `"style": "${KEEP_STYLE} — the voice it has settled into"` : '',

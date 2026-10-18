@@ -293,6 +293,24 @@ export function premiseOf(passage) {
   const r2 = (passage.versions || []).find((x) => x && x.ask && String(x.ask.premise || '').trim());
   return r2 ? String(r2.ask.premise).trim() : '';
 }
+/* EVERY PREMISE HE TYPED, THE BOOK THROUGH (2.12.36 — his report: "does the notes read my premise too?" — the world
+ * his premise set up, an elder vampire's turning that comes once in a thousand, was read by the writer of that one page
+ * and nobody after it; the notes read only what the page said, and the pages after it drifted). In the book's order,
+ * each with the passage it was typed for, as the page numbers it: what the notes' reading, check and the helper's
+ * telling of the book hold as his word (archivist.js). `chapters`: id → chapter. */
+export function premisesOf(novel, chapters) {
+  const out = [];
+  (((novel && novel.order) || [])).forEach((id) => {
+    const c = chapters && chapters[id];
+    if (!c) return;
+    const nums = passageNumbers(c);
+    for (const p of c.passages || []) {
+      const text = premiseOf(p);
+      if (text) out.push({ chapterId: id, pid: p.id, text, label: `${chapterLabel(novel, c, { withName: false })}, Passage ${nums.get(p.id) || '—'}` });
+    }
+  });
+  return out;
+}
 export function passageText(passage) {
   if (!passage) return '';
   if (passage.by === 'break') return '* * *';

@@ -13467,6 +13467,106 @@ await test('words put back that are not the newest kept are the base of the fixe
   await putAway(c);
 });
 
+heading('his premise is his word on the book: the notes read it, the check holds to it (2.12.36)');
+const PREMISE_36 = 'Emilia Vermaine, an elder vampire of the Sanguelis council, turns Jovan Wessex. Becoming an elder is a 1 in 1000 chance.';
+
+await test('the helper reads the premise he typed beside the page it wrote — what it says of the world kept as his word — and a page with none carries none', async () => {
+  const b = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(b);
+  await script([{ text: 'Jovan hit the wall. A pale woman stood over him.' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: PREMISE_36, length: 'scene' });
+  assert.equal(out.ok, true, out.error);
+  await reset();
+  await script([{ text: JSON.stringify({ people: [{ name: 'Emilia Vermaine', about: 'An elder vampire of the Sanguelis council.' }, { name: 'Jovan Wessex', about: 'Turned by an elder.' }], lore: [{ name: 'Elder vampires', about: 'Becoming one is a 1 in 1000 chance.' }] }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes'));
+  assert.ok(sent, 'a reading was asked');
+  const at = sent.indexOf('My premise for it, as I typed it:');
+  assert.ok(at >= 0 && sent.indexOf(PREMISE_36) > at && sent.indexOf(PREMISE_36) < sent.indexOf('Jovan hit the wall.'), 'beside the page it wrote, before its words');
+  assert.ok(sent.includes('is my own word on the book and counts as the book'), 'told what his premise is');
+  const n = b.novel().notes;
+  assert.equal(n.lore.find((c) => c.name === 'Elder vampires').about, 'Becoming one is a 1 in 1000 chance.', 'a rule of his world the page never said, kept');
+  assert.ok(n.people.some((c) => c.name === 'Emilia Vermaine'));
+  /* Continue — no premise of his: none rides, and nor does the rule */
+  await reset();
+  await script([{ text: 'The sun came up over the river.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  await reset();
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  const plain = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes'));
+  assert.ok(plain && plain.includes('The sun came up over the river.'));
+  assert.ok(!plain.includes('My premise for it') && !plain.includes('counts as the book'), 'nothing of his to show');
+  await putAway(b);
+});
+
+await test('the notes’ check is shown his premises and holds to them: a card only his premise names is never taken out for no page naming it, and a figure only his premise gives is kept', async () => {
+  const b = await makeBook([['The alley was quiet.', { text: 'Jovan hit the wall. A pale woman stood over him.', ask: { direction: PREMISE_36, length: 'scene' } }]], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => {
+    n.notes.lore.push({ id: 'lo-s', name: 'Sanguelis', about: 'The council of the elder families.', updated: { chapterId: b.ids[0], at: 1 } });
+    n.notes.people.push({ id: 'pe-e', name: 'Emilia Vermaine', aka: [], about: 'A pale woman.', updated: { chapterId: b.ids[0], at: 1 } });
+  }, { now: true });
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', gone: [{ kind: 'lore', name: 'Sanguelis', why: 'no passage names it' }], people: [{ name: 'Emilia Vermaine', about: 'An elder vampire; becoming one is a 1 in 1000 chance.', why: 'her premise' }] }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes(prompts.AUDIT_ASK));
+  assert.ok(sent && sent.includes(`[Chapter One, Passage 2] ${PREMISE_36}`), 'each premise by the passage it was typed for');
+  assert.ok(sent.includes('My premises count as the book'), 'told to hold to them');
+  const n = b.novel().notes;
+  assert.ok(n.lore.some((c) => c.id === 'lo-s'), 'named by his premise alone: it stays');
+  assert.equal(n.people.find((c) => c.id === 'pe-e').about, 'An elder vampire; becoming one is a 1 in 1000 chance.', 'a figure his premise gives: kept');
+  /* the same check where no premise gives them: the card goes, the made-up figure is left out */
+  const c = await makeBook([['The alley was quiet.', 'Jovan hit the wall. A pale woman stood over him.']], { manual: true });
+  markAllSeen(c);
+  store.change('novel', c.novelId, (x) => {
+    x.notes.lore.push({ id: 'lo-s', name: 'Sanguelis', about: 'The council of the elder families.', updated: { chapterId: c.ids[0], at: 1 } });
+    x.notes.people.push({ id: 'pe-e', name: 'Emilia Vermaine', aka: [], about: 'A pale woman.', updated: { chapterId: c.ids[0], at: 1 } });
+  }, { now: true });
+  await reset();
+  archivist.askAudit(c.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', gone: [{ kind: 'lore', name: 'Sanguelis', why: 'no passage names it' }], people: [{ name: 'Emilia Vermaine', about: 'An elder vampire; becoming one is a 1 in 1000 chance.', why: 'made up' }] }) }]);
+  await archivist.run(c.novelId);
+  const plain = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes(prompts.AUDIT_ASK));
+  assert.ok(plain && !plain.includes('My premises'), 'no premise, nothing of it said');
+  assert.ok(!c.novel().notes.lore.some((x) => x.id === 'lo-s'), 'without his premise: gone');
+  assert.equal(c.novel().notes.people.find((x) => x.id === 'pe-e').about, 'A pale woman.', 'without his premise: the figure is made up, left out');
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('notes read before 2.12.36 never saw his premises: a book with any is checked against them once, by itself — one with none is not', async () => {
+  const b = await makeBook([['The alley was quiet.', { text: 'Jovan hit the wall.', ask: { direction: PREMISE_36, length: 'scene' } }]], { manual: true });
+  const c = await makeBook([['The alley was quiet.', 'Jovan hit the wall.']], { manual: true });
+  for (const x of [b, c]) {
+    markAllSeen(x);
+    store.change('novel', x.novelId, (n) => { n.notes.people.push({ id: 'pe-j', name: 'Jovan Wessex', aka: [], about: 'A novice hunter.', updated: { chapterId: x.ids[0], at: 1 } }); n.memory = { ...(n.memory || {}), audit: { at: 1, reads: 0, v: 10, checked: true } }; }, { now: true });
+    archivist.firstCheck(x.novelId);
+  }
+  assert.deepEqual([b.novel().memory.auditAsked, b.novel().memory.audit.v], [true, archivist.AUDIT_V], 'with a premise: asked');
+  assert.deepEqual([Boolean(c.novel().memory.auditAsked), c.novel().memory.audit.v], [false, archivist.AUDIT_V], 'with none: not asked');
+  /* once: opened again, nothing more is owed */
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: false }), { now: true });
+  archivist.firstCheck(b.novelId);
+  assert.equal(Boolean(b.novel().memory.auditAsked), false);
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('what the book is about, kept by the helper, is written from the book and his premises', async () => {
+  const b = await makeBook([['The alley was quiet.', { text: 'Jovan hit the wall.', ask: { direction: PREMISE_36, length: 'scene' } }]]);
+  markAllSeen(b);
+  await reset();
+  archivist.keepAgain(b.novelId, 'about');
+  await script([{ text: JSON.stringify({ about: 'A novice hunter is turned by an elder vampire. Her first family is him.' }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('for the writer to read before every page'));
+  assert.ok(sent && sent.includes(`[Chapter One, Passage 2] ${PREMISE_36}`) && sent.indexOf(PREMISE_36) > sent.indexOf('Jovan hit the wall.'), 'after the book, his premise by its passage');
+  assert.equal(b.novel().kept.about.text, 'A novice hunter is turned by an elder vampire. Her first family is him.');
+  await putAway(b);
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

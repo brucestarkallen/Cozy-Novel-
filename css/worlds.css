@@ -279,8 +279,8 @@ input::placeholder, textarea::placeholder { color: var(--chrome-soft); opacity: 
 .menu-pop { background: var(--chrome-solid); box-shadow: var(--shadow); border-color: var(--line); }
 .menu-pop button:hover, .menu-pop button:focus-visible { background: var(--hover); }
 .toast { background: var(--chrome-solid); color: var(--chrome-ink); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); box-shadow: var(--shadow); }
-.toast .toastact { color: var(--accent); }
-.toast .toastact:hover, .toast .toastact:focus-visible { background: var(--hover); }
+.toast .toastact { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.toast .toastact:hover, .toast .toastact:focus-visible { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .banner { color: var(--chrome-ink); background: var(--chrome-solid); border-color: var(--danger); box-shadow: var(--shadow); }
 .banner code { background: var(--wash); }
 .sugsheet .sug[data-kind] .tag { color: var(--accent); }

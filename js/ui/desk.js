@@ -1239,10 +1239,17 @@ function initScroller() {
     toPassage(step);
   });
   window.addEventListener('resize', placeScrollerSoon);
-  if (typeof ResizeObserver === 'function') new ResizeObserver(() => {
-    SC.geometry = null;
-    placeScrollerSoon();
-  }).observe(ui.passages);
+  if (typeof ResizeObserver === 'function') {
+    const watch = new ResizeObserver(() => {
+      SC.geometry = null;
+      placeScrollerSoon();
+    });
+    watch.observe(ui.passages);
+    /* (and the page's own height: the box grows with his words or the row that says what he selected, the page under
+     * it shortens, and the thumb is placed on the shorter track — through 2.12.35 it stayed where it was, below the
+     * track's end and over Suggestions: 2.12.36) */
+    watch.observe(ui.wrap);
+  }
 }
 function placeScrollerSoon() { if (SC.bar && !SC.frame) SC.frame = requestAnimationFrame(() => { SC.frame = 0; placeScroller(); }); }
 /* the numbered passages on the page, in order, with their numbers */

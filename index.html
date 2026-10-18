@@ -104,9 +104,12 @@
           <div id="passages"></div>
           <div id="pageEnd"></div>
         </article>
-        <button class="btn small follow" id="followBtn" hidden>Follow the writing &darr;</button>
       </section>
-      <button class="checkbubble" id="checkBubble" data-state="clean" aria-label="Suggestions" title="The checker: green all good, blue checking, yellow suggestions waiting, red trouble, grey nobody checks"></button>
+      <!-- what floats at the foot of the page stands side by side, never one over the other -->
+      <div class="floatrow" id="floatRow">
+        <button class="btn small follow" id="followBtn" hidden>Follow the writing &darr;</button>
+        <button class="checkbubble" id="checkBubble" data-state="clean" aria-label="Suggestions" title="The checker: green all good, blue checking, yellow suggestions waiting, red trouble, grey nobody checks"></button>
+      </div>
       <div class="scroller" id="scroller" hidden><div class="tip" aria-hidden="true"></div><div class="thumb" role="slider" tabindex="0" aria-label="Passage" aria-valuemin="1"></div></div>
     </div>
 

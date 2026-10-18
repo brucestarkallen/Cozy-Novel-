@@ -455,10 +455,14 @@ function banner(offline) {
 /* An open sheet starts under the banner, never beneath it: the banner lay over a sheet's title, its Close and the
  * toolbar of Settings' parts while the phone was not answering (2.12.20). Measured again as its words wrap anew. */
 let bannerWatch = null;
+/* (2.12.36: it stands in a band of its own at the top, the band given to the top that is not the screen's to use —
+ * css --safe-t — so the bar, a pane's head, a scene over the whole screen and Leave full screen start below it: it lay
+ * over a scene's All scenes, Full screen and its menu, and over the tabs of the column beside the page) */
 function bannerRoom() {
   const b = $('#banner');
   const root = document.documentElement.style;
-  if (b.hidden) { root.removeProperty('--banner-room'); return; }
+  if (b.hidden) { root.removeProperty('--banner-room'); root.removeProperty('--banner-band'); return; }
+  root.setProperty('--banner-band', `${Math.ceil(b.getBoundingClientRect().height) + 16}px`);
   root.setProperty('--banner-room', `${Math.ceil(b.getBoundingClientRect().bottom) + 10}px`);
   if (!bannerWatch && typeof ResizeObserver === 'function') { bannerWatch = new ResizeObserver(() => bannerRoom()); bannerWatch.observe(b); }
 }
