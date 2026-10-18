@@ -692,6 +692,9 @@ body.fullpage #desk .composer { padding-left: 10px; padding-right: 10px; }
 body.fullpage .pagewrap { padding-top: var(--safe-t); }
 .fullexit { position: fixed; right: 10px; top: calc(var(--safe-t) + 10px); z-index: 20; width: 38px; height: 38px; border-radius: 50%; background: var(--chrome-solid); color: var(--chrome-ink); border: 1px solid var(--line); box-shadow: var(--shadow); opacity: .55; transition: opacity .2s; }
 .fullexit:hover, .fullexit:focus-visible { opacity: 1; }
+/* the notes' light in full screen (the bar that carries it is gone): its dot in the middle; on the page, beside Leave full screen */
+.noteslight .dot { inset: 0; margin: auto; width: 11px; height: 11px; }
+.noteslight.fullcorner { position: fixed; right: 56px; top: calc(var(--safe-t) + 10px); z-index: 20; width: 38px; height: 38px; border-radius: 50%; background: var(--chrome-solid); border: 1px solid var(--line); box-shadow: var(--shadow); }
 
 /* a scene over the whole screen: the narrator's words in the book's own type */
 .scenehead { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }

@@ -423,8 +423,14 @@ async def scenario_round(b):
     await pg.wait_for_timeout(300)
     bar = await pg.evaluate("getComputedStyle(document.querySelector('.deskbar')).display")
     check('Full screen hides the bars above the page and keeps the box', bar == 'none' and await pg.locator('.composer').is_visible() and await pg.locator('.fullexit').count() == 1, bar)
+    # the notes' light, gone with the bar, stands beside Leave full screen: the same state and words; a tap says them
+    lit = await pg.evaluate("(() => { const a = document.querySelector('.noteslight.fullcorner'), b = document.querySelector('#notesBtn'); if (!a) return null; const r = a.getBoundingClientRect(), x = document.querySelector('.fullexit').getBoundingClientRect(), d = a.querySelector('.dot').getBoundingClientRect(); return [a.dataset.state, b.dataset.state, a.getAttribute('aria-label'), b.getAttribute('aria-label'), r.width > 0 && r.right <= x.left, getComputedStyle(a.querySelector('.dot')).backgroundColor, d.left > r.left && d.right < r.right && d.top > r.top && d.bottom < r.bottom] })()")
+    await pg.click('.noteslight.fullcorner'); await pg.wait_for_timeout(300)
+    said = await pg.inner_text('#toast')
+    check('in full screen the notes\' light is beside Leave full screen, as the Notes button says it, and a tap says how the notes stand', lit is not None and lit[0] == lit[1] and lit[0] in ('idle', 'reading', 'waiting') and lit[2] == lit[3] and lit[4] and lit[6] and said.startswith('Notes — ') and said.strip() == lit[3].strip(), (lit, said))
     await pg.go_back(); await pg.wait_for_timeout(400)
     check('Back leaves full screen, not the book', await on_desk(pg) and await pg.evaluate("getComputedStyle(document.querySelector('.deskbar')).display") != 'none')
+    check('…and the light beside it goes with it', await pg.locator('.noteslight').count() == 0)
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Full screen")')
     await pg.wait_for_timeout(300)
     await pg.evaluate("document.querySelector('#pageWrap').scrollTop = 1e9")
@@ -474,6 +480,8 @@ async def scenario_round(b):
     await pg.wait_for_timeout(400)
     r = await pg.evaluate("(() => { const b = document.querySelector('#sidePane').getBoundingClientRect(); return [b.x, b.y, b.width, b.height, innerWidth, innerHeight] })()")
     check('a scene goes full screen', r[0] == 0 and r[1] == 0 and r[2] == r[4] and r[3] == r[5], r)
+    sl = await pg.evaluate("(() => { const a = document.querySelector('#sidePane .scenehead .noteslight'); return a ? [a.dataset.state, document.querySelector('#notesBtn').dataset.state, a.getBoundingClientRect().width > 0, a.nextElementSibling && a.nextElementSibling.getAttribute('aria-label')] : null })()")
+    check('…with the notes\' light beside Leave full screen', sl is not None and sl[0] == sl[1] and sl[2] and sl[3] == 'Leave full screen', sl)
     await pg.go_back(); await pg.wait_for_timeout(400)
     check('Back leaves the scene\'s full screen and keeps the scene open', not await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')") and await pg.evaluate("document.querySelector('#sidePane').classList.contains('open')"))
     await pg.go_back(); await pg.wait_for_timeout(400)
@@ -495,6 +503,18 @@ async def scenario_round(b):
     await pg.wait_for_selector('.sheet.on')
     check('a person\'s card keeps how they stand with the others', await pg.locator('.sheet.on label.field:has(span:text-is("With others")) textarea').count() == 1)
     await close_sheet(pg)
+    # writing in full screen: the light beside Leave full screen goes from reading to up to date as the helper works
+    if await pg.evaluate("document.querySelector('#sidePane').classList.contains('open')"):
+        await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Full screen")')
+    await pg.wait_for_timeout(300)
+    await pg.evaluate("(() => { const a = document.querySelector('.noteslight.fullcorner'); window.__lit = [a.dataset.state]; new MutationObserver(() => window.__lit.push(a.dataset.state)).observe(a, { attributes: true, attributeFilter: ['data-state'] }); })()")
+    await write(pg, 'Mara reads the letter by the lamp.')
+    await pg.wait_for_function("(() => { const a = document.querySelector('.noteslight.fullcorner'); return a && a.dataset.state === 'idle' && window.__lit.some((x) => x !== 'idle'); })()", timeout=30000)
+    seen = await pg.evaluate("window.__lit")
+    end = await pg.evaluate("[document.querySelector('.noteslight.fullcorner').getAttribute('aria-label'), document.querySelector('#notesBtn').getAttribute('aria-label')]")
+    check('in full screen the light shows the helper reading the new page, then the notes up to date', any(x in ('reading', 'waiting') for x in seen) and seen[-1] == 'idle' and end[0] == end[1] == 'Notes — The notes are up to date.', (seen, end))
+    await pg.go_back(); await pg.wait_for_timeout(400)
     errs = [l for l in logs if l.startswith('PAGEERROR')]
     check('no page errors (this round)', not errs, errs[:5])
     await pg.close()
@@ -1362,8 +1382,9 @@ async def scenario_partner(b):
     # full screen, and back
     await pg.click('#sideBody .convrow button[aria-label="Full screen"]'); await pg.wait_for_timeout(400)
     full = await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')")
+    pl = await pg.evaluate("(() => { const a = document.querySelector('#sideBody .convrow .noteslight'); return a ? a.dataset.state === document.querySelector('#notesBtn').dataset.state && a.getBoundingClientRect().width > 0 : null })()")
     await pg.click('#sideBody .convrow button[aria-label="Leave full screen"]'); await pg.wait_for_timeout(400)
-    check('the partner goes full screen and comes back', full and not await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')"))
+    check('the partner goes full screen, its notes\' light beside Leave full screen, and comes back', full and pl is True and not await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')") and await pg.locator('#sideBody .convrow .noteslight').count() == 0, pl)
     # a passage taken out is said as such
     await pg.fill('#sideFoot textarea', 'TAKE OUT THE PASSAGE, please.')
     await pg.click('#sideFoot button:has-text("Send")')

@@ -760,3 +760,11 @@ In the scene itself the narrator already renders his move the way Cozy Tavern's 
 
 Checks: app — the new test (the scene's prose request and the Go on after it both carry his line and say it stands; it fails on 2.12.23's code); every app test named for scenes, once — 25 passed; every one named for prose — 7 passed; the rule-waking test that turns a scene into prose — passed; the helper's reading request compared with 2.12.23's — byte for byte the same. Not run: the browser walks (nothing on the screen changed), the whole app suite.
 
+## 2.12.25, the notes' light in full screen
+
+"The full screen is stupid — how do I know the notes is finished?" The helper's light rides on the Notes button, in the bar at the top, and full screen takes that bar away — the page's full screen hides it, and a scene's or the partner's full screen lies over it. Nothing else said whether the notes were being kept, were up to date, or had trouble, so in full screen there was no way to know.
+
+Now every full screen carries the same light beside its Leave full screen: on the page, a round light in the top corner next to the button that leaves; in a scene and in the partner, in their head next to theirs. It is painted with the Notes button, by the same drawing — the same state, the same colours (amber while the helper reads, green when the notes are up to date, red for trouble, grey with no helper), the same words — and a tap says them: "Notes — The notes are up to date." It goes when the full screen does.
+
+Checks: the second browser walk's full-screen round, once — 28 passed (the light beside Leave full screen with the Notes button's state and words, its dot inside it, a tap saying them, gone with Back; the scene's light beside its Leave full screen; and a page written in full screen — the light went from reading to up to date while the bar was hidden, ending on "Notes — The notes are up to date." as the Notes button says); its partner round — 26 passed, the partner's light; the accessibility walk — 56 passed; the reading colours walk — 47 passed. Not run: the other browser walks and the app suite — nothing they reach changed.
+

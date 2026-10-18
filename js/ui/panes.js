@@ -533,12 +533,23 @@ async function bringBackCopy(id, row, box, s, given = null) {
 
 /* --------------------------------------------------------------- light */
 
-/* the helper's light rides on the Notes button */
-function drawLight() {
+/* the helper's light rides on the Notes button — and, in full screen, where the bar with the Notes button is gone,
+ * on a light of its own beside Leave full screen (his ask, 2.12.25: "how do I know the notes is finished?") */
+function paintLight(el) {
   const l = archivist.lightOf(P.novelId);
-  ui.light.dataset.state = l.state;
-  ui.light.title = `Notes — ${l.words}`;
-  ui.light.setAttribute('aria-label', `Notes — ${l.words}`);
+  el.dataset.state = l.state;
+  el.title = `Notes — ${l.words}`;
+  el.setAttribute('aria-label', `Notes — ${l.words}`);
+}
+function drawLight() {
+  paintLight(ui.light);
+  for (const el of document.querySelectorAll('.noteslight')) paintLight(el);
+}
+/* the notes' light for a full screen: the same colours as on the Notes button; a tap says how the notes stand */
+export function notesLight(cls = '') {
+  const el = h(`button.icon.notesbtn.noteslight${cls ? `.${cls}` : ''}`, { onclick: () => toast(`Notes — ${archivist.lightOf(P.novelId).words}`, 5000) }, h('span.dot', { 'aria-hidden': 'true' }));
+  paintLight(el);
+  return el;
 }
 /* the talk record at hand as the book opens — read, never made — so the Partner
  * button's count is right before the pane is opened; one subscription per book
@@ -1375,6 +1386,7 @@ function conversationRow(novelId, t) {
       drawSide();
     } }, icon('plus', 14), 'New'),
     h('span.grow'),
+    full ? notesLight() : null,
     h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: partnerFull }, icon(full ? 'shrink' : 'expand', 18))));
 }
 function conversationMenu(anchor, novelId) {
@@ -1981,6 +1993,7 @@ function drawOnePlay(p) {
   const head = previousHead?._headingSignature === headingSignature ? previousHead : h('div.scenehead',
     h('button.icon', { 'aria-label': 'All scenes', onclick: () => { P.playId = null; drawSide(); } }, icon('back', 20)),
     h('div', { style: { flex: '1', minWidth: '0' } }, h('b', { style: { font: '600 18px/1.2 var(--display)' } }, `You play ${p.who}`), h('div', { style: { fontSize: '12.5px', color: 'var(--chrome-soft)' } }, c ? `From ${chapterLabel(n, c, { withName: false })}` : '')),
+    full ? notesLight() : null,
     h('button.icon', { 'aria-label': full ? 'Leave full screen' : 'Full screen', title: full ? 'Leave full screen' : 'Full screen', onclick: () => sceneFull() }, icon(full ? 'shrink' : 'expand', 18)),
     h('button.icon', { 'aria-label': 'More for this scene', onclick: (e) => menu(e.currentTarget, [
       { label: 'Turn it all into prose (from the start)', hint: 'The whole scene written into the chapter, not just what is new since last time.', run: () => toProse(store.peek('play', p.id) || p, true) },

@@ -10,7 +10,7 @@ import { h, $, icon, toast, hintToast, menu, closeMenu, closeAllSheets, afterBac
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
 import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound, whenOpen } from './ui/desk.js';
-import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn, showCard } from './ui/panes.js';
+import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn, showCard, notesLight } from './ui/panes.js';
 import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './ui/look.js';
@@ -417,8 +417,10 @@ function moreMenu(anchor) {
  * in stay. The button in the corner, or Back, brings them back. */
 function fullPage() {
   const out = h('button.icon.fullexit', { 'aria-label': 'Leave full screen', title: 'Leave full screen', onclick: () => leaveFull() }, icon('shrink', 20));
-  enterFull('page', () => { document.body.classList.add('fullpage'); document.body.append(out); },
-    () => { document.body.classList.remove('fullpage'); out.remove(); });
+  /* the notes' light, which rode on the bar now gone, beside it */
+  const light = notesLight('fullcorner');
+  enterFull('page', () => { document.body.classList.add('fullpage'); document.body.append(light, out); },
+    () => { document.body.classList.remove('fullpage'); light.remove(); out.remove(); });
 }
 
 /* Reading mode: only the page. The phone's Back (or Escape, or Back to
