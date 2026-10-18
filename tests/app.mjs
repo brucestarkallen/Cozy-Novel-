@@ -2429,8 +2429,8 @@ await test('a scene sends the narrator\'s own words first — nothing of his whe
   assert.ok(sys.startsWith('THE NARRATOR\'S OWN WORDS') && !sys.includes('HIS OWN WORDS FIRST'), sys.slice(0, 80));
   assert.ok(sys.includes('I’m taking Joon’s part. Everything Joon says, does, thinks and feels comes from me'), 'whose part it is, in his own voice');
   assert.ok(sys.includes('if the book sees through Joon’s eyes') && sys.includes('if it sees through someone else’s, it stays theirs'), 'the book\'s own point of view stays');
-  assert.ok(body.messages.at(-1).content.includes('where the book and my starting description place Joon'), 'the opening respects the established position');
-  assert.ok(body.messages.at(-1).content.includes('leave the arrival or entry for me to choose'), 'an unsupplied arrival remains the player’s choice');
+  assert.ok(body.messages.at(-1).content.includes('where the book and my description of the start put Joon'), 'the opening respects the established position');
+  assert.ok(body.messages.at(-1).content.includes('if neither settles how Joon arrives or comes in, leave that to me'), 'an unsupplied arrival remains the player’s choice');
   await setHouse({}, { instructions: { system: 'HIS OWN WORDS FIRST', narrator: '', late: '', partner: '' } });
   await reset();
   await script([{ text: 'Rain.' }]);
@@ -4834,7 +4834,7 @@ await test('his own modules ride word for word to whom he chose, after the app\'
   const [w, p, t] = (await requests()).map(systemOf);
   assert.ok(w.startsWith('HIS OWN WORDS FIRST\n\nMY NOVEL CRAFT.'), w.slice(0, 80));
   assert.ok(!w.includes(mine) && !w.includes('## The Sound Of A Voice'), 'not his narrator\'s module; the voice rule is off');
-  assert.ok(p.includes(mine) && p.indexOf(mine) > p.indexOf('Role = you handle narration') && p.indexOf(second) > p.indexOf(mine), 'after the app\'s, the oldest first');
+  assert.ok(p.includes(mine) && p.indexOf(mine) > p.indexOf('Your Part = you handle narration') && p.indexOf(second) > p.indexOf(mine), 'after the app\'s, the oldest first');
   assert.ok(t.includes(mine) && !t.includes(second), 'and to his partner, as he ticked');
   /* the app's words again: the row goes; Off and empty: nothing */
   store.change('house', 'house', modules.moduleSteps.set('novel-craft', { text: modules.builtinOf('novel-craft').text }), { now: true });
@@ -4903,7 +4903,7 @@ await test('a rewrite with his note carries the change through — the old words
   await writer.rewrite({ novelId: b2.novelId, chapterId: b2.ids[0], passageId: last, note: 'He never says a word.' });
   await writer.rewrite({ novelId: b2.novelId, chapterId: b2.ids[0], passageId: last, note: '' });
   const asks = (await requests()).map(askOf);
-  assert.ok(asks[0].includes('What I want different: Jovan stays silent and saves Yuki without a word.') && asks[0].includes('My change is now what happens') && asks[0].includes('there only for reference'), asks[0]);
+  assert.ok(asks[0].includes('What I want different: Jovan stays silent and saves Yuki without a word.') && asks[0].includes('My change is now what happens') && asks[0].includes('just for reference'), asks[0]);
   assert.ok(asks[0].includes('my change wins') && !asks[0].includes('end wherever'), 'more comes after it in its chapter');
   assert.ok(asks[1].includes('my change wins'), 'a later chapter with words comes after it');
   assert.ok(asks[2].includes('can end wherever the change takes it') && !asks[2].includes('my change wins'), 'the last passage of the book');
@@ -8512,7 +8512,7 @@ await test('how someone stands with the others, past its room, keeps its newest 
   assert.ok(kept.notes.people[0].ties.startsWith('On day 1 Mara'), 'his lines are never the ones let go');
 });
 
-await test('the partner is told the notes keep themselves only while they do — with the helper’s connection turned away, it is asked to say when a card is out of date', async () => {
+await test('the partner is told the notes look after themselves only while they do — with the helper’s connection turned away, it is asked to say when a card is out of date', async () => {
   const b = await makeBook([['The lamp was cold.']]);
   await script([{ text: 'An answer.' }, { text: 'Another answer.' }]);
   await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Hello.' });
@@ -8520,8 +8520,8 @@ await test('the partner is told the notes keep themselves only while they do —
   await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'And now?' });
   archivist.forTests().blocked.delete(b.novelId);
   const sys = (await requests()).map((x) => x.body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n'));
-  assert.ok(sys[0].includes('The notes keep themselves') && !sys[0].includes('Nothing reads the new pages'), 'kept');
-  assert.ok(sys[1].includes('Nothing reads the new pages into the notes just now') && !sys[1].includes('The notes keep themselves'), 'turned away');
+  assert.ok(sys[0].includes('The notes look after themselves') && !sys[0].includes('Nothing reads the new pages'), 'kept');
+  assert.ok(sys[1].includes('Nothing reads the new pages into the notes just now') && !sys[1].includes('The notes look after themselves'), 'turned away');
   await putAway(b);
 });
 
@@ -8645,7 +8645,7 @@ await test('what each one is told, as Cozy Tavern learned it: the writer may jum
   await script([{ text: 'Three days later, the funeral.' }]);
   await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'Three days later, at the funeral.' });
   const write = (await requests())[0].body.messages.at(-1).content;
-  assert.ok(write.includes('when what happens next starts somewhere or somewhen else, mark the jump'), write.slice(0, 400));
+  assert.ok(write.includes('If what happens next starts somewhere else, or later, mark the jump'), write.slice(0, 400));
   await reset();
   await checker.runCheck(b.novelId);
   const check = (await requests()).map((x) => x.body.messages.at(-1).content).find((c) => c.includes('Check these passages from'));
@@ -9372,7 +9372,7 @@ await test('what his words explain stays the writer’s — said with every requ
   const said = asks.map((a) => a.includes(prompts.YOURS_ONLY));
   assert.deepEqual(said, [true, false, true, true, false, true, false], 'his words: a new page, another take of it, a rewrite with his note, a part with his note — none where he gave no words');
   assert.ok(asks[0].indexOf(ASK) < asks[0].indexOf(prompts.YOURS_ONLY), 'right after what he asked');
-  assert.ok(prompts.YOURS_ONLY.includes('how a power works, its rules and limits, how many') && prompts.YOURS_ONLY.includes('nobody says, guesses or acts on more') && prompts.YOURS_ONLY.includes('unless I say someone learns more'));
+  assert.ok(prompts.YOURS_ONLY.includes('how a power works, its rules and limits, how many') && prompts.YOURS_ONLY.includes('nobody says it, guesses it or acts on it') && prompts.YOURS_ONLY.includes('unless I say someone learns more'));
   for (const x of r) {
     const t = all(x);
     assert.ok(!/knows,? and feels because of it|knows and feels because/.test(t), 'nothing asks what each person knows because of the change');
@@ -11230,7 +11230,7 @@ await test('the partner is sent the chapter open cut only at its passages’ edg
   const notes = picked(store.peek('talk', b.novelId).turns.at(-1)).notes || [];
   assert.ok(notes.some((n) => n.includes('left out of what it was sent') && left.every((l) => n.includes(l.slice(1, -1)))), JSON.stringify(notes));
   /* and it is told the book comes fresh with every message, as it reads now */
-  assert.ok(sent.includes('Our book comes to you fresh with every message of mine, just as it reads right now'), 'the frame says so');
+  assert.ok(sent.includes('The book comes to you fresh with every message of mine, just as it reads right now'), 'the frame says so');
   await setHouse();
   await putAway(b);
 });

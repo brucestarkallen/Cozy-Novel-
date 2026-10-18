@@ -120,13 +120,13 @@ check('checker and helper distinguish narration from factual reference', () => {
 check('a continued scene retains what actually happened and the book’s viewpoint', () => {
   const r = prompts.goOnRequest({ chapterLabel: 'One', transcript: 'Mara: I give the key back.\nNarrator: The gardener locks the gate.', who: 'Mara', tail: 'The gardener', outcome: '' });
   assert.ok(r.includes('The gardener locks the gate.'));
-  assert.ok(r.includes('without repeating the converted part or inventing a different outcome'));
+  assert.ok(r.includes('don’t repeat the part already written, and don’t change how it turned out'));
   assert.ok(!r.includes('How it turns out is yours to decide'));
 });
 check('opening a scene preserves the player’s starting position and next move', () => {
   const words = prompts.playOpening({ who: 'Mara' });
-  assert.ok(words.includes('where the book and my starting description place Mara'));
-  assert.ok(words.includes('leave the arrival or entry for me to choose'));
+  assert.ok(words.includes('where the book and my description of the start put Mara'));
+  assert.ok(words.includes('if neither settles how Mara arrives or comes in, leave that to me'));
   assert.ok(!words.includes('bring Mara in'));
 });
 /* 2.11.1: the judge's checks as 2.6.6 asked them (2.9 had excused a quiet

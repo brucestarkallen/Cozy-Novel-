@@ -909,7 +909,7 @@ async def scenario_crafts(b):
     await pg.wait_for_selector('.turn.ai .tctl', timeout=8000)
     em = await pg.locator('#sideBody .turn.ai .tprose em').all_inner_texts()
     sysp = system_of(completions()[-1])
-    check('the narrator reads his preset’s opening, the scene craft and his module', sysp.startswith(NARRATOR_STARTING) and 'Role = you handle narration' in sysp and 'MY OWN MODULE' in sysp and '## The Telling\nI bring you premises' not in sysp, sysp[:160])
+    check('the narrator reads his preset’s opening, the scene craft and his module', sysp.startswith(NARRATOR_STARTING) and 'Your Part = you handle narration' in sysp and 'MY OWN MODULE' in sysp and '## The Telling\nI bring you premises' not in sysp, sysp[:160])
     check('the narrator’s telling is drawn as prose, its sound effect in italics', em == ['Crack!'] and '*' not in await pg.inner_text('#sideBody .turn.ai .tprose'), em)
     await pg.fill('#sideFoot textarea >> nth=0', 'I draw my sword and attack him.')
     reset()

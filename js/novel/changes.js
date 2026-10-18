@@ -554,7 +554,7 @@ function replaceAllOf(novel, op) {
   if (!find.trim()) return { why: 'it named no words to change' };
   if (words === null) return { why: 'it gave no new words for them' };
   const range = chapterRange(novel, op.chapters !== undefined ? op.chapters : op.range);
-  if (!range) return { why: 'it did not name chapters the app could read — say them as “2-5”, or “all”' };
+  if (!range) return { why: 'it didn’t name chapters I could read — say them as “2-5”, or “all”' };
   return { find, words, range, rule: { re: wordsRe(find), to: () => words } };
 }
 const inRange = (r, ci) => (r.list ? r.list.includes(ci) : ci >= r.from && ci <= r.to);

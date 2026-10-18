@@ -424,8 +424,8 @@ export function narrationChoices(novel) {
   ].filter(Boolean).join('\n');
 }
 
-const TELLER_VOICE = 'Keep your own voice, humour and way of thinking as we work. These notes help with our book. Talk to me naturally, and let any thoughts you share sound like you; the story’s pages follow the voice and viewpoint I chose for them.';
-const PROSE_GUIDE = 'For prose, follow my choices and instructions for point of view, tense, language and style; otherwise keep the telling established at this scene. The person of my request or a scene’s spoken moves does not choose the book’s person. Keep the viewpoint clear, with shifts only where the telling allows them; an omniscient telling may move between minds deliberately. My instructions take precedence over general craft advice.';
+const TELLER_VOICE = 'Stay yourself while we work — your own voice, your humour, the way you think. When you talk to me or think something through, sound like you; the pages themselves are told in the voice and point of view I chose for the book.';
+const PROSE_GUIDE = 'On the page, go by what I’ve chosen and asked for in point of view, tense, language and style; where I haven’t said, keep telling it the way the book does here. However I word a request — “I”, “you”, “he” — and however I speak my moves in a scene, the book stays in the person it’s told in. Keep it clear whose eyes we’re behind, and move to someone else’s only where the telling allows it; a book told from above everyone can move between minds, on purpose. Where my instructions and the usual craft advice disagree, mine win.';
 
 /* The book itself: earlier chapters told in short, the chapters that fit told
  * whole, what comes after the chapter being written (when it is not the last),
@@ -496,7 +496,7 @@ const WHAT_FOLLOWS = 'what it’s about, who and what is in it so far, and the b
  * Epistemic Law, said where the notes are handed over): a power's rules and limits, a secret, a count
  * written there are known in the story only by whoever could know them. Said to the writer and the
  * narrator wherever the notes ride; the partner talks the book over and is told it for what it writes. */
-export const NOTES_KNOW = 'In the story, each person knows only what they have lived, seen, been told or could plainly work out — never a secret, or how a power works and its limits, because it is written here.';
+export const NOTES_KNOW = 'In the story, each person knows only what they’ve lived, seen, been told or could plainly work out — nobody knows a secret, or how a power works and where it stops, just because it’s written down here.';
 export function notesOpening(house, novel, as, purpose = 'write') {
   const name = nameOf(house);
   const numbered = purpose === 'partner' ? ' — every passage numbered as it is on the page, as it reads right now' : '';
@@ -613,7 +613,7 @@ export function openingWords(length, { outcome = 'writer' } = {}) {
  * and nobody in the story says, guesses or acts on it unless he says they learn it, nor is the page bent
  * so that it comes out (his report: "Stranger. How many of those do you have left?"). Said with every
  * request that carries his words: a new page, another take, a rewrite, a part rewritten, Go on. */
-export const YOURS_ONLY = 'My words are for you, not for anyone in the story: what they say happens, happens, but what they explain — how a power works, its rules and limits, how many, why, what someone means or plans — is yours to write by. In the story, people know only what they have lived, seen, heard or been told, and make of it only what anyone there plainly would; unless I say someone learns more, nobody says, guesses or acts on more, and nothing is bent so that it comes out.';
+export const YOURS_ONLY = 'My words are for you, not for anyone in the story: what they say happens, happens, but what they explain — how a power works, its rules and limits, how many, why, what someone means or plans — is yours to write by. In the story, people know only what they have lived, seen, heard or been told, and make of it only what anyone there plainly would; unless I say someone learns more, nobody says it, guesses it or acts on it, and the story never bends just to get it out in the open.';
 
 const STORY_ONLY = 'Just the story itself — it goes straight onto the page after the last line, so no chapter title, no notes, nothing before or after it.';
 const STORY_ONLY_FIRST = 'Just the story itself — it goes straight onto the page, so no chapter title, no notes, nothing before or after it.';
@@ -629,7 +629,7 @@ export function writeRequest({ chapterLabel, direction, length, empty, firstOfBo
     lines.push(`Write the passage that comes next in ${chapterLabel}, between the text before it and the text that follows it.`);
     if (d) lines.push(`What happens: ${d}`);
   } else {
-    lines.push(`Carry on with ${chapterLabel} from where it stops. Your first lines follow straight on from its last ones — the same moment, everyone where it left them, nothing it already told told again — so the book reads as one${d ? '; when what happens next starts somewhere or somewhen else, mark the jump (a scene break, or a line that carries the reader there) rather than bridging to it' : ''}.`);
+    lines.push(`Pick ${chapterLabel} up right where it stops. Your first lines carry straight on from its last ones — the same moment, everyone where we left them, nothing told twice — so it reads as one book${d ? '. If what happens next starts somewhere else, or later, mark the jump — a scene break, or a line that takes the reader there — rather than bridging to it' : ''}.`);
     lines.push(d ? `What happens next: ${d}` : CHOSEN_NEXT);
   }
   if (d) lines.push(YOURS_ONLY);
@@ -654,14 +654,14 @@ export function rewriteRequest({ chapterLabel, note, text, last = false }) {
     return [
       `I’d like this passage from ${chapterLabel} written again.`,
       'Write it again — a fresh take on the same moment.',
-      `The passage as it stands now (it sits where the chapter above says it does):\n${fence(text)}`,
+      `Here it is as it stands now (it goes where the chapter above shows it):\n${fence(text)}`,
       "Write the new version — just the passage itself. It takes the old one's place on the page, so it has to fit with what comes before and after it.",
     ].join('\n\n');
   }
   return [
     `I’d like this passage from ${chapterLabel} written again, with a change.`,
     `What I want different: ${n}`,
-    `The passage as it stands now — what happened before my change, there only for reference (it sits where the chapter above says it does):\n${fence(text)}`,
+    `Here it is as it stands now — how it went before my change, just for reference (it goes where the chapter above shows it):\n${fence(text)}`,
     'My change is now what happens. Rethink the moment with it in place — what each person who meets it does, says and feels, and where the passage ends up — and carry it through to the passage’s last line. Keep only what still holds once the change is made; never patch the old words around it.',
     YOURS_ONLY,
     last ? 'Nothing comes after this passage yet, so it can end wherever the change takes it.' : 'What comes after it is already written, so bring the passage to where that picks up — but where my change and what follows can’t both stand, my change wins.',
@@ -679,7 +679,7 @@ export function selectionRequest({ chapterLabel, note, marked }) {
     n ? `What I want different: ${n}` : 'Make it read better — same moment, better words.',
     n ? YOURS_ONLY : '',
     fence(marked),
-    'Keep its viewpoint, tense, meaning and links to the surrounding sentences unless my change calls for something different. Do not settle a later event or add a new fact just to polish the wording.',
+    'Keep its point of view, tense and meaning, and the way it joins the sentences around it, unless my change calls for something different. Don’t settle something that happens later, or add a new fact, just to polish the wording.',
     `Write only the new words for the marked part — nothing from before or after it, and no ${MARK_OPEN} ${MARK_CLOSE} marks or quotation marks around it — so they slot back in exactly where the old ones were.`,
   ].filter(Boolean).join('\n\n');
 }
@@ -701,9 +701,9 @@ export function goOnRequest({ chapterLabel, between = false, tail = '', directio
     d ? `What I asked for in it: ${d}` : '',
     c ? `It was written again with a change, which is now what happens: ${c}` : '',
     h.length ? `Some of its words were written again with ${h.length === 1 ? 'this note' : 'these notes'} — what ${h.length === 1 ? 'it asks' : 'they ask'} holds for the rest of it too:\n${h.map((x) => `- ${x}`).join('\n')}` : '',
-    transcript ? `This passage is a scene being written into prose. The played scene${who ? `, with me taking ${who}’s part` : ''}:\n${fence(transcript)}\nFinish only what remains of this scene after the prose already written. Keep its events and dialogue, without repeating the converted part or inventing a different outcome. My spoken moves do not change the book’s point of view.` : '',
+    transcript ? `This passage is a scene we played, being written into prose. Here’s the scene${who ? `, with me taking ${who}’s part` : ''}:\n${fence(transcript)}\nFinish only what’s left of it after the prose so far. Keep what happened and what was said — don’t repeat the part already written, and don’t change how it turned out. How I spoke my moves doesn’t change the book’s point of view.` : '',
     d || c ? YOURS_ONLY : '',
-    `Carry on from exactly where it stops. Begin by repeating its last few words exactly as they stand${tail ? '' : ' (from the start of its last sentence)'}, then go on — the repeated words are taken off again and what follows is joined straight on, so don't start over or retell anything.${between ? ' What comes after the passage is already written, so bring it to where that picks up.' : ''}`,
+    `Carry on from exactly where it stops. Start by repeating its last few words exactly as they are${tail ? '' : ' (from the start of its last sentence)'}, then keep going — I’ll trim the repeat and join the rest straight on, so don’t start over or retell anything.${between ? ' What comes after the passage is already written, so bring it to where that picks up.' : ''}`,
     between || !outcome ? '' : outcomeWords(outcome),
     'Just the story itself — no notes, nothing before or after it.',
   ].filter(Boolean).join('\n\n');
@@ -716,7 +716,7 @@ export function playToProseRequest({ chapterLabel, who, transcript, length, betw
     `We played a scene picking up ${between ? `at the point in ${chapterLabel} where it was set` : `where ${chapterLabel} leaves off`}: I took ${w}’s part, and you told everything else. Here’s how it went — my lines are the ones marked “${w}:”, yours are marked “Narrator:”.`,
     fence(transcript),
     `Now write it into the book as ${between ? `the part of ${chapterLabel} that comes there` : `the next part of ${chapterLabel}`} — real prose in the book's own voice, not a transcript. Keep what happened and what was said; smooth it, give it room, let it read like the rest of the novel.${length === 'paragraphs' ? ' Keep it short.' : ''}`,
-    `It has to read as one book with what comes before: its first lines carry straight on from ${between ? 'the passage before it' : `where ${chapterLabel} stops now`} — nothing it already told told again.${between ? ' What comes after it is already written, so bring it to where that picks up.' : ''} Tell it from the point of view and in the tense chosen for the book, whoever I played: if the book sees through someone else’s eyes, it stays behind theirs, and ${w}’s thoughts come only as the book would give them. In a limited telling, change viewpoint only at a scene break (* * *), making plain whose eyes we’re behind; an established omniscient telling may move deliberately between minds without that break.`,
+    `It has to read as one book with what comes before: its first lines carry straight on from ${between ? 'the passage before it' : `where ${chapterLabel} stops now`} — nothing told twice.${between ? ' What comes after it is already written, so bring it to where that picks up.' : ''} Tell it from the point of view and in the tense chosen for the book, whoever I played: if the book sees through someone else’s eyes, it stays behind theirs, and ${w}’s thoughts come only as the book would give them. Where the book stays behind one person’s eyes at a time, change whose only at a scene break (* * *), and make plain whose eyes we’re behind now; a book told from above everyone can move between minds on purpose, without the break.`,
     between ? STORY_ONLY_BETWEEN : STORY_ONLY,
   ].join('\n\n');
 }
@@ -769,7 +769,7 @@ ${CHANGES_OPEN}[
   {"module": "The novel craft", "find": "…", "replace": "…", "why": "…"}
 ]${CHANGES_CLOSE}
 
-- "2.3" is passage 3 of Chapter Two as the page numbers it — a passage may hold many paragraphs, even a whole chapter (1.1 can be all of Chapter One); the number is never a paragraph’s. Quote "find" exactly — enough to be found in one place only. "rewrite" hands the passage to the writer — my chosen model, with my instructions and its craft — to write it again from your note: say what must change and what must stay, nothing about how to write. "text" is your own prose for it — only when I ask for your words. Either makes a new version, one arrow from the words before. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
+- "2.3" is passage 3 of Chapter Two as the page numbers it — a passage may hold many paragraphs, even a whole chapter (1.1 can be all of Chapter One); the number is never a paragraph’s. Quote "find" exactly — enough to be found in one place only. "rewrite" hands the passage to the writer — who works from my instructions and the craft — to write it again from your note: say what must change and what must stay, nothing about how to write. "text" is your own prose for it — only when I ask for your words. Either makes a new version, one arrow from the words before. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
 - "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary. "plan": what a chapter is for — my plan for it, which the writer reads only while writing in that chapter; the number after the last chapter makes a new, empty chapter to hold it, so a few in a row map the chapters ahead.
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
 - "entry" is an entry in my bibliography — the world behind the book: what is true of a name whether or not a page has said it yet. How someone looks and what makes them unlike anyone else, where they come from and what they carry, what a place is like, how a power or a technique works and what it costs, what a word of the world means, what a group is and who leads it. The writer reads an entry when its name comes up and writes from it as the truth of the world; I read it when I tap the name. This is where the world is made up, and that is your job in it: when I ask for an entry, write it — whole, in the block, in that same answer — richly and particularly, the way a novelist builds a world, inventing freely wherever the pages have not spoken and never against what they have said; what I tell you is true of them is true. Never ask me for the particulars first or offer me choices instead of the entry: write it, and I change what I see differently. "kind" is "people", "places", "things", "groups" or "lore"; "line" says in a line who or what it is; "text" is the entry whole, "add" a paragraph added to it; "rides" is "named" (the writer reads it when its name comes up — the usual), "always" or "never" (only for me); "newName", "aka", "dropAka" and "remove" as for a card.
@@ -779,12 +779,12 @@ ${CHANGES_OPEN}[
 - Only quote what you can see, and never say the pages hold what they do not: the pages are what they are, and what I ask you to make — an entry, a plan, a card, a note for the writer — is ours to make up, so make it. Nothing changes by being said — only the block changes it — so never say a thing is done unless it is in the block, and never describe what you would write in place of writing it.`;
 
 /* the notes' upkeep, as it is now (Cozy Tavern M567: a worker is never told the app does what it is not doing) */
-const NOTES_KEEP = 'The notes keep themselves — every new page is read into them, and every few readings each card is checked against the book and cards that repeat each other are folded into one — so leave their upkeep to that: change a card when I ask, or when one is plainly wrong about the book, and never offer to tidy them.';
+const NOTES_KEEP = 'The notes look after themselves — every new page is read into them, and every so often each card is checked against the book and cards that repeat each other are folded into one — so leave the upkeep to that: change a card when I ask, or when one is plainly wrong about the book, and never offer to tidy them.';
 const NOTES_UNKEPT = 'Nothing reads the new pages into the notes just now, so they may lag behind the book: where a card is out of date with it, say so and offer the change — and make it when I ask.';
 export function partnerFrame(house, novel, { notesAs = 'system', tools = true, notesKept = true } = {}) {
   return [
     TELLER_VOICE,
-    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner. Our book comes to you fresh with every message of mine, just as it reads right now: a change of yours that was made is already in it, and I never paste pages to you. Where some of it is in short or left out to save room, it says so where it stands, with how to read it. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. Distinguish what the pages establish from an inference or a possible direction. ${tools ? 'Read the relevant pages before making a change that depends on words not shown here; if they cannot be read, say what remains uncertain.' : 'Use only what is shown here, and do not claim to have read missing pages.'} ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
+    `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner. The book comes to you fresh with every message of mine, just as it reads right now — any change of yours that went in is already there, and I never paste pages to you. Where some of it is cut short or left out to save room, it says so right there, with how to read it. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. Keep what the pages actually say apart from what you’re guessing at or suggesting. ${tools ? 'Before a change that hangs on words you can’t see here, read those pages first; if you can’t, tell me what’s still uncertain.' : 'Go only by what’s here, and never claim to have read pages you haven’t.'} ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
     PROSE_GUIDE,
     /* Ideas reads nothing more and changes nothing: it is never told it could (Cozy Tavern's M241) */
     tools ? partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now') : '',
@@ -861,7 +861,7 @@ export function choicesIn(text) {
 
 export function playOpening({ who }) {
   const w = String(who || '').trim() || 'my character';
-  return `Begin the scene: where we are, who is there, what is happening. Start where the book and my starting description place ${w}; if they leave an arrival or entry undecided, leave the arrival or entry for me to choose. Tell the surrounding world up to the first moment ${w} would answer or act, then stop.`;
+  return `Open the scene: where we are, who’s there, what’s going on. Start where the book and my description of the start put ${w}; if neither settles how ${w} arrives or comes in, leave that to me. Tell everything around ${w} up to the first moment ${w} would answer or act, then stop.`;
 }
 
 export function playOnwards({ who }) {

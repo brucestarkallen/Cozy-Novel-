@@ -242,7 +242,7 @@ for (const [identity, words] of [
     assert.ok(!text.includes('You are a master novelist'), 'no generic replacement identity');
     if (purpose === 'play') {
       assert.ok(text.includes('MC Agency = ABSOLUTE. Render only the MC content I wrote.'));
-      assert.ok(text.includes('Dialogue: grammar/spelling fix only. Match input length (6 words in = 6 words out).'));
+      assert.ok(text.includes('Dialogue: grammar/spelling fix only. Match the length of what I wrote (6 words in = 6 words out).'));
       assert.ok(text.includes('Roll, in your head, and let the result stand — for everyone.'), 'his board for the contest');
       assert.ok(!text.includes('Use dice, numeric difficulty and other game mechanics only if I ask for them'));
     } else {
@@ -262,7 +262,7 @@ test('an explicitly edited craft retains its persona and original rules unchange
 });
 
 
-const appMetaWords = /\b(?:robot(?:ic)?|persona|AI|assistant|language model|LLM|chatbot|few[- ]shot|the model)\b/i;
+const appMetaWords = /\b(?:robot(?:ic)?|persona|AI|assistant|language model|LLM|chatbot|few[- ]shot|the model|NPCs?|role ?play(?:ing)?)\b/i;
 for (const purpose of ['write', 'play']) {
   test(`${purpose}: the assembled default craft speaks directly without machine labels`, () => {
     const words = 'Batman, keep your dry humor as we write.';
@@ -271,7 +271,7 @@ for (const purpose of ['write', 'play']) {
     assert.ok(text.startsWith(words));
     assert.equal(appMetaWords.exec(text), null, 'ordinary author-to-writer language throughout the request');
     /* the three places his laws said it with a machine word, in plain words */
-    assert.ok(text.includes("Their gravity is real: the "), 'Own Output Is Not Precedent');
+    assert.ok(text.includes("Their gravity is real: the "), 'What You Wrote Is Not Precedent');
     assert.ok(text.includes('gravity is global; varying the opener'), 'The Book (Scene) Is The Whole Context');
     assert.ok(text.includes('on the eighth body blow = a voice that ignores what the body has endured.'), 'the Ledger Law');
     /* knowledge stays where it was learned */
@@ -298,17 +298,17 @@ test('intentional story and custom words are never scrubbed by the terminology c
 });
 
 /* the laws 2.9 took out of each craft, by name: every one rides again */
-const TAKEN_OUT = ['Simulation Principle', 'Support Is The Sequel', 'Own Output Is Not Precedent', 'Bonds Are Not Frozen Categories',
+const TAKEN_OUT = ['Simulation Principle', 'Support Is The Sequel', 'What You Wrote Is Not Precedent', 'Bonds Are Not Frozen Categories',
   'Ambient Frame', 'Crowd In Action', 'Simultaneity', 'Event Phases Advance', 'Scene Relocation', 'Exception', 'Night Empties The World',
   'Pressure Advances State', 'CORE Is A Trajectory Not A Freeze', 'Composure Is Effort Not Absence', 'Intelligent Is Not Flat', 'Effort Has A Budget',
-  'Tone Is Output Never Input', 'Standings Move On Revelation', 'Affection Is Not Anesthesia', 'Anger Has A Physical Channel', 'Love Interests Are Rivals',
+  'Tone Is The Result Never The Cause', 'Standings Move On Revelation', 'Affection Is Not Anesthesia', 'Anger Has A Physical Channel', 'Love Interests Are Rivals',
   'Dominance Shapes Anger', 'Pathways', 'One Step Standard', 'Pathway Laundering', 'Default State', 'Anomaly Reads Mundane', 'Noticing Cap', 'Ripening Lock',
   'Public Records Absolute', 'Book Override', 'Expertise Is A Multiplier', 'Room Divergence', 'Vocabulary Quarantine', 'Distributed Deduction Ban',
   'Rule Shape Is Theory', 'Limits Are Peak Resolution', 'State Gates Cognition', 'Information Routes Through Established Mechanics', 'Camera Lens',
   'Body From Biography', 'Anchor Feature', 'Cast Contrast', 'Show Never Interpret', 'Silence Is A Choice', 'Dialogue Ratio', 'Anti Melodrama',
   'Signature Bits Burn', 'Peaks Are Plain', 'Never Spreads', 'Beat Arcs', 'Weight Is Not Defused', 'Tone Calibration', 'Peak Trigger',
   'Real People, Real Record', 'Banned Constructs (narration only)', 'CORE Voice Fixed, Register Dynamic', 'State-Driven Speech'];
-const TAKEN_OUT_OF = { write: ['A Passage Moves The World', 'Nobody Is Sherlock Holmes'], play: ['A Turn Moves The World', 'NPCs Are Not Sherlock Holmes', 'NPC Private Thoughts'] };
+const TAKEN_OUT_OF = { write: ['A Passage Moves The World', 'Nobody Is Sherlock Holmes'], play: ['A Turn Moves The World', 'Nobody Is Sherlock Holmes', 'Other People\'s Thoughts'] };
 /* what 2.9 put in their place: none of it rides */
 const PUT_IN = ['Cause And Consequence', 'Earlier Prose Is Not Precedent', 'Bonds Can Grow', 'A Passage Has A Purpose', 'A Turn Has A Purpose',
   'Pressure And Response', 'Tone Follows The People', 'Reasoned Conclusions', 'Relationships Keep Their History', 'Affection And Conflict',
@@ -388,7 +388,7 @@ for (const purpose of ['write', 'play']) {
       assert.ok(text.includes('Point Of View And Agency = narrative person and control of my character are separate.'));
       assert.ok(text.includes('My character’s unstated past, private attachments and inner life remain mine'));
       assert.ok(text.includes('Leave my character’s response to a kindness for me to give'));
-      assert.ok(text.includes("NPC Private Thoughts = only where the book's point of view reaches that NPC's mind"));
+      assert.ok(text.includes("Other People's Thoughts = anyone else's thought is given only where the book's point of view reaches their mind"));
       assert.ok(text.includes('Maximum two per telling; zero fits fine.'), 'his discipline for a thought');
       assert.ok(text.includes('MC Agency = ABSOLUTE. Render only the MC content I wrote.'));
       assert.ok(!text.includes('Private Thoughts = access follows the chosen viewpoint'));
@@ -425,8 +425,8 @@ for (const sound of ['comic', 'novel']) for (const purpose of ['write', 'play'])
 for (const purpose of ['write', 'play', 'partner']) {
   test(`${purpose}: the prose guide keeps the viewpoint mechanics and none of 2.9's softening`, () => {
     const text = assembled(purpose);
-    assert.ok(text.includes('The person of my request or a scene’s spoken moves does not choose the book’s person.'));
-    assert.ok(text.includes('My instructions take precedence over general craft advice.'));
+    assert.ok(text.includes('However I word a request — “I”, “you”, “he” — and however I speak my moves in a scene, the book stays in the person it’s told in.'));
+    assert.ok(text.includes('Where my instructions and the usual craft advice disagree, mine win.'));
     assert.ok(!text.includes('a quiet moment need not become a cliffhanger'));
     assert.ok(!text.includes('Keep deliberate dialect, repetition, figurative language'));
   });

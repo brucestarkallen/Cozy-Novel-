@@ -234,7 +234,7 @@ function currentPart(novel, chapter, target, purpose = 'write', notesAs = 'syste
   const join = purpose === 'partner' ? (arr) => numberedText(novel, chapter, arr) : (arr) => arr.map(passageText).filter((t) => t.trim()).join('\n\n');
   if (target.mark) {
     const i = list.findIndex((p) => p.id === target.mark);
-    return { label, note: mine ? NOTE_MINE.mark : "the chapter you're working in", before: join(list.slice(0, Math.max(0, i))), marker: '[ … the passage being rewritten sits here … ]', after: join(list.slice(i + 1)) };
+    return { label, note: mine ? NOTE_MINE.mark : "the chapter you're working in", before: join(list.slice(0, Math.max(0, i))), marker: '[ … the passage you’re writing again goes here … ]', after: join(list.slice(i + 1)) };
   }
   if (target.before) {
     const i = list.findIndex((p) => p.id === target.before);
@@ -398,7 +398,7 @@ function notesRunOn(novel, chapters) {
   let last = '';
   for (const id of order) if (chapters[id] && chapterText(chapters[id]).trim()) last = id;
   const label = last ? chapterLabel(novel, chapters[last], { withName: false }) : 'the book';
-  return `These notes run to the end of the book so far (${label}), later than the point being written here: where they tell of what comes after it — where someone is, what they know, what has happened since — the chapters up to this point are right, and nothing after it has happened yet.`;
+  return `These notes run to the end of the book so far (${label}), past the point we’re writing at here. Where they tell of anything after it — where someone is, what they know, what has happened since — go by the chapters up to this point: nothing after it has happened yet.`;
 }
 
 /* The passages the notes have not read yet, up to the point being written
