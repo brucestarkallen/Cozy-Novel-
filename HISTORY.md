@@ -829,3 +829,13 @@ Checks: app — the whole suite once, 503 passed (2 new: page by page — the na
 **Now** (shape.js `premiseOf`, desk.js). Under the passage's line — *Passage 3 · 1,040 words · … · just now* — **Your premise:** what he typed, whole, line breaks and all. The newest page is selected when it is written, so its premise shows right under it; any earlier page shows its own when he taps it. Another take and a rewrite keep the page's premise; a page he let the writer choose (Continue), his own words, a scene's prose and a scene break have none. It is plain text: copying it never starts a rewrite of selected words (that reads only the page's prose). Reading mode hides it with the rest of the controls.
 
 Checks: app — the new section, 1 (the premise whole as typed, two lines; kept through another take and a rewrite; none after Continue, for his own words, a scene break, or a page made without one); browser — the main walk 81 (the box empties and "Your premise: She finds a bottle with a letter." shows under the new page), the more walk whole 310 (its check of a passage's number took the controls' only line, and now takes the first, since the premise is a second). Not run: the rest of the app suite and the other walks — nothing they reach changed but the passage's controls, which only the main and more walks read.
+
+## 2.12.31, the premise behind a button
+
+"It should have a button and be hidden, not below it. It destroys immersion."
+
+**What 2.12.30 did.** The premise showed as a line under every selected page — and the newest page is always selected, so it sat under the page he was reading.
+
+**Now** (desk.js). A **Premise** button beside Edit, only on a page that has one; the premise is hidden until he presses it, shown whole under the passage's line, and put away by pressing it again (the button marked while it is open). Pressing it changes nothing else on the page — no redraw, no scroll. Reading mode hides the controls, the button with them.
+
+Checks: browser — the main walk 81 (after writing, the box empty, the Premise button there and the premise hidden; pressed, "Your premise: She finds a bottle with a letter."; pressed again, hidden), the more walk whole 310, accessibility 56. Not run: the app suite — no code it reaches changed (shape.js premiseOf as in 2.12.30, tested there); the other walks — none of them reads the passage's controls.

@@ -58,10 +58,16 @@ async def scenario_main(b):
     await write(pg, 'She finds a bottle with a letter.')
     prose = await pg.inner_text('#passages .passage.selected .prose')
     check('Write puts a passage on the page', 'Mara Venn' in prose and 'She finds a bottle with a letter.' in prose, prose[:200])
-    # his premise: the box empties, and the premise stays under the page it wrote (2.12.30)
-    said = await pg.inner_text('#passages .passage.selected .pctl .note.premise') if await pg.locator('#passages .passage.selected .pctl .note.premise').count() else ''
-    check('the box empties and his premise shows under the page it wrote', await pg.input_value('#direction') == '' and said == 'Your premise: She finds a bottle with a letter.', said)
-    await pg.locator('#passages .passage.selected .pctl .note.premise').scroll_into_view_if_needed(); await pg.screenshot(path=os.path.join(SHOTS, 'premise.png'))
+    # his premise: the box empties; under the page only a Premise button — the premise shows when he presses it, and goes again (2.12.31)
+    line = '#passages .passage.selected .pctl .note.premise'
+    btn = '#passages .passage.selected .pctl button:has-text("Premise")'
+    hidden_first = await pg.locator(btn).count() == 1 and not await pg.locator(line).is_visible()
+    await pg.locator('#passages .passage.selected .pctl').scroll_into_view_if_needed(); await pg.screenshot(path=os.path.join(SHOTS, 'premise-closed.png'))
+    await pg.click(btn); await pg.wait_for_timeout(150)
+    shown = await pg.inner_text(line) if await pg.locator(line).is_visible() else ''
+    await pg.screenshot(path=os.path.join(SHOTS, 'premise.png'))
+    await pg.click(btn); await pg.wait_for_timeout(150)
+    check('the box empties; his premise waits behind Premise under the page — shown when pressed, put away again', await pg.input_value('#direction') == '' and hidden_first and shown == 'Your premise: She finds a bottle with a letter.' and not await pg.locator(line).is_visible(), (hidden_first, shown))
     calls = completions()
     body = calls[-1]['body'] if calls else {}
     check('the request streams to the chosen model', body.get('model') == 'fake-writer' and body.get('stream') is True, {k: body.get(k) for k in ('model', 'stream')})

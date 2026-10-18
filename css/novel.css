@@ -359,6 +359,8 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 /* his premise under the page it wrote, as he typed it */
 .pctl .note.premise { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .pctl .note.premise b { font-weight: 600; color: var(--ink-soft); }
+.pctl .note.premise[hidden] { display: none; }
+.pctl button.premisebtn[aria-expanded="true"] { color: var(--accent-on-paper, var(--accent)); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .pctl .go { color: var(--accent-on-paper); font-weight: 600; }
 
 .editbox { width: 100%; min-height: 160px; resize: vertical; border-radius: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent); background: color-mix(in srgb, var(--paper) 92%, var(--ink)); color: var(--ink); font: var(--prose-size)/var(--prose-lead) var(--serif); }

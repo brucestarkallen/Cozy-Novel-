@@ -37,6 +37,7 @@ const S = {
   offs: [],
   live: new Map(),       /* passageId -> {text, thinking} while being written */
   thinkOpen: new Set(),
+  premiseOpen: new Set(),  /* passages whose premise he opened (Premise, under the page) */
   undo: null,            /* a removed passage, for a few seconds */
   insertAfter: null,     /* "Write from here": the next passage goes after this one */
   focusNext: null,       /* the box that takes the keyboard when it opens: 'edit' | 'rewrite' */
@@ -481,6 +482,19 @@ function controls(p) {
   if (writer.takeOf(p)) row.append(h('button', { title: 'The same request written again, as a new version — the notes it is written from are the ones before this passage', disabled: working, onclick: () => run(() => writer.anotherTake({ novelId: S.novelId, chapterId: c.id, passageId: p.id })) }, 'Another take'));
   row.append(h('button', { title: 'Say what should change; the change becomes what happens, carried through the passage', disabled: working, onclick: () => { S.rewriting = S.rewriting === p.id ? null : p.id; S.focusNext = 'rewrite'; drawPage(); } }, 'Rewrite…'));
   row.append(h('button', { title: 'Change the words yourself, on the page itself — ⋯ → Put back the words before undoes it', disabled: working, onclick: () => openEdit(p.id) }, 'Edit'));
+  /* HIS PREMISE, A TAP AWAY (his word, 2.12.31: "it should have a button and be hidden, not below it — it destroys
+   * immersion"): the words he typed for this page, shown only when he presses Premise, and put away again the same way */
+  const premise = premiseOf(p);
+  const premiseLine = premise ? h('div.note.premise', { hidden: !S.premiseOpen.has(p.id) }, h('b', 'Your premise: '), premise) : null;
+  if (premise) {
+    const btn = h('button.premisebtn', { title: 'The premise you typed for this page', 'aria-expanded': String(S.premiseOpen.has(p.id)), onclick: () => {
+      const open = !S.premiseOpen.has(p.id);
+      if (open) S.premiseOpen.add(p.id); else S.premiseOpen.delete(p.id);
+      premiseLine.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+    } }, 'Premise');
+    row.append(btn);
+  }
   row.append(h('button', { 'aria-label': 'More for this passage', title: 'More for this passage', onclick: (e) => passageMenu(e.currentTarget, p) }, icon('more', 18)));
   /* what to know about this version, in a line — first, its number on the page */
   const bits = [];
@@ -503,9 +517,8 @@ function controls(p) {
   if (v.ask && v.ask.note && (v.how === 'rewrite' || v.how === 'selection')) bits.push(`“${v.ask.note.slice(0, 60)}”`);
   if (v.done || v.at) bits.push(timeAgo(v.done || v.at));
   if (bits.length) row.append(h('div.note', bits.join(' · ')));
-  /* his premise, whole, under the page it wrote — the box empties once the page is written (shape.js premiseOf) */
-  const premise = premiseOf(p);
-  if (premise) row.append(h('div.note.premise', h('b', 'Your premise: '), premise));
+  /* (his premise, whole, when he opened it — shape.js premiseOf) */
+  if (premiseLine) row.append(premiseLine);
   if (v.cut) row.append(h('div.note.warn', `It stopped partway${v.cutWhy ? ` (${v.cutWhy})` : ''}. ${carry ? 'Go on carries it on from the last word.' : 'Another take writes it again.'}`));
   if (v.notes && v.notes.length) row.append(h('div.note', v.notes.join(' ')));
   /* only an address on the web is ever a link (a page kept before this check, too) */
