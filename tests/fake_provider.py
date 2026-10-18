@@ -99,7 +99,7 @@ def answer_for(body):
         return json.dumps({"summary": "Mara Venn finds a bottle at the tide line with a letter inside that smells of tar and oranges.", "name": "The Bottle"})
     if "⟦" in last_user and "Write only the new words" in last_user:
         return "lit with a slow, amber glow"
-    if "written again" in last_user and "The passage as it stands now" in last_user:
+    if "written again" in last_user and "Here it is as it stands now" in last_user:
         return "A rewritten passage. Mara steadied the lamp with both hands and listened to the rain."
     if "stopped partway through" in last_user:
         return "and the tide, at last, came in."

@@ -1458,7 +1458,8 @@ function drawTurn(kind, id, turn) {
   if (kind === 'talk' && v.read && v.read.length) el.append(h('div.turnnote', `It read ${v.read.join(', ')} whole.`));
   /* what was said of this answer — a lesson its model taught, what was taken off it — as a page's version says it */
   if (turn.by !== 'you' && v.notes && v.notes.length) el.append(h('div.turnnote.said', v.notes.join(' ')));
-  if (kind === 'play' && turn.by !== 'you') {
+  if (kind === 'play' && turn.by !== 'you' && v.how === 'edited') el.append(h('div.turnnote', 'Changed by you — the telling before is one arrow back.'));
+  else if (kind === 'play' && turn.by !== 'you') {
     const usage = sceneInputTokens(v);
     el.append(h('p.turn-tokens', { title: usage?.counted
       ? 'Input tokens reported by the provider for this telling, including the instructions, notes and scene history sent with your move.'
@@ -1470,7 +1471,34 @@ function drawTurn(kind, id, turn) {
   if (looked.length) el.append(h('div.turnnote.sources', 'Looked up: ', ...looked.slice(0, 8).flatMap((x, k) => [k ? ' · ' : '', h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer' }, String(x.title || x.url).slice(0, 80))])));
   if (kind === 'talk' && v.changes && v.changes.length) el.append(changeList(id, turn, v));
   const row = h('div.tctl');
-  if (turn.by !== 'you') {
+  /* A SCENE IS PLAYED AS HIS TALES ARE (Cozy Tavern's M27/M40): the swipe bar on the newest telling always — › past
+   * the last writes another — Edit on his move and on a telling, Try again on his move. Never on what is already
+   * written into the book. */
+  const sceneRec = kind === 'play' ? store.peek('play', id) : null;
+  const booked = kind === 'play' && talk.inBook(sceneRec, turn.id);
+  const sceneBusy = kind === 'play' && talk.talkBusy('play', id);
+  if (kind === 'play' && turn.by !== 'you') {
+    const newest = sceneRec && sceneRec.turns && sceneRec.turns.length && sceneRec.turns[sceneRec.turns.length - 1].id === turn.id;
+    const more = newest && !booked;
+    if (turn.versions.length > 1 || more) {
+      const i = turn.versions.indexOf(v);
+      const last = i >= turn.versions.length - 1;
+      row.append(h('button', { 'aria-label': 'The telling before', disabled: i <= 0, onclick: () => store.change(kind, id, turnSteps.pick(turn.id, turn.versions[i - 1].id), { now: true }) }, '‹'),
+        h('span.swipecount', `${i + 1}/${turn.versions.length}`),
+        h('button', last
+          ? { 'aria-label': 'Write another version of this telling', title: 'Writes another version of this telling; the one you have stays one arrow back.', disabled: !more || sceneBusy, onclick: async () => { const out = await talk.playAgain({ playId: id, turnId: turn.id }); if (out && !out.ok && out.error) toast(out.error, 6000); } }
+          : { 'aria-label': 'The telling after', onclick: () => store.change(kind, id, turnSteps.pick(turn.id, turn.versions[i + 1].id), { now: true }) }, '›'));
+    }
+    if (!booked) row.append(h('button', { title: 'Change the narrator’s words yourself — kept as a new version, the one before one arrow back.', disabled: sceneBusy, onclick: () => editSceneTurn(id, turn) }, 'Edit'));
+  } else if (kind === 'play') {
+    if (!booked) {
+      row.append(h('button', { title: 'Change your move where it stands. The telling after it stays until you press Try again.', disabled: sceneBusy, onclick: () => editSceneTurn(id, turn) }, 'Edit'),
+        h('button', { title: 'The narrator answers this move afresh: the telling after it gets another version, the one you have one arrow back — anything after that telling is let go, with Undo.', disabled: sceneBusy, onclick: async () => {
+          const out = await talk.playRetry({ playId: id, turnId: turn.id, onCut: (undo, n) => undoToast(`What came after it is let go (${plural(n, 'part')}) — Undo puts it back.`, undo) });
+          if (out && !out.ok && out.error) toast(`It couldn’t: ${out.error}.`, 6000);
+        } }, 'Try again'));
+    }
+  } else if (turn.by !== 'you') {
     if (turn.versions.length > 1) {
       const i = turn.versions.indexOf(v);
       row.append(h('button', { 'aria-label': 'The answer before', disabled: i <= 0, onclick: () => store.change(kind, id, turnSteps.pick(turn.id, turn.versions[i - 1].id), { now: true }) }, '‹'),
@@ -1550,7 +1578,9 @@ function turnSignature(turn, newest, kind, id) {
    * every checkpoint allocates another copy of every old paragraph. */
   return [turn.id, turn.by, turn.pick, (turn.versions || []).map(v => v.id).join('\0'), JSON.stringify(visible), JSON.stringify(changesContext),
     writingHere(v) ? null : text, writingHere(v) ? null : thinking,
-    newest, kind === 'play' ? JSON.stringify(sceneInputTokens(v)) : '', turn.by === 'you' && kind === 'talk' && talk.talkBusy(kind, id),
+    newest, kind === 'play' ? JSON.stringify(sceneInputTokens(v)) : '', (kind === 'play' || (turn.by === 'you' && kind === 'talk')) && talk.talkBusy(kind, id),
+    /* a scene's Edit and Try again go once that part is written into the book */
+    kind === 'play' && talk.inBook(store.peek('play', id), turn.id),
     Boolean((kind === 'talk' ? partnerLive : playLive).get(turnKey(kind, id, turn.id)))];
 }
 const sameSignature = (a, b) => a?.length === b?.length && a.every((part, i) => part === b[i]);
@@ -1698,6 +1728,30 @@ function editByHand(novelId, turn, v, c) {
 function showWhole(text) {
   const s = openSheet('What it said, whole');
   s.body.append(h('pre.whole', String(text || '')));
+}
+
+/* Edit in a scene (talk.js editPlayTurn): his move and his line to the narrator, or the narrator's telling — in a
+ * sheet of their own, with Undo */
+function editSceneTurn(playId, turn) {
+  const v = picked(turn) || {};
+  const mine = turn.by === 'you';
+  const s = openSheet(mine ? 'Edit your move' : 'Edit the telling');
+  const words = h('textarea', { rows: mine ? 5 : 12, 'aria-label': mine ? 'Your move' : 'The telling' });
+  words.value = mine ? String(v.text || '') : sceneWords(String(v.text || ''));
+  const tell = mine ? h('textarea', { rows: 3, 'aria-label': 'To the narrator', placeholder: 'How you’d like the telling to go from here — not something your character says or does. Optional.' }) : null;
+  if (tell) tell.value = String(v.tell || '');
+  const save = () => {
+    const out = talk.editPlayTurn({ playId, turnId: turn.id, text: words.value, tell: tell ? tell.value : '' });
+    if (!out.ok) { toast(`It couldn’t: ${out.error}.`, 5000); return; }
+    s.close();
+    if (!out.same) undoToast(mine ? 'Your move is changed — Try again has the narrator answer it afresh.' : 'The telling is changed — the one before is one arrow back.', out.undo);
+  };
+  s.body.append(
+    field(mine ? 'Your move' : 'The telling', words, mine ? 'Changed where it stands. The narrator’s telling after it stays as it is until you press Try again.' : 'Kept as a new version of this telling — the one before stays one arrow back.'),
+    tell ? field('To the narrator', tell, '') : null,
+    h('div.btnrow', h('button.btn.primary', { title: 'Keeps your change, with Undo.', onclick: save }, 'Save'), h('button.btn.quiet', { title: 'Leaves it as it was.', onclick: () => s.close() }, 'Cancel')));
+  autoGrow(words);
+  requestAnimationFrame(() => { try { words.focus({ preventScroll: true }); } catch (_) { /* fine */ } });
 }
 
 /* a turn taken out, with a few seconds to change his mind */
@@ -1962,7 +2016,7 @@ function drawOnePlay(p) {
   } else if ((store.peek('house', 'house') || {}).sceneChoices && lv && !lv.streaming && !working && sceneWords(String(lv.text || '')).trim()) {
     /* Three choices on, and none came with the newest part (told before they were on, or left out): said, with the way to ask
      * again — never an empty row (Cozy Tavern m752-018/019) */
-    extras.push(box.querySelector('.nochoices') || h('p.hint.nochoices', 'No choices came with this part — Another answer, on it, tells it again with them.'));
+    extras.push(box.querySelector('.nochoices') || h('p.hint.nochoices', 'No choices came with this part — › under it writes another version, with them.'));
   }
   updateTurns(box, 'play', p.id, turns, { turned: p.turned, extras });
   keepChildren(ui.rightBody, [head, box]);

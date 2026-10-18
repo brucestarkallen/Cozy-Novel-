@@ -153,7 +153,7 @@ async def scenario_main(b):
     check('Three choices turns on', await pg.get_attribute('#sideFoot button:has-text("Three choices")', 'aria-pressed') == 'true')
     # the newest part was told before they were on: said, with the way to ask again — never an empty row
     none = await pg.locator('#sideBody .nochoices').all_inner_texts()
-    check('a part that came with no choices says so, and how to ask again', none == ['No choices came with this part — Another answer, on it, tells it again with them.'], none)
+    check('a part that came with no choices says so, and how to ask again', none == ['No choices came with this part — › under it writes another version, with them.'], none)
     await pg.click('#sideFoot button:has-text("Send")')
     await pg.wait_for_selector('#sideBody .choices .choice', timeout=8000)
     check('…and the line goes once the choices come', await pg.locator('#sideBody .nochoices').count() == 0)
@@ -165,6 +165,26 @@ async def scenario_main(b):
     moved = completions()[-1]['body']['messages']
     story = [m for m in moved if m['role'] != 'system']
     check('a way tapped is his move, and the offers are not sent back as the story', moved[-1]['content'] == 'Mara holds out the letter.' and not any('<choices>' in (m.get('content') or '') or 'turns back up' in (m.get('content') or '') for m in story), [m['content'][-120:] for m in story])
+    # a scene is played as his tales are: the swipe bar on the newest telling, Edit and Try again on his move
+    last_ai = pg.locator('#sideBody .turn.ai').last
+    more = last_ai.locator('.tctl button[aria-label="Write another version of this telling"]')
+    check('the newest telling has its swipe bar, › writing another version', await more.is_visible() and (await last_ai.locator('.tctl .swipecount').inner_text()) == '1/1')
+    my_last = pg.locator('#sideBody .turn.you').last
+    check('his move has Edit and Try again', await my_last.locator('.tctl button:text-is("Edit")').is_visible() and await my_last.locator('.tctl button:text-is("Try again")').is_visible())
+    await my_last.locator('.tctl button:text-is("Edit")').click()
+    sheet = pg.get_by_role('dialog', name='Edit your move', exact=True)
+    await sheet.wait_for(state='visible')
+    await sheet.locator('textarea').first.fill('Mara holds out the letter, shaking.')
+    await sheet.get_by_role('button', name='Save', exact=True).click()
+    await pg.wait_for_timeout(200)
+    check('Edit changes his move where it stands', 'Mara holds out the letter, shaking.' in await pg.locator('#sideBody .turn.you').last.inner_text())
+    await pg.locator('#toast').get_by_role('button', name='Undo', exact=True).click()
+    await pg.wait_for_timeout(200)
+    check('…and Undo puts his words back', 'shaking' not in await pg.locator('#sideBody .turn.you').last.inner_text())
+    n_sent = len(completions())
+    await pg.locator('#sideBody .turn.ai').last.locator('.tctl button[aria-label="Write another version of this telling"]').click()
+    await pg.wait_for_function("(() => { const t = [...document.querySelectorAll('#sideBody .turn.ai')].pop(); return t && !t.classList.contains('streaming') && t.querySelector('.swipecount') && t.querySelector('.swipecount').textContent === '2/2'; })()", timeout=10000)
+    check('› writes another version of the telling, the one before one arrow back', len(completions()) == n_sent + 1)
     await pg.click('#sideFoot button:has-text("Three choices")')
     await pg.wait_for_timeout(200)
     check('…and turns off again', await pg.get_attribute('#sideFoot button:has-text("Three choices")', 'aria-pressed') == 'false')

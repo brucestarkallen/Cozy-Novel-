@@ -11721,6 +11721,70 @@ await test('Read my standing words for an assistant’s voice names his lines th
   assert.ok(plainvoice.findingsText(found).includes('As an AI assistant, respond to the user.'));
 });
 
+/* ------------------------------------------------------------ a scene played as his tales are (2.12.23) */
+heading('a scene played as his tales are: edit, try again, another version (2.12.23)');
+await test('in a scene his move is changed where it stands and a telling by his hand as a new version, each with Undo; Try again answers his move afresh — the telling after it another version, what came after let go with Undo; nothing already in the book', async () => {
+  await setHouse();
+  const b = await makeBook([['Mara climbed to the lamp.']]);
+  const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+  await script([{ text: 'The lamp room is cold.' }, { text: 'He takes it, warm.' }, { text: 'The rain eases.' }]);
+  await talk.playSay({ playId, text: '' });
+  await talk.playSay({ playId, text: 'I take his hand.' });
+  await talk.playSay({ playId, text: 'I wait.' });
+  const turns = () => store.peek('play', playId).turns;
+  const said = () => turns().map((t) => `${t.by}:${picked(t).text}`);
+  assert.deepEqual(said(), ['ai:The lamp room is cold.', 'you:I take his hand.', 'ai:He takes it, warm.', 'you:I wait.', 'ai:The rain eases.']);
+  /* his move, changed where it stands — with his line to the narrator */
+  const move = turns()[1];
+  const e1 = talk.editPlayTurn({ playId, turnId: move.id, text: 'I take his cold hand.', tell: 'Slow it down.' });
+  assert.equal(e1.ok, true);
+  assert.deepEqual([picked(turns()[1]).text, picked(turns()[1]).tell, turns()[1].versions.length], ['I take his cold hand.', 'Slow it down.', 1]);
+  e1.undo();
+  assert.deepEqual([picked(turns()[1]).text, picked(turns()[1]).tell], ['I take his hand.', undefined], 'Undo: his words as they were');
+  assert.equal(talk.editPlayTurn({ playId, turnId: move.id, text: '  ', tell: '' }).ok, false, 'a move needs words');
+  /* the narrator's telling, by his hand: a new version, the one before one arrow back */
+  const e2 = talk.editPlayTurn({ playId, turnId: turns()[2].id, text: 'He takes it, warm, and does not let go.' });
+  assert.equal(e2.ok, true);
+  assert.deepEqual([turns()[2].versions.length, picked(turns()[2]).text, picked(turns()[2]).how], [2, 'He takes it, warm, and does not let go.', 'edited']);
+  e2.undo();
+  assert.deepEqual([turns()[2].versions.length, picked(turns()[2]).text], [1, 'He takes it, warm.']);
+  /* Try again on his first move: the telling after it is written again; what came after it is let go, with Undo */
+  await reset();
+  await script([{ text: 'He takes it, and the lamp gutters.' }]);
+  let cut = 0;
+  let undo = null;
+  const out = await talk.playRetry({ playId, turnId: move.id, onCut: (u, n) => { cut = n; undo = u; } });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(cut, 2, 'his later move and its telling let go');
+  assert.deepEqual(said(), ['ai:The lamp room is cold.', 'you:I take his hand.', 'ai:He takes it, and the lamp gutters.']);
+  assert.equal(turns()[2].versions.length, 2, 'the telling before one arrow back');
+  const sent = (await requests())[0].body.messages.map((m) => m.content).join('\n');
+  assert.ok(sent.includes('I take his hand.') && !sent.includes('I wait.') && !sent.includes('He takes it, warm.'), 'answered from his move, never from what came after it');
+  undo();
+  assert.deepEqual(said().slice(3), ['you:I wait.', 'ai:The rain eases.'], 'Undo puts back what came after');
+  /* Try again on his newest move: only another version of the telling after it */
+  await reset();
+  await script([{ text: 'The rain stops.' }]);
+  let cutLast = -1;
+  await talk.playRetry({ playId, turnId: turns()[3].id, onCut: (u, n) => { cutLast = n; } });
+  assert.equal(cutLast, -1, 'nothing let go');
+  assert.deepEqual([turns().length, turns()[4].versions.length, picked(turns()[4]).text], [5, 2, 'The rain stops.']);
+  /* a telling with choices: he edits the telling as it is drawn, and its choices stay with it */
+  const last = turns()[4];
+  const choices = '<choices>\n1. Mara opens the door.\n2. Mara waits.\n3. Mara calls out.\n</choices>';
+  store.change('play', playId, shape.turnSteps.setVersion(last.id, picked(last).id, { text: `The rain stops.\n\n${choices}` }), { now: true });
+  assert.equal(talk.editPlayTurn({ playId, turnId: last.id, text: 'The rain stops.' }).same, true, 'the words as drawn, unchanged: nothing new');
+  assert.equal(talk.editPlayTurn({ playId, turnId: last.id, text: 'The rain stops at last.' }).ok, true);
+  assert.equal(picked(turns()[4]).text, `The rain stops at last.\n\n${choices}`, 'the choices kept under his words');
+  /* written into the book up to here: that part is the book's */
+  store.change('play', playId, (d) => { d.turned = d.turns[2].id; }, { now: true });
+  assert.equal(talk.editPlayTurn({ playId, turnId: move.id, text: 'Changed.' }).ok, false);
+  assert.equal((await talk.playRetry({ playId, turnId: move.id })).ok, false);
+  assert.equal(talk.editPlayTurn({ playId, turnId: turns()[3].id, text: 'I wait, and listen.' }).ok, true, 'what comes after the marker is still his to change');
+  await setHouse();
+  await putAway(b);
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

@@ -184,3 +184,5 @@
 .bibview .biblist { margin-top: 10px; }
 .bibview .bibitem .ab { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .bibview .bibactions { margin-top: 16px; flex-wrap: wrap; gap: 8px; }
+/* a scene's swipe bar (‹ 1/2 ›): the count between its arrows */
+.pane .turn .tctl .swipecount { align-self: center; padding: 0 4px; font: 12px/1 var(--ui); color: var(--chrome-soft); }

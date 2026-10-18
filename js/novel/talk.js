@@ -21,7 +21,7 @@ import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount, rewrite as writerRewrite, busy as writerBusy } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, NOTE_KINDS, matchCard } from './shape.js';
 import { newId, numberWords } from '../util.js';
-import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN } from './prompts.js';
+import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN, CHOICES_CLOSE } from './prompts.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup } from './textshape.js';
 import { numberedText, partnerCut } from './context.js';
 import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, statusNow, sinceWords, changeShort, madeGone, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot, renamedTarget } from './changes.js';
@@ -1433,6 +1433,82 @@ export async function playAgain({ playId, turnId }) {
   store.change('play', playId, turnSteps.addVersion(turnId, v), { now: true });
   return runTurn({ kind: 'play', id: playId, novelId: p.novelId, turnId, versionId: v.id, role: 'writer', length: 'paragraphs',
     buildArgs: playArgs(p, turnId) });
+}
+
+/* EDIT AND TRY AGAIN IN A SCENE (Cozy Tavern's "edit" and "try again", M27/M40): a scene is played the way his
+ * tales are, so his move can be changed where it stands, the narrator's telling can be changed by his hand, and his
+ * move can be answered afresh. Never on what is already written into the book ("written into the book up to here"):
+ * that part is the book's now — taking out the passage it became lets the scene go back to before it (mendScene). */
+function choicesBlockOf(text) {
+  const t = String(text || '');
+  const at = t.toLowerCase().indexOf(CHOICES_OPEN);
+  if (at < 0) return '';
+  const end = t.toLowerCase().indexOf(CHOICES_CLOSE, at);
+  return t.slice(at, end >= 0 ? end + CHOICES_CLOSE.length : undefined).trim();
+}
+function turnedAt(p) { return p && p.turned ? (p.turns || []).findIndex((t) => t.id === p.turned) : -1; }
+export function inBook(p, turnId) {
+  const i = (p && p.turns ? p.turns : []).findIndex((t) => t.id === turnId);
+  return i >= 0 && i <= turnedAt(p);
+}
+
+/* his move's words and his line to the narrator, changed where they stand — or the narrator's telling, changed by
+ * his hand as a new version of it, the one before one arrow away. With Undo. */
+export function editPlayTurn({ playId, turnId, text = '', tell = '' }) {
+  const p = store.peek('play', playId);
+  const t = p && (p.turns || []).find((x) => x.id === turnId);
+  if (!t) return { ok: false, error: 'that part of the scene is not there any more' };
+  if (inBook(p, turnId)) return { ok: false, error: 'that part is already written into the book — change it on the page' };
+  if (talkBusy('play', playId)) return { ok: false, error: 'a reply is already on its way — Stop it first' };
+  const v = picked(t);
+  const words = String(text || '').replace(/\s+$/, '');
+  if (t.by === 'you') {
+    const line = String(tell || '').trim();
+    if (!words.trim() && !line) return { ok: false, error: 'a move needs words — Remove takes it out' };
+    const was = { text: v.text, tell: v.tell };
+    store.change('play', playId, turnSteps.setVersion(t.id, v.id, { text: words.trim(), tell: line || undefined }), { now: true });
+    return { ok: true, undo: () => { if (store.peek('play', playId)) store.change('play', playId, turnSteps.setVersion(t.id, v.id, { text: was.text, tell: was.tell || undefined }), { now: true }); } };
+  }
+  if (!words.trim()) return { ok: false, error: 'a telling needs words — Remove takes it out' };
+  /* he edits the telling as it is drawn; the choices that came with it stay with it */
+  const raw = String(v.text || '');
+  if (words === sceneWords(raw)) return { ok: true, same: true, undo: () => {} };
+  const block = choicesBlockOf(raw);
+  const nv = newVersion({ text: block ? `${words}\n\n${block}` : words, how: 'edited' });
+  store.change('play', playId, turnSteps.addVersion(t.id, nv), { now: true });
+  return { ok: true, undo: () => { if (store.peek('play', playId)) store.change('play', playId, turnSteps.removeVersion(t.id, nv.id), { now: true }); } };
+}
+
+/* Try again on his move: the narrator answers it afresh. The telling right after it gets another version (the one
+ * before one arrow away); whatever came after that telling is let go — onCut hands the Undo over at once, before the
+ * answer comes. A move with no telling after it gets one. */
+export async function playRetry({ playId, turnId, onCut = null }) {
+  const p = await store.open('play', playId);
+  const list = (p && p.turns) || [];
+  const i = list.findIndex((t) => t.id === turnId);
+  if (i < 0 || list[i].by !== 'you') return { ok: false, error: 'that move is not there any more' };
+  if (inBook(p, turnId)) return { ok: false, error: 'that part is already written into the book — change it on the page' };
+  if (talkBusy('play', playId)) return { ok: false, error: 'a reply is already on its way — Stop it first' };
+  const next = list[i + 1] && list[i + 1].by !== 'you' ? list[i + 1] : null;
+  const keep = next ? i + 2 : i + 1;
+  const later = JSON.parse(JSON.stringify(list.slice(keep)));
+  if (later.length) {
+    store.change('play', playId, turnSteps.removeFrom(later[0].id), { now: true });
+    const after = (next || list[i]).id;
+    const undo = () => store.change('play', playId, (d) => {
+      d.turns = d.turns || [];
+      const back = later.filter((c) => !d.turns.some((t) => t.id === c.id));
+      if (!back.length) return;
+      const at = d.turns.findIndex((t) => t.id === after);
+      d.turns.splice(at >= 0 ? at + 1 : d.turns.length, 0, ...JSON.parse(JSON.stringify(back)));
+    }, { now: true });
+    if (typeof onCut === 'function') onCut(undo, later.length);
+  }
+  if (next) return playAgain({ playId, turnId: next.id });
+  const reply = newTurn('ai', '', { streaming: true });
+  store.change('play', playId, turnSteps.addTurn(reply), { now: true });
+  return runTurn({ kind: 'play', id: playId, novelId: p.novelId, turnId: reply.id, versionId: reply.versions[0].id, role: 'writer', length: 'paragraphs',
+    buildArgs: playArgs(store.peek('play', playId) || p, reply.id) });
 }
 
 /* A reply being written when its window closed would show "…" forever: one
