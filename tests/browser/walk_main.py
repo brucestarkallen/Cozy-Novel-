@@ -58,6 +58,10 @@ async def scenario_main(b):
     await write(pg, 'She finds a bottle with a letter.')
     prose = await pg.inner_text('#passages .passage.selected .prose')
     check('Write puts a passage on the page', 'Mara Venn' in prose and 'She finds a bottle with a letter.' in prose, prose[:200])
+    # his premise: the box empties, and the premise stays under the page it wrote (2.12.30)
+    said = await pg.inner_text('#passages .passage.selected .pctl .note.premise') if await pg.locator('#passages .passage.selected .pctl .note.premise').count() else ''
+    check('the box empties and his premise shows under the page it wrote', await pg.input_value('#direction') == '' and said == 'Your premise: She finds a bottle with a letter.', said)
+    await pg.locator('#passages .passage.selected .pctl .note.premise').scroll_into_view_if_needed(); await pg.screenshot(path=os.path.join(SHOTS, 'premise.png'))
     calls = completions()
     body = calls[-1]['body'] if calls else {}
     check('the request streams to the chosen model', body.get('model') == 'fake-writer' and body.get('stream') is True, {k: body.get(k) for k in ('model', 'stream')})

@@ -269,6 +269,18 @@ export function requestOf(passage, version = picked(passage)) {
     : ask.note !== undefined && ask.from === undefined && ask.to === undefined ? 'rewrite' : '';
   return { how, ask, notes };
 }
+/* THE PREMISE HE TYPED FOR A PASSAGE (his report, 2.12.30: "after the output my premise is gone — where can I see my
+ * previous input?"): the words in the box under the page that it was written from, as he typed them — the version on
+ * show's own request, else any version written from one (another take carries the same); '' when he pressed Continue
+ * and let the writer choose, and for his own words, a scene's prose or a scene break */
+export function premiseOf(passage) {
+  if (!passage || passage.by === 'break') return '';
+  const said = (ask) => String((ask && ask.direction) || '').trim();
+  const r = requestOf(passage);
+  if ((r.how === 'write' || r.how === 'another') && said(r.ask)) return said(r.ask);
+  const v = (passage.versions || []).find((x) => x && (x.how === 'write' || x.how === 'another') && said(x.ask));
+  return v ? said(v.ask) : '';
+}
 export function passageText(passage) {
   if (!passage) return '';
   if (passage.by === 'break') return '* * *';

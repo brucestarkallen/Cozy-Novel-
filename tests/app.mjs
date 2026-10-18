@@ -12382,6 +12382,37 @@ await test('with Super automatic on the writer’s request and the partner say e
   await putAway(b);
 });
 
+heading('his premise kept with the page it wrote (2.12.30)');
+
+await test('the premise he typed stays with its page — through another take and a rewrite, whole as he typed it; Continue, his own words, a scene break: none', async () => {
+  await setHouse();
+  const b = await makeBook([['The lamp was cold.']]);
+  const premise = 'Mara reads the letter twice.\nThen she burns it.';
+  await script([{ text: 'A page.' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: premise, length: 'scene' });
+  assert.equal(out.ok, true, out.error);
+  const pid = b.ch().passages.at(-1).id;
+  const p = () => b.ch().passages.find((x) => x.id === pid);
+  assert.equal(shape.premiseOf(p()), premise, 'whole, as typed');
+  await script([{ text: 'Another page.' }]);
+  await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid });
+  assert.equal(picked(p()).how, 'another');
+  assert.equal(shape.premiseOf(p()), premise, 'another take: the same premise');
+  await script([{ text: 'A page, rewritten.' }]);
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'Colder.' });
+  assert.equal(picked(p()).how, 'rewrite');
+  assert.equal(shape.premiseOf(p()), premise, 'rewritten: the page’s premise still');
+  /* Continue with the box empty, his own words, a scene break: nothing of his to show */
+  await script([{ text: 'The writer chose.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  assert.equal(shape.premiseOf(b.ch().passages.at(-1)), '');
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'My own lines.' });
+  assert.equal(shape.premiseOf(b.ch().passages.at(-1)), '');
+  assert.equal(shape.premiseOf(shape.newPassage('break')), '');
+  assert.equal(shape.premiseOf(b.ch().passages[0]), '', 'a page made without a premise');
+  await putAway(b);
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

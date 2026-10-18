@@ -356,6 +356,9 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .pctl .ver button { width: 30px; padding: 0; }
 .pctl .note { width: 100%; font-size: 12.5px; color: var(--ink-soft); padding: 4px 2px 0; line-height: 1.4; }
 .pctl .note.warn { color: var(--danger-ink); }
+/* his premise under the page it wrote, as he typed it */
+.pctl .note.premise { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pctl .note.premise b { font-weight: 600; color: var(--ink-soft); }
 .pctl .go { color: var(--accent-on-paper); font-weight: 600; }
 
 .editbox { width: 100%; min-height: 160px; resize: vertical; border-radius: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent); background: color-mix(in srgb, var(--paper) 92%, var(--ink)); color: var(--ink); font: var(--prose-size)/var(--prose-lead) var(--serif); }

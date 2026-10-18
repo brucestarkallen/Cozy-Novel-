@@ -9,7 +9,7 @@ import * as talk from '../novel/talk.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf, premiseOf } from '../novel/shape.js';
 import { putBackWords } from '../novel/inplace.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
@@ -503,6 +503,9 @@ function controls(p) {
   if (v.ask && v.ask.note && (v.how === 'rewrite' || v.how === 'selection')) bits.push(`“${v.ask.note.slice(0, 60)}”`);
   if (v.done || v.at) bits.push(timeAgo(v.done || v.at));
   if (bits.length) row.append(h('div.note', bits.join(' · ')));
+  /* his premise, whole, under the page it wrote — the box empties once the page is written (shape.js premiseOf) */
+  const premise = premiseOf(p);
+  if (premise) row.append(h('div.note.premise', h('b', 'Your premise: '), premise));
   if (v.cut) row.append(h('div.note.warn', `It stopped partway${v.cutWhy ? ` (${v.cutWhy})` : ''}. ${carry ? 'Go on carries it on from the last word.' : 'Another take writes it again.'}`));
   if (v.notes && v.notes.length) row.append(h('div.note', v.notes.join(' ')));
   /* only an address on the web is ever a link (a page kept before this check, too) */
