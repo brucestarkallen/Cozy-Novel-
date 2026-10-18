@@ -12336,6 +12336,52 @@ await test('the bibliography past its share: what the page names, with the book�
   assert.deepEqual(bib.ridingItems(items, { near, budget: 1e9 }).items.map((x) => x.name), ['Ann']);
 });
 
+await test('Super automatic decides each entry page by page: Always is not first — what the page names or needs goes first, an Always entry left out can be picked like any other, Never stays his; off again, Always first as he set it', () => {
+  const text = (tag) => `${tag} ` + 'the old oaths of the port and the grey cloaks '.repeat(20);
+  const novel = { bibliography: [
+    bib.tidyEntry(bib.newEntry({ name: 'The Weave', kind: 'lore', line: 'How magic works', rides: 'always', text: text('WEAVE-ENTRY') })),
+    bib.tidyEntry(bib.newEntry({ name: 'Kael', kind: 'people', line: 'A smuggler', text: text('KAEL-ENTRY') })),
+    bib.tidyEntry(bib.newEntry({ name: 'Secret', kind: 'lore', line: 'The ending', rides: 'never', text: 'SECRET-ENTRY' })),
+  ] };
+  const items = bib.bibItems(novel, {}, { facts: false });
+  /* room for one of the two, never both */
+  const costOf = (name) => bib.ridingItems(items.filter((it) => it.name === name), { his: name, budget: 1e9 }).cost;
+  const one = Math.max(costOf('Kael'), costOf('The Weave'));
+  assert.ok(costOf('Kael') + costOf('The Weave') > one + 2);
+  const args = { his: 'Kael runs for the boats.', rest: true, budget: one + 2 };
+  assert.deepEqual(bib.ridingItems(items, args).items.map((x) => x.name), ['The Weave'], 'his setting: Always first, and the page’s own name gives way');
+  assert.deepEqual(bib.ridingItems(items, { ...args, byPage: true }).items.map((x) => x.name), ['Kael'], 'page by page: the name the page says first');
+  /* the pick: an Always entry the page went without is on its list like any other; Never never is */
+  const pick = bib.pickRows(items, { his: 'Kael runs.', rode: new Set([items.find((x) => x.name === 'Kael').ref]), byPage: true });
+  assert.deepEqual(pick.rows.map((r) => r.name), ['The Weave']);
+  assert.deepEqual(pick.riding.map((x) => x.name), ['Kael']);
+  const asSet = bib.pickRows(items, { his: 'Kael runs.', rode: new Set([items.find((x) => x.name === 'Kael').ref]) });
+  assert.deepEqual([asSet.rows.length, asSet.riding.map((x) => x.name).sort()], [0, ['Kael', 'The Weave']], 'as he set it: Always is riding, nothing to pick');
+});
+
+await test('with Super automatic on the writer’s request and the partner say each entry goes page by page; the partner is never asked to set always — and is, as before, with it off', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The harbour bell rang twice.']], { title: 'Salt and Iron' });
+  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'The Weave', kind: 'lore', line: 'How magic works', rides: 'always', text: 'WEAVE ENTRY.' }))), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ name: 'Kael Varro', kind: 'people', line: 'A smuggler', text: 'KAEL ENTRY.' }))), { now: true });
+  const frame = (house) => prompts.partnerFrame(house, b.novel());
+  const on = frame(store.peek('house', 'house'));
+  assert.ok(on.includes('"rides" only as "never", when I ask to keep an entry for myself') && !on.includes('"always" (what every page needs'), 'the partner: page by page');
+  assert.ok(on.includes('first when the page names it or needs it'));
+  /* the writer: the whole of it goes (it fits), Kael — named — before the Always entry */
+  const a = context.assemble({ house: { ...store.peek('house', 'house'), ...CRAFTS_OFF }, novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn: { ...CONN, context: 200000, maxTokens: 1000 }, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'Kael Varro runs for the boats.' });
+  const t = sentOf(a);
+  assert.ok(t.includes('KAEL ENTRY.') && t.includes('WEAVE ENTRY.') && t.indexOf('KAEL ENTRY.') < t.indexOf('WEAVE ENTRY.'), 'page by page: the named one first');
+  await setHouse();
+  const off = frame(store.peek('house', 'house'));
+  assert.ok(off.includes('"always" (what every page needs') && !off.includes('"rides" only as "never"'), 'off: as before');
+  const a2 = context.assemble({ house: quietHouse(), novel: b.novel(), chapters: { [b.ids[0]]: b.ch() }, conn: { ...CONN, context: 200000, maxTokens: 1000 }, purpose: 'write', target: { chapterId: b.ids[0] }, request: 'Kael Varro runs for the boats.' });
+  const t2 = sentOf(a2);
+  assert.ok(t2.indexOf('WEAVE ENTRY.') < t2.indexOf('KAEL ENTRY.'), 'off: Always first, as he set it');
+  assert.equal(bib.entriesOf(b.novel()).find((e) => e.name === 'The Weave').rides, 'always', 'his setting never changed');
+  await putAway(b);
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

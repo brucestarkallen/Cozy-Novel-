@@ -2174,13 +2174,49 @@ async def scenario_super(b):
     hint = await pg.inner_text('.sheet.on .keptfield em >> nth=0')
     check('About this book: What it’s about and How it reads Automatic, Manual waiting until it is off, said', len(modes) == 4 and all(m[1] for m in modes) and [m[2] for m in modes] == ['false', 'true', 'false', 'true'] and 'Automatic with Super automatic on' in hint, (modes, hint[-120:]))
     await close_sheet(pg)
-    await pg.click('#notesBtn')
-    await pg.wait_for_selector('[data-notes-view=bibliography]')
-    await pg.click('[data-notes-view=bibliography]')
-    await pg.wait_for_selector('.bibview'); await pg.wait_for_timeout(300)
+    # an entry his partner wrote, set to Always, and one of his own
+    await pg.evaluate("""async (nid) => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const B = await import('/js/novel/bibliography.js');
+      s.change('novel', nid, sh.novelSteps.putEntry({ ...B.tidyEntry(B.newEntry({ name: 'The Weave', kind: 'lore', line: 'How magic works', rides: 'always', text: 'Every working costs the caster warmth.' })), by: 'partner', at: Date.now() }), { now: true });
+      s.change('novel', nid, sh.novelSteps.putEntry({ ...B.tidyEntry(B.newEntry({ name: 'Mara', kind: 'people', line: 'The keeper', text: 'She keeps the light.' })), by: 'you', at: Date.now() }), { now: true });
+      await s.flush(); }""", nid)
+    async def open_bib():
+        await pg.click('#notesBtn')
+        await pg.wait_for_selector('[data-notes-view=bibliography]')
+        await pg.click('[data-notes-view=bibliography]')
+        await pg.wait_for_selector('.bibview'); await pg.wait_for_timeout(300)
+    def tags_of(name):
+        return pg.evaluate("(name) => [...document.querySelectorAll('.bibview .bibitem')].filter((x) => x.querySelector('.nm').firstChild.textContent === name).map((x) => [...x.querySelectorAll('.ctag')].map((t) => t.textContent))[0] || null", name)
+    await open_bib()
     toggles = await pg.evaluate("[...document.querySelectorAll('.bibview label.toggle')].filter((l) => /Fill it from the book|Smart recall/.test(l.textContent)).map((l) => [l.textContent, l.querySelector('input').checked, l.querySelector('input').disabled])")
     intro = await pg.inner_text('.bibview .bibintro')
-    check('the bibliography fills itself and Smart recall is on, both held, said', len(toggles) == 2 and all(t[1] and t[2] for t in toggles) and 'Super automatic keeps both switches on.' in intro, (toggles, intro[-160:]))
+    check('the bibliography fills itself and Smart recall is on, both held, said', len(toggles) == 2 and all(t[1] and t[2] for t in toggles) and 'Super automatic keeps both switches on.' in intro and 'decided page by page by Super automatic' in intro, (toggles, intro[-200:]))
+    await pg.locator('.bibview .bibitem', has_text='The Weave').first.scroll_into_view_if_needed(); await pg.screenshot(path=os.path.join(SHOTS, 'super-bib.png'))
+    weave, mara = await tags_of('The Weave'), await tags_of('Mara')
+    said = await pg.locator('.bibview > p.notekey').last.inner_text()
+    check('whose each entry is: yours, or your partner’s — and no Always while Super automatic decides page by page', weave == ['your partner’s'] and mara == ['yours'] and 'written by your partner' in said, (weave, mara, said))
+    await pg.locator('.bibview .bibitem', has_text='The Weave').first.click()
+    await pg.wait_for_selector('.sheet.on .namecard'); await pg.wait_for_timeout(250)
+    note = await pg.inner_text('.sheet.on .namecard-note')
+    check('its card says so', note.startswith('Your partner’s entry — the writer reads it with every page while there’s room; when there isn’t, Super automatic sends it first'), note)
+    await pg.click('.sheet.on button:has-text("Edit your entry")')
+    await pg.wait_for_selector('.sheet.on select[aria-label="The writer reads it"]')
+    opts = await pg.evaluate("(sel) => [...document.querySelector(sel).options].map((o) => [o.textContent, o.selected])", '.sheet.on select[aria-label="The writer reads it"]')
+    await pg.fill('.sheet.on input[placeholder="Who or what it is, in a line"]', 'How magic works, and what it costs')
+    await pg.click('.sheet.on button:has-text("Save")'); await pg.wait_for_timeout(500)
+    kept = await pg.evaluate("(nid) => fetch('/api/store/novel/' + nid).then((r) => r.json()).then((x) => (x.data.bibliography || []).filter((e) => e.name === 'The Weave').map((e) => [e.rides, e.line, e.by])[0])", nid)
+    check('his sheet offers page by page or never — saved, Always stays underneath for when it is off', opts == [['Page by page — Super automatic', True], ['Never — it’s only for me', False]] and kept == ['always', 'How magic works, and what it costs', 'you'], (opts, kept))
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
+    # Build the world asks the partner for no Always while Super automatic decides page by page
+    await pg.click('#partnerBtn'); await pg.wait_for_timeout(400)
+    await pg.click('#sideFoot button:has-text("Quick asks")'); await pg.wait_for_timeout(200)
+    await pg.click('.menu-pop button:has-text("Build the world")')
+    for _ in range(80):
+        t = (await pg.evaluate(f"fetch('/api/store/talk/{nid}').then((r) => r.ok ? r.json() : null)") or {}).get('data') or {}
+        mine_said = [((x.get('versions') or [{}])[0].get('text') or '') for x in (t.get('turns') or []) if x.get('by') == 'you']
+        if mine_said and len(t.get('turns') or []) >= 2: break
+        await pg.wait_for_timeout(250)
+    built = mine_said[-1] if mine_said else ''
+    check('Build the world, sent with Super automatic on, asks for no Always', built.startswith('Let’s build this book’s world') and 'set to always' not in built and 'inventing wherever nothing is settled yet. Then tell me' in built, built[-160:])
     await pg.click('#sideClose'); await pg.wait_for_timeout(300)
     # the writer ends the chapter: the line comes off, the chapter's end says where the next page goes
     reset()
@@ -2218,6 +2254,9 @@ async def scenario_super(b):
     fix = pg.locator(f'{grp} label.toggle:has-text("Apply the checker’s fixes by themselves") input')
     check('off: the checker’s fixes switch is his again, off as he left it', not await fix.is_checked() and not await fix.is_disabled())
     await close_sheet(pg)
+    await open_bib()
+    check('off: the entry set to Always says so again', await tags_of('The Weave') == ['yours', 'always'], await tags_of('The Weave'))
+    await pg.click('#sideClose'); await pg.wait_for_timeout(300)
     errs = [l for l in logs if l.startswith('PAGEERROR')]
     check('no page errors (Super automatic)', not errs, errs[:5])
     await pg.close()

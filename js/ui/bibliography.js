@@ -11,9 +11,12 @@
 import * as store from '../store.js';
 import { h, icon, toast, undoToast, openSheet, confirmIt, field, pickFile, download } from './dom.js';
 import { picked, novelSteps } from '../novel/shape.js';
-import { bibItems, itemForms, nameForms, makeFinder, formKey, codexNow, ENTRY_KINDS, KIND_TITLE, RIDES, RIDES_WORDS, newEntry, tidyEntry, entriesOf, nameTaken, entriesFromLorebook, lorebookOf, recallOn } from '../novel/bibliography.js';
+import { bibItems, itemForms, nameForms, makeFinder, formKey, codexNow, ENTRY_KINDS, KIND_TITLE, RIDES, RIDES_WORDS, BY_PAGE_WORDS, newEntry, tidyEntry, entriesOf, nameTaken, entriesFromLorebook, lorebookOf, recallOn } from '../novel/bibliography.js';
 import { bibAutoOn } from '../novel/context.js';
 import { superActive } from '../novel/auto.js';
+
+/* the entry sheet's "page by page" (Super automatic): never kept as such — it keeps what the entry was set to */
+const BY_PAGE = 'page';
 import { nowLabelOf } from '../novel/prompts.js';
 import { plural, nameKey, slug } from '../util.js';
 import * as archivist from '../novel/archivist.js';
@@ -134,7 +137,12 @@ function nameSection(novelId, novel, { it, card, cardKind }, { many, close, said
   const entry = it && it.entry;
   if (entry && entry.line) box.append(h('p.namecard-line', entry.line));
   if (entry && entry.text) box.append(h('div.namecard-text', ...paragraphs(entry.text)));
-  if (entry) box.append(h('p.namecard-note', entry.rides === 'always' ? 'Your entry — the writer always reads it.' : entry.rides === 'never' ? 'Your entry — only for you; the writer never reads it.' : `Your entry — the writer reads it with every page while there’s room, and first when ${name} comes up${recallOn(novel) ? ' or a page needs it' : ''}.`));
+  /* whose words: his own, or his partner's written for him — kept alike, never written over by the helper */
+  const whose = entry && entry.by === 'partner' ? 'Your partner’s entry' : 'Your entry';
+  if (entry) box.append(h('p.namecard-note', entry.rides === 'never' ? `${whose} — only for you; the writer never reads it.`
+    : superActive() ? `${whose} — the writer reads it with every page while there’s room; when there isn’t, Super automatic sends it first when the page names it or needs it.`
+      : entry.rides === 'always' ? `${whose} — the writer always reads it.`
+        : `${whose} — the writer reads it with every page while there’s room, and first when ${name} comes up${recallOn(novel) ? ' or a page needs it' : ''}.`));
   /* where it stands now: the notes' own card (the notes are the story as it stands) */
   if (card) {
     const notes = h('div.namecard-notes', h('h4', 'In the notes'));
@@ -159,7 +167,7 @@ function nameSection(novelId, novel, { it, card, cardKind }, { many, close, said
   }
   if (!entry && !facts.length && !card) box.append(h('p.namecard-note', 'Nothing is kept for this name yet.'));
   const row = h('div.btnrow');
-  row.append(h('button.btn.small', { title: entry ? 'Change your entry — the book’s facts and the notes stay as they are.' : `Write your own entry for ${name}: what it means, for the writer to read when ${name} comes up.`, onclick: () => { close(); editEntry(novelId, entry ? entry.id : null, { name, kind }); } }, entry ? 'Edit your entry' : 'Write your entry'));
+  row.append(h('button.btn.small', { title: entry ? 'Change your entry — the book’s facts and the notes stay as they are.' : `Write your own entry for ${name}: what it means, for the writer to read with every page while there’s room.`, onclick: () => { close(); editEntry(novelId, entry ? entry.id : null, { name, kind }); } }, entry ? 'Edit your entry' : 'Write your entry'));
   if (card && hooks.showCard) row.append(h('button.btn.small.quiet', { title: 'Opens the card in the notes, to read or edit it.', onclick: () => { close(); hooks.showCard(cardKind, card.id); } }, 'Open the card'));
   /* by the name as he tapped it ("Rukia" finds Rukia and Rukia Kuchiki), else its own */
   const asked = said || name;
@@ -208,16 +216,30 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
   const lineBox = h('input', { type: 'text', value: e.line || '', placeholder: 'Who or what it is, in a line' });
   const textBox = h('textarea', { rows: 7 });
   textBox.value = e.text || '';
-  const ridesBox = h('select', { 'aria-label': 'The writer reads it' }, ...RIDES.map((r) => h('option', { value: r, selected: e.rides === r }, RIDES_WORDS[r])));
+  /* Super automatic: Always and When there's room are one, page by page — what he set stays for when it is off (BY_PAGE) */
+  const byPage = superActive();
+  const ridesBox = byPage
+    ? h('select', { 'aria-label': 'The writer reads it' }, h('option', { value: BY_PAGE, selected: e.rides !== 'never' }, BY_PAGE_WORDS), h('option', { value: 'never', selected: e.rides === 'never' }, RIDES_WORDS.never))
+    : h('select', { 'aria-label': 'The writer reads it' }, ...RIDES.map((r) => h('option', { value: r, selected: e.rides === r }, RIDES_WORDS[r])));
   const boxes = { name: nameBox, aka: akaBox, kind: kindBox, line: lineBox, text: textBox, rides: ridesBox };
   const opened = Object.fromEntries(Object.entries(boxes).map(([k, b]) => [k, b.value]));
-  if (draft) { for (const [k, v] of Object.entries(draft)) if (boxes[k]) boxes[k].value = v; s.body.append(h('p.say', 'Your words from before, not saved yet, are back.')); }
+  if (draft) {
+    for (const [k, v] of Object.entries(draft)) {
+      if (!boxes[k]) continue;
+      /* a choice kept while Super automatic was on, or off, read as the sheet offers it now */
+      if (k === 'rides') { const r = byPage ? (v === 'never' ? 'never' : BY_PAGE) : v === BY_PAGE ? null : v; if (r) boxes[k].value = r; continue; }
+      boxes[k].value = v;
+    }
+    s.body.append(h('p.say', 'Your words from before, not saved yet, are back.'));
+  }
   s.body.append(field('Name', nameBox));
   s.body.append(field('Also called', akaBox, 'Other names, separated by commas — the page marks them too.'));
   s.body.append(field('What it is', kindBox));
   s.body.append(field('In a line', lineBox));
   s.body.append(field('The entry', textBox, 'What it means — for you to read when you tap the name, and for the writer as background. People in the story still know only what they have lived.'));
-  s.body.append(field('The writer reads it', ridesBox, 'When there’s room: with every page while the bibliography has room beside the book — when it hasn’t, first when its name is said near the page or, with Smart recall, when the page needs it. Always: with every page, before anything else. Never keeps it for you alone.'));
+  s.body.append(field('The writer reads it', ridesBox, byPage
+    ? 'Page by page: with every page while the bibliography has room beside the book — when it hasn’t, Super automatic sends it first when the page names it or needs it. Never keeps it for you alone. Always, set before, comes back when Super automatic is off.'
+    : 'When there’s room: with every page while the bibliography has room beside the book — when it hasn’t, first when its name is said near the page or, with Smart recall, when the page needs it. Always: with every page, before anything else. Never keeps it for you alone.'));
   const typed = () => Object.fromEntries(Object.keys(boxes).filter((k) => boxes[k].value !== opened[k]).map((k) => [k, boxes[k].value]));
   let done = false;
   const keepDraft = () => {
@@ -240,6 +262,8 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
     const out = live ? JSON.parse(JSON.stringify(live)) : e;
     for (const [k, v] of Object.entries(t)) out[k] = k === 'aka' ? v.split(',').map((x) => x.trim()).filter(Boolean) : v;
     if (!cur) { out.name = nameBox.value; out.aka = akaBox.value.split(',').map((x) => x.trim()).filter(Boolean); out.kind = kindBox.value; out.line = lineBox.value; out.text = textBox.value; out.rides = ridesBox.value; }
+    /* page by page: what it was set to stays (Always, or When there's room), Never let go of as When there's room */
+    if (out.rides === BY_PAGE) out.rides = live && live.rides !== 'never' ? live.rides : 'named';
     /* renamed: the old name stays among the others it goes by */
     if (cur && t.name !== undefined && nameKey(t.name) !== nameKey(live.name)) out.aka = [...(out.aka || []), live.name];
     const tidy = tidyEntry(out);
@@ -294,7 +318,7 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
   const mine = items.filter((it) => it.entry).length;
   root.dataset.count = plural(items.length, 'name');
   root.append(h('div.lightcard.bibintro',
-    h('p.notekey', 'What each name in the book means — tap one to read it. ', auto ? 'The helper fills it from the pages as it reads them, each fact from the passage that says it; your own entries stand beside them. ' : 'The helper adds nothing to it just now — what it found stays with the passages that say it, and goes with them when they change; your own entries stand beside them. ', 'The notes say where everything stands now. The whole bibliography goes to the writer with every page while there is room beside the book; when there isn’t, what this page needs goes first — the entries set to Always and those named in your words or near the page', recall ? ' and, with Smart recall, those the page needs though nothing there names them (the helper brings them in before each page and each telling of a scene, eight seconds at most)' : '', ' — then as much of the rest as fits.', superActive() ? ' Super automatic keeps both switches on.' : ''),
+    h('p.notekey', 'What each name in the book means — tap one to read it. ', auto ? 'The helper fills it from the pages as it reads them, each fact from the passage that says it; your own entries stand beside them. ' : 'The helper adds nothing to it just now — what it found stays with the passages that say it, and goes with them when they change; your own entries stand beside them. ', 'The notes say where everything stands now. The whole bibliography goes to the writer with every page while there is room beside the book; when there isn’t, what this page needs goes first — ', superActive() ? 'decided page by page by Super automatic: the entries named in your words or near the page, and those the page needs though nothing there names them (Smart recall: the helper brings them in before each page and each telling of a scene, eight seconds at most) — then as much of the rest as fits. Always waits until it is off, and Super automatic keeps both switches on.' : ['the entries set to Always and those named in your words or near the page', recall ? ' and, with Smart recall, those the page needs though nothing there names them (the helper brings them in before each page and each telling of a scene, eight seconds at most)' : '', ' — then as much of the rest as fits.'].join('')),
     h('label.toggle', h('input', { type: 'checkbox', checked: auto, disabled: superActive(), onchange: (e) => {
       store.change('novel', novelId, novelSteps.setPref('bibAuto', e.target.checked ? '' : 'off'), { now: true });
       if (e.target.checked) { archivist.nudge(novelId); toast('The helper fills the bibliography from the book — pages read before are filled in a few at a time.'); }
@@ -343,8 +367,9 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
       const box = h('div.cards');
       for (const it of rows) {
         const tags = [];
-        if (it.entry) tags.push(h('span.ctag.yours', 'yours'));
-        if (it.entry && it.entry.rides === 'always') tags.push(h('span.ctag', 'always'));
+        if (it.entry) tags.push(it.entry.by === 'partner' ? h('span.ctag.partner', 'your partner’s') : h('span.ctag.yours', 'yours'));
+        /* (Super automatic sends each entry page by page: Always is not first while it is on) */
+        if (it.entry && it.entry.rides === 'always' && !superActive()) tags.push(h('span.ctag', 'always'));
         if (it.entry && it.entry.rides === 'never') tags.push(h('span.ctag', 'only for you'));
         box.append(h('div.card.notecard.bibitem', { role: 'button', tabindex: 0, 'data-ref': it.ref, title: `Open ${it.name}`,
           onclick: () => showRef(novelId, it.ref),
@@ -363,7 +388,8 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
     h('button.btn.small', { title: 'Write your own entry: what a name means, for you and for the writer.', onclick: () => editEntry(novelId, null) }, icon('plus', 14), 'Add an entry'),
     h('button.btn.small.quiet', { title: 'Adds the entries of a SillyTavern lorebook (World Info) or a character card’s book — a name already here is left as it is.', onclick: () => bringLorebook(novelId, redraw) }, 'Bring in a lorebook'),
     mine ? h('button.btn.small.quiet', { title: 'Your entries as a SillyTavern lorebook (World Info) file.', onclick: () => takeLorebook(novelId) }, 'Take it out as a lorebook') : null));
-  root.append(h('p.notekey', `${plural(items.length, 'name')}${mine ? `, ${plural(mine, 'entry', 'entries')} of yours` : ''}. Your partner can write entries too — ask it.`));
+  const theirs = items.filter((it) => it.entry && it.entry.by === 'partner').length;
+  root.append(h('p.notekey', `${plural(items.length, 'name')}${mine ? `, ${plural(mine, 'entry', 'entries')} of yours${theirs ? ` — ${theirs === mine ? (mine === 1 ? 'written' : 'all written') : `${theirs} written`} by your partner` : ''}` : ''}. Your partner can write entries too — ask it.`));
   return root;
 }
 

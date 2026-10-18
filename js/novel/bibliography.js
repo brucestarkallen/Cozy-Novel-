@@ -35,6 +35,8 @@ export const RIDES_WORDS = {
   always: 'Always',
   never: 'Never — it’s only for me',
 };
+/* …and with Super automatic on, Always and When there's room are one: what each page names or needs (ridingItems byPage) */
+export const BY_PAGE_WORDS = 'Page by page — Super automatic';
 
 const clean = (s) => String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
 const cleanName = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -673,10 +675,13 @@ function namedOrder(usable, his, near) {
   return { his: refsIn(his, false), near: refsIn(near, true) };
 }
 
-export function ridingItems(items, { his = '', near = '', picked = [], rest = false, budget = 4000, skip = null, purpose = 'write', factsMost = Infinity } = {}) {
+export function ridingItems(items, { his = '', near = '', picked = [], rest = false, byPage = false, budget = 4000, skip = null, purpose = 'write', factsMost = Infinity } = {}) {
   const forPartner = purpose === 'partner';
   const usable = usableFor(items, purpose);
-  const always = forPartner ? [] : usable.filter((it) => it.rides === 'always');
+  /* byPage (Super automatic, auto.js — his word, 2.12.28: "always or not always, put automatically"): no entry goes first
+   * for being set to Always — each goes by what this page names or needs, then by the words it shares with the moment;
+   * Never stays his */
+  const always = forPartner || byPage ? [] : usable.filter((it) => it.rides === 'always');
   const order = [];
   const seen = new Set(always.map((it) => it.ref));
   const take = (refs) => { for (const r of refs) if (!seen.has(r)) { seen.add(r); order.push(r); } };
@@ -800,7 +805,7 @@ function pickHead(it) {
  * with words to give, that his words and the words near the point do not name — numbered, each by pickHead; the ones
  * that share the most words with the moment first, fitted to `cap` tokens, then numbered in the bibliography's order.
  * riding — his entries that ride anyway (always, or named here), for the helper to know what the page has. Pure. */
-export function pickRows(items, { his = '', near = '', cap = 6000, rode = null } = {}) {
+export function pickRows(items, { his = '', near = '', cap = 6000, rode = null, byPage = false } = {}) {
   const usable = usableFor(items, 'write');
   /* rode: the entries the request carries without a pick (context.js stats.entries) — else the ones it names */
   let named = rode;
@@ -808,8 +813,9 @@ export function pickRows(items, { his = '', near = '', cap = 6000, rode = null }
     const found = namedOrder(usable, his, near);
     named = new Set([...found.his, ...found.near]);
   }
-  const riding = usable.filter((it) => it.entry && (it.rides === 'always' || named.has(it.ref)));
-  const open = (items || []).filter((it) => it.entry && ridesOf(it.rides) === 'named' && !named.has(it.ref) && String(it.entry.text || it.entry.line || '').trim());
+  /* (byPage: an entry set to Always rides only as any other does — the pick may bring it like any other) */
+  const riding = usable.filter((it) => it.entry && ((!byPage && it.rides === 'always') || named.has(it.ref)));
+  const open = (items || []).filter((it) => it.entry && (byPage ? ridesOf(it.rides) !== 'never' : ridesOf(it.rides) === 'named') && !named.has(it.ref) && String(it.entry.text || it.entry.line || '').trim());
   if (!open.length) return { rows: [], riding };
   const moment = topicWords(`${his}\n${near}`);
   const scored = open.map((it, i) => {

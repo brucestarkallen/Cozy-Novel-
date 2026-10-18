@@ -28,7 +28,7 @@ import { ownWordsFor } from './ownwords.js';
 import { tellerOf, personFor, hasSelf, toTeller, groundingWeave, groundingSeed, oneYouAre, naturalLook, swapPerson, headsInPerson } from './teller.js';
 import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook, bibPart, READ_OPEN, READ_CLOSE } from './prompts.js';
 import { entriesOf, entryIndex, bibShare, bibItems, ridingItems, pickRows, recallOn } from './bibliography.js';
-import { superActive } from './auto.js';
+import { superActive, superOn } from './auto.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
@@ -499,7 +499,7 @@ export function passagesAfter(novel, chapters, chapterId, target = {}, purpose =
  * none of the book's facts (the first fitting, before it is known which
  * chapters ride whole). The partner also sees every entry of his by its name
  * and line. */
-export function bibliographyFor({ items, opened, purpose, request = '', moment = '', plan = '', turns = [], names = {}, free = 0, skip = null, skipAll = false, factsMost = Infinity, picks = [], recall = true }) {
+export function bibliographyFor({ items, opened, purpose, request = '', moment = '', plan = '', turns = [], names = {}, free = 0, skip = null, skipAll = false, factsMost = Infinity, picks = [], recall = true, byPage = false }) {
   if (!items || !items.length) return { text: '', ids: [], left: 0, picked: [], whole: true, allEntries: true };
   const filled = withEntryNames(items, names, { skipAll });
   const { his, near } = bibWords({ opened, request, moment, plan, turns });
@@ -508,17 +508,18 @@ export function bibliographyFor({ items, opened, purpose, request = '', moment =
     const mine = filled.filter((it) => it.entry).map((it) => it.entry);
     const index = mine.length ? entryIndex(mine, Math.floor(share / 3)) : { text: '', left: 0 };
     const ride = ridingItems(filled, { his, near, budget: share - (mine.length ? Math.floor(share / 3) : 0), skip, purpose, factsMost });
-    const text = ride.words.length || index.text ? bibPart(ride.words, { index: index.text, indexLeft: index.left, recall }) : '';
+    const text = ride.words.length || index.text ? bibPart(ride.words, { index: index.text, indexLeft: index.left, recall, byPage }) : '';
     return { text, ids: ride.items.map((it) => it.ref), left: ride.left, picked: [], whole: ride.whole, allEntries: ride.allEntries };
   }
   /* what the page needs that no word here names (bibpick.js), after his words' names; then the rest of it — his other
    * entries, then what the book says of names not named here — as much as there is room for: the whole bibliography
    * while it fits */
   const wanted = new Set(picks || []);
-  const ride = ridingItems(filled, { his, near, picked: [...wanted], rest: true, budget: share, skip, purpose, factsMost });
+  /* (byPage, Super automatic: Always is not first — every entry by what this page names or needs: ridingItems) */
+  const ride = ridingItems(filled, { his, near, picked: [...wanted], rest: true, byPage, budget: share, skip, purpose, factsMost });
   const picked = ride.items.filter((it) => wanted.has(it.ref)).map((it) => it.ref);
   /* "whole" said when all of it went and there is more of it than this page names (else it is what is named here) */
-  const more = ride.rest > 0 || filled.some((it) => it.entry && it.rides === 'always');
+  const more = ride.rest > 0 || (!byPage && filled.some((it) => it.entry && it.rides === 'always'));
   return { text: ride.words.length ? bibPart(ride.words, { picked: picked.length > 0, whole: ride.whole && more, rest: ride.rest > 0 }) : '', ids: ride.items.map((it) => it.ref), left: ride.left, picked, whole: ride.whole, allEntries: ride.allEntries };
 }
 
@@ -552,7 +553,7 @@ export function pickInput({ house, novel, chapters, purpose = 'write', target = 
   const plan = String(chapter.plan || '').trim();
   const items = withEntryNames(bibItems(novel, chapters, { facts: false }), macroNames(house, purpose, play));
   const words = bibWords({ opened, request, moment, plan, turns });
-  const { rows, riding } = pickRows(items, { ...words, cap, rode });
+  const { rows, riding } = pickRows(items, { ...words, cap, rode, byPage: superOn(house) });
   if (!rows.length) return null;
   /* his own words for it — what he asked for, his newest moves — the chapter's plan, and the newest of the words near
    * the point: the pick reads for meaning, and a page's worth is enough for that */
@@ -693,7 +694,7 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
   /* the book's facts ride whenever the helper has gathered them — Fill it from the book by itself only says whether it goes on gathering them (a portrait made short leaves its lasting details to them) */
   const bibItemsNow = bibItems(named, chapters, { facts: true });
   /* (picks: what the pick named this page needs, bibpick.js — the writer's and the narrator's only) */
-  const bibArgs = { items: bibItemsNow, opened, purpose, request, moment, plan: planHere, turns, names, free: total - reserve - instructions - afterCost, picks, recall: recallOn(novel) };
+  const bibArgs = { items: bibItemsNow, opened, purpose, request, moment, plan: planHere, turns, names, free: total - reserve - instructions - afterCost, picks, recall: recallOn(novel), byPage: superOn(house) };
   const afterPoint = passagesAfter(novel, chapters, chapter.id, target, purpose);
   /* first fitted with his entries alone; the book's facts come once it is known which chapters ride word for word */
   let bib = bibliographyFor({ ...bibArgs, skipAll: true });

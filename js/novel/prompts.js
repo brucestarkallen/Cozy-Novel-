@@ -27,7 +27,7 @@ import { numberWords, estimateTokens, cutWords } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
 import { tellerOf, toTeller } from './teller.js';
 import { PICK_MAX, recallOn } from './bibliography.js';
-import { superActive, appliesOf } from './auto.js';
+import { superActive, superOn, appliesOf } from './auto.js';
 
 /* ------------------------------------------------- the starting words */
 /* What the boxes in Settings → Your instructions start with, and what
@@ -522,10 +522,11 @@ function hereIs(purpose) {
   return `Here is ${WHAT_FOLLOWS} — for you alone. ${NOTES_KNOW}`;
 }
 
-/* THE BIBLIOGRAPHY (bibliography.js): his entries for who and what is named
- * here — background for the writing, read only when a name comes up (or
- * always, as he set it). What a person knows is still only what they have
- * lived; where the pages or the notes say otherwise, they are right. */
+/* THE BIBLIOGRAPHY (bibliography.js): his entries — background for the
+ * writing, the whole of it with every page while it fits, and past that first
+ * what the page names or needs (or Always, as he set it; with Super automatic
+ * on, page by page). What a person knows is still only what they have lived;
+ * where the pages or the notes say otherwise, they are right. */
 export const BIB_LEAD = `Who and what is named here, from my bibliography of the book — background for the writing. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
 /* the partner sees every entry by its name and line, and the ones named here whole */
 /* the checker: who and what the passages name, as the book set them down before them (and his entries) */
@@ -534,16 +535,19 @@ export const BIB_FOR_A_READER = 'From the book’s bibliography — who and what
 export const BIB_LEAD_PICKED = `Who and what is named here, and what else this part needs, from my bibliography of the book — background for the writing. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
 /* when the writer reads an entry (2.12.28): with every page while the bibliography has room beside the book — and when
  * it hasn't, first by its name, and with Smart recall on, when a page needs it */
-const READS_WHEN = (recall) => `with every page while there’s room beside the book — and when there isn’t, first when its name comes up${recall ? ' or a page needs it' : ''}`;
-const bibIndexLead = (recall) => `My bibliography of the book — every entry by its name and line. The writer reads an entry ${READS_WHEN(recall)}, unless I say always or never:`;
+/* (byPage, Super automatic: Always and the rest are one — what each page names or needs, bibliography.js ridingItems) */
+const READS_WHEN = (recall, byPage = false) => (byPage
+  ? 'with every page while there’s room beside the book — and when there isn’t, first when the page names it or needs it'
+  : `with every page while there’s room beside the book — and when there isn’t, first when its name comes up${recall ? ' or a page needs it' : ''}`);
+const bibIndexLead = (recall, byPage = false) => `My bibliography of the book — every entry by its name and line. The writer reads an entry ${READS_WHEN(recall, byPage)}, unless I ${byPage ? 'keep it for myself' : 'say always or never'}:`;
 export const BIB_INDEX = bibIndexLead(true);
 export const BIB_NAMED = 'The entries named here, whole:';
 /* …and the whole of it, or as much more of it as there is room for (2.12.28) */
 export const BIB_LEAD_WHOLE = `My bibliography of the book, whole — the world behind it, background for the writing: draw on what this part needs, and let nothing in it come onto the page only because it is written here. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
 const bibLeadMore = (picked) => `Who and what is named here${picked ? ', what else this part needs' : ''}, and as much more of my bibliography of the book as there is room for — background for the writing: draw on what this part needs, and let nothing in it come onto the page only because it is written here. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
-export function bibPart(rows, { index = '', indexLeft = 0, picked = false, recall = true, whole = false, rest = false } = {}) {
+export function bibPart(rows, { index = '', indexLeft = 0, picked = false, recall = true, whole = false, rest = false, byPage = false } = {}) {
   const parts = [];
-  if (index) parts.push(`${bibIndexLead(recall)}\n${index}${indexLeft ? `\n(and ${numberWords(indexLeft).toLowerCase()} more — ask for one by its name to read it)` : ''}`);
+  if (index) parts.push(`${bibIndexLead(recall, byPage)}\n${index}${indexLeft ? `\n(and ${numberWords(indexLeft).toLowerCase()} more — ask for one by its name to read it)` : ''}`);
   const lead = index ? BIB_NAMED : whole ? BIB_LEAD_WHOLE : rest ? bibLeadMore(picked) : picked ? BIB_LEAD_PICKED : BIB_LEAD;
   if (rows.length) parts.push(`${lead}\n\n${rows.join('\n\n')}`);
   return parts.join('\n\n');
@@ -817,7 +821,7 @@ const LANDS = {
   now: 'I see every change as it lands, and any of them can be undone.',
   wait: 'Each change waits until I apply it — until then nothing in the book changes, and what waits is not in the book: to change the same passage or card again in a later answer, give it whole as it should finally read (the newer proposal replaces the older one waiting for that thing), never a small change on top of words that are only waiting. I apply everything waiting at once, in the order you proposed it, or pick.',
 };
-const partnerChanges = (applies, recall = true) => `When I ask for a change — or you see one that plainly needs making and I’d want it — make it yourself, in the same answer: a changes block at the very top, then a line for each change saying what you changed and why. ${LANDS[applies] || LANDS.now}
+const partnerChanges = (applies, recall = true, byPage = false) => `When I ask for a change — or you see one that plainly needs making and I’d want it — make it yourself, in the same answer: a changes block at the very top, then a line for each change saying what you changed and why. ${LANDS[applies] || LANDS.now}
 
 ${CHANGES_OPEN}[
   {"passage": "2.3", "find": "the exact words", "replace": "the new words", "why": "…"},
@@ -840,7 +844,7 @@ ${CHANGES_OPEN}[
 - "2.3" is passage 3 of Chapter Two as the page numbers it — a passage may hold many paragraphs, even a whole chapter (1.1 can be all of Chapter One); the number is never a paragraph’s. Quote "find" exactly — enough to be found in one place only. "rewrite" hands the passage to the writer — who works from my instructions and the craft — to write it again from your note: say what must change and what must stay, nothing about how to write. "text" is your own prose for it — only when I ask for your words. Either makes a new version, one arrow from the words before. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
 - "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary. "plan": what a chapter is for — my plan for it, which the writer reads only while writing in that chapter; the number after the last chapter makes a new, empty chapter to hold it, so a few in a row map the chapters ahead.
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
-- "entry" is an entry in my bibliography — the world behind the book: what is true of a name whether or not a page has said it yet. How someone looks and what makes them unlike anyone else, where they come from and what they carry, what a place is like, how a power or a technique works and what it costs, what a word of the world means, what a group is and who leads it. The writer reads an entry ${READS_WHEN(recall)}, and writes from it as the truth of the world; I read it when I tap the name. This is where the world is made up, and that is your job in it: when I ask for an entry, write it — whole, in the block, in that same answer — richly and particularly, the way a novelist builds a world, inventing freely wherever the pages have not spoken and never against what they have said; what I tell you is true of them is true. Never ask me for the particulars first or offer me choices instead of the entry: write it, and I change what I see differently. "kind" is "people", "places", "things", "groups" or "lore"; "line" says in a line who or what it is; "text" is the entry whole, "add" a paragraph added to it; "rides" is "named" (the writer reads it ${READS_WHEN(recall)} — the usual), "always" (what every page needs — how the world works at its root) or "never" (only for me); "newName", "aka", "dropAka" and "remove" as for a card.
+- "entry" is an entry in my bibliography — the world behind the book: what is true of a name whether or not a page has said it yet. How someone looks and what makes them unlike anyone else, where they come from and what they carry, what a place is like, how a power or a technique works and what it costs, what a word of the world means, what a group is and who leads it. The writer reads an entry ${READS_WHEN(recall, byPage)}, and writes from it as the truth of the world; I read it when I tap the name. This is where the world is made up, and that is your job in it: when I ask for an entry, write it — whole, in the block, in that same answer — richly and particularly, the way a novelist builds a world, inventing freely wherever the pages have not spoken and never against what they have said; what I tell you is true of them is true. Never ask me for the particulars first or offer me choices instead of the entry: write it, and I change what I see differently. "kind" is "people", "places", "things", "groups" or "lore"; "line" says in a line who or what it is; "text" is the entry whole, "add" a paragraph added to it; ${byPage ? '"rides" only as "never", when I ask to keep an entry for myself — with Super automatic on, what each page needs decides the rest, so you never set "always";' : `"rides" is "named" (the writer reads it ${READS_WHEN(recall)} — the usual), "always" (what every page needs — how the world works at its root) or "never" (only for me);`} "newName", "aka", "dropAka" and "remove" as for a card.
 - To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole (the chapter open too, when some of it is left out), ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["entry: Name"]${READ_CLOSE} an entry of my bibliography, whole, ${READ_OPEN}["about"]${READ_CLOSE} the book’s own words as they stand now — what it’s about, how it reads, where it’s headed — to quote exactly before changing them, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - The pages already written are yours to change when I ask — "rewrite", or "find"/"replace" — every passage the change touches, chapter by chapter. Never write the passage yourself unless I ask for your words. When the story changes, everything that tells the old story changes with it in the same block — every card, thread and entry, What it's about and Where it's headed, and the plans of the chapters ahead; a thread about a thing that no longer happens is taken out. A premise in ${DIRECTION_OPEN}…${DIRECTION_CLOSE} is for the page not written yet — never hand me one for a page that exists, and never leave a page as it was because changing it is "a real edit". When I ask whether the story should change — "would it be better if…", "is it possible to edit…", "do you agree?" — say what you think, make the changes to the notes and the bibliography that follow, and name the passages that would have to be written again, offering it in a line: "Say rewrite and I hand 1.3–1.5 to the writer with my notes." When I say so — or ask for the change plainly — do it in that same answer.
 - A passage you write is the book: in it, people know only what they have lived, seen or been told — what we say here stays ours unless I ask for it on the page.
@@ -855,7 +859,7 @@ export function partnerFrame(house, novel, { notesAs = 'system', tools = true, n
     `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner. The book comes to you fresh with every message of mine, just as it reads right now — any change of yours that went in is already there, and I never paste pages to you. Where some of it is cut short or left out to save room, it says so right there, with how to read it. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. Keep what the pages actually say apart from what you’re guessing at or suggesting. ${tools ? 'Before a change that hangs on words you can’t see here, read those pages first; if you can’t, tell me what’s still uncertain.' : 'Go only by what’s here, and never claim to have read pages you haven’t.'} ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
     PROSE_GUIDE,
     /* Ideas reads nothing more and changes nothing: it is never told it could (Cozy Tavern's M241) */
-    tools ? partnerChanges(appliesOf(house), recallOn(novel)) : '',
+    tools ? partnerChanges(appliesOf(house), recallOn(novel), superOn(house)) : '',
     notesAs === 'system' ? hereIs('partner') : '',
   ].filter(Boolean).join('\n\n');
 }
