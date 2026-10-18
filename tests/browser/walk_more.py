@@ -553,6 +553,49 @@ DRAWN_THE_SAME = r"""async () => {
   return bad;
 }"""
 
+async def scenario_heads_in_reach(b):
+    """the scene's and the partner's heads stay at the top while their turns scroll: Full screen always in reach"""
+    logs = []
+    pg = await page(b, logs)
+    await new_book(pg, title='The Long Scene')
+    await add_conn(pg)
+    await pg.fill('#direction', 'Mara climbs to the lamp room as the storm comes in.')
+    await pg.click('#mineBtn'); await pg.wait_for_timeout(250)
+    await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Scenes")')
+    await pg.wait_for_timeout(300)
+    await pg.fill('#sidePane input[list="cn-people"]', 'Mara')
+    await pg.click('#sidePane button:has-text("Begin the scene")')
+    await pg.wait_for_selector('#sideBody .turn.ai .tctl', timeout=8000)
+    for i in range(5):
+        await pg.fill('#sideFoot textarea:not(.tellbox)', f'I take step {i + 1} down toward him.')
+        await pg.click('#sideFoot button:has-text("Send")')
+        await pg.wait_for_function(f"document.querySelectorAll('#sideBody .turn.ai .tctl').length >= {i + 2}", timeout=8000)
+    await pg.wait_for_timeout(300)
+    REACH = """([sel, label, bottom]) => { const body = document.querySelector('#sideBody'); if (bottom) body.scrollTop = body.scrollHeight; const b = document.querySelector(sel + ' button[aria-label="' + label + '"]'); if (!b) return null; const r = b.getBoundingClientRect(), p = body.getBoundingClientRect(); const over = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { scrolled: body.scrollTop, onScreen: r.top >= p.top - 1 && r.bottom <= p.bottom + 1, nothingOver: over === b || b.contains(over), fromTop: Math.round(r.top - p.top) }; }"""
+    low = await pg.evaluate(REACH, ['#sideBody .scenehead', 'Full screen', True])
+    await pg.evaluate("document.querySelector('#sideBody').scrollTop = 0")
+    at_top = await pg.evaluate(REACH, ['#sideBody .scenehead', 'Full screen', False])
+    check('a scene\'s head sits where it did at the top, and stays there with its Full screen when the turns are scrolled to the end', at_top and at_top['scrolled'] == 0 and 18 <= at_top['fromTop'] <= 24 and low and low['scrolled'] > 400 and low['onScreen'] and low['nothingOver'], (at_top, low))
+    await pg.click('#sideBody .scenehead button[aria-label="Full screen"]'); await pg.wait_for_timeout(400)
+    full_low = await pg.evaluate(REACH, ['#sideBody .scenehead', 'Leave full screen', True])
+    await pg.click('#sideBody .scenehead button[aria-label="Leave full screen"]'); await pg.wait_for_timeout(400)
+    check('…full screen from the end of the scene, and Leave full screen from its end too', full_low and full_low['scrolled'] > 200 and full_low['onScreen'] and full_low['nothingOver'] and not await pg.evaluate("document.querySelector('#sidePane').classList.contains('full')"), full_low)
+    # the partner: the same
+    await pg.click('#sideTabs button[data-tab="partner"]'); await pg.wait_for_timeout(400)
+    for i in range(5):
+        await pg.fill('#sideFoot textarea', f'Who wrote the letter, do you think? ({i + 1})')
+        await pg.click('#sideFoot button:has-text("Send")')
+        await pg.wait_for_function(f"document.querySelectorAll('#sideBody .turn.ai:not(.streaming)').length >= {i + 1}", timeout=8000)
+    await pg.wait_for_timeout(300)
+    p_top = await pg.evaluate(REACH, ['#sideBody .convrow', 'Full screen', False])
+    p_low = await pg.evaluate(REACH, ['#sideBody .convrow', 'Full screen', True])
+    await pg.evaluate("document.querySelector('#sideBody').scrollTop = 0")
+    p_zero = await pg.evaluate(REACH, ['#sideBody .convrow', 'Full screen', False])
+    check('the partner\'s head stays at the top with its Full screen when its answers are scrolled to the end', p_low and p_low['scrolled'] > 400 and p_low['onScreen'] and p_low['nothingOver'] and p_zero['scrolled'] == 0 and p_zero['onScreen'], (p_top, p_low, p_zero))
+    errs = [l for l in logs if l.startswith('PAGEERROR')]
+    check('no page errors (heads in reach)', not errs, errs[:5])
+    await pg.close()
+
 async def scenario_follow(b):
     """the page follows the words being written until his finger moves it up, then stays where he put it"""
     logs = []
@@ -2470,7 +2513,7 @@ async def main():
             async def offline(b):
                 """the server stops under an open page, then comes back"""
                 await scenario_offline(b, env)
-            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_suggestions_more, scenario_page_whole, scenario_rest, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
+            for sc in (scenario_back, scenario_middle, scenario_thinking, scenario_round, bring_in, scenario_look, scenario_windows, scenario_heads_in_reach, scenario_follow, scenario_made_while_asked, scenario_checker, scenario_judge, scenario_suggestions_more, scenario_page_whole, scenario_rest, scenario_auto, scenario_crafts, scenario_versions, scenario_notes, scenario_page_fails, scenario_partner_said, scenario_partner, scenario_tavern_page, scenario_tavern_ui, scenario_update_waits, offline):
                 # ONLY=words runs just the scenarios whose description holds them
                 if os.environ.get('ONLY') and os.environ['ONLY'] not in (getattr(sc, '__doc__', None) or ''):
                     continue

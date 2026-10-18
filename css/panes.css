@@ -73,7 +73,10 @@
 
 /* Conversations have an identifiable voice and an unhurried reading rhythm. */
 .pane .turn-tokens { margin: 9px 0 0; color: var(--chrome-soft); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
-.conversation-heading { margin: 0 0 20px; }
+/* the partner's head and the scene's stay at the top of the pane while the turns scroll under them (2.12.26: "to have
+ * full screen on or off I need to scroll up far away"): Full screen, Leave full screen and the rest always in reach.
+ * The pane's own 20px at its top is the head's, so it sits where it did until the turns scroll. */
+.conversation-heading { position: sticky; top: -20px; z-index: 2; background: var(--chrome-solid); margin: -20px 0 12px; padding: 20px 0 8px; }
 .pane .convrow { gap: 4px; margin: 0; padding: 5px; background: var(--pane-wash); border: 1px solid var(--line); border-radius: 11px; }
 .pane .convrow .convpick { flex: 1 1 auto; font-family: var(--display); font-size: 18px; justify-content: space-between; padding: 4px 6px; }
 .pane .convrow .convpick + .btn { padding: 6px; font-size: 11px; }
@@ -122,13 +125,13 @@
 .pane .scene-start .field small { font-size: 11px; line-height: 1.6; }
 .pane .scene-start .btnrow { margin-top: 18px; }
 .pane .scene-start .btn { width: 100%; border-radius: 9px; min-height: 42px; font-size: 12px; }
-.pane .scenehead { margin: 0 0 18px; padding: 0 0 14px; border-bottom: 1px solid var(--line); gap: 4px; }
+.pane .scenehead { position: sticky; top: -20px; z-index: 2; background: var(--chrome-solid); margin: -20px 0 18px; padding: 20px 0 14px; border-bottom: 1px solid var(--line); gap: 4px; }
 .pane .scenehead .icon { flex: none; width: 34px; height: 38px; }
 .pane .choices { gap: 8px; padding-top: 3px; }
 .choice-heading { margin: 0 0 2px; color: var(--chrome-soft); font: italic 18px/1.4 var(--display); }
 .pane .choice { border-radius: 10px; padding: 12px 14px; font-size: 12px; line-height: 1.6; text-align: left; border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .pane .choice:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.pane.right.full .conversation-heading { position: sticky; top: -20px; z-index: 2; background: var(--chrome-solid); padding: 20px 0 12px; }
+.pane.right.full .conversation-heading { position: sticky; top: -20px; z-index: 2; background: var(--chrome-solid); margin: 0 0 20px; padding: 20px 0 12px; }
 .pane.right.full .convrow { position: static; background: var(--pane-wash); padding: 5px; }
 .pane.right.full .turn { font-size: 16px; }
 .pane.right.full .turn.ai.prose-turn { padding: 12px 2px; font: var(--prose-size)/var(--prose-lead) var(--serif); }
