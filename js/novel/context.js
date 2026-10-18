@@ -165,10 +165,25 @@ export function numberedText(novel, chapter, list = null) {
 }
 /* each passage as the partner sees it: [{p, text, words, brk}] — one with no words yet is said so, never left out
  * without a word (a number the page shows it would not find) */
+/* (some of a chapter's passages: with every scene break that stands between two of them — 2.12.35, the audit: the
+ * checker and the chapter read whole were sent passages with their breaks taken out, and asked to mend "a jump in time
+ * or place nobody marks") */
+function withBreaks(chapter, list) {
+  const all = chapter.passages || [];
+  const at = new Map(all.map((p, i) => [p.id, i]));
+  if (!list.every((p) => at.has(p.id))) return list;
+  const out = [];
+  const seen = new Set();
+  list.forEach((p, k) => {
+    if (k > 0) for (let i = at.get(list[k - 1].id) + 1; i < at.get(p.id); i++) if (all[i].by === 'break' && !seen.has(all[i].id)) { seen.add(all[i].id); out.push(all[i]); }
+    if (!seen.has(p.id)) { seen.add(p.id); out.push(p); }
+  });
+  return out;
+}
 function numberedRows(novel, chapter, list = null) {
   const n = chapterNumber(novel, chapter.id);
   const nums = passageNumbers(chapter);
-  return (list || chapter.passages || []).map((p) => {
+  return (list ? withBreaks(chapter, list) : chapter.passages || []).map((p) => {
     const t = passageText(p);
     if (p.by === 'break') return t.trim() ? { p, text: t, words: 0, brk: true } : null;
     const v = picked(p) || {};
@@ -506,8 +521,8 @@ export function bibliographyFor({ items, opened, purpose, request = '', moment =
   const share = bibShare(free);
   if (purpose === 'partner') {
     const mine = filled.filter((it) => it.entry).map((it) => it.entry);
-    const index = mine.length ? entryIndex(mine, Math.floor(share / 3)) : { text: '', left: 0 };
-    const ride = ridingItems(filled, { his, near, budget: share - (mine.length ? Math.floor(share / 3) : 0), skip, purpose, factsMost });
+    const index = mine.length ? entryIndex(mine, Math.floor(share / 3), { byPage }) : { text: '', left: 0 };
+    const ride = ridingItems(filled, { his, near, budget: share - (mine.length ? Math.floor(share / 3) : 0), skip, purpose, factsMost, byPage });
     const text = ride.words.length || index.text ? bibPart(ride.words, { index: index.text, indexLeft: index.left, recall, byPage }) : '';
     return { text, ids: ride.items.map((it) => it.ref), left: ride.left, picked: [], whole: ride.whole, allEntries: ride.allEntries };
   }

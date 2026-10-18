@@ -21,11 +21,11 @@
 import * as store from '../store.js';
 import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked } from './shape.js';
 import { foldVersion } from './inplace.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, dropMarkup, partBlock } from './textshape.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, dropMarkup, partBlock, mendSpacing, unglueSounds } from './textshape.js';
 import { shapeTelling } from './talk.js';
 import { resign } from './archivist.js';
 import { locate } from './changes.js';
-import { liftOfFaults } from './checker.js';
+import { liftOfFaults, wholeSig } from './checker.js';
 import { hashText, countWords } from '../util.js';
 import { carriedCodex } from './bibliography.js';
 
@@ -36,14 +36,18 @@ import { carriedCodex } from './bibliography.js';
  *    written in one, a curly mark facing the wrong way turned, speech wrapped in asterisks unwrapped, an asterisk left
  *    open closed inside its own stretch, and a page that came as one block parted where speech begins (Cozy Tavern
  *    M753, M510-17, 2.12.34) */
-export const MEND_V = 4;
+/* 5: a space a slip of the hand left out or put in — after a full stop or a comma, around speech marks, before a comma
+ *    (textshape.js spacingSlips); and what 4 did wrong, undone: the sounds it glued to the speech between them —
+ *    `*CLANG!* "Nngh—!" *THUD*` made `*CLANG!"Nngh—!"THUD*` — parted again (unglueSounds; a bold it took off a spoken
+ *    line cannot be told from an italic, and stays off); a chapter read whole stays read (2.12.35) */
+export const MEND_V = 5;
 const HIS = ['mine', 'edit', 'imported'];
 
 /* one version's words made whole as a new page's are: {text, tookOff, tookOffTop} */
 export function mendPage(v, { names = [] } = {}) {
   const given = String((v && v.text) || '');
   const cut = Boolean(v && v.cut);
-  const head = dropTop(given, { names });
+  const head = dropTop(unglueSounds(given), { names });
   let text = joinSoftWraps(partBlock(head.text).text);
   let tail = '';
   /* the unfinished end of a page cut short is story still to be carried on — never a note */
@@ -52,6 +56,7 @@ export function mendPage(v, { names = [] } = {}) {
     if (fin.removed) { text = fin.text.replace(/\s+$/, ''); tail = fin.removed; }
   }
   text = mendMarks(dropMarkup(dropGluedStrays(text).text).text, { leaveLast: cut }).text;
+  text = mendSpacing(text, { leaveLast: cut }).text;
   return { text, tookOff: tail, tookOffTop: head.removed || '' };
 }
 
@@ -69,6 +74,9 @@ export async function mendBook(novelId) {
   if (chapters.some((c) => !c)) return none;
   let n = 0;
   let told = 0;
+  /* a chapter read whole as it stood: still read, once its words have lost only what was never the story (2.12.35, the
+   * audit: through 2.12.34 every chapter with a page mended was read whole again) */
+  const readWas = new Set(chapters.filter((c) => c.wholeRead && c.wholeRead.sig === wholeSig(c)).map((c) => c.id));
   /* the fixes made as versions of their own first, then the pages, at once — before the helper looks at the book */
   const versions = foldOld(novelId, chapters.map((c) => c.id));
   for (const c of chapters) {
@@ -81,6 +89,9 @@ export async function mendBook(novelId) {
         if (m.text === was || !m.text.trim()) continue;
         store.change('chapter', c.id, chapterSteps.setVersion(p.id, v.id, {
           text: m.text, words: countWords(m.text),
+          /* (the words before the fixes by themselves mended the same way: what went in by itself is still measured
+           * from them — shape.js autoBaseOf) */
+          ...(typeof v.autoBase === 'string' ? { autoBase: mendPage({ ...v, text: v.autoBase }, { names: [c.name].filter(Boolean) }).text } : {}),
           ...(m.tookOff ? { tookOff: joined(m.tookOff, v.tookOff) } : {}),
           ...(m.tookOffTop ? { tookOffTop: joined(v.tookOffTop, m.tookOffTop) } : {}),
         /* (not a checkpoint: the chapter as it was before the mend is kept among its earlier copies) */
@@ -106,6 +117,11 @@ export async function mendBook(novelId) {
         n++;
       }
     }
+  }
+  for (const id of readWas) {
+    const c = store.peek('chapter', id);
+    const sig = c && wholeSig(c);
+    if (c && c.wholeRead && c.wholeRead.sig !== sig) store.change('chapter', id, chapterSteps.setWholeRead({ ...c.wholeRead, sig }), { checkpoint: true });
   }
   /* a lift the judge of 2.4 echoed from its own example — "Slow the moment
    * Yuki falls…" — in a book with no Yuki is not this book's: it would be
@@ -145,7 +161,7 @@ export async function mendBook(novelId) {
       for (const v of t.versions || []) {
         if (v.streaming || v.asIs || !String(v.text || '').trim()) continue;
         const was = String(v.text || '');
-        const m = shapeTelling(was, { cut: Boolean(v.cut) });
+        const m = shapeTelling(unglueSounds(was), { cut: Boolean(v.cut) });
         if (m.text === was || !m.text.trim()) continue;
         store.change('play', id, turnSteps.setVersion(t.id, v.id, {
           text: m.text,

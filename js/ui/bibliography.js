@@ -223,11 +223,13 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
     : h('select', { 'aria-label': 'The writer reads it' }, ...RIDES.map((r) => h('option', { value: r, selected: e.rides === r }, RIDES_WORDS[r])));
   const boxes = { name: nameBox, aka: akaBox, kind: kindBox, line: lineBox, text: textBox, rides: ridesBox };
   const opened = Object.fromEntries(Object.entries(boxes).map(([k, b]) => [k, b.value]));
+  /* a draft's Always or When there's room, chosen while Super automatic was off: kept underneath when it is saved now (2.12.35) */
+  let underneath = null;
   if (draft) {
     for (const [k, v] of Object.entries(draft)) {
       if (!boxes[k]) continue;
       /* a choice kept while Super automatic was on, or off, read as the sheet offers it now */
-      if (k === 'rides') { const r = byPage ? (v === 'never' ? 'never' : BY_PAGE) : v === BY_PAGE ? null : v; if (r) boxes[k].value = r; continue; }
+      if (k === 'rides') { if (byPage && (v === 'always' || v === 'named')) underneath = v; const r = byPage ? (v === 'never' ? 'never' : BY_PAGE) : v === BY_PAGE ? null : v; if (r) boxes[k].value = r; continue; }
       boxes[k].value = v;
     }
     s.body.append(h('p.say', 'Your words from before, not saved yet, are back.'));
@@ -240,7 +242,14 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
   s.body.append(field('The writer reads it', ridesBox, byPage
     ? 'Page by page: with every page while the bibliography has room beside the book — when it hasn’t, Super automatic sends it first when the page names it or needs it. Never keeps it for you alone. Always, set before, comes back when Super automatic is off.'
     : 'When there’s room: with every page while the bibliography has room beside the book — when it hasn’t, first when its name is said near the page or, with Smart recall, when the page needs it. Always: with every page, before anything else. Never keeps it for you alone.'));
-  const typed = () => Object.fromEntries(Object.keys(boxes).filter((k) => boxes[k].value !== opened[k]).map((k) => [k, boxes[k].value]));
+  const typed = () => {
+    const t = Object.fromEntries(Object.keys(boxes).filter((k) => boxes[k].value !== opened[k]).map((k) => [k, boxes[k].value]));
+    /* (a draft's Always or When there's room, kept underneath while the box says Page by page, is his still to save —
+     * 2.12.35, the review: for an entry read page by page already the box never changed, so it was let go) */
+    const liveNow = cur ? entriesOf(store.peek('novel', novelId) || {}).find((x) => x.id === cur.id) : null;
+    if (underneath && ridesBox.value === BY_PAGE && (!liveNow || liveNow.rides !== underneath)) t.rides = underneath;
+    return t;
+  };
   let done = false;
   const keepDraft = () => {
     if (done) return;
@@ -263,7 +272,7 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
     for (const [k, v] of Object.entries(t)) out[k] = k === 'aka' ? v.split(',').map((x) => x.trim()).filter(Boolean) : v;
     if (!cur) { out.name = nameBox.value; out.aka = akaBox.value.split(',').map((x) => x.trim()).filter(Boolean); out.kind = kindBox.value; out.line = lineBox.value; out.text = textBox.value; out.rides = ridesBox.value; }
     /* page by page: what it was set to stays (Always, or When there's room), Never let go of as When there's room */
-    if (out.rides === BY_PAGE) out.rides = live && live.rides !== 'never' ? live.rides : 'named';
+    if (out.rides === BY_PAGE) out.rides = underneath || (live && live.rides !== 'never' ? live.rides : 'named');
     /* renamed: the old name stays among the others it goes by */
     if (cur && t.name !== undefined && nameKey(t.name) !== nameKey(live.name)) out.aka = [...(out.aka || []), live.name];
     const tidy = tidyEntry(out);

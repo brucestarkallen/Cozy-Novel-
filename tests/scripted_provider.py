@@ -102,8 +102,12 @@ class H(BaseHTTPRequestHandler):
             whole = "Read it as one chapter" in last_user
             # the marks' mender (2.12.34): sets nothing, unless the test queued an answer for it ({"marks": true})
             marks = "Add the quotation marks each spoken line is missing" in last_user
-            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole) and not (marks and not QUEUE[0].get("marks")) and not (QUEUE[0].get("marks") and not marks):
+            # the proofreader (2.12.35): finds no slip, unless the test queued an answer for it ({"proof": true})
+            proof = "Find every slip of the hand in them" in last_user
+            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole) and not (marks and not QUEUE[0].get("marks")) and not (QUEUE[0].get("marks") and not marks) and not (proof and not QUEUE[0].get("proof")) and not (QUEUE[0].get("proof") and not proof):
                 beh = QUEUE.pop(0)
+            elif proof:
+                beh = {"text": json.dumps({"edits": []})}
             elif whole:
                 beh = {"text": json.dumps({"edits": []})}
             elif marks:

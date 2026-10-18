@@ -29,7 +29,7 @@ export function superOn(house) { return Boolean(house && house.superAuto && hous
 let houseNow = () => null;
 export function readHouseWith(fn) { if (typeof fn === 'function') houseNow = fn; }
 export function superActive() { try { return superOn(houseNow()); } catch (_) { return false; } }
-/* when he switched it on: what happens by itself happens to what is written from then on */
+/* when he switched it on (with Nobody chosen to check, when the helper's connection began to: checker.js checksFromOf) */
 export function superFrom(house) { return superOn(house) && Number.isFinite(house.superAuto.from) ? house.superAuto.from : null; }
 
 /* whether the partner's changes land at once or wait for Apply */
@@ -37,8 +37,9 @@ export function appliesOf(house) { return !superOn(house) && house && house.part
 
 /* WHEN WHAT HAPPENS BY ITSELF WAS SWITCHED ON (null: off) — fix: the checker's fixes, by his own switch or by Super
  * automatic (the earlier of the two when both are on); lift: a passage under his mark written again, his own switch
- * alone. What goes in by itself goes in on what was written from then on (checker.js autoAfter), and a page being
- * written by itself stops the moment the switch that started it is off (writer.js runVersion). Pure. */
+ * alone. A fix goes in by itself on every passage checked while it is on, written before too (checker.js autoAfter;
+ * with Super automatic every page is checked, checker.js wanted); a passage is lifted only when written from then on;
+ * and a page being written by itself stops the moment the switch that started it is off (writer.js runVersion). Pure. */
 export function autoOf(house) {
   const on = (x) => (x && x.on && Number.isFinite(x.from) ? x.from : null);
   const own = on(house && house.autoFix);

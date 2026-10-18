@@ -422,7 +422,7 @@ function card(novelId, x) {
       if (C.sheet) C.sheet.close();
       /* his words to avoid, or stock wording counted: the sentence written again without them */
       const note = checker.spanNote(item);
-      desk.rewriteSpan({ chapterId: x.chapterId, passageId: x.passageId, start: spot.start, end: spot.end, note });
+      desk.rewriteSpan({ chapterId: x.chapterId, passageId: x.passageId, start: spot.start, end: spot.end, note, marks: checker.spanMarks(item) });
     } }, 'Write it again'));
   }
   btns.append(h('button.btn.quiet.small', { title: 'Keep the words as they are — this is not offered for the passage again.', onclick: () => checker.leaveOne(x.chapterId, x.passageId, item.id) }, 'Leave it'));

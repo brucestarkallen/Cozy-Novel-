@@ -229,13 +229,13 @@ export function bibShare(free) {
 }
 
 /* every entry by its name and line (the partner's view of the whole), fitted to `budget` tokens */
-export function entryIndex(entries, budget = 4000) {
+export function entryIndex(entries, budget = 4000, { byPage = false } = {}) {
   const rows = [];
   let cost = 0;
   let left = 0;
   for (const e of entries || []) {
     if (!cleanName(e.name)) continue;
-    const row = `- ${e.name}${(e.aka || []).length ? ` (also ${e.aka.join(', ')})` : ''}${e.line ? ` — ${e.line}` : ''}${e.rides === 'never' ? ' [only for me — the writer never reads it]' : e.rides === 'always' ? ' [the writer always reads it]' : ''}`;
+    const row = `- ${e.name}${(e.aka || []).length ? ` (also ${e.aka.join(', ')})` : ''}${e.line ? ` — ${e.line}` : ''}${e.rides === 'never' ? ' [only for me — the writer never reads it]' : e.rides === 'always' && !byPage ? ' [the writer always reads it]' : ''}`;
     const c = estimateTokens(row) + 1;
     if (cost + c > budget) { left++; continue; }
     rows.push(row);
@@ -809,13 +809,17 @@ export function pickRows(items, { his = '', near = '', cap = 6000, rode = null, 
   const usable = usableFor(items, 'write');
   /* rode: the entries the request carries without a pick (context.js stats.entries) — else the ones it names */
   let named = rode;
+  let found = null;
   if (!named) {
-    const found = namedOrder(usable, his, near);
+    found = namedOrder(usable, his, near);
     named = new Set([...found.his, ...found.near]);
   }
   /* (byPage: an entry set to Always rides only as any other does — the pick may bring it like any other) */
   const riding = usable.filter((it) => it.entry && ((!byPage && it.rides === 'always') || named.has(it.ref)));
-  const open = (items || []).filter((it) => it.entry && (byPage ? ridesOf(it.rides) !== 'never' : ridesOf(it.rides) === 'named') && !named.has(it.ref) && String(it.entry.text || it.entry.line || '').trim());
+  /* (never one his own words name: it goes right after them, picked or not — one left out for room is left out either
+   * way, and asking for it only made the page wait, 2.12.35) */
+  const own = new Set((found || namedOrder(usable, his, '')).his);
+  const open = (items || []).filter((it) => it.entry && (byPage ? ridesOf(it.rides) !== 'never' : ridesOf(it.rides) === 'named') && !named.has(it.ref) && !own.has(it.ref) && String(it.entry.text || it.entry.line || '').trim());
   if (!open.length) return { rows: [], riding };
   const moment = topicWords(`${his}\n${near}`);
   const scored = open.map((it, i) => {

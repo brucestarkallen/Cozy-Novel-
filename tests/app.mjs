@@ -79,8 +79,11 @@ async function reset() { await realFetch(PROVIDER + '/reset'); }
  * what a page, the partner or the helper sent leaves those picks out, and the picks are read by themselves */
 const isPickAsk = (x) => ((x.body && x.body.messages) || []).some((m) => String(m.content || '').includes('Answer with only this: {"entries": [the numbers]}'));
 async function everyRequest() { return (await (await realFetch(PROVIDER + '/requests')).json()).requests; }
-async function requests() { return (await everyRequest()).filter((x) => !isPickAsk(x)); }
+/* the proofreader's asks (2.12.35) are counted apart, as the picks are: every checked passage is proofread once */
+const isProofAsk = (x) => ((x.body && x.body.messages) || []).some((m) => m.role === 'user' && String(m.content || '').includes(prompts.PROOF_ASK));
+async function requests() { return (await everyRequest()).filter((x) => !isPickAsk(x) && !isProofAsk(x)); }
 async function pickAsks() { return (await everyRequest()).filter(isPickAsk); }
+async function proofAsks() { return (await everyRequest()).filter(isProofAsk); }
 /* since 2.11.3 every new summary is held once against its words in the same run (the summary check): a count of
  * what the helper asked about a summary leaves those checks out, and the checks are counted by themselves */
 const isCheckAsk = (x) => x.body.messages.some((m) => String(m.content || '').includes('Its summary, as it stands'));
@@ -11345,12 +11348,13 @@ await test('a swap set to wait and a change he applies in his own words, applied
   await script([{ text: 'Seen.' }]);
   await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Mine now.' });
   const mineNow = String((await requests())[4].body.messages.at(-1).content);
-  assert.ok(mineNow.includes('(“was cold” → “burned blue”) — made, but the page no longer reads that way — those words were changed since'), mineNow);
+  /* (2.12.35: who changed them since, and what they read now — told only "changed since", the partner could not see the page) */
+  assert.ok(mineNow.includes('(“was cold” → “burned blue”) — made, but the page no longer reads that way — I changed them myself since; it reads there now: “The lamp burned low.”'), mineNow);
   assert.ok(!mineNow.includes('were put back'), mineNow);
   /* and where his own-words change is the answer before's, it is told the same way */
   const edited = picked(store.peek('talk', b.novelId).turns.find((t) => t.id === first.id)).changes[2];
   assert.equal(edited.edited, true);
-  assert.equal(changes.outcomeWords([edited], b.novelId), `(Of your changes: ${edited.label} — made, in my own words instead of yours, but the page no longer reads that way — those words were changed since.)`);
+  assert.equal(changes.outcomeWords([edited], b.novelId), `(Of your changes: ${edited.label} — made, in my own words instead of yours, but the page no longer reads that way — I changed them myself since; it reads there now: “The lamp burned low.”.)`);
   await setHouse();
   await putAway(b);
 });
@@ -12124,7 +12128,9 @@ await test('one switch reads before every book’s own: What it’s about and Ho
   await putAway(b);
 });
 
-await test('Super automatic checking where he chose Nobody begins when it is switched on: a page written before waits to be asked for, a page after is checked by itself', async () => {
+/* (2.12.35, his word, 18 October — "make it like Grammarly that fixes everything": through 2.12.34 a page written before
+ * Super automatic was switched on waited to be asked for; now every page is checked, the newest first) */
+await test('Super automatic checking where he chose Nobody begins when it is switched on: what is written after it first, and the pages written before it too, by themselves', async () => {
   const long = Date.now() - 100000;
   await setHouse({}, { roles: { writer: 'c-w', checker: 'off' }, checksFrom: long, judge: { on: false } });
   const b = await makeBook([['An old page from before.']]);
@@ -12136,7 +12142,9 @@ await test('Super automatic checking where he chose Nobody begins when it is swi
   await sleep(5);
   await checker.runCheck(b.novelId);
   const isCheck = (x) => String(x.body.messages.at(-1).content).includes('Check these passages from');
-  assert.equal((await requests()).filter(isCheck).length, 0, 'the page from before is not checked by itself');
+  const before = (await requests()).filter(isCheck);
+  assert.equal(before.length, 1, 'the page from before is checked by itself too');
+  assert.ok(String(before[0].body.messages.at(-1).content).includes('[1.1] An old page from before.'));
   writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'A new page of mine.' });
   await reset();
   await checker.runCheck(b.novelId);
@@ -12723,6 +12731,740 @@ await test('his own words checked: a mark that stands in for the lost quote is s
   assert.equal(picked(old.ch().passages[0]).text, '"A gift," she said, and set the box down. "From my sister." Then she left.');
   assert.deepEqual(await mend.mendBook(old.novelId), { pages: 0, tellings: 0, versions: 0 }, 'once');
   await putAway(old);
+});
+
+heading('every slip found and set right: the spaces, the proofreading, every page under Super automatic, what the partner sees (2.12.35)');
+const isCheckAskOf = (x) => String(x.body.messages.at(-1).content).includes('Check these passages from');
+const passageAsks = async () => (await requests()).filter(isCheckAskOf).map((x) => String(x.body.messages.at(-1).content));
+const onShow = (b, i = 0, c = 0) => picked(b.ch(c).passages[i]);
+/* a page as if checked before: its entry, nothing found */
+function checkedBefore(b, i = 0, c = 0, extra = {}) {
+  const p = b.ch(c).passages[i];
+  const v = picked(p);
+  store.change('chapter', b.ids[c], shape.chapterSteps.setCheck(p.id, v.id, { round: 'ck-old', sig: util.hashText(v.text), at: Date.now() - 86400000, items: [], ...extra }), { now: true });
+}
+
+await test('a space a slip of the hand left out or put in is set right on a new page as it arrives — white space only, never in a figure, an initialism, a title or a French page — and found on a page kept before, put in by itself with no model asked for it', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['The rain had stopped.']]);
+  const came = 'The sky had gone from bruised to ash.She looked at him. "Go,"she said. He said,"Wait." A word , then 3,000 more at 9:30, U.S.A. and Ph.D. on Re:Zero.';
+  await script([{ text: came }, { text: 'Il dit : bonjour ; et puis il partit.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  assert.equal(onShow(b, 1).text, 'The sky had gone from bruised to ash. She looked at him. "Go," she said. He said, "Wait." A word, then 3,000 more at 9:30, U.S.A. and Ph.D. on Re:Zero.');
+  assert.equal(onShow(b, 1).text.replace(/\s+/g, ''), came.replace(/\s+/g, ''), 'white space only');
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  assert.equal(onShow(b, 2).text, 'Il dit : bonjour ; et puis il partit.', 'a French page as it came');
+  await putAway(b);
+  /* a page kept before, checked before: its slip found with no model asked, and in by itself */
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const old = await makeBook([['Her hand.She waited by the door, and the door did not open.']]);
+  checkedBefore(old);
+  await reset();
+  await checker.runCheck(old.novelId);
+  assert.equal((await passageAsks()).length, 0, 'never sent to the checker again');
+  assert.equal(onShow(old).text, 'Her hand. She waited by the door, and the door did not open.');
+  assert.deepEqual(onShow(old).hands, ['checker']);
+  assert.equal(checker.suggestions(old.novelId).length, 0);
+  await setHouse();
+  await putAway(old);
+});
+
+await test('every checked passage is proofread once, for slips alone: a slip’s size goes in by itself, a sentence said another way never; a slip inside a fix found already is mended inside it; the places code sees as likely slips are named to it; never asked again for the words its own fixes made', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const text = 'Whether keeping it wassentiment or discipline, she could not say. The sky had gone from bruised to ash, She looked at him and smiled.';
+  const b = await makeBook([[text]]);
+  await reset();
+  await script([
+    { text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'clarity', find: 'keeping it wassentiment or discipline, she could not say', replace: 'keeping it wassentiment or discipline, she could not tell', why: 'plainer' }] }) },
+    { proof: true, text: JSON.stringify({ edits: [
+      { passage: '1.1', find: 'keeping it wassentiment or', replace: 'keeping it was sentiment or', why: 'two words run together' },
+      { passage: '1.1', find: 'bruised to ash, She looked', replace: 'bruised to ash. She looked', why: 'two sentences run together with a comma' },
+      { passage: '1.1', find: 'She looked at him and smiled.', replace: 'She turned to him with a slow and secret smile, and held his eyes.', why: 'better' },
+    ] }) },
+  ]);
+  await checker.runCheck(b.novelId);
+  const [ask] = (await proofAsks()).map((x) => String(x.body.messages.at(-1).content));
+  assert.ok(ask && ask.includes(prompts.PROOF_ASK) && ask.includes('These places look like slips') && ask.includes('ash, She looked'), ask && ask.slice(-1600));
+  assert.ok(ask.includes('[1.1] Whether keeping it wassentiment'), 'the passage itself');
+  assert.equal(onShow(b).text, 'Whether keeping it was sentiment or discipline, she could not tell. The sky had gone from bruised to ash. She looked at him and smiled.', 'the slips in by themselves, the clarity fix with the slip mended inside it — and never the sentence said another way');
+  assert.equal(checker.suggestions(b.novelId).length, 0, 'the one too large is never kept as a slip');
+  const p = b.ch().passages[0];
+  assert.equal(b.ch().checks[p.id][onShow(b).id].proofed, true, 'read once for these words — and for the words its own fixes made');
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await proofAsks()).length, 0, 'never asked again');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a slip the proofreader found that he left stays left — offered for that passage never again, though the words are proofread again once they change', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['The cat sat on the the mat by the fire.']]);
+  const slip = { passage: '1.1', find: 'on the the mat', replace: 'on the mat', why: 'a word doubled' };
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [] }) }, { proof: true, text: JSON.stringify({ edits: [slip] }) }]);
+  await checker.runCheck(b.novelId);
+  const [s] = checker.suggestions(b.novelId);
+  assert.ok(s && s.item.proof && s.item.find === 'on the the mat' && s.item.replace === 'on the mat', JSON.stringify(s && s.item));
+  checker.leaveOne(b.ids[0], b.ch().passages[0].id, s.item.id);
+  /* his own words change the passage: checked and proofread again — the slip he left not offered again */
+  assert.ok(inplace.changeInPlace({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id, next: 'The cat sat on the the mat by the fire. It slept.', by: 'you' }));
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [] }) }, { proof: true, text: JSON.stringify({ edits: [slip] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.equal((await proofAsks()).length, 1, 'proofread again for the new words');
+  assert.equal(checker.suggestions(b.novelId).length, 0, 'what he left stays left');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('with Super automatic on, every page of the book is checked — the ones written before it was switched on too — the newest first, and the light says how many wait', async () => {
+  const long = Date.now() - 100000;
+  await setHouse({}, { roles: { writer: 'c-w', checker: 'off' }, checksFrom: long, judge: { on: false } });
+  const b = await makeBook([['An old page.', 'Another old page.', 'A third old page.', 'A fourth old page.'], []]);
+  await sleep(5);
+  store.change('house', 'house', (x) => { x.superAuto = { on: true, from: Date.now() }; }, { now: true });
+  await sleep(5);
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[1], text: 'A new page of mine.' });
+  const light = checker.stateOf(b.novelId);
+  assert.equal(light.state, 'waiting');
+  assert.equal(light.words, '5 passages to check — the newest first, a few at a time.', JSON.stringify(light));
+  await reset();
+  await checker.runCheck(b.novelId);
+  const asks = await passageAsks();
+  assert.ok(asks.length >= 2, `asks: ${asks.length}`);
+  /* (the chapter before is told it as the story before it: only its numbered passages are checked) */
+  assert.ok(asks[0].includes('[2.1] A new page of mine.') && !asks[0].includes('[1.1]'), 'the newest first');
+  assert.ok(asks.slice(1).some((a) => a.includes('[1.1] An old page.') && a.includes('[1.4] A fourth old page.')), 'and then the book’s older pages');
+  for (const c of [0, 1]) for (const p of b.ch(c).passages) assert.ok(checker.entryFor(b.ch(c), p), `checked: ${picked(p).text}`);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('his partner is shown, whole, the passages its last answer changed as they read now; told who changed its words since and what they read there; a change that would change nothing is asked about again in the same answer', async () => {
+  await setHouse();
+  const b = await makeBook([['The lamp was cold.', 'The sea was grey.']]);
+  await script([{ text: '<changes>[{"passage": "1.1", "find": "was cold", "replace": "burned blue", "why": "colder light"}]</changes>\nBluer.' }, { text: 'I see it.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Make the lamp stranger.' });
+  assert.equal(onShow(b).text, 'The lamp burned blue.');
+  /* his own words over the change since */
+  assert.ok(inplace.changeInPlace({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id, next: 'The lamp burned low and blue.', by: 'you' }));
+  await reset();
+  await script([{ text: 'I see it.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'How does it read now?' });
+  const last = String((await requests()).at(-1).body.messages.at(-1).content);
+  assert.ok(last.includes('— made, but the page no longer reads that way — I changed them myself since; it reads there now: “The lamp burned low and blue.”'), last);
+  assert.ok(last.includes('(The passages your last answer\'s changes went into, as they read now — whole:') && last.includes('[1.1] The lamp burned low and blue.'), last);
+  /* the passages shown with the newest message only: never kept in the talk */
+  await reset();
+  await script([{ text: 'Fine.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'And now?' });
+  const msgs = (await requests()).at(-1).body.messages.map((m) => String(m.content));
+  assert.equal(msgs.filter((m) => m.includes('went into, as they read now')).length, 0, 'the answer before changed nothing: nothing shown, and nothing kept from before');
+  /* a change whose new words are the words there already: asked about again in the same answer */
+  await reset();
+  await script([{ text: '<changes>[{"passage": "1.2", "find": "was grey", "replace": "was grey", "why": "x"}]</changes>\nDone.' }, { text: 'NOTHING — I leave it.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Greyer?' });
+  const again = (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Some of your changes couldn’t be made'));
+  assert.equal(again.length, 1, 'asked again');
+  assert.ok(again[0].includes('it would change nothing') && again[0].includes('found the words there already reading as its new words'), again[0]);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the speech marks: the sound law’s two lanes stay apart and bold stays bold as a page arrives; the sounds 2.12.34 glued to the speech between them are parted again, once, on the pages kept — and on the scenes’ tellings', async () => {
+  await setHouse();
+  const b = await makeBook([['The rain had stopped.']]);
+  const came = 'He swung. *CLANG!* "Nngh—!" *THUD* He went down.\n\n*BANG!*"Get down!"*BANG!*\n\n**"STOP!"** he roared.\n\n*"Ahh—!"* she cried.';
+  await script([{ text: came }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  assert.equal(onShow(b, 1).text, 'He swung. *CLANG!* "Nngh—!" *THUD* He went down.\n\n*BANG!*"Get down!"*BANG!*\n\n**"STOP!"** he roared.\n\n"Ahh—!" she cried.', 'only speech wrapped in asterisks loses them');
+  await putAway(b);
+  /* the pages and the tellings 2.12.34 mended in place: parted again, every letter kept, once */
+  const old = await makeBook([['He swung. *CLANG!"Nngh—!"THUD* He went down. *slap slap"Ahh—ahh—!"creak—creak*']]);
+  const play = { id: util.newId('pl'), novelId: old.novelId, title: 'A scene', turns: [{ id: 't1', by: 'ai', versions: [{ id: 'tv1', text: 'The blade fell. *BANG!"Get down!"BANG!* She ran.' }], pick: 'tv1' }] };
+  await store.create('play', play.id, play);
+  store.change('novel', old.novelId, (n) => { n.plays = [play.id]; n.memory = { ...(n.memory || {}), mended: 4 }; }, { now: true });
+  const got = await mend.mendBook(old.novelId);
+  assert.deepEqual([got.pages, got.tellings], [1, 1], JSON.stringify(got));
+  assert.equal(onShow(old).text, 'He swung. *CLANG!* "Nngh—!" *THUD* He went down. *slap slap* "Ahh—ahh—!" *creak—creak*');
+  assert.equal(picked(store.peek('play', play.id).turns[0]).text, 'The blade fell. *BANG!* "Get down!" *BANG!* She ran.');
+  assert.deepEqual(await mend.mendBook(old.novelId), { pages: 0, tellings: 0, versions: 0 }, 'once');
+  await putAway(old);
+});
+
+await test('the speech marks are read as a book sets them: the closing line of a letter or a song is no fault, nor a quotation that ends in a figure — no card, no mender asked; the unfinished last line of a page cut short is left to its Go on', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['“Dear John,\nI miss you.\nLove, Mary”', 'She sang:\n"Oh the river runs,\nand the river bends,\nand the river never ends."', 'She made the "Top 10" list again, and "Catch-22" stayed on the shelf. "I\'m 25" she said, and "He is 5\'9" tall," he said, and swung the 12" blade.', { text: 'He waited.\n\n"I went down to the harbour and waited for the', cut: true }]]);
+  checker.checkChapter(b.novelId, b.ids[0]);
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0, 'no mender asked');
+  const [ask] = await passageAsks();
+  assert.ok(ask && !ask.includes('Speech marks that do not pair'), ask && ask.slice(-1200));
+  assert.equal(checker.suggestions(b.novelId).filter((s) => s.item.marks).length, 0, JSON.stringify(checker.suggestions(b.novelId).map((s) => s.item)));
+  /* an older reading's card on such a paragraph goes */
+  const p = b.ch().passages[0];
+  const e = b.ch().checks[p.id][picked(p).id];
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p.id, picked(p).id, { ...e, items: [{ id: 'sg-old', kind: 'grammar', find: 'Love, Mary”', replace: null, marks: true, why: 'x' }] }), { now: true });
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal(checker.suggestions(b.novelId).filter((s) => s.item.marks).length, 0, 'the old card let go');
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a paragraph whose speech marks do not pair, standing twice in a passage: each card’s words stand in one place, the same cards at every look, each mender asked once; a mender’s fix he leaves stays left — never offered, never asked again', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const twice = `${HIS_PARA}\n\nThe lamp guttered.\n\n${HIS_PARA}`;
+  const b = await makeBook([[twice]]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [] }) }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: HIS_SET }, { n: 2, text: HIS_SET }] }) }]);
+  await checker.runCheck(b.novelId);
+  const cards = () => checker.suggestions(b.novelId).filter((s) => s.item.marks).map((s) => s.item);
+  const first = cards();
+  assert.equal(first.length, 2, JSON.stringify(first));
+  for (const x of first) assert.equal(twice.indexOf(x.find), twice.lastIndexOf(x.find), `stands once: ${x.find}`);
+  /* each one put in lands on its own paragraph */
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.deepEqual(cards().map((x) => [x.find, x.replace]), first.map((x) => [x.find, x.replace]), 'the same cards — none piled on');
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0, 'nothing asked again');
+  /* he leaves one: never offered again, the mender never asked again for it */
+  const p = b.ch().passages[0];
+  checker.leaveOne(b.ids[0], p.id, first[0].id);
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0, 'not asked again');
+  assert.deepEqual(cards().map((x) => x.find), [first[1].find], 'what he left stays left');
+  assert.equal(checker.applyOne(b.novelId, b.ids[0], p.id, first[1].id).ok, true);
+  assert.equal(onShow(b).text.split(HIS_SET).length - 1, 1, 'the one he applied set its own paragraph');
+  /* another fix in on those words: what he left is still left */
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal(cards().length, 0, JSON.stringify(cards()));
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a markup fix he leaves stays left when another fix goes in beside it', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['He paid for it.</code>\n\nShe walked slowly from the room.']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'clarity', find: 'walked slowly', replace: 'walked', why: 'lighter' }] }) }]);
+  await checker.runCheck(b.novelId);
+  const all = checker.suggestions(b.novelId).map((s) => s.item);
+  const markup = all.find((x) => x.markup);
+  const other = all.find((x) => !x.markup);
+  assert.ok(markup && other, JSON.stringify(all));
+  checker.leaveOne(b.ids[0], b.ch().passages[0].id, markup.id);
+  assert.equal(checker.applyOne(b.novelId, b.ids[0], b.ch().passages[0].id, other.id).ok, true);
+  assert.equal(onShow(b).text, 'He paid for it.</code>\n\nShe walked from the room.');
+  assert.equal(checker.suggestions(b.novelId).length, 0, 'the markup he left is not offered again');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a paragraph’s marks the mender could not set, written again by itself, go in only when nothing but quotation marks changed — words dropped are refused and said; quotation marks around the whole answer are kept; a mender’s answer in curly marks or with "…" is taken in the page’s own', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const para = 'Get out of my house." She did not move. "Now, before I call them.';
+  const b = await makeBook([['The rain had stopped.', para]]);
+  await reset();
+  /* the mender changes a word: refused; written again by itself, the writer drops a sentence: refused too */
+  await script([{ text: JSON.stringify({ edits: [] }) }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: '"Get out of my home." She did not move. "Now, before I call them."' }] }) }, { text: '"Get out of my house." "Now."' }]);
+  await checker.runCheck(b.novelId);
+  let job = checker.forTests().lifting.get(b.novelId);
+  if (job) await job;
+  assert.equal(onShow(b, 1).text, para, 'words dropped: nothing went in');
+  const [s] = checker.suggestions(b.novelId);
+  assert.ok(s && s.item.marks, JSON.stringify(s && s.item));
+  assert.equal(checker.waitsWhy(b.ids[0], b.ch().passages[1].id, s.item), 'written again by itself, it did not come — Write it again asks for it');
+  /* his Write it again: the writer's answer in quotation marks whole — kept */
+  await reset();
+  await script([{ text: '"Get out of my house." She did not move. "Now, before I call them."' }]);
+  const out = await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[1].id, start: 0, end: para.length, note: checker.spanNote(s.item), fix: true, marks: checker.spanMarks(s.item) });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(onShow(b, 1).text, '"Get out of my house." She did not move. "Now, before I call them."');
+  /* the mender in curly marks and "…": taken in the page's own kind and dots */
+  const c = await makeBook([['Wait... she said. Go now."']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [] }) }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: '“Wait…” she said. “Go now.”' }] }) }]);
+  await checker.runCheck(c.novelId);
+  assert.equal(onShow(c).text, '"Wait..." she said. "Go now."');
+  await setHouse();
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a mender’s ask its model will not read for its words is asked again a paragraph at a time', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const other = 'The lamp guttered. "Tck. Tck. "You never listen, and you never will, not to me and not to anyone.';
+  const b = await makeBook([[`${HIS_PARA}\n\n${other}`]]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [] }) }, { marks: true, text: 'I would rather not.' }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: HIS_SET }] }) }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: `${other.replace('Tck. Tck. "You', 'Tck. Tck." "You')}"` }] }) }]);
+  await checker.runCheck(b.novelId);
+  const asks = await askOfLast(prompts.MARKS_ASK);
+  assert.equal(asks.length, 3, asks.map((a) => a.slice(0, 80)).join(' | '));
+  assert.ok(asks[1].includes('1. «') && !asks[1].includes('2. «') && asks[2].includes('1. «') && !asks[2].includes('2. «'), 'one at a time');
+  const set = checker.suggestions(b.novelId).filter((s) => s.item.marks && typeof s.item.replace === 'string');
+  assert.equal(set.length, 2, JSON.stringify(checker.suggestions(b.novelId).map((x) => x.item)));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the chapter read whole, and each checking, is sent its scene breaks; a seam the whole read finds after a break waits for him, and says why — a fix by itself never adds a transition where the book marks the jump', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, ...SUPER() });
+  const b = await makeBook([['Mara sat at the kitchen table and read the letter twice.', '---', 'The station was crowded with the morning trains.'], ['Morning.']]);
+  await reset();
+  await script([{ whole: true, text: JSON.stringify({ edits: [{ passage: '1.2', kind: 'seam', find: 'The station was crowded', replace: 'Later that night, the station was crowded', why: 'a jump nobody marks', says: 'Mara sat at the kitchen table and read the letter twice' }] }) }]);
+  await checker.runCheck(b.novelId);
+  const [check] = await passageAsks();
+  assert.ok(/\[1\.1\] Mara sat at the kitchen table[^\n]*\n\n\* \* \*\n\n\[1\.2\] The station/.test(check), check.slice(-900));
+  const [whole] = await wholeAsks();
+  assert.ok(/\[1\.1\] Mara sat[^\n]*\n\n\* \* \*\n\n\[1\.2\] The station/.test(whole), whole.slice(-1500));
+  assert.ok(whole.includes('A scene break (* * *) marks a jump in time or place'));
+  assert.equal(onShow(b, 2).text, 'The station was crowded with the morning trains.', 'never put in by itself');
+  const s = checker.suggestions(b.novelId).find((x) => x.item.kind === 'seam');
+  assert.ok(s && s.item.afterBreak, JSON.stringify(s && s.item));
+  assert.equal(checker.waitsWhy(b.ids[0], b.ch().passages[2].id, s.item), 'a scene break stands before it, and the jump in time or place is marked there');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('what goes in by itself goes in before the chapter is read whole — the whole read is sent the words as they will stand; a fix whose quoted words have changed since waits for him, and says so', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, ...SUPER() });
+  const b = await makeBook([['Mara set the blue cup on the sill.', 'She lifted the red cup from the sill and drank.'], ['Morning.']]);
+  await reset();
+  await script([
+    { text: JSON.stringify({ edits: [{ passage: '1.2', kind: 'continuity', find: 'the red cup', replace: 'the blue cup', why: 'the cup is blue', says: 'Mara set the blue cup on the sill' }] }) },
+    { whole: true, text: JSON.stringify({ edits: [] }) },
+  ]);
+  await checker.runCheck(b.novelId);
+  const [whole] = await wholeAsks();
+  assert.ok(whole && whole.includes('[1.2] She lifted the blue cup') && !whole.includes('the red cup'), whole && whole.slice(-900));
+  /* a fix held to the book's words, those words changed since: it waits */
+  const c = await makeBook([['The lamp was green and cold, and Mara kept it lit.', 'The lamp burned red in the window all night.']]);
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.2', kind: 'continuity', find: 'burned red', replace: 'burned green', why: 'it is green', says: 'The lamp was green and cold' }] }) }]);
+  await checker.runCheck(c.novelId);
+  const [fix] = checker.suggestions(c.novelId);
+  assert.ok(fix && fix.item.held && fix.item.heldAt && fix.item.heldAt.passageId === c.ch().passages[0].id, JSON.stringify(fix && fix.item));
+  assert.ok(inplace.changeInPlace({ novelId: c.novelId, chapterId: c.ids[0], passageId: c.ch().passages[0].id, next: 'The lamp was red and cold, and Mara kept it lit.', by: 'you' }));
+  store.change('house', 'house', (x) => { x.autoFix = { on: true, from: Date.now() - 1000 }; }, { now: true });
+  assert.equal(checker.waitsWhy(c.ids[0], c.ch().passages[1].id, fix.item), 'the words of the book it holds to were changed since, so it may be wrong now');
+  checker.forTests().autoAfter(c.novelId);
+  assert.equal(onShow(c, 1).text, 'The lamp burned red in the window all night.', 'not put in by itself');
+  await setHouse();
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a fix that quotes its own passage before the words it changes, or a page with an accent the quote lacks, holds to the book — and the quick look finds it', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const b = await makeBook([['Siobhán stood in the doorway with the green lamp.', 'Mara lit the green lamp and set it down. Later the red lamp burned on the sill.']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.2', kind: 'continuity', find: 'the red lamp', replace: 'the green lamp', why: 'one lamp', says: 'Mara lit the green lamp and set it down' },
+  ] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.equal(onShow(b, 1).text, 'Mara lit the green lamp and set it down. Later the green lamp burned on the sill.', 'its own passage, before the words: held');
+  const c = await makeBook([['Siobhán stood in the doorway with the green lamp.', 'Later Siobhan held the red lamp.']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.2', kind: 'continuity', find: 'the red lamp', replace: 'the green lamp', why: 'one lamp', says: 'Siobhan stood in the doorway with the green lamp' }] }) }]);
+  await checker.runCheck(c.novelId);
+  assert.equal(onShow(c, 1).text, 'Later Siobhan held the green lamp.', 'the accent let go, as search lets it go');
+  await setHouse();
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a chapter of one passage is read whole when its checking read it in parts, and never when it read it at once — his Check this chapter answered either way; a long chapter read in parts keeps what each part found, and goes on at the part it stopped at', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['A short chapter, read whole by its own checking.'], [unique('x', 3000)], ['Morning.']]);
+  checker.checkChapter(b.novelId, b.ids[0]);
+  checker.checkChapter(b.novelId, b.ids[1]);
+  await reset();
+  await checker.runCheck(b.novelId);
+  const asks = await wholeAsks();
+  assert.equal(asks.length, 1, `read whole: ${asks.length}`);
+  assert.ok(asks[0].includes('[2.1] x0 x1'), 'the long one, read in parts by its checking');
+  assert.equal(b.ch(0).wholeAsked, undefined, 'his ask answered for the short one too');
+  assert.equal(b.ch(1).wholeAsked, undefined);
+  assert.equal(checker.wholeOwed(b.novelId, b.ids[0]), false);
+  await putAway(b);
+  /* a chapter read in parts: a passing fault on part 2 keeps part 1's fix, and the next look asks part 2 alone */
+  const c = await makeBook([['Mara held the cup.', unique('a', 2400), unique('b', 2400), unique('c', 2400), unique('d', 2400), 'The cup was gone.'], ['Morning.']]);
+  await reset();
+  await checker.runCheck(c.novelId);
+  await reset();
+  checker.forTests().wholeWait.clear();
+  store.change('chapter', c.ids[0], (x) => { delete x.wholeRead; }, { now: true });
+  const parts = [];
+  await script([{ whole: true, text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'continuity', find: 'held the cup', replace: 'held the blue cup', why: 'x', says: '' }] }) }, ...[1, 2, 3, 4, 5].map(() => ({ whole: true, status: 503, message: 'overloaded' }))]);
+  await checker.runCheck(c.novelId);
+  parts.push(...(await wholeAsks()));
+  assert.ok(parts.length >= 2 && parts[0].includes('part 1 of'), parts.map((x) => x.slice(0, 60)).join(' | '));
+  const n = Number(/part 1 of (\d+)/.exec(parts[0])[1]);
+  assert.ok(n >= 2, `parts: ${n}`);
+  assert.ok(checker.suggestions(c.novelId).some((s) => s.item.whole && s.item.replace === 'held the blue cup'), 'part 1’s fix kept');
+  checker.forTests().wholeWait.clear();
+  await reset();
+  await checker.runCheck(c.novelId);
+  const again = await wholeAsks();
+  assert.ok(again.length >= 1 && again[0].includes(`part 2 of ${n}`) && !again.some((x) => x.includes(`part 1 of ${n}`)), `n=${n} again=${again.length}: ` + again.map((x) => (/part \d+ of \d+/.exec(x) || ['?'])[0]).join(' | ') + ` progress=${JSON.stringify([...checker.forTests().wholePart.entries()])} read=${JSON.stringify(c.ch().wholeRead)}`);
+  assert.equal(c.ch().wholeRead && c.ch().wholeRead.sig, checker.wholeSig(c.ch()), 'read whole');
+  await setHouse();
+  await putAway(c);
+});
+
+await test('writing from before checking began is never read whole unasked — with Super automatic it is; the checker’s own fixes, however many, never ask for another read, and the base they are measured from stays where it was, past his edit', async () => {
+  const long = Date.now() + 60000;
+  await setHouse({}, { checksFrom: long, judge: { on: false } });
+  const b = await makeBook([['Mara climbed the stairs.', 'The lamp room was cold.'], ['Morning.']]);
+  for (const p of b.ch().passages) checkedBefore(b, b.ch().passages.indexOf(p));
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 0, 'older writing: not read whole unasked');
+  store.change('house', 'house', (x) => { x.superAuto = { on: true, from: Date.now() }; }, { now: true });
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 1, 'Super automatic: every page wanted');
+  await setHouse();
+  await putAway(b);
+  /* the base the fixes by themselves are measured from: kept on the version, past his edit, however many go in */
+  const c = await makeBook([['One two three four five six seven eight nine ten.']]);
+  const pid = c.ch().passages[0].id;
+  assert.ok(inplace.changeInPlace({ novelId: c.novelId, chapterId: c.ids[0], passageId: pid, next: 'One two three four five six seven eight nine TEN.', by: 'you' }));
+  const sig0 = checker.wholeSig(c.ch());
+  const words = ['One', 'two', 'three', 'four', 'five', 'six', 'seven'];
+  for (let i = 0; i < words.length; i++) {
+    const now = onShow(c).text;
+    assert.ok(inplace.changeInPlace({ novelId: c.novelId, chapterId: c.ids[0], passageId: pid, next: now.replace(words[i], words[i].toUpperCase()), by: 'checker', extra: { auto: true } }));
+    assert.equal(shape.autoBaseOf(onShow(c)), 'One two three four five six seven eight nine TEN.', `after ${i + 1} by itself`);
+    assert.equal(checker.wholeSig(c.ch()), sig0, 'no new read asked for');
+  }
+  assert.ok(onShow(c).before.length <= shape.BEFORE_KEEP);
+  /* his own change: the base is his words */
+  assert.ok(inplace.changeInPlace({ novelId: c.novelId, chapterId: c.ids[0], passageId: pid, next: 'Mine now.', by: 'you' }));
+  assert.equal(shape.autoBaseOf(onShow(c)), 'Mine now.');
+  await putAway(c);
+});
+
+await test('a chapter read whole stays read when its pages are mended once on opening — and the mend repairs the spaces a slip left too', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['Her hand.She waited by the door.', 'The lamp was cold.']]);
+  store.change('chapter', b.ids[0], shape.chapterSteps.setWholeRead({ sig: checker.wholeSig(b.ch()), at: Date.now(), day: Math.floor(Date.now() / 86400000), n: 1, words: 10 }), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ mended: 4 }), { now: true });
+  const got = await mend.mendBook(b.novelId);
+  assert.equal(got.pages, 1);
+  assert.equal(onShow(b).text, 'Her hand. She waited by the door.');
+  assert.equal(b.ch().wholeRead.sig, checker.wholeSig(b.ch()), 'still read');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the writer’s END OF CHAPTER comes off in every shape it is said — its number past twenty, a hundred, with the chapter’s name, shouted at the end of the last line, twice — with what it writes after it that is not story; story after it stays, and the chapter goes on', async () => {
+  const ends = (t) => { const r = textshape.chapterEnds(t); return [r.text, r.found, r.ended]; };
+  for (const line of ['END OF CHAPTER TWENTY-ONE', 'End of Chapter Twenty One', 'END OF CHAPTER ONE HUNDRED', 'END OF CHAPTER 1: The Riders', '*End of Chapter Three*']) assert.deepEqual(ends(`She closed the door.\n\n${line}`), ['She closed the door.', true, true], line);
+  assert.deepEqual(ends('She closed the door. END OF CHAPTER'), ['She closed the door.', true, true], 'shouted at the end of the last line');
+  assert.deepEqual(ends('She closed the door.\n\nEND OF CHAPTER\n\nEND OF CHAPTER'), ['She closed the door.', true, true], 'twice');
+  for (const after of ['Note: the next chapter turns to Kael.', 'CHAPTER TWO — The Storm', '[Next: the storm breaks]', 'Ready for Chapter Two whenever you are.']) assert.deepEqual(ends(`She closed the door.\n\nEND OF CHAPTER\n\n${after}`), ['She closed the door.', true, true], after);
+  assert.deepEqual(ends('She closed the door.\n\nEND OF CHAPTER\n\nThe wind rose over the cliffs and the sea went white.'), ['She closed the door.\n\nThe wind rose over the cliffs and the sea went white.', true, false], 'story after it: kept, the chapter goes on');
+  assert.equal(textshape.chapterEnds('It was the end of the chapter of her life, she thought.').found, false, 'prose is never the line');
+  /* on a page: what came after it kept with the version, the menu puts it back */
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The lamp was cold.']]);
+  await script([{ text: 'She closed the door behind her.\n\nEND OF CHAPTER TWENTY-ONE\n\n[Next: Chapter Two — the storm]' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She leaves.', length: 'scene' });
+  assert.equal(out.ok, true, out.error);
+  const v = onShow(b, 1);
+  assert.equal(v.text, 'She closed the door behind her.');
+  assert.equal(v.closes, true);
+  assert.ok(String(v.tookOff || '').includes('[Next: Chapter Two — the storm]'), JSON.stringify(v.tookOff));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('an answer that is nothing but the END OF CHAPTER line ends the chapter where it already stops — no empty page, said so — and the next page goes in the next chapter', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The lamp was cold.', 'She closed the door behind her.']]);
+  await script([{ text: 'END OF CHAPTER' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  assert.equal(out.ok, false);
+  assert.equal(out.endedHere, true, JSON.stringify(out));
+  assert.ok(/ends where it already stops/.test(out.error), out.error);
+  assert.equal(b.ch().passages.length, 2, 'no empty page left');
+  assert.equal(onShow(b, 1).closes, true, 'the last page ends it');
+  assert.deepEqual(writer.closedGoesOn(b.novelId, b.ids[0]), { fresh: true, number: 2 });
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a rewrite of the page that ended its chapter, cut short and carried on with Go on, still ends it; two asks at once for the chapter after a closed one make one chapter; the partner’s page written anew keeps its chapter’s end', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([[{ text: 'The lamp was cold, and the night came down.', closes: true }]]);
+  const pid = b.ch().passages[0].id;
+  await script([{ text: 'The lamp was cold, and the night came', finish: 'length' }]);
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'Colder.' });
+  assert.equal(onShow(b).cut, true);
+  assert.equal(onShow(b).closes, undefined, 'cut short: it waits for its Go on');
+  await script([{ text: 'down over the sea.' }]);
+  const go = await writer.goOn({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid });
+  assert.equal(go.ok, true, go.error);
+  assert.equal(onShow(b).closes, true, 'carried to its end: it ends the chapter');
+  assert.equal(shape.chapterClosed(b.ch()), true);
+  /* two asks at once: one chapter */
+  const [x, y] = await Promise.all([writer.chapterAfterClose(b.novelId, b.ids[0]), writer.chapterAfterClose(b.novelId, b.ids[0])]);
+  assert.equal(x, y);
+  assert.equal(b.novel().order.length, 2, JSON.stringify(b.novel().order));
+  await putAway(b);
+  /* the partner writes the closing page anew: it still closes the chapter */
+  const c = await makeBook([[{ text: 'The lamp was cold.', closes: true }]]);
+  await script([{ text: '<changes>[{"passage": "1.1", "text": "The lamp had gone out, and the room was dark.", "why": "darker"}]</changes>\nDarker.' }]);
+  await talk.partnerSay({ novelId: c.novelId, chapterId: c.ids[0], text: 'Write it darker.' });
+  assert.equal(onShow(c).text, 'The lamp had gone out, and the room was dark.');
+  assert.equal(onShow(c).how, 'partner');
+  assert.equal(onShow(c).closes, true);
+  assert.equal(shape.chapterClosed(c.ch()), true);
+  await setHouse();
+  await putAway(c);
+});
+
+await test('the bibliography under Super automatic: the partner told no entry is read always, and asked for Always refused; when it is read said as the screen says it; an entry he wrote stays his when the partner changes it; an entry his words name never picked again', async () => {
+  const e1 = bib.tidyEntry(bib.newEntry({ name: 'The Weave', kind: 'lore', line: 'How magic works', rides: 'always', text: 'WEAVE.' }));
+  assert.ok(bib.entryIndex([e1], 4000).text.includes('[the writer always reads it]'));
+  assert.ok(!bib.entryIndex([e1], 4000, { byPage: true }).text.includes('always'), 'page by page: never said always');
+  assert.equal(prompts.entryReadWords('always', true, true), 'The writer reads it with every page while there’s room beside the book — and when there isn’t, first when the page names it or needs it.');
+  assert.equal(prompts.entryReadWords('never'), 'Only for me — the writer never reads it.');
+  await setHouse({}, SUPER());
+  const b = await makeBook([['Rukia drew her sword.']], { title: 'Ice' });
+  store.change('novel', b.novelId, shape.novelSteps.putEntry({ ...bib.tidyEntry(bib.newEntry({ name: 'Rukia', kind: 'people', line: 'A reaper.', text: 'She fights with ice.' })), by: 'you' }), { now: true });
+  await script([{ text: '<changes>[{"entry": "Rukia", "rides": "always", "why": "a"}, {"entry": "Rukia", "add": "Her eyes are violet.", "why": "b"}]</changes>\nTwo.' }, { text: '<changes>[{"entry": "Rukia", "rides": "Never — it’s only for me", "why": "c"}]</changes>\nOne.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Rukia.' });
+  const [always, add] = picked(store.peek('talk', b.novelId).turns.at(-1)).changes;
+  assert.equal(always.status, 'refused');
+  assert.ok(/with Super automatic on, every entry goes page by page/.test(always.said), always.said);
+  assert.equal(add.status, 'made');
+  const rukia = () => bib.entriesOf(b.novel()).find((e) => e.name === 'Rukia');
+  assert.equal(rukia().by, 'you', 'his entry stays his');
+  assert.ok(String(rukia().text).includes('Her eyes are violet.'));
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Keep her secret.' });
+  assert.equal(picked(store.peek('talk', b.novelId).turns.at(-1)).changes[0].status, 'made');
+  assert.equal(rukia().rides, 'never', 'as the screen says it');
+  /* the pick: an entry his own words name goes with the page — never one to pick */
+  const items = bib.bibItems({ bibliography: [bib.tidyEntry(bib.newEntry({ name: 'Kael', kind: 'people', line: 'A smuggler', text: 'KAEL.' })), bib.tidyEntry(bib.newEntry({ name: 'Mira', kind: 'people', line: 'A healer', text: 'MIRA.' }))] }, {}, { facts: false });
+  const pick = bib.pickRows(items, { his: 'Kael runs for the boats.', byPage: true });
+  assert.ok(!pick.rows.some((r) => r.name === 'Kael'), JSON.stringify(pick.rows));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('his premise stays with the page written again after the version it came from is taken out', async () => {
+  await setHouse();
+  const b = await makeBook([['The lamp was cold.']]);
+  const premise = 'Mara reads the letter twice.';
+  await script([{ text: 'A page.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: premise, length: 'scene' });
+  const pid = b.ch().passages.at(-1).id;
+  const p = () => b.ch().passages.find((x) => x.id === pid);
+  const first = picked(p()).id;
+  await script([{ text: 'A page, rewritten.' }]);
+  await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'Colder.' });
+  store.change('chapter', b.ids[0], shape.chapterSteps.removeVersion(pid, first), { now: true });
+  assert.equal(p().versions.length, 1);
+  assert.equal(shape.premiseOf(p()), premise);
+  await putAway(b);
+});
+
+await test('measures stay measures, a stray asterisk beside a quote is never made one, and a pair written in two kinds is its own paragraph’s — the page as it arrives is the page the repair would make again', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['The rain had stopped.']]);
+  const came = ['She framed the 8"x10" photo and hung it over a 2"x4" shelf.', '*"Help me, she begged. "Please."', 'She turned. "Wait for me', 'He shrugged. “Why should I?" he asked.', '"Fine",she said.'].join('\n\n');
+  await script([{ text: came }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  const kept = onShow(b, 1).text;
+  assert.ok(kept.includes('the 8"x10" photo and hung it over a 2"x4" shelf.'), kept);
+  assert.ok(kept.includes('*"Help me, she begged. "Please."'), 'no empty pair, no quote taken away — the speech is the checker’s to set');
+  assert.ok(kept.includes('She turned. "Wait for me"') && kept.includes('He shrugged. “Why should I?” he asked.'), kept);
+  assert.ok(kept.endsWith('"Fine", she said.'), kept);
+  /* an entity is the page's, never a slip's place: the semicolon ending &nbsp; or &mdash; before a word */
+  assert.equal(textshape.mendSpacing('It was&nbsp;late.Then dark, &mdash;she said.').text, 'It was&nbsp;late. Then dark, &mdash;she said.');
+  assert.equal(kept.replace(/["“”\s]/g, ''), came.replace(/["“”\s]/g, ''), 'marks and white space only');
+  /* the repair made again, as on the pages kept — nothing more to change, nothing for the checker to set by itself */
+  assert.equal(mend.mendPage({ text: kept }).text, kept);
+  assert.ok(textshape.speechFaults(kept).every((f) => !f.mended), JSON.stringify(textshape.speechFaults(kept)));
+  assert.deepEqual(textshape.spacingSlips(kept), []);
+  /* the sounds 2.12.34 glued when one was italic and the other bold: each its own again */
+  assert.equal(textshape.unglueSounds('*CLANG!"Nngh—!"THUD**'), '*CLANG!* "Nngh—!" **THUD**');
+  assert.equal(textshape.unglueSounds('**CLANG!"Nngh—!"THUD*'), '**CLANG!** "Nngh—!" *THUD*');
+  await putAway(b);
+});
+
+await test('a mender’s answer is held to the paragraph’s own white space, and never makes a measure speech', async () => {
+  assert.equal(textshape.marksOnlyResult('Go now, she said.  Run.', '"Go now," she said.  "Run."'), '"Go now," she said.  "Run."', 'his double space stays');
+  assert.equal(textshape.marksOnlyResult('Go now, she said. Run.', '"Go now,"  she said.   "Run."'), '"Go now," she said. "Run."', 'never a space doubled');
+  assert.equal(textshape.marksOnlyResult('Go now, she said. Run, he said.', '"Go now," she said.\n"Run," he said.'), '"Go now," she said.\n\n"Run," he said.', 'a paragraph parted with a blank line');
+  assert.equal(textshape.marksOnlyResult('He held a 12" blade. Go, he said.', 'He held a "12" blade. "Go," he said.'), '', 'a measure is never made a quotation');
+  assert.equal(textshape.marksOnlyResult('He held a 12" blade. Go, he said.', 'He held a 12" blade. "Go," he said.'), 'He held a 12" blade. "Go," he said.');
+});
+
+await test('the END OF CHAPTER line with only the writer’s matter after it ends the chapter where it already stops — the matter is never the page; shouted after the last words, its number in words or numerals, it comes off', async () => {
+  const ends = (t) => { const r = textshape.chapterEnds(t); return [r.text, r.found, r.ended]; };
+  assert.deepEqual(ends('END OF CHAPTER\n\nNext chapter: The Storm'), ['', true, false]);
+  assert.deepEqual(ends('END OF CHAPTER\n\n(Let me know if you want the next chapter!)'), ['', true, false]);
+  for (const n of ['THREE', 'TWENTY-ONE', 'XXI', '21']) assert.deepEqual(ends(`She closed the door. END OF CHAPTER ${n}`), ['She closed the door.', true, true], n);
+  assert.equal(textshape.chapterEnds('She thought of the end of chapter three').found, false, 'never said in the story’s own words');
+  await setHouse({}, SUPER());
+  const b = await makeBook([['The lamp was cold.', 'She closed the door behind her.']]);
+  await script([{ text: 'END OF CHAPTER\n\nNext chapter: The Storm' }]);
+  const out = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  assert.equal(out.endedHere, true, JSON.stringify(out));
+  assert.equal(b.ch().passages.length, 2, 'no page of the writer’s note');
+  assert.equal(onShow(b, 1).closes, true);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a paragraph whose marks wait for a reading and which stands twice: Write it again is given the paragraph alone — by itself and by his button — and what comes back goes in on it', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const P = 'Go now," she said, and he went to the door.';
+  const SET = '"Go now," she said, and he went to the door.';
+  const b = await makeBook([[`He looked up. "Stay here," he said. "I mean it."\n\n${P}\n\nThe rain came down.\n\n${P}\n\nIt was late.`]]);
+  await reset();
+  /* the mender changes a word: nothing set — then each is written again */
+  await script([{ text: JSON.stringify({ edits: [] }) }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: '"Go now," she said, and he ran to the door.' }, { n: 2, text: '"Go now," she said, and he ran to the door.' }] }) }, { text: SET }]);
+  await checker.runCheck(b.novelId);
+  const job = checker.forTests().lifting.get(b.novelId);
+  if (job) await job;
+  const marked = (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('the part between ⟦ and ⟧'));
+  assert.equal(marked.length, 1, 'written again by itself, once');
+  assert.equal([...marked[0].matchAll(/⟦([^⟧]*)⟧/g)].map((m) => m[1]).find((x) => x.trim().length > 5), P, 'the paragraph alone');
+  assert.ok(!/no ⟦ ⟧ marks or quotation marks around it/.test(marked[0]), 'never told to leave its quotation marks off');
+  assert.equal(onShow(b).text.split(SET).length - 1, 1, onShow(b).text);
+  /* his button, the fixes by themselves off: the words written again are checked again, and the card for the other
+   * paragraph gives the paragraph alone too */
+  store.change('house', 'house', (x) => { x.autoFix = { on: false }; }, { now: true });
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [] }) }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: '"Go now," she said, and he ran to the door.' }] }) }]);
+  await checker.runCheck(b.novelId);
+  const [s] = checker.suggestions(b.novelId).filter((x) => x.item.marks);
+  assert.ok(s, JSON.stringify(checker.suggestions(b.novelId).map((x) => x.item)));
+  const spot = checker.spotOf(s.chapterId, s.passageId, s.item);
+  assert.equal(onShow(b).text.slice(spot.start, spot.end), P);
+  await reset();
+  await script([{ text: SET }]);
+  const out = await writer.rewriteSelection({ novelId: b.novelId, chapterId: s.chapterId, passageId: s.passageId, start: spot.start, end: spot.end, note: checker.spanNote(s.item), fix: true, marks: checker.spanMarks(s.item) });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(onShow(b).text, `He looked up. "Stay here," he said. "I mean it."\n\n${SET}\n\nThe rain came down.\n\n${SET}\n\nIt was late.`);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('his partner saying Page by page under Super automatic keeps the Always he set underneath — as the entry’s own sheet does', async () => {
+  await setHouse({}, SUPER());
+  const b = await makeBook([['Mara waited by the light.']]);
+  store.change('novel', b.novelId, shape.novelSteps.putEntry({ ...bib.tidyEntry(bib.newEntry({ name: 'Mara', kind: 'people', line: 'A keeper.', rides: 'always', text: 'She keeps the light.' })), by: 'you' }), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.putEntry({ ...bib.tidyEntry(bib.newEntry({ name: 'Kael', kind: 'people', line: 'A smuggler.', rides: 'never', text: 'He runs the boats.' })), by: 'you' }), { now: true });
+  await script([{ text: '<changes>[{"entry": "Mara", "rides": "Page by page", "line": "The keeper of the light.", "why": "a"}, {"entry": "Kael", "rides": "Page by page.", "why": "b"}]</changes>\nDone.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Mara and Kael.' });
+  const entry = (n) => bib.entriesOf(b.novel()).find((e) => e.name === n);
+  assert.deepEqual(picked(store.peek('talk', b.novelId).turns.at(-1)).changes.map((c) => c.status), ['made', 'made']);
+  assert.equal(entry('Mara').rides, 'always', 'his Always kept underneath');
+  assert.equal(entry('Mara').line, 'The keeper of the light.');
+  assert.equal(entry('Kael').rides, 'named', 'Never let go of as When there’s room');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the passages its last answer changed are shown to the partner as a small model has room for them — the rest named, never the book open pushed out', async () => {
+  await setHouse({ context: 16000 }, CRAFTS_OFF);
+  const long = unique('w', 1500);
+  const b = await makeBook([[long, 'The sea was grey.']]);
+  await script([{ text: '<changes>[{"passage": "1.1", "find": "w0 w1 w2", "replace": "w0 w1 w2 w3x", "why": "x"}, {"passage": "1.2", "find": "was grey", "replace": "was green", "why": "y"}]</changes>\nTwo.' }, { text: 'Seen.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Change them.' });
+  await reset();
+  await script([{ text: 'Seen.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'And now?' });
+  const last = String((await requests()).at(-1).body.messages.at(-1).content);
+  assert.ok(last.includes('[1.2] The sea was green.'), last.slice(0, 600));
+  assert.ok(!last.includes('[1.1] w0') && last.includes('1.1 is not shown here for room'), last.slice(0, 600));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('with Super automatic on, an old page that stopped partway is said to be checked once Go on finishes it, and what waits for him is said as words brought in from a file', async () => {
+  const long = Date.now() - 100000;
+  await setHouse({}, { roles: { writer: 'c-w' }, checksFrom: long, judge: { on: false } });
+  const b = await makeBook([[{ text: 'An old page cut short in the', cut: true, at: long - 1000 }, { text: 'Brought in from a file.', how: 'imported', at: long - 1000 }]]);
+  store.change('house', 'house', (x) => { x.superAuto = { on: true, from: Date.now() }; }, { now: true });
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await passageAsks()).length, 0);
+  const st = checker.stateOf(b.novelId);
+  assert.equal(st.state, 'clean', JSON.stringify(st));
+  assert.match(st.words, /A passage that stopped partway is checked once Go on finishes it\./);
+  assert.match(st.words, /1 passage brought in from a file is checked only when you ask\./);
+  assert.doesNotMatch(st.words, /older passage/);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the proofreading: a few passages its model will not read are asked again one at a time; a long passage read in parts keeps what part 1 found when part 2 fails, and goes on at part 2', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['The cat sat on teh mat.', 'The dog ran too the gate.', 'The bird sang.']]);
+  for (const i of [0, 1, 2]) checkedBefore(b, i);
+  await reset();
+  await script([{ proof: true, text: 'I would rather not.' }, { proof: true, text: JSON.stringify({ edits: [{ passage: '1.1', find: 'on teh mat', replace: 'on the mat', why: 'a slip' }] }) }, { proof: true, text: JSON.stringify({ edits: [{ passage: '1.2', find: 'ran too the', replace: 'ran to the', why: 'a slip' }] }) }, { proof: true, text: JSON.stringify({ edits: [] }) }]);
+  await checker.runCheck(b.novelId);
+  const asks = (await proofAsks()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes(prompts.PROOF_ASK));
+  assert.equal(asks.length, 4, asks.map((a) => a.slice(-200)).join(' | '));
+  for (const [k, n] of [[1, '[1.1]'], [2, '[1.2]'], [3, '[1.3]']]) assert.ok(asks[k].includes(n) && asks[k].split('[1.').length === 2, `one at a time: ${k}`);
+  assert.deepEqual(checker.suggestions(b.novelId).map((s) => s.item.replace).sort(), ['on the mat', 'ran to the']);
+  for (const p of b.ch().passages) assert.equal(checker.entryFor(b.ch(), p).proofed, true);
+  await putAway(b);
+  /* one passage longer than one ask carries: part 2 fails — part 1's slip kept, the next look asks part 2 alone */
+  const c = await makeBook([[`Mara held teh cup.\n\n${unique('a', 2400)}\n\n${unique('b', 2400)}\n\nThe cup was gone.`]]);
+  checkedBefore(c);
+  await reset();
+  await script([{ proof: true, text: JSON.stringify({ edits: [{ passage: '1.1', find: 'held teh cup', replace: 'held the cup', why: 'a slip' }] }) }, ...[1, 2, 3, 4, 5].map(() => ({ proof: true, status: 503, message: 'overloaded' }))]);
+  await checker.runCheck(c.novelId);
+  const first = (await proofAsks()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes(prompts.PROOF_ASK));
+  assert.ok(first.length >= 2 && first[0].includes('a0 a1') && !first[0].includes('b0 b1') && first[1].includes('b0 b1'), first.map((x) => x.slice(0, 80)).join(' | '));
+  assert.equal(checker.entryFor(c.ch(), c.ch().passages[0]).proofed, undefined, 'not read whole yet');
+  checker.forTests().proofWait.clear();
+  await reset();
+  await script([{ proof: true, text: JSON.stringify({ edits: [] }) }]);
+  await checker.runCheck(c.novelId);
+  const again = (await proofAsks()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes(prompts.PROOF_ASK));
+  assert.equal(again.length, 1, `${again.length}`);
+  assert.ok(again[0].includes('b0 b1') && !again[0].includes('a0 a1'), 'part 2 alone');
+  assert.deepEqual(checker.suggestions(c.novelId).map((s) => s.item.replace), ['held the cup'], 'part 1’s slip kept');
+  assert.equal(checker.entryFor(c.ch(), c.ch().passages[0]).proofed, true);
+  await setHouse();
+  await putAway(c);
+});
+
+await test('words put back that are not the newest kept are the base of the fixes by themselves — never the base of other words — and a page mended once on opening mends that base the same way', async () => {
+  await setHouse();
+  const b = await makeBook([['The lamp burned low.']]);
+  const pid = b.ch().passages[0].id;
+  assert.ok(inplace.changeInPlace({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, next: 'The lamp burned lower.', by: 'checker', extra: { auto: true } }));
+  assert.equal(onShow(b).autoBase, 'The lamp burned low.');
+  const back = inplace.putBackWords({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, before: 'A lamp.' });
+  assert.equal(back.ok, true, JSON.stringify(back));
+  assert.equal(onShow(b).text, 'A lamp.');
+  assert.equal(shape.autoBaseOf(onShow(b)), 'A lamp.', 'nothing in these words went in by itself');
+  await putAway(b);
+  /* the mend on opening: the words and their base mended alike */
+  const c = await makeBook([[{ text: 'Her hand.She waited, and waited.', autoBase: 'Her hand.She waited.' }]]);
+  store.change('novel', c.novelId, (x) => { x.memory = { ...(x.memory || {}), mended: mend.MEND_V - 1 }; }, { now: true });
+  await mend.mendBook(c.novelId);
+  assert.equal(onShow(c).text, 'Her hand. She waited, and waited.');
+  assert.equal(onShow(c).autoBase, 'Her hand. She waited.');
+  await putAway(c);
 });
 
 /* ------------------------------------------------------------ done */

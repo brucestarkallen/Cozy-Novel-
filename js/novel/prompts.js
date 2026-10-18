@@ -227,7 +227,7 @@ export function namedBook(novel, house) {
   };
 }
 
-function fence(text) { return `"""\n${String(text || '').trim()}\n"""`; }
+export function fence(text) { return `"""\n${String(text || '').trim()}\n"""`; }
 
 function titled(novel) { return `“${(novel.meta && novel.meta.title) || 'Untitled'}”`; }
 function titleLine(novel) { return `${titled(novel)}${novel.meta && novel.meta.subtitle ? ` — ${novel.meta.subtitle}` : ''}`; }
@@ -539,6 +539,13 @@ export const BIB_LEAD_PICKED = `Who and what is named here, and what else this p
 const READS_WHEN = (recall, byPage = false) => (byPage
   ? 'with every page while there’s room beside the book — and when there isn’t, first when the page names it or needs it'
   : `with every page while there’s room beside the book — and when there isn’t, first when its name comes up${recall ? ' or a page needs it' : ''}`);
+/* how an entry is read, said on the entry the partner reads (2.12.35: through 2.12.34 it said "when its name comes up"
+ * whatever was set, and "always" under Super automatic too) */
+export function entryReadWords(rides, recall = true, byPage = false) {
+  if (rides === 'never') return 'Only for me — the writer never reads it.';
+  if (rides === 'always' && !byPage) return 'The writer always reads it, with every page, before anything else.';
+  return `The writer reads it ${READS_WHEN(recall, byPage)}.`;
+}
 const bibIndexLead = (recall, byPage = false) => `My bibliography of the book — every entry by its name and line. The writer reads an entry ${READS_WHEN(recall, byPage)}, unless I ${byPage ? 'keep it for myself' : 'say always or never'}:`;
 export const BIB_INDEX = bibIndexLead(true);
 export const BIB_NAMED = 'The entries named here, whole:';
@@ -735,7 +742,9 @@ export function rewriteRequest({ chapterLabel, note, text, last = false }) {
 export const MARK_OPEN = '⟦';
 export const MARK_CLOSE = '⟧';
 
-export function selectionRequest({ chapterLabel, note, marked }) {
+/* marks: the part's speech marks are what is set — the quotation marks its answer opens or closes it with are the part's own
+ * (2.12.35: told to leave them off, a paragraph spoken whole could not be set) */
+export function selectionRequest({ chapterLabel, note, marked, marks = false }) {
   const n = String(note || '').trim();
   return [
     `In this passage from ${chapterLabel}, I’d like one part written again — the part between ${MARK_OPEN} and ${MARK_CLOSE}.`,
@@ -743,7 +752,7 @@ export function selectionRequest({ chapterLabel, note, marked }) {
     n ? YOURS_ONLY : '',
     fence(marked),
     'Keep its point of view, tense and meaning, and the way it joins the sentences around it, unless my change calls for something different. Don’t settle something that happens later, or add a new fact, just to polish the wording.',
-    `Write only the new words for the marked part — nothing from before or after it, and no ${MARK_OPEN} ${MARK_CLOSE} marks or quotation marks around it — so they slot back in exactly where the old ones were.`,
+    `Write only the new words for the marked part — nothing from before or after it, and no ${MARK_OPEN} ${MARK_CLOSE} marks${marks ? '' : ' or quotation marks around it'} — so they slot back in exactly where the old ones were.`,
   ].filter(Boolean).join('\n\n');
 }
 
@@ -1096,11 +1105,11 @@ Answer with one JSON object and nothing else: {"grades": [{"passage": "2.3", "ch
     return parts.join('\n\n');
   }
   parts.push(`Suggest only what is worth changing, each a fix in place — a word, a phrase, or a whole sentence written again when a small fix won't do:
-- "grammar": spelling, grammar, punctuation; a word missing, doubled, or wrong for the meaning (their/there, affect/effect, lay/lie); agreement; a tense slip, inside a sentence or from the tense the book is told in; a slip from the point of view the book is told in; capitals; and the book kept consistent — a word spelled one way throughout (grey/gray, half-light/half light), numbers and quote marks as the book writes them. And dialogue set as a book sets it: every spoken line opens and closes its quotation marks, in one kind of mark; a new speaker begins a new paragraph — where a second person speaks inside the same paragraph, part it there (the fix's words with a line break where the new paragraph begins); the comma, question or exclamation mark inside the closing quote before a tag, and the tag after it in small letters unless it begins with a name ("Go," she said); a quotation inside speech in the other kind of mark; a sentence of speech run on into the narration, or narration left inside a quote.${marksLine(marks)}
+- "grammar": spelling, grammar, punctuation; two words run together or one split apart; a space missing or doubled; a word missing, doubled, or wrong for the meaning (their/there, affect/effect, lay/lie); two sentences run together with a comma; agreement; a tense slip, inside a sentence or from the tense the book is told in; a slip from the point of view the book is told in; capitals; and the book kept consistent — a word spelled one way throughout (grey/gray, half-light/half light), numbers and quote marks as the book writes them. And dialogue set as a book sets it: every spoken line opens and closes its quotation marks, in one kind of mark; a new speaker begins a new paragraph — where a second person speaks inside the same paragraph, part it there (the fix's words with a line break where the new paragraph begins); the comma, question or exclamation mark inside the closing quote before a tag, and the tag after it in small letters unless it begins with a name ("Go," she said); a quotation inside speech in the other kind of mark; a sentence of speech run on into the narration, or narration left inside a quote.${marksLine(marks)}
 - "clarity": a sentence hard to follow, tangled, or running on; padding; phrasing unnatural in the book's language (a wrong preposition, words that don't go together); a weak passive or buried verb where the active is plainer (a passive the book means stays) — the sentence written again whole when it needs it.
 - "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs, or a flat one where a precise one belongs; a word out of the book's voice or time, unless a character talks that way; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${repeatsLine(repeats)}${straysLine(strays)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
-- "seam": this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
+- "seam": this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening. A scene break (* * *) marks a jump in time or place: the passage after one begins a new scene.
 - "continuity": something that disagrees with the book, its notes or its bibliography — a name, a look, a fact, who knows what; where people and things are (who is in the room and who has gone; who sits, stands or lies, how near, on which side; what each holds, wears or carries, and in which hand; a wound, a door, a light, the weather, the hour, the day — what changed must have been changed on the page); words said again (a line remembered, quoted or answered back is the line as it was said); and time (what came first, how long ago). A slip needs a written fact it goes against: something new the notes or the earlier chapters do not hold yet — a sister, a scar, a past — is the story growing, never a slip. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix. But someone knowing what they never lived, saw or were told — a secret, how another’s power works or its limits, what my words to the writer explain — beyond what anyone there would plainly make of it, is a slip.
 
 Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake${his && his.trim() ? ', and nothing I ask the writer for (above) is one' : ''}. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
@@ -1120,6 +1129,33 @@ Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kin
  * across it: where people and things are, who knows what, words said again, time, the seams. The later words are
  * put right to the earlier with the smallest fix, never what happens; each fix quotes what it holds to. */
 export const WHOLE_ASK = 'Read it as one chapter';
+
+/* THE PROOFREADING (checker.js runProof, 2.12.35): every checked passage read once more for slips of the hand alone —
+ * the checking asks for nine things at once, and a slip is the easiest of them to miss (his page: "wassentiment",
+ * "ash, She looked", under a green light). Only slips: never the wording, the rhythm, the voice. */
+export const PROOF_ASK = 'Find every slip of the hand in them';
+export function proofRequest({ novel, chapterLabel, numbered, his = '', hints = {} }) {
+  const out = [];
+  const about = aboutTheBook(novel, { plans: false });
+  if (about) out.push(about);
+  if (his && his.trim()) out.push(`How I want the book written — nothing it asks for is ever a slip:\n${fence(his)}`);
+  out.push(`Passages from ${chapterLabel}, each numbered as it is on the page:\n${fence(numbered)}`);
+  const rows = Object.entries(hints || {}).filter(([, list]) => list && list.length);
+  const looks = rows.length ? `\nThese places look like slips — read each, and mend it only if it is one: ${rows.map(([n, list]) => `[${n}] ${list.map((w) => `“${w}”`).join(', ')}`).join('; ')}.` : '';
+  out.push(`Proofread them the way a careful proofreader reads a novel before it goes to print. ${PROOF_ASK}, sentence by sentence — every one, and nothing that is not one:
+- a word misspelled, two words run together ("wassentiment") or one word split apart;
+- a space missing — after a full stop, a comma, a closing quote — or doubled, or standing before a comma or a full stop;
+- a word doubled ("the the"), or a small word dropped where the sentence plainly needs it;
+- punctuation: a sentence with no end mark, a stray or doubled mark, two sentences run together with a comma ("…to ash, She looked at him");
+- capitals: a sentence or a name that should begin with one, a capital in the middle of a sentence that should not have one;
+- quotation marks that do not open and close, a spoken line run into the narration.${looks}
+Never touch the style or the voice: a fragment, dialect, slang, a character’s own way of talking, a sound written out ("Nngh—!", "Tck."), an invented word or a name, spelling as the book spells it (British or American), and anything the book does on purpose stay as they are. ${SOUND_STYLE[soundOf(novel)]} Nothing about wording, rhythm or meaning — only slips. Leave what is right alone; a passage with no slip gets nothing.
+
+Each fix: "passage" its number, "find" the words exactly as they stand in that passage — the slip with a few words around it, enough to stand in only one place — "replace" those same words with only the slip mended, and "why" in a few words.
+
+Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "find": "…", "replace": "…", "why": "…"}]} — or {"edits": []} when there is no slip.`);
+  return out.join('\n\n');
+}
 
 /* THE SPEECH MARKS THE REPAIR CANNOT SET (Cozy Tavern M753, checker.js runMarks): a paragraph whose quotation marks do
  * not pair, where no mark stands in for the one left out — where it belongs is a reading of the sentence, not of its
@@ -1151,7 +1187,7 @@ export function wholeRequest({ novel, chapterLabel, numbered, before = '', befor
 - words said again: a line remembered, quoted or answered back is the line as it was said — the same words where it is given as the same words.
 - time: what came first, how long ago, the hour and the day, kept in order.
 - names, looks and facts, as the book gave them.
-- the seams: each passage carrying on from the end of the one before — no beat told twice, no line answered twice, no jump in time or place nobody marks.
+- the seams: each passage carrying on from the end of the one before — no beat told twice, no line answered twice, no jump in time or place nobody marks. A scene break (* * *) marks a jump in time or place: the passage after one begins a new scene, and who is where may change across it.
 
 Never change what happens, who the people are, or the voice it is told in. Put the later words right to the earlier, with the smallest fix that does it — a word, a phrase, a sentence at most — and never the earlier words to fit one later line. A slip needs a written fact it goes against: something new is the story growing, never a slip; what someone says wrong on purpose or in character — a lie, a joke, a tease, a memory gone wrong, someone who does not know — is the story, and never a fix. Leave what is right alone; a chapter that holds together gets nothing.
 

@@ -61,6 +61,17 @@ def answer_for(body):
             if fixed:
                 out.append({"n": int(m.group(1)), "text": fixed})
         return json.dumps({"paragraphs": out})
+    if "Find every slip of the hand in them" in last_user:
+        # the proofreader (2.12.35): two words run together, and two sentences run together with a comma
+        edits = []
+        part = last_user.split("each numbered as it is on the page:", 1)[-1].split("Proofread them the way", 1)[0]
+        for m in re.finditer(r"\[(\d+\.\d+)\] ([\s\S]*?)(?=\n\n\[\d+\.\d+\] |\n\"\"\"|$)", part):
+            num, text = m.group(1), m.group(2)
+            if "wassentiment" in text:
+                edits.append({"passage": num, "find": "it wassentiment", "replace": "it was sentiment", "why": "two words run together"})
+            if "to ash, She" in text:
+                edits.append({"passage": num, "find": "to ash, She looked", "replace": "to ash. She looked", "why": "two sentences run together with a comma"})
+        return json.dumps({"edits": edits})
     if "Read it as one chapter" in last_user:
         # the checker reading a chapter whole (2.12.33): a cup set down earlier and still in her hand later
         edits = []

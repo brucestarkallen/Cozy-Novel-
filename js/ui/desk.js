@@ -207,12 +207,12 @@ export function nudgeChecker() { if (S.novelId) checker.schedule(S.novelId, 300)
 /* the helper of the book open, asked to read now (Super automatic switched on) */
 export function nudgeHelper() { if (S.novelId) archivist.nudge(S.novelId, 1500); }
 /* some words of a passage written again (a word he never wants) */
-export function rewriteSpan({ chapterId, passageId, start, end, note = '' }) {
+export function rewriteSpan({ chapterId, passageId, start, end, note = '', marks = false }) {
   if (busy()) { toast('The writer is busy — try again once it has finished.'); return; }
-  if (chapterId !== S.chapterId) { whenOpen(chapterId, { rewrite: { chapterId, passageId, start, end, note } }); return; }
+  if (chapterId !== S.chapterId) { whenOpen(chapterId, { rewrite: { chapterId, passageId, start, end, note, marks } }); return; }
   S.selected = passageId;
-  /* the checker's sentence written again: a fix, on the page itself */
-  run(() => writer.rewriteSelection({ novelId: S.novelId, chapterId, passageId, start, end, note, fix: true }));
+  /* the checker's sentence written again: a fix, on the page itself (a paragraph's speech marks: its marks alone) */
+  run(() => writer.rewriteSelection({ novelId: S.novelId, chapterId, passageId, start, end, note, fix: true, marks }));
 }
 
 function novel() { return store.peek('novel', S.novelId); }

@@ -20,7 +20,7 @@ import { paced, follower, streamLines } from './live.js';
 import { drawProse, growProse } from './prose.js';
 import * as desk from './desk.js';
 import { sceneWords, choicesIn, nowLabelOf } from '../novel/prompts.js';
-import { superActive } from '../novel/auto.js';
+import { superActive, superOn } from '../novel/auto.js';
 import { openBranch, branchBusy } from './branches.js';
 import { makeTimeline } from './timeline.js';
 import { bibliographyView, bibliographyPrint, pageNames, tapName } from './bibliography.js';
@@ -79,6 +79,9 @@ export function openPanes(novelId, chapterId) {
   P.novelId = novelId;
   P.chapterId = chapterId;
   P.offs.push(store.subscribe('novel', novelId, () => { drawChaptersSoon(); if (P.side === 'notes' || partnerChangesVisible()) drawSideSoon(); drawLight(); }));
+  /* Super automatic switched on or off: the Bibliography says how its entries go now (2.12.35) */
+  let superWas = superOn(store.peek('house', 'house') || {});
+  P.offs.push(store.subscribe('house', 'house', () => { const now = superOn(store.peek('house', 'house') || {}); if (now !== superWas) { superWas = now; if (P.side === 'notes') drawSideSoon(); } }));
   dockWide();
   drawChapters();
   drawSide();

@@ -19,9 +19,10 @@ import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
+import { superOn } from './auto.js';
 import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
-import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, hasMarkup as hasMarkupText } from './textshape.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, hasMarkup as hasMarkupText } from './textshape.js';
 import { replaceMany, renameRule } from './names.js';
 import { entriesOf, entryNamed, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 import { changeInPlace, putBackWords } from './inplace.js';
@@ -819,8 +820,9 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
 /* One change, made. Returns the change as kept on the reply:
  * {id, op, label, why, status: 'made'|'refused', said?, undo?}. */
 /* when the writer reads an entry, as it may be said */
-const RIDES_SAID = { always: 'always', named: 'named', 'when named': 'named', 'when its name comes up': 'named', never: 'never', 'only for me': 'never' };
-const entryRides = (v) => RIDES_SAID[String(v || '').trim().toLowerCase()] || '';
+/* (and as the screen says it: "When there's room", "Page by page", "Never — it's only for me", 2.12.35) */
+const RIDES_SAID = { always: 'always', named: 'named', 'when named': 'named', 'when its name comes up': 'named', 'when there’s room': 'named', "when there's room": 'named', 'page by page': 'named', never: 'never', 'only for me': 'never', 'never — it’s only for me': 'never', "never — it's only for me": 'never', 'never - only for me': 'never' };
+const entryRides = (v) => RIDES_SAID[String(v || '').trim().toLowerCase().replace(/[.!]+$/, '')] || '';
 function makeEntry(novelId, novel, op, { base, refuse, put, at }) {
   const entries = entriesOf(novel);
   const name = archivist.cleanName(op.entry);
@@ -847,8 +849,14 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at }) {
     next.kind = k;
   }
   if (op.rides !== undefined) {
-    const r = entryRides(op.rides);
+    let r = entryRides(op.rides);
     if (!r) return refuse(`“${clipped(text(op.rides))}” is not when the writer reads it — always, named or never`);
+    /* (Page by page, under Super automatic, is how the screen says Always and When there's room alike: what he set stays
+     * underneath, as the entry's own sheet keeps it — never Never, which goes as When there's room; 2.12.35, the review:
+     * said by the partner, it let his Always go) */
+    if (/^page by page$/i.test(String(op.rides || '').trim().replace(/[.!]+$/, '')) && superOn(store.peek('house', 'house') || {})) r = cur && cur.rides !== 'never' ? cur.rides : 'named';
+    /* with Super automatic on, every entry goes page by page: Always is his to set when it is off (2.12.35) */
+    if (r === 'always' && superOn(store.peek('house', 'house') || {}) && (!cur || cur.rides !== 'always')) return refuse('with Super automatic on, every entry goes page by page — Always is set in the entry itself once Super automatic is off');
     next.rides = r;
   }
   const line = op.line === undefined ? '' : archivist.cleanText(op.line, 400);
@@ -872,7 +880,9 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at }) {
   if (!ENTRY_KINDS.includes(tidy.kind) || !RIDES.includes(tidy.rides)) return refuse('the entry could not be read');
   if (cur && JSON.stringify(tidy) === JSON.stringify(tidyEntry(cur))) return refuse(twice ? 'those words are there already' : 'the entry already says that');
   if (!cur && !tidy.line && !tidy.text) return refuse('it gave nothing to write in a new entry');
-  const after = { ...tidy, at, by: 'partner' };
+  /* whose it is: an entry he wrote stays his when the partner changes it (2.12.35: it was tagged "your partner's") */
+  const by = cur ? (cur.by === 'partner' ? 'partner' : cur.by) : 'partner';
+  const after = { ...tidy, at, ...(by ? { by } : {}) };
   put('novel', novelId, novelSteps.putEntry(after), { now: true });
   return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(after) }, before: cur ? (cur.text || cur.line || '') : '', after: after.text || after.line || '' };
 }
@@ -1031,9 +1041,10 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const unglued = dropGluedStrays(next);
       const unmarked = dropMarkup(unglued.text);
       const marks = mendMarks(joinSoftWraps(unmarked.text));
-      if (unglued.changed || unmarked.changed || marks.text !== unmarked.text) {
-        mended = [unglued.changed ? 'a stray character of another script stuck to a word taken off' : '', unmarked.changed ? 'web page or code markup taken off' : '', marks.changed ? 'a quotation left open closed' : '', !marks.changed && marks.text !== unmarked.text ? 'a line broken mid-sentence joined' : ''].filter(Boolean).join('; ');
-        next = marks.text;
+      const spaced = mendSpacing(marks.text);
+      if (unglued.changed || unmarked.changed || spaced.text !== unmarked.text) {
+        mended = [unglued.changed ? 'a stray character of another script stuck to a word taken off' : '', unmarked.changed ? 'web page or code markup taken off' : '', marks.changed ? 'its quotation marks set right' : '', !marks.changed && marks.text !== unmarked.text ? 'a line broken mid-sentence joined' : '', spaced.changed ? 'a space a slip left out or put in set right' : ''].filter(Boolean).join('; ');
+        next = spaced.text;
       }
     } else {
       let words = newWords(op);
@@ -1056,7 +1067,8 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
      * version of its own, the one before one arrow away */
     let version = null;
     if (anew) {
-      version = newVersion({ text: next, how: 'partner', from: v.id, words: countWords(next), why: base.why || undefined, ...(v.ask ? { ask: v.ask } : {}) });
+      /* (the page that ended its chapter, written anew, still ends it: 2.12.35) */
+      version = newVersion({ text: next, how: 'partner', from: v.id, words: countWords(next), why: base.why || undefined, ...(v.ask ? { ask: v.ask } : {}), ...(v.closes ? { closes: true } : {}) });
       put('chapter', chapter.id, chapterSteps.addVersion(passage.id, version), { now: true });
       put('novel', novelId, novelSteps.touchWritten(at));
     } else if (!dry && !changeInPlace({ novelId, chapterId: chapter.id, passageId: passage.id, versionId: v.id, next, by: 'partner', extra: base.why ? { why: base.why } : {} })) return refuse('the passage is being written just now');
@@ -1672,8 +1684,40 @@ export function madeGone(novelId, c) {
   const now = String(v.text || '');
   const back = u.before !== undefined && u.before !== u.after && now === String(u.before);
   if (back) return 'the page no longer reads that way — the words before it were put back';
-  if (String(to || '').trim() && !now.includes(String(to).trim())) return 'the page no longer reads that way — those words were changed since';
+  if (String(to || '').trim() && !now.includes(String(to).trim())) {
+    /* who wrote over them, and what the page says there now — never only "changed since" (his report, 18 October: told
+     * that much and no more, the partner could not see the page, said its own line was gone, then that it was there) */
+    const who = writtenOverBy(v, u);
+    const there = readsNow(String(u.after || ''), now);
+    return `the page no longer reads that way — ${who ? `${who} since` : 'those words were changed since'}${there ? `; it reads there now: “${there}”` : ''}`;
+  }
   return '';
+}
+/* who changed a passage's words after a change of the partner's: each change kept on the version (shape.js
+ * inPlaceFields) holds the words it changed and who changed them — the first after the partner's holds the words the
+ * partner left */
+const OVER_BY = { checkerAuto: 'the checker’s fixes went in on them by themselves', checker: 'I put in a fix of the checker’s on them', you: 'I changed them myself', partner: 'a later change of yours went in on them' };
+function writtenOverBy(v, u) {
+  const list = Array.isArray(v && v.before) ? v.before : [];
+  let k = -1;
+  for (let i = list.length - 1; i >= 0; i--) if (list[i] && list[i].text === u.after) { k = i; break; }
+  if (k < 0) return '';
+  const who = [...new Set(list.slice(k).map((e) => (e && e.by === 'checker' ? (e.auto ? 'checkerAuto' : 'checker') : e && e.by)).filter((b) => OVER_BY[b]))];
+  return who.map((b) => OVER_BY[b]).join(', and ');
+}
+/* the sentences of the page where it no longer reads as the change left it — 400 characters at most */
+function readsNow(after, now) {
+  let a = 0;
+  while (a < after.length && a < now.length && after[a] === now[a]) a++;
+  let b = 0;
+  while (b < after.length - a && b < now.length - a && after[after.length - 1 - b] === now[now.length - 1 - b]) b++;
+  let s = a;
+  while (s > 0 && now[s - 1] !== '\n' && !(/[.!?…]/.test(now[s - 2] || '') && /\s/.test(now[s - 1]))) s--;
+  let e = Math.max(s, now.length - b);
+  while (e < now.length && now[e] !== '\n' && !/[.!?…]/.test(now[e])) e++;
+  while (e < now.length && /[.!?…"”’)\]]/.test(now[e])) e++;
+  const seg = now.slice(s, e).replace(/\s+/g, ' ').trim();
+  return seg.length > 400 ? `${seg.slice(0, 400).replace(/\s+\S*$/, '')} …` : seg;
 }
 /* what came of its changes, in his words, for the partner to read next time */
 export function outcomeWords(changes, novelId = null) {

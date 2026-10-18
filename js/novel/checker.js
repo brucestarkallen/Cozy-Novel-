@@ -34,11 +34,11 @@ import { changeInPlace } from './inplace.js';
 import { numberedText, shortOf, notesBehind, passagesAfter } from './context.js';
 import { bibItems, ridingItems } from './bibliography.js';
 import { superOn, superFrom, autoOf } from './auto.js';
-import { checkerFrame, checkRequest, wholeRequest, marksRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
+import { checkerFrame, checkRequest, wholeRequest, marksRequest, proofRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
 import { findIn } from './search.js';
 import { stockIn, repeatsIn } from './stock.js';
-import { straysIn, markupAt, unmarked, speechFaults, changeSpan, insertsOnlyMarks, speechMarks, pairWalk } from './textshape.js';
+import { straysIn, markupAt, unmarked, speechFaults, changeSpan, uniqueAround, marksOnlyResult, speechMarks, pairWalk, spacingSlips } from './textshape.js';
 import { contextOf } from '../model/providers.js';
 import { hashText, countWords, newId, plural, estimateTokens, cutWords } from '../util.js';
 
@@ -141,6 +141,9 @@ function wanted(house, chapter, p) {
   /* by itself, only a finished page: one cut short or stopped waits for its Go on (Cozy Tavern M552) */
   if (v.cut) return false;
   if (howOf(v) === 'imported') return false;
+  /* Super automatic: every page of the book — written before it was switched on too, and words changed since they
+   * were checked (his word, 18 October: "make it like Grammarly that fixes everything"); the newest first (nextBatch) */
+  if (superOn(house)) return true;
   const from = checksFromOf(house);
   return Number.isFinite(from) && bornOf(v) >= from;
 }
@@ -249,10 +252,13 @@ export function unchecked(novelId, chapterId = null) {
   }
   return { passages: n, words, ungraded };
 }
-/* a new page that stopped partway: checked once Go on finishes it — never "older writing" (S11-G11) */
+/* a new page that stopped partway: checked once Go on finishes it — never "older writing" (S11-G11); with Super
+ * automatic, any page that stopped partway (2.12.35: every page is checked, so an old one is too once Go on finishes it) */
 function waitsForGoOn(house, v) {
+  if (!v || !v.cut || howOf(v) === 'imported') return false;
+  if (superOn(house)) return true;
   const from = checksFromOf(house);
-  return Boolean(v && v.cut) && howOf(v) !== 'imported' && Number.isFinite(from) && bornOf(v) >= from;
+  return Number.isFinite(from) && bornOf(v) >= from;
 }
 function cutWaiting(novelId) {
   const house = store.peek('house', 'house') || {};
@@ -295,7 +301,8 @@ export function stateOf(novelId) {
   if (s && (s.state === 'retry' || s.state === 'elsewhere')) return { state: 'waiting', words: s.words, count };
   const again = automaticWait(novelId);
   if (again) return { state: 'waiting', words: `An automatic rewrite couldn’t finish just now. It tries again by itself in ${archivist.waitWords(again.until - Date.now())}.`, count };
-  if (waiting(novelId)) return { state: 'waiting', words: 'The newest words are checked in a moment.', count };
+  const toGo = waiting(novelId);
+  if (toGo) return { state: 'waiting', words: toGo > 3 ? `${plural(toGo, 'passage')} to check — the newest first, a few at a time.` : 'The newest words are checked in a moment.', count };
   /* green says only what is true: older writing, never sent unasked, is not
    * called checked; a page that stopped partway waits for its Go on; one its
    * model would not check is said */
@@ -307,7 +314,8 @@ export function stateOf(novelId) {
   const more = [
     cut ? `${cut === 1 ? 'A passage that stopped partway is' : `${plural(cut, 'passage')} that stopped partway are`} checked once Go on finishes ${cut === 1 ? 'it' : 'them'}.` : '',
     asideSaid,
-    older ? `${plural(older, 'older passage')} ${older === 1 ? 'is' : 'are'} checked only when you ask.` : '',
+    /* (with Super automatic every page is checked by itself: what waits for him is only words brought in from a file) */
+    older ? `${plural(older, superOn(house) ? 'passage' : 'older passage')} ${superOn(house) ? 'brought in from a file ' : ''}${older === 1 ? 'is' : 'are'} checked only when you ask.` : '',
     ungraded ? `${ungraded === 1 ? 'One passage is' : `${plural(ungraded, 'passage')} are`} checked but not graded yet — Check this chapter, or Check the whole book, grades ${ungraded === 1 ? 'it' : 'them'}.` : '',
   ].filter(Boolean).join(' ');
   return { state: 'clean', words: more ? `${cut || aside ? 'Everything else new' : 'Everything new'} is checked — nothing to change. ${more}` : 'Everything is checked — nothing to change.', count: 0 };
@@ -438,13 +446,17 @@ function batchWords(conn, house, novel) {
 function nextBatch(novelId, limit, { one = false } = {}) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
-  for (const c of chaptersOf(novelId)) {
+  const from = checksFromOf(house);
+  /* what is new first — written since checking began, words changed since they were checked, a chapter he asked for —
+   * and only then, with Super automatic, the book's older pages (2.12.35): a backlog never holds up the newest page */
+  const isNew = (c, p) => { const v = picked(p); return Boolean(c.checkAll) || Boolean(c.checks && c.checks[p.id] && c.checks[p.id][v.id]) || (Number.isFinite(from) && bornOf(v) >= from); };
+  for (const older of [false, true]) for (const c of chaptersOf(novelId)) {
     const list = [];
     let words = 0;
     /* passages checked already, wanted for their grade alone, go in a checking of their own */
     let gradeOnly = null;
     for (const p of c.passages || []) {
-      if (!wanted(house, c, p)) continue;
+      if (!wanted(house, c, p) || (!older && !isNew(c, p))) continue;
       const w = countWords(picked(p).text);
       const has = Boolean(entryFor(c, p));
       if (list.length && has !== gradeOnly) break;
@@ -505,8 +517,16 @@ export async function runCheck(novelId) {
         await checkBatch(novelId, conn, batch, limit, choice);
       }
       choice.beforeAsk();
+      /* every checked passage proofread once for slips alone — the ones checked before this was here too */
+      await runProof(novelId, conn, choice);
+      choice.beforeAsk();
       /* the speech marks of every checked passage: found on what was found in it, and set by the marks' mender */
       await runMarks(novelId, conn, choice);
+      choice.beforeAsk();
+      /* what goes in by itself goes in first: the chapter is read whole as it will stand, never on words a fix found
+       * this look is about to change (2.12.35, the audit: both went in together — "red" made "blue" in one passage, and
+       * "blue" made "red" in the next on the old words) */
+      autoAfter(novelId);
       choice.beforeAsk();
       /* each chapter read whole once its passages are checked, for what disagrees across it */
       await runWhole(novelId, conn, choice);
@@ -783,37 +803,81 @@ function homeOf(novelId, chapterId, pid) {
 }
 
 /* WHAT A FIX HOLDS TO (2.12.33): a fix to the book's continuity, or a seam, quotes the words of the story before it
- * that it holds to ("says", prompts.js SAYS_RULE) — found in the passages before the one it fixes, nearest first,
- * that passage's chapter and then the chapters before it, it is `held` (the words as they stand there): it holds the
- * page to the book itself, not to the notes, and may go in by itself as any small fix (holdsToNotes). Words it quotes
- * that are not there are kept as `unheld`, and it waits for him. A few words at least: four. */
+ * that it holds to ("says", prompts.js SAYS_RULE) — found in its own passage before the words it changes, or in the
+ * passages before that one, nearest first, that passage's chapter and then the chapters before it, it is `held` (the
+ * words as they stand there, and where: `heldAt`): it holds the page to the book itself, not to the notes, and may go in
+ * by itself as any small fix (waitsForHim) — while those words still stand there. Words it quotes that are not there
+ * are kept as `unheld`, and it waits for him. A few words at least: four.
+ * (2.12.35, the audit: the quick look compared the page's letters as typed, so "Siobhán" never held a quote of
+ * "Siobhan", and the fix waited with a reason that was not true; a quote of its own passage was never found; and on a
+ * book of 300,000 words each fix whose quote was not there folded every page before it again.) */
 const SAYS_MIN = 4;
-function heldBy(novelId, chapterId, pid, says) {
+const lightSeen = new WeakMap();
+/* the words as the quick look reads them: small letters, accents and the marks no one sees let go (search.js fold's way) */
+const lightFold = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f\u00ad\u200b-\u200d\u2060\ufeff*_]/g, '');
+function lightOf(v) {
+  const t = String((v && v.text) || '');
+  const was = v && lightSeen.get(v);
+  if (was && was.t === t) return was.light;
+  const light = lightFold(t);
+  if (v) lightSeen.set(v, { t, light });
+  return light;
+}
+function heldBy(novelId, chapterId, pid, says, before = '') {
   const want = clean(says, 1200);
-  if (countWords(want) < SAYS_MIN) return '';
+  if (countWords(want) < SAYS_MIN) return null;
   const list = chaptersOf(novelId);
   const at = list.findIndex((c) => c.id === chapterId);
-  if (at < 0) return '';
-  /* a quick look first, by its longest plain word: most passages never hold it */
-  const key = (want.toLowerCase().match(/[a-z]+/g) || []).sort((a, b) => b.length - a.length)[0] || '';
+  if (at < 0) return null;
+  /* a quick look first, by its longest word: most passages never hold it */
+  const key = (lightFold(want).match(/[\p{L}\p{N}]+/gu) || []).sort((a, b) => b.length - a.length)[0] || '';
+  const quick = key.length >= 4;
+  const own = String(before || '');
+  if (own.trim() && (!quick || lightFold(own).includes(key))) {
+    const [hit] = findIn(own, want, { words: true, max: 1 });
+    if (hit) return { held: cutWords(own.slice(hit.start, hit.end), 600), at: { chapterId, passageId: pid } };
+  }
   for (let i = at; i >= 0; i--) {
     const ps = list[i].passages || [];
     const end = i === at ? ps.findIndex((p) => p.id === pid) : ps.length;
-    if (end < 0) return '';
+    if (end < 0) return null;
     for (let j = end - 1; j >= 0; j--) {
       if (ps[j].by === 'break') continue;
-      const t = String((picked(ps[j]) || {}).text || '');
-      if (!t || (key.length >= 4 && !t.toLowerCase().includes(key))) continue;
+      const v = picked(ps[j]);
+      const t = String((v || {}).text || '');
+      if (!t || (quick && !lightOf(v).includes(key))) continue;
       const [hit] = findIn(t, want, { words: true, max: 1 });
-      if (hit) return cutWords(t.slice(hit.start, hit.end), 600);
+      if (hit) return { held: cutWords(t.slice(hit.start, hit.end), 600), at: { chapterId: list[i].id, passageId: ps[j].id } };
     }
   }
-  return '';
+  return null;
 }
-function saysOf(novelId, chapterId, pid, kind, says) {
-  if ((kind !== 'continuity' && kind !== 'seam') || typeof says !== 'string' || !says.trim()) return {};
-  const held = heldBy(novelId, chapterId, pid, says);
-  return held ? { held } : { unheld: clean(says, 300) };
+/* a passage that opens after a scene break: the jump in time or place is marked there — a seam fix of its opening waits
+ * for him (2.12.35, the audit: the chapter read whole was sent without its breaks, and could add a transition at each) */
+function afterBreak(chapter, pid) {
+  const ps = (chapter && chapter.passages) || [];
+  for (let i = ps.findIndex((p) => p.id === pid) - 1; i >= 0; i--) {
+    if (ps[i].by === 'break') return true;
+    if (hasWords(ps[i])) return false;
+  }
+  return false;
+}
+function saysOf(novelId, chapterId, pid, kind, says, before = '') {
+  const brk = kind === 'seam' && afterBreak(store.peek('chapter', chapterId), pid) ? { afterBreak: true } : {};
+  if ((kind !== 'continuity' && kind !== 'seam') || typeof says !== 'string' || !says.trim()) return brk;
+  const h = heldBy(novelId, chapterId, pid, says, before);
+  return { ...brk, ...(h ? { held: h.held, heldAt: h.at } : { unheld: clean(says, 300) }) };
+}
+/* the words a fix holds to, still where they were found (2.12.35, the audit: a fix held to words another fix changed in
+ * the same look went in by itself all the same — "red cup" made "blue" in one passage, and "blue" made "red" in the next
+ * on the strength of the old words) */
+function holdStands(novelId, item) {
+  if (!item.held || !item.heldAt) return true;
+  const home = homeOf(novelId, item.heldAt.chapterId, item.heldAt.passageId);
+  const c = home && store.peek('chapter', home);
+  const p = c && (c.passages || []).find((x) => x.id === item.heldAt.passageId);
+  const t = String(((p && picked(p)) || {}).text || '');
+  return Boolean(t.trim()) && findIn(t, item.held, { words: true, max: 1 }).length > 0;
 }
 
 /* a passage its model would not check, set aside while its words stand:
@@ -853,7 +917,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     const text = String(v.text || '');
     const ask = askWords(v);
     /* stock wording counted — never a kind his own words for it asked for (Cozy Tavern M355) — strays of another script, and stretches copied from the pages before */
-    asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, text, sig: sigOf(v), model: v.model || '', items: [], stock: stockIn(text, { not: ask }), strays: straysIn(text), repeats: repeatsIn(text, priorOf(p)), marks: marksOf(text), ask, tries: ((entryFor(chapter, p) || {}).tries || 0) });
+    asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, text, sig: sigOf(v), model: v.model || '', cut: Boolean(v.cut), items: [], stock: stockIn(text, { not: ask }), strays: straysIn(text), repeats: repeatsIn(text, priorOf(p)), marks: marksOf(text, Boolean(v.cut)), ask, tries: ((entryFor(chapter, p) || {}).tries || 0) });
   }
   const keys = new Set(asked.keys());
   const system = [checkerFrame(house, view), avoidLine(avoid)].filter(Boolean).join('\n\n');
@@ -881,7 +945,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
    * his entries tell them — never from these passages or after them — so a slip against a chapter it reads only in
    * short is still caught */
   const bib = ridingItems(bibItems(view, inHand, { facts: true }), { near: batch.passages.map((x) => String((picked(x) || {}).text || '')).join('\n\n'),
-    budget: Math.max(0, Math.min(2500, Math.floor(spare * 0.2))), skip: passagesAfter(novel, inHand, chapter.id, { before: batch.passages[0].id }, 'write') }).words.join('\n\n');
+    budget: Math.max(0, Math.min(2500, Math.floor(spare * 0.2))), skip: passagesAfter(novel, inHand, chapter.id, { before: batch.passages[0].id }, 'write'), byPage: superOn(house) }).words.join('\n\n');
   const edits = [];
   const grades = [];
   const incompleteParts = new Set();
@@ -973,7 +1037,8 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
   }
   /* what he left as it is (as the chapter stands now) is not offered for that passage again */
   const now = store.peek('chapter', chapter.id) || chapter;
-  const wasLeft = (a, find, replace) => ((now.checksLeft && now.checksLeft[a.pid]) || []).some((l) => l.find === find && l.replace === replace);
+  const leftFor = new Map([...asked.values()].map((a) => [a.pid, leftTest((now.checksLeft && now.checksLeft[a.pid]) || [])]));
+  const wasLeft = (a, find, replace) => leftFor.get(a.pid)(find, replace);
   for (const e of edits) {
     if (!e || typeof e !== 'object') continue;
     const ref = refOf(e.passage, keys);
@@ -987,9 +1052,9 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     /* two fixes over the same words: the first stands */
     if (a.items.some((x) => overlaps(x, spot)) || wasLeft(a, find, e.replace)) continue;
     const kind = CHECK_KINDS.includes(String(e.kind || '').toLowerCase()) ? String(e.kind).toLowerCase() : 'humanize';
-    a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), ...saysOf(novelId, chapter.id, a.pid, kind, e.says), start: spot.start, end: spot.end });
+    a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), ...saysOf(novelId, chapter.id, a.pid, kind, e.says, a.text.slice(0, spot.start)), start: spot.start, end: spot.end });
   }
-  if (!gradeOnly) for (const a of asked.values()) foundHere(a, avoid, (find, replace = null) => wasLeft(a, find, replace));
+  if (!gradeOnly) for (const a of asked.values()) foundHere(a, avoid, leftFor.get(a.pid), { cut: a.cut });
   const graded = new Map();
   if (judge) {
     for (const { a, list } of byPassage.values()) {
@@ -1026,7 +1091,8 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     if (!home) continue;
     /* no grade, its asking again stopped by a fault: checked again on a later look (twice at most), never counted judged */
     const ungraded = judge && !grade && gradeLater.has(a.pid) ? { graded: false, tries: a.tries + 1 } : {};
-    store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}), ...ungraded }), { checkpoint: true });
+    /* (read in parts: its chapter, if it is the whole of one, is read whole too — wholeWanted) */
+    store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}), ...ungraded, ...(numbered.length > 1 ? { parts: numbered.length } : {}) }), { checkpoint: true });
   }
   await store.flush('chapter', chapter.id);
   tell(novelId);
@@ -1045,61 +1111,107 @@ function where(chapterId, passageId) {
   return { chapter, p, v, e };
 }
 
+/* WHAT HE LEFT AS IT IS, ASKED ONE WAY EVERYWHERE (2.12.35, the audit: each finder asked in words of its own, and two
+ * asked for what Leave it never records — a markup fix he left was looked for as its sentence with no fix, and came
+ * back; a fix the marks' mender made was looked for as its paragraph, so a card came back and the mender was asked
+ * again at every look): the same words with the same fix — and for the speech marks of a paragraph, whose fix is
+ * made fresh each time, any fix of them he left (`marks`) that stands inside its words. */
+function leftTest(list) {
+  const left = Array.isArray(list) ? list : [];
+  const marksLeft = left.filter((l) => l && (l.marks || (typeof l.replace === 'string' && l.replace !== l.find && Boolean(marksOnlyResult(l.find, l.replace)))));
+  /* (the marks of a paragraph: a fix of them he left, where it stands in the words — over the paragraph's own place,
+   * {text, start, end} — or, with no words to look in, the one's words inside the other's) */
+  const overParagraph = (l, find, { text = null, start = -1, end = -1 }) => {
+    if (typeof text === 'string' && start >= 0) { const at = text.indexOf(l.find); return at >= 0 && at < end && at + l.find.length > start; }
+    return String(find).includes(l.find) || String(l.find).includes(String(find));
+  };
+  return (find, replace = null, { marks = false, ...where } = {}) => left.some((l) => l && l.find === find && l.replace === replace)
+    || (marks && marksLeft.some((l) => overParagraph(l, find, where)));
+}
+
 /* the new words, kept: on the version this checking made, when it is the
  * one on the page — or as a new version, the words before one arrow away */
 /* The sentences the app finds itself, to be written again — a word on his list it let through, stock wording
  * counted, a stray of another script — in words as they stand (a.text), around what is found there already
  * (a.items, with their places): where a fix takes in the very words, the fix takes them away; where a fix only
- * shares the sentence, the sentence waits, and is found again in the words the fix makes (keepWords). `left`:
- * a sentence he left as it is for this passage. */
-function foundHere(a, avoid, left) {
+ * shares the sentence, the sentence waits, and is found again in the words the fix makes (keepWords). `left`
+ * (leftTest): what he left as it is for this passage. Each find stands in one place in the words — a sentence that
+ * stands twice takes a few words around it (2.12.35, the audit: its card could not be written again, nor put in).
+ * `cut`: the passage stopped partway — its last paragraph is not finished, and is never offered a fix of its marks or
+ * its spaces (Go on finishes it). */
+function foundHere(a, avoid, left, { cut = false } = {}) {
+  const spotOf = (s) => uniqueAround(a.text, s.start, s.end);
   /* a word he never wants: its sentence offered to be written again (every such word of that sentence named) */
   for (const w of avoid) {
     for (const hit of avoidedIn(a.text, w)) {
-      const s = sentenceAround(a.text, hit.start, hit.end);
+      const s = spotOf(sentenceAround(a.text, hit.start, hit.end));
       /* (one of its own for the same sentence — never a fix that came back for it, which holds no list of words: 2.6.1 stopped on that) */
       const same = a.items.find((x) => x.kind === 'avoid' && x.replace === null && x.start === s.start && x.end === s.end);
       if (same) { if (!same.phrases.includes(w)) same.phrases.push(w); continue; }
-      const sentence = a.text.slice(s.start, s.end);
-      if (a.items.some((x) => overlaps(x, hit) || overlaps(x, s)) || left(sentence)) continue;
-      a.items.push({ id: newId('sg'), kind: 'avoid', find: sentence, replace: null, phrase: w, phrases: [w], start: s.start, end: s.end });
+      if (a.items.some((x) => overlaps(x, hit) || overlaps(x, s)) || left(s.find)) continue;
+      a.items.push({ id: newId('sg'), kind: 'avoid', find: s.find, replace: null, phrase: w, phrases: [w], start: s.start, end: s.end });
     }
   }
   for (const x of a.items) if (x.kind === 'avoid' && x.replace === null) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} on your list of words to avoid`;
   /* stock wording counted that no fix here takes away: its sentence offered to be written again, the same way */
   for (const hit of a.stock) {
-    const s = sentenceAround(a.text, hit.start, hit.end);
+    const s = spotOf(sentenceAround(a.text, hit.start, hit.end));
     /* (a second stock wording in a sentence already offered is named on its card — looked for first: the card itself overlaps it) */
     const same = a.items.find((x) => x.stock && x.start === s.start && x.end === s.end);
     if (same) { if (!same.phrases.includes(hit.words)) same.phrases.push(hit.words); continue; }
     if (a.items.some((x) => overlaps(x, hit))) continue;
-    const sentence = a.text.slice(s.start, s.end);
-    if (a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
-    a.items.push({ id: newId('sg'), kind: 'humanize', find: sentence, replace: null, stock: true, phrases: [hit.words], start: s.start, end: s.end });
+    if (a.items.some((x) => overlaps(x, s)) || left(s.find)) continue;
+    a.items.push({ id: newId('sg'), kind: 'humanize', find: s.find, replace: null, stock: true, phrases: [hit.words], start: s.start, end: s.end });
   }
   for (const x of a.items) if (x.stock) x.why = `${quoted(x.phrases, 'and')} ${x.phrases.length === 1 ? 'is' : 'are'} stock wording — far more common in machine-made fiction than in books people write`;
   /* a stray of another script no fix here takes out: its sentence offered to be written again (Cozy Tavern M119) */
   for (const hit of a.strays) {
     if (a.items.some((x) => overlaps(x, hit))) continue;
-    const s = sentenceAround(a.text, hit.start, hit.end);
-    const sentence = a.text.slice(s.start, s.end);
-    if (a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
-    a.items.push({ id: newId('sg'), kind: 'grammar', find: sentence, replace: null, stray: true, phrases: [a.text.slice(hit.start, hit.end)], why: 'a stray character of another script stands here', start: s.start, end: s.end });
+    const s = spotOf(sentenceAround(a.text, hit.start, hit.end));
+    if (a.items.some((x) => overlaps(x, s)) || left(s.find)) continue;
+    a.items.push({ id: newId('sg'), kind: 'grammar', find: s.find, replace: null, stray: true, phrases: [a.text.slice(hit.start, hit.end)], why: 'a stray character of another script stands here', start: s.start, end: s.end });
   }
   /* a web page's or code's markup in the story ("…paid for.</code>", his report 2.12.2): the sentence as it reads
    * without it — the fix is known, no model asked, so it is put in by itself when he lets fixes go in by themselves */
   for (const hit of markupAt(a.text)) {
-    const s = sentenceAround(a.text, hit.start, hit.end);
+    const s = spotOf(sentenceAround(a.text, hit.start, hit.end));
     const same = a.items.find((x) => x.markup && x.start === s.start && x.end === s.end);
     if (same) { if (!same.phrases.includes(hit.words)) same.phrases.push(hit.words); continue; }
     if (a.items.some((x) => overlaps(x, hit))) continue;
-    const sentence = a.text.slice(s.start, s.end);
-    const bare = unmarked(sentence);
-    if (bare === sentence || a.items.some((x) => overlaps(x, s)) || left(sentence)) continue;
-    a.items.push({ id: newId('sg'), kind: 'grammar', find: sentence, replace: bare, markup: true, phrases: [hit.words], start: s.start, end: s.end });
+    const bare = unmarked(s.find);
+    if (bare === s.find || a.items.some((x) => overlaps(x, s)) || left(s.find, bare)) continue;
+    a.items.push({ id: newId('sg'), kind: 'grammar', find: s.find, replace: bare, markup: true, phrases: [hit.words], start: s.start, end: s.end });
   }
   for (const x of a.items) if (x.markup) x.why = `web page or code markup (${quoted(x.phrases, 'and')}) stands in the story`;
-  marksHere(a, left);
+  marksHere(a, left, { cut });
+  slipsHere(a, left, { cut });
+}
+/* SPACES A SLIP OF THE HAND LEFT OUT OR PUT IN (textshape.js spacingSlips, 2.12.35): the fix is known — white space
+ * only — so no model is asked, and it goes in by itself as any small fix; slips a few letters apart are one fix */
+const slipsSeen = new Map();
+function slipsOf(text, cut = false) {
+  const t = String(text || '');
+  const key = `${cut ? 'cut:' : ''}${hashText(t)}`;
+  if (slipsSeen.has(key)) return slipsSeen.get(key);
+  const out = spacingSlips(t, { leaveLast: cut });
+  if (slipsSeen.size > 4000) slipsSeen.clear();
+  slipsSeen.set(key, out);
+  return out;
+}
+function slipsHere(a, left, { cut = false } = {}) {
+  const groups = [];
+  for (const x of slipsOf(a.text, cut)) {
+    const g = groups[groups.length - 1];
+    if (g && x.at - g.end <= 6) { g.list.push(x); g.end = Math.max(g.end, x.at + x.del); } else groups.push({ start: x.at, end: x.at + x.del, list: [x] });
+  }
+  for (const g of groups) {
+    let seg = a.text.slice(g.start, g.end);
+    for (const x of [...g.list].sort((p, q) => q.at - p.at)) seg = seg.slice(0, x.at - g.start) + x.ins + seg.slice(x.at - g.start + x.del);
+    const c = changeSpan(a.text, g.start, g.end, seg);
+    const spot = { start: c.start, end: c.end };
+    if (a.items.some((x) => x.start !== undefined && overlaps(x, spot)) || left(c.find, c.replace)) continue;
+    a.items.push({ id: newId('sg'), kind: 'grammar', find: c.find, replace: c.replace, slip: true, why: [...new Set(g.list.map((x) => x.why))].join('; '), start: c.start, end: c.end });
+  }
 }
 /* SPEECH MARKS THAT DO NOT PAIR (Cozy Tavern M753, 2.12.34 — his page: `"Tck. Tck. "You did not look…`): each
  * paragraph of the words whose quotation marks do not pair, that no fix here takes in. Where one mark accounts for it
@@ -1109,30 +1221,36 @@ function foundHere(a, avoid, left) {
 const MARKS_SET = 'its speech marks do not pair — the quotation marks set right, every word as it is';
 const MARKS_LEFT = 'a quotation mark is left out or one too many stands here, so speech and narration run together';
 const marksSeen = new Map();
-function marksOf(text) {
+function marksOf(text, cut = false) {
   const t = String(text || '');
-  const key = hashText(t);
+  const key = `${cut ? 'cut:' : ''}${hashText(t)}`;
   if (marksSeen.has(key)) return marksSeen.get(key);
-  const out = speechFaults(t);
+  const out = speechFaults(t, { leaveLast: cut });
   if (marksSeen.size > 4000) marksSeen.clear();
   marksSeen.set(key, out);
   return out;
 }
-function marksHere(a, left) {
-  for (const f of marksOf(a.text)) {
+/* (a paragraph that waits for the mender keeps its own words, `line`, for the mender, and where they stand in its
+ * find, `lineAt`: the find takes a few words around them where the paragraph stands twice) */
+function marksHere(a, left, { cut = false } = {}) {
+  for (const f of marksOf(a.text, cut)) {
     const spot = { start: f.start, end: f.end };
     if (a.items.some((x) => x.start !== undefined && overlaps(x, spot))) continue;
     if (f.mended) {
       const c = changeSpan(a.text, f.start, f.end, f.mended);
-      if (left(c.find, c.replace)) continue;
+      if (left(c.find, c.replace, { marks: true, text: a.text, start: f.start, end: f.end })) continue;
       a.items.push({ id: newId('sg'), kind: 'grammar', find: c.find, replace: c.replace, marks: true, why: MARKS_SET, start: c.start, end: c.end });
     } else {
-      if (left(f.line)) continue;
-      a.items.push({ id: newId('sg'), kind: 'grammar', find: f.line, replace: null, marks: true, goesOn: f.goesOn, phrases: f.near ? [f.near] : [], why: MARKS_LEFT, start: f.start, end: f.end });
+      const u = uniqueAround(a.text, f.start, f.end);
+      if (left(u.find, null, { marks: true, text: a.text, start: f.start, end: f.end })) continue;
+      a.items.push({ id: newId('sg'), kind: 'grammar', find: u.find, replace: null, marks: true, goesOn: f.goesOn, ...(f.carried ? { carried: f.carried } : {}), ...(u.find !== f.line ? { line: f.line, lineAt: f.start - u.start } : {}), phrases: f.near ? [f.near] : [], why: MARKS_LEFT, start: u.start, end: u.end });
     }
   }
 }
 const ownFind = (x) => x.replace === null && (x.kind === 'avoid' || x.stock || x.stray || x.marks);
+/* what the app finds itself, fix and all, found again in new words each time (foundHere) — never kept on words it no
+ * longer stands in */
+const foundAgain = (x) => ownFind(x) || Boolean(x.slip || x.markup || (x.marks && typeof x.replace === 'string'));
 
 /* what still waits on words a fix made: the fixes not put in, where they stand in them, and the app's own
  * sentences found again in them (foundHere) — a word on his list in a sentence a fix shared is offered now,
@@ -1144,18 +1262,20 @@ function stillWaiting(w, next, rest) {
   for (const x of rest) {
     if (ownFind(x)) continue;
     const spot = x.kind === 'grade' || !x.find ? { why: 'none' } : locate(next, x.find);
-    if (spot.why) loose.push(x); else placed.push({ ...x, start: spot.start, end: spot.end });
+    /* (what the app found itself, no longer standing in the words: found again in them, or gone — 2.12.35, the audit:
+     * kept loose, it stood beside the one found again, and a card more came at every look) */
+    if (spot.why) { if (!foundAgain(x)) loose.push(x); } else placed.push({ ...x, start: spot.start, end: spot.end });
   }
   const a = { text: next, items: placed, stock: stockIn(next, { not: askWords(w.v) }), strays: straysIn(next) };
-  const leftHere = (w.chapter.checksLeft && w.chapter.checksLeft[w.p.id]) || [];
-  foundHere(a, avoidList(house), (find, replace = null) => leftHere.some((l) => l.find === find && l.replace === replace));
+  foundHere(a, avoidList(house), leftTest((w.chapter.checksLeft && w.chapter.checksLeft[w.p.id]) || []), { cut: Boolean(w.v.cut) });
   const before = rest.filter(ownFind);
   const found = a.items.sort((x, y) => x.start - y.start).map(({ start, end, ...x }) => {
-    const was = ownFind(x) ? before.find((o) => o.find === x.find && o.kind === x.kind) : null;
+    const was = ownFind(x) ? before.find((o) => o.find === x.find && o.kind === x.kind && Boolean(o.marks) === Boolean(x.marks)) : null;
     /* (and a paragraph the marks' mender was asked about once, for these very words, is not asked again) */
     return was ? { ...x, id: was.id, ...(was.asked ? { asked: was.asked } : {}) } : x;
   });
-  return [...loose.filter((x) => x.kind === 'grade'), ...found, ...loose.filter((x) => x.kind !== 'grade')];
+  const twice = (x) => found.some((f) => f.kind === x.kind && f.find === x.find && f.replace === x.replace);
+  return [...loose.filter((x) => x.kind === 'grade'), ...found, ...loose.filter((x) => x.kind !== 'grade' && !twice(x))];
 }
 
 /* the grade a checking gave goes with the words its fixes made (through 2.6.2 it was lost — the score, the average
@@ -1198,7 +1318,8 @@ export function keepGrades(novelId) {
 function keepWords(novelId, w, next, rest, { auto = false } = {}) {
   const { chapter, p, v, e } = w;
   const sig = hashText(next);
-  const entry = { round: e.round, sig, at: Date.now(), items: stillWaiting(w, next, rest), ...gradeKept(e) };
+  /* (words its own fixes made were proofread with the words they came from: never asked again for them) */
+  const entry = { round: e.round, sig, at: Date.now(), items: stillWaiting(w, next, rest), ...gradeKept(e), ...(e.proofed ? { proofed: true } : {}), ...(e.parts ? { parts: e.parts } : {}) };
   const made = changeInPlace({ novelId, chapterId: chapter.id, passageId: p.id, versionId: v.id, next, by: 'checker', check: entry, extra: auto ? { auto: true } : {} });
   if (!made) return null;
   recount(novelId);
@@ -1369,6 +1490,194 @@ async function runDuels(novelId, conn, choice) {
   }
 }
 
+/* ------------------------------------------------------------ the proofreading */
+
+/* THE PROOFREADING (2.12.35 — his pages: "…whether keeping it wassentiment or discipline…", "…from bruised to ash,
+ * She looked at him…", "even as anything", each under a green light, each found at once by his partner when he asked
+ * it only that). A checking asks for nine things at once — grammar, clarity, machine-made wording, his words to avoid,
+ * continuity, seams, and the judge's ten checks — and a slip of the hand is the easiest of them to miss. So every
+ * checked passage — those checked before this was here too — is read once more for slips alone (prompts.js
+ * proofRequest), the places code sees as likely slips named to it ("ash, She", a doubled word). Each fix must be a
+ * slip's size — a few letters, marks or words, never a sentence said another way (`slipSize`) — and is kept like any
+ * other fix, put in by itself as any small fix; where a fix found already covers the same words, the slip is mended
+ * inside it. Each version's words are read once (`proofed`, carried with the words its own fixes make); a passing fault
+ * is waited out; the connection's own stops the checker. */
+const PROOF_ASKS = 4;
+const proofWait = new Map();
+const proofPart = new Map(); /* `${passage}:${sig}:${limit}` -> {k, proofs}: a passage read in parts, stopped at part k */
+export function slipSize(find, replace) {
+  const f = String(find || '');
+  const r = String(replace || '');
+  let a = 0;
+  while (a < f.length && a < r.length && f[a] === r[a]) a++;
+  let b = 0;
+  while (b < f.length - a && b < r.length - a && f[f.length - 1 - b] === r[r.length - 1 - b]) b++;
+  /* the stretch that changed, out to whole words */
+  while (a > 0 && /[\p{L}\p{N}]/u.test(f[a - 1])) a--;
+  while (b > 0 && /[\p{L}\p{N}]/u.test(f[f.length - b])) b--;
+  const was = f.slice(a, f.length - b);
+  const now = r.slice(a, r.length - b);
+  return Math.max(was.length, now.length) <= 40 && countWords(was) <= 3 && countWords(now) <= 4;
+}
+/* places code sees as likely slips, for the proofreader to read (never mended by code: only a reading can say) */
+const SPLICE = /\p{Ll}, (?:She|He|They|It|We|You|The|His|Her|Their|There|Then|This|That|These|Those|But|And|So|Its|My|Our|Your)\b/gu;
+function likelySlips(text) {
+  const t = String(text || '');
+  const out = [];
+  for (const m of t.matchAll(SPLICE)) out.push(t.slice(Math.max(0, m.index - 24), m.index + m[0].length + 16).replace(/^\S*\s/, '').replace(/\s\S*$/, ''));
+  for (const m of t.matchAll(/(?<![\p{L}'’])(\p{L}+)\s+\1(?![\p{L}'’])/giu)) if (!/^(?:had|that|no|very|so|ha|bye|now|go|come|there|knock|tsk|tck|yes|well|oh|ah|my|run|again)$/i.test(m[1])) out.push(t.slice(Math.max(0, m.index - 16), m.index + m[0].length + 16).replace(/^\S*\s/, '').replace(/\s\S*$/, ''));
+  return out.slice(0, 6);
+}
+/* (the newest chapter first: the page he is writing is proofread before the backlog of the book's older ones) */
+function proofBatch(novelId, limit) {
+  for (const c of chaptersOf(novelId).reverse()) {
+    const list = [];
+    let words = 0;
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      const v = picked(p);
+      const e = v && entryFor(c, p);
+      if (!e || e.aside || e.proofed || v.streaming || v.cut || !String(v.text || '').trim()) continue;
+      const w = countWords(v.text);
+      if (list.length && words + w > limit) break;
+      list.push(p);
+      words += w;
+      if (w > limit) break;
+    }
+    if (list.length) return { chapterId: c.id, passages: list };
+  }
+  return null;
+}
+async function runProof(novelId, conn, choice) {
+  const wait = proofWait.get(novelId);
+  if (wait && wait.until > Date.now()) { schedule(novelId, wait.until - Date.now() + 500); return; }
+  for (let asks = 0; ; asks++) {
+    choice.beforeAsk();
+    if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+    const limit = batchWords(conn, store.peek('house', 'house') || {}, store.peek('novel', novelId));
+    const batch = proofBatch(novelId, limit);
+    if (!batch) return;
+    if (asks >= PROOF_ASKS) { schedule(novelId, 3000); return; }
+    const out = await proofRead(novelId, conn, batch, limit, choice);
+    if (out && out.gaveWay) { schedule(novelId, 20000); return; }
+    if (out && out.stop) throw out.stop;
+    if (out && out.passing) return;
+  }
+}
+async function proofRead(novelId, conn, batch, limit, choice) {
+  const house = store.peek('house', 'house') || {};
+  const novel = store.peek('novel', novelId);
+  const chapter = store.peek('chapter', batch.chapterId);
+  if (!novel || !chapter) return null;
+  const view = namedBook(standingNotes(novel), house);
+  const ci = chapterNumber(novel, chapter.id);
+  const nums = passageNumbers(chapter);
+  const label = chapterLabel(novel, chapter);
+  const asked = new Map();
+  for (const p of batch.passages) {
+    const v = picked(p);
+    asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, sig: sigOf(v), text: String(v.text || ''), items: [] });
+  }
+  const keys = new Set(asked.keys());
+  const one = asked.size === 1 ? [...asked.entries()][0] : null;
+  const numbered = one && countWords(one[1].text) > limit
+    ? archivist.partsOf(one[1].text, limit).map((part) => `[${one[0]}] ${part}`)
+    : [numberedText(novel, chapter, batch.passages)];
+  const system = checkerFrame(house, view);
+  const his = cutWords(hisWords(house), 8000);
+  setState(novelId, 'checking', `Proofreading ${chapterLabel(novel, chapter, { withName: false })}, ${batch.passages.length === 1 ? `passage ${nums.get(batch.passages[0].id)}` : `passages ${nums.get(batch.passages[0].id)}–${nums.get(batch.passages[batch.passages.length - 1].id)}`}…`);
+  /* a passage read in parts goes on at the part it stopped at, with what the parts before it found (as the chapter read
+   * whole does: a fault on part 2 never throws part 1's slips away, nor pays for part 1 again) */
+  const key = numbered.length > 1 ? `${one[1].pid}:${one[1].sig}:${limit}` : null;
+  const was = key ? proofPart.get(key) : null;
+  const proofs = was ? was.proofs.slice() : [];
+  const settleAll = (fields) => {
+    for (const a of asked.values()) {
+      const home = homeOf(novelId, chapter.id, a.pid);
+      const c = home && store.peek('chapter', home);
+      const p = c && (c.passages || []).find((x) => x.id === a.pid);
+      const v = p && picked(p);
+      const e = v && v.id === a.vid && sigOf(v) === a.sig && c.checks && c.checks[a.pid] && c.checks[a.pid][a.vid];
+      if (!e || e.sig !== a.sig) continue;
+      store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, ...fields(a, e, c) }), { checkpoint: true });
+    }
+  };
+  for (let k = was ? was.k : 0; k < numbered.length; k++) {
+    const words = numbered[k];
+    const hints = {};
+    for (const [n, a] of asked) if (words.includes(`[${n}]`)) { const h = likelySlips(a.text).filter((x) => words.includes(x)); if (h.length) hints[n] = h; }
+    const got = await archivist.askJson(conn, system, proofRequest({ novel: view, chapterLabel: label, numbered: words, his, hints }), { want: (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
+    await archivist.mustHold('checker', novelId);
+    if (!got.ok) {
+      if (key) { if (proofPart.size > 100) proofPart.clear(); proofPart.set(key, { k, proofs: proofs.slice() }); }
+      if (got.leashed === 'gaveway') return { gaveWay: true };
+      const fault = got.leashed === 'long' ? 'words' : got.leashed ? 'model' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
+      if (fault && typeof fault === 'object') return { stop: failed(fault) };
+      if (fault === 'words') {
+        /* its model would not read these: a few passages are asked again one at a time (as the marks' mender is) — only
+         * words it will not read alone are passed by, never asked in a loop, and what the parts before found is kept */
+        if (batch.passages.length > 1) {
+          for (const p of batch.passages) {
+            choice.beforeAsk();
+            if (writerBusy(novelId)) { schedule(novelId, 4000); return { passing: true }; }
+            const out = await proofRead(novelId, conn, { chapterId: batch.chapterId, passages: [p] }, limit, choice);
+            if (out && (out.gaveWay || out.stop || out.passing)) return out;
+          }
+          return { ok: true };
+        }
+        break;
+      }
+      const held = proofWait.get(novelId);
+      const n = ((held && held.n) || 0) + 1;
+      const ms = Math.max([60000, 180000, 600000][Math.min(n - 1, 2)], Number(got.retryAfterMs) || 0);
+      proofWait.set(novelId, { n, until: Date.now() + ms });
+      schedule(novelId, ms + 1000);
+      return { passing: true };
+    }
+    proofs.push(...got.obj.edits);
+  }
+  if (key) proofPart.delete(key);
+  proofWait.delete(novelId);
+  for (const e of proofs) {
+    if (!e || typeof e !== 'object' || typeof e.find !== 'string' || typeof e.replace !== 'string') continue;
+    const ref = refOf(e.passage, keys);
+    const a = ref ? asked.get(ref) : null;
+    if (!a) continue;
+    const spot = locate(a.text, e.find);
+    if (spot.why) continue;
+    const find = a.text.slice(spot.start, spot.end);
+    if (find === e.replace || find.replace(/\s+/g, ' ').trim() === e.replace.replace(/\s+/g, ' ').trim() || !slipSize(find, e.replace)) continue;
+    if (a.items.some((x) => overlaps(x, spot))) continue;
+    a.items.push({ id: newId('sg'), kind: 'grammar', find, replace: e.replace, why: clean(e.why) || 'a slip of the hand', proof: true, start: spot.start, end: spot.end });
+  }
+  /* laid beside what was found in each passage: inside a fix found already over the same words, when its words still
+   * hold the slip; never over one he left */
+  settleAll((a, e, c) => {
+    const left = leftTest((c.checksLeft && c.checksLeft[a.pid]) || []);
+    const items = (e.items || []).map((x) => ({ ...x }));
+    const where = items.map((x) => (typeof x.replace === 'string' && x.find ? locate(a.text, x.find) : { why: 'none' }));
+    for (const s of a.items) {
+      if (left(s.find, s.replace)) continue;
+      const over = items.map((x, i) => ({ x, sp: where[i] })).filter(({ sp }) => !sp.why && overlaps(sp, s));
+      if (over.length) {
+        /* (put in by its place, never by String.replace — a "$&" in the words is no code) */
+        const at = over.length === 1 ? over[0].x.replace.indexOf(s.find) : -1;
+        if (at >= 0 && over[0].x.replace.indexOf(s.find, at + 1) < 0) over[0].x.replace = over[0].x.replace.slice(0, at) + s.replace + over[0].x.replace.slice(at + s.find.length);
+        continue;
+      }
+      const { start, end, ...item } = s;
+      items.push(item);
+      where.push({ start, end });
+    }
+    const at = (x, i) => (x.kind === 'grade' ? -1 : where[i] && !where[i].why ? where[i].start : (() => { const sp = x.find ? locate(a.text, x.find) : { why: 'none' }; return sp.why ? Infinity : sp.start; })());
+    const sorted = items.map((x, i) => ({ x, k: at(x, i) })).sort((m, n) => m.k - n.k).map(({ x }) => x);
+    return { items: sorted, proofed: true };
+  });
+  await store.flush();
+  tell(novelId);
+  return { ok: true };
+}
+
 /* ------------------------------------------------------------ the speech marks */
 
 /* THE SPEECH MARKS OF EVERY CHECKED PASSAGE (2.12.34; Cozy Tavern M753's mender, for a book). A passage checked before
@@ -1384,26 +1693,42 @@ const MARKS_AT_ONCE = 6;
 const marksWait = new Map();
 async function runMarks(novelId, conn, choice) {
   const due = [];
+  let read = 0;
   for (const c0 of chaptersOf(novelId)) {
     for (const p0 of c0.passages || []) {
       if (p0.by === 'break') continue;
+      /* (a long book read a few pages at a time, the page let breathe between — each passage looked at as it stands then) */
+      if (++read % 12 === 0) await new Promise((r) => setTimeout(r, 0));
       const c = store.peek('chapter', c0.id) || c0;
       const p = (c.passages || []).find((x) => x.id === p0.id);
       const v = p && picked(p);
       const e = p && entryFor(c, p);
       if (!v || !e || e.aside || v.streaming) continue;
       const text = String(v.text || '');
-      if (!marksOf(text).length) continue;
-      /* what is found already, where it stands */
+      const cut = Boolean(v.cut);
+      const faults = marksOf(text, cut);
+      const slips = slipsOf(text, cut);
+      const own = (e.items || []).filter((x) => x.marks || x.slip);
+      if (!faults.length && !slips.length && !own.length) continue;
+      /* what is found already, where it stands — a fault of the marks or the spaces found by an older reading that
+       * these words no longer have (2.12.35: the closing line of a letter, "Top 10"), or found where it no longer
+       * stands, let go: never put in, never asked for again */
       const items = [];
+      let dropped = false;
       for (const x of e.items || []) {
         const sp = x.kind === 'grade' || !x.find ? { why: 'none' } : locate(text, x.find);
+        const still = !(x.marks || x.slip) || (!sp.why && (x.marks
+          ? faults.some((f) => overlaps(sp, f))
+          : slips.some((g) => g.at >= sp.start && g.at + g.del <= sp.end)));
+        /* (only the marks and the spaces: what this pass finds again itself) */
+        if (!still || (sp.why && (x.marks || x.slip))) { dropped = true; continue; }
         items.push(sp.why ? { ...x } : { ...x, start: sp.start, end: sp.end });
       }
       const a = { text, items: items.slice() };
-      const leftHere = (c.checksLeft && c.checksLeft[p.id]) || [];
-      marksHere(a, (find, replace = null) => leftHere.some((l) => l.find === find && l.replace === replace));
-      if (a.items.length > items.length) {
+      const leftOf = leftTest((c.checksLeft && c.checksLeft[p.id]) || []);
+      marksHere(a, leftOf, { cut });
+      slipsHere(a, leftOf, { cut });
+      if (a.items.length > items.length || dropped) {
         const at = (x) => (x.kind === 'grade' ? -1 : x.start !== undefined ? x.start : Infinity);
         const next = a.items.map((x) => ({ x, at: at(x) })).sort((m, n) => m.at - n.at).map(({ x: { start: _s, end: _e, ...x } }) => x);
         store.change('chapter', c.id, chapterSteps.setCheck(p.id, v.id, { ...e, items: next }), { checkpoint: true });
@@ -1426,14 +1751,19 @@ async function runMarks(novelId, conn, choice) {
   }
   tell(novelId);
 }
-/* one ask of the marks' mender for a few paragraphs; each item settled as set, or as asked */
+/* one ask of the marks' mender for a few paragraphs; each item settled as set, or as asked. A request its model would
+ * not read for its words is asked again a paragraph at a time — only a paragraph it will not read alone is let be
+ * (2.12.35, the audit: all six were marked asked at once, and each went to be written again). What comes back is held
+ * to the marks alone (textshape.js marksOnlyResult): the paragraph's own words, with the quotation marks the answer
+ * adds — never a word, nor a mark taken away. */
 async function askMarks(novelId, conn, choice, list) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
   if (!novel) return null;
   setState(novelId, 'checking', `Setting the speech marks of ${list.length === 1 ? 'a paragraph' : `${list.length} paragraphs`}…`);
   const system = checkerFrame(house, namedBook(standingNotes(novel), house));
-  const rows = list.map((x, i) => ({ n: i + 1, line: x.item.find }));
+  const lineOf = (item) => (typeof item.line === 'string' ? item.line : item.find);
+  const rows = list.map((x, i) => ({ n: i + 1, line: lineOf(x.item) }));
   const got = await archivist.askJson(conn, system, marksRequest({ rows }), { want: (o) => Array.isArray(o.paragraphs), beforeAsk: choice.beforeAsk });
   await archivist.mustHold('checker', novelId);
   const settle = (x, fields) => {
@@ -1442,14 +1772,27 @@ async function askMarks(novelId, conn, choice, list) {
     const v = p && picked(p);
     const e = v && v.id === x.vid && c.checks && c.checks[x.pid] && c.checks[x.pid][x.vid];
     if (!e || e.sig !== x.sig || sigOf(v) !== x.sig) return;
-    const items = (e.items || []).map((y) => (y.id === x.item.id ? { ...y, ...fields(String(v.text || ''), y) } : y));
+    const left = leftTest((c.checksLeft && c.checksLeft[x.pid]) || []);
+    const items = (e.items || []).map((y) => (y.id === x.item.id ? { ...y, ...fields(String(v.text || ''), y, left) } : y));
     store.change('chapter', x.chapterId, chapterSteps.setCheck(x.pid, x.vid, { ...e, items }), { checkpoint: true });
   };
   if (!got.ok) {
     if (got.leashed === 'gaveway') return { gaveWay: true };
     const fault = got.leashed === 'long' ? 'words' : got.leashed ? 'model' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
     if (fault && typeof fault === 'object') return { stop: failed(fault) };
-    if (fault === 'words') { for (const x of list) settle(x, () => ({ asked: true })); return { missed: true }; }
+    if (fault === 'words') {
+      if (list.length > 1) {
+        for (const x of list) {
+          choice.beforeAsk();
+          if (writerBusy(novelId)) { schedule(novelId, 4000); return { passing: true }; }
+          const out = await askMarks(novelId, conn, choice, [x]);
+          if (out && (out.gaveWay || out.stop || out.passing)) return out;
+        }
+        return { ok: true };
+      }
+      for (const x of list) settle(x, () => ({ asked: true }));
+      return { missed: true };
+    }
     const was = marksWait.get(novelId);
     const n = ((was && was.n) || 0) + 1;
     const ms = Math.max([60000, 180000, 600000][Math.min(n - 1, 2)], Number(got.retryAfterMs) || 0);
@@ -1461,15 +1804,18 @@ async function askMarks(novelId, conn, choice, list) {
   const answers = got.obj.paragraphs;
   list.forEach((x, i) => {
     const said = answers.find((r) => r && Number(r.n) === i + 1);
-    const line = x.item.find;
+    const line = lineOf(x.item);
     const text = said && typeof said.text === 'string' ? said.text.replace(/^\s+|\s+$/g, '') : '';
-    /* only quotation marks added, and every mark pairs after them */
-    const whole = Boolean(text) && insertsOnlyMarks(line, text) && !pairWalk(speechMarks(text), Boolean(x.item.goesOn)).faults;
-    settle(x, (vtext) => {
-      const at = vtext.indexOf(line);
-      if (!whole || at < 0) return { asked: true };
-      const c = changeSpan(vtext, at, at + line.length, text);
-      return { find: c.find, replace: c.replace, why: MARKS_SET, asked: true, phrases: undefined };
+    /* only quotation marks added (or one set in the kind its pair needs), every word as it is, and every mark pairs */
+    const mended = text ? marksOnlyResult(line, text, { goesOn: Boolean(x.item.goesOn), carried: x.item.carried || null }) : '';
+    settle(x, (vtext, y, left) => {
+      const spot = mended ? locate(vtext, y.find) : { why: 'none' };
+      if (spot.why) return { asked: true };
+      const at = spot.start + (Number.isInteger(y.lineAt) ? y.lineAt : 0);
+      if (vtext.slice(at, at + line.length) !== line) return { asked: true };
+      const c = changeSpan(vtext, at, at + line.length, mended);
+      if (left(c.find, c.replace, { marks: true, text: vtext, start: at, end: at + line.length })) return { asked: true };
+      return { find: c.find, replace: c.replace, why: MARKS_SET, asked: true, phrases: undefined, line: undefined, lineAt: undefined, goesOn: undefined, carried: undefined };
     });
   });
   await store.flush();
@@ -1507,13 +1853,41 @@ const wordsOf = (ps) => ps.reduce((n, p) => n + countWords(String(picked(p).text
 export function wholeSig(c) {
   return hashText(wholeList(c).map((p) => { const v = picked(p); return `${p.id}:${v.id}:${hashText(autoBaseOf(v))}`; }).join('|'));
 }
+/* a chapter one checking did not read whole: two passages or more — or one so long it was read in parts (`parts` on its
+ * check; 2.12.35, the audit: a chapter of one passage, as a book brought in from a text file makes each, was never read
+ * whole, even when he asked, and the end of a long one was never held to its start) */
+function wholeWanted(c) {
+  const ps = wholeList(c);
+  if (ps.length >= 2) return true;
+  const e = ps.length === 1 ? entryFor(c, ps[0]) : null;
+  return Boolean(e && (Number(e.parts) || 0) > 1);
+}
 /* a chapter whose words as they stand were never read whole — Check this chapter reads it (ui/checks.js) */
 export function wholeOwed(novelId, chapterId) {
   const c = store.peek('chapter', chapterId);
-  return Boolean(c && store.peek('novel', novelId) && wholeList(c).length >= 2 && (c.wholeRead || {}).sig !== wholeSig(c) && !(wholeMiss.get(`${c.id}:${wholeSig(c)}`) >= 2));
+  return Boolean(c && store.peek('novel', novelId) && wholeWanted(c) && (c.wholeRead || {}).sig !== wholeSig(c) && !(wholeMiss.get(`${c.id}:${wholeSig(c)}`) >= 2));
 }
-/* the next chapter to read whole — {chapter, sig} — or {wait} until one may be, or null */
+/* what he asked for, settled where no read is wanted: a chapter its checking read whole already (one passage, read at
+ * once), or one read whole at the words it has now — its ask let go (2.12.35, the audit: it stayed, and a chapter still
+ * being written was read whole by itself the moment it grew, past the rules for when) */
+function settleWhole(novelId) {
+  for (const c of chaptersOf(novelId)) {
+    if (!c.wholeAsked) continue;
+    const ps = wholeList(c);
+    if (ps.some((p) => picked(p).streaming || !entryFor(c, p))) continue;
+    const sig = wholeSig(c);
+    const r = c.wholeRead || {};
+    if (r.sig === sig) store.change('chapter', c.id, chapterSteps.setWholeRead(r), { checkpoint: true });
+    else if (!wholeWanted(c)) wholeDone(c.id, sig, wordsOf(ps), { byCheck: true });
+  }
+}
+/* the next chapter to read whole — {chapter, sig} — or {wait} until one may be, or null. Writing from before checking
+ * began is never read whole unasked, as it is never checked unasked — with Super automatic every page is wanted
+ * (2.12.35, the audit: the first look after 2.12.33 read every ended chapter of a checked book whole by itself) */
 function wholeDue(novelId, now = Date.now()) {
+  const house = store.peek('house', 'house') || {};
+  const from = checksFromOf(house);
+  const all = superOn(house);
   const list = chaptersOf(novelId);
   let last = -1;
   list.forEach((c, i) => { if (wholeList(c).length) last = i; });
@@ -1522,12 +1896,13 @@ function wholeDue(novelId, now = Date.now()) {
   for (let i = 0; i < list.length; i++) {
     const c = list[i];
     const ps = wholeList(c);
-    if (ps.length < 2 || ps.some((p) => picked(p).streaming || !entryFor(c, p))) continue;
+    if (ps.some((p) => picked(p).streaming || !entryFor(c, p)) || !wholeWanted(c)) continue;
     const sig = wholeSig(c);
     const r = c.wholeRead || {};
     if (r.sig === sig) continue;
     const key = `${c.id}:${sig}`;
     if ((wholeMiss.get(key) || 0) >= 2) continue;
+    if (!c.wholeAsked && !all && !ps.some((p) => Number.isFinite(from) && bornOf(picked(p)) >= from)) continue;
     const words = wordsOf(ps);
     if (!c.wholeAsked && !(i < last || chapterClosed(c) || words - (Number(r.words) || 0) >= WHOLE_GROW)) continue;
     const held = wholeWait.get(key);
@@ -1552,9 +1927,12 @@ function wholeDone(chapterId, sig, words, extra = {}) {
 
 /* a few chapters at a time (the rest in a moment) */
 async function runWhole(novelId, conn, choice) {
+  /* (what is written again by itself goes in first, as every fix does) */
+  const busyNow = () => writerBusy(novelId) || lifting.has(novelId);
+  settleWhole(novelId);
   for (let n = 0; ; n++) {
     choice.beforeAsk();
-    if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+    if (busyNow()) { schedule(novelId, 4000); return; }
     const due = wholeDue(novelId);
     if (!due) return;
     if (due.wait) { schedule(novelId, due.wait + 1000); return; }
@@ -1568,7 +1946,11 @@ async function runWhole(novelId, conn, choice) {
   }
 }
 
-/* one chapter read whole: its passages as they read when asked, in parts as its model holds them */
+/* one chapter read whole: its passages as they read when asked, in parts as its model holds them — what each part finds
+ * kept as it comes, and a read that stopped partway (a passing fault, the checker giving way to his page) goes on at the
+ * part it stopped at (2.12.35, the audit: a fault on part 2 threw part 1's findings away, and the next look paid for
+ * part 1 again) */
+const wholePart = new Map();
 async function readWhole(novelId, conn, chapter, sig, words, choice) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
@@ -1597,7 +1979,7 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
     if (w > limit) {
       if (run) { runs.push(run); run = null; }
       const pieces = archivist.partsOf(a.text, limit);
-      pieces.forEach((piece, k) => runs.push({ first: p, numbered: `[${ci}.${nums.get(p.id)}] ${piece}`, lead: pieces.slice(0, k).join('\n\n'), refs: [`${ci}.${nums.get(p.id)}`] }));
+      pieces.forEach((piece, k) => runs.push({ first: p, piece: k, numbered: `[${ci}.${nums.get(p.id)}] ${piece}`, lead: pieces.slice(0, k).join('\n\n'), refs: [`${ci}.${nums.get(p.id)}`] }));
       continue;
     }
     if (run && run.words + w > limit) { runs.push(run); run = null; }
@@ -1605,10 +1987,38 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
     run.list.push(p); run.words += w; run.refs.push(`${ci}.${nums.get(p.id)}`);
   }
   if (run) runs.push(run);
-  for (let k = 0; k < runs.length; k++) {
+  /* where a read that stopped partway goes on (the part it stopped at, found by its first passage — its words may have
+   * taken fixes since: the parts are made again on them) */
+  const was = wholePart.get(key);
+  const resume = was ? runs.findIndex((r) => r.first.id === was.pid && (r.piece === undefined ? -1 : r.piece) === was.piece) : -1;
+  /* what a part found, laid beside what each passage's checking found — only on the words it read, and never over a fix
+   * there already or one he left as it is */
+  const merge = (refs) => {
+    for (const ref of refs) {
+      const a = asked.get(ref);
+      if (!a || !a.items.length) continue;
+      const found = a.items;
+      a.items = [];
+      const home = homeOf(novelId, chapter.id, a.pid);
+      const c = home && store.peek('chapter', home);
+      const p = c && (c.passages || []).find((x) => x.id === a.pid);
+      const v = p && picked(p);
+      const e = v && v.id === a.vid && sigOf(v) === a.sig && c.checks && c.checks[a.pid] && c.checks[a.pid][a.vid];
+      if (!e || e.sig !== a.sig || e.aside) continue;
+      const left = leftTest((c.checksLeft && c.checksLeft[a.pid]) || []);
+      const there = (e.items || []).filter((x) => typeof x.replace === 'string' && x.find).map((x) => locate(a.text, x.find)).filter((x) => !x.why);
+      const add = found.filter((x) => !there.some((y) => overlaps(x, y)) && !left(x.find, x.replace));
+      if (!add.length) continue;
+      /* in the order they stand, the grade's card first */
+      const at = (x) => (x.kind === 'grade' ? -1 : x.start !== undefined ? x.start : (() => { const sp = x.find ? locate(a.text, x.find) : { why: 'none' }; return sp.why ? Infinity : sp.start; })());
+      const items = [...(e.items || []), ...add].map((x) => ({ x, at: at(x) })).sort((m, n) => m.at - n.at).map(({ x: { start: _s, end: _e, ...x } }) => x);
+      store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, items }), { checkpoint: true });
+    }
+  };
+  for (let k = Math.max(0, resume); k < runs.length; k++) {
     const r = runs[k];
     choice.beforeAsk();
-    if (writerBusy(novelId)) { schedule(novelId, 4000); return null; }
+    if (writerBusy(novelId) || lifting.has(novelId)) { wholePart.set(key, { pid: r.first.id, piece: r.piece === undefined ? -1 : r.piece }); schedule(novelId, 4000); return null; }
     setState(novelId, 'checking', `Reading ${chapterLabel(novel, chapter, { withName: false })} whole${runs.length > 1 ? ` (part ${k + 1} of ${runs.length})` : ''}, for what disagrees across it…`);
     const numbered = r.numbered || numberedText(novel, chapter, r.list);
     /* the chapter up to these words — or, for its opening, the end of the chapter before */
@@ -1622,11 +2032,13 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
     const story = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
     const behind = notesBehind(view, inHand, chapter, { before: r.first.id }, 'write');
     const bib = ridingItems(bibItems(view, inHand, { facts: true }), { near: numbered,
-      budget: Math.max(0, Math.min(2500, Math.floor(spare * 0.2))), skip: passagesAfter(novel, inHand, chapter.id, { before: r.first.id }, 'write') }).words.join('\n\n');
+      budget: Math.max(0, Math.min(2500, Math.floor(spare * 0.2))), skip: passagesAfter(novel, inHand, chapter.id, { before: r.first.id }, 'write'), byPage: superOn(house) }).words.join('\n\n');
     const req = wholeRequest({ novel: view, chapterLabel: label, numbered, before, beforeFrom: leadFrom, his, sofar: story.text, left: story.left, notesFit, asked: askList, behind, bib, part: k + 1, parts: runs.length });
     const got = await archivist.askJson(conn, system, req, { want: (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
     await archivist.mustHold('checker', novelId);
     if (!got.ok) {
+      /* (this part is read again first) */
+      wholePart.set(key, { pid: r.first.id, piece: r.piece === undefined ? -1 : r.piece });
       /* it made way for his page: read again once the page has gone */
       if (got.leashed === 'gaveway') return { gaveWay: true };
       const fault = got.leashed === 'long' ? 'words' : got.leashed ? 'model' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
@@ -1636,12 +2048,12 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
       if (fault === 'words') {
         const n = (wholeMiss.get(key) || 0) + 1;
         wholeMiss.set(key, n);
-        if (n >= 2) wholeDone(chapter.id, sig, words, { missed: cutWords(got.error || 'its model would not read it', 200) });
+        if (n >= 2) { wholeDone(chapter.id, sig, words, { missed: cutWords(got.error || 'its model would not read it', 200) }); wholePart.delete(key); }
         return { missed: true };
       }
       /* passing (down, busy, too slow): waited out, a minute and then longer, never holding up the rest */
-      const was = wholeWait.get(key);
-      const n = ((was && was.n) || 0) + 1;
+      const held = wholeWait.get(key);
+      const n = ((held && held.n) || 0) + 1;
       const ms = Math.max([60000, 180000, 600000][Math.min(n - 1, 2)], Number(got.retryAfterMs) || 0);
       wholeWait.set(key, { n, until: Date.now() + ms });
       schedule(novelId, ms + 1000);
@@ -1659,29 +2071,14 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
       if (find === e.replace || find.replace(/\s+/g, ' ').trim() === e.replace.replace(/\s+/g, ' ').trim()) continue;
       if (a.items.some((x) => overlaps(x, spot))) continue;
       const kind = String(e.kind || '').toLowerCase() === 'seam' ? 'seam' : 'continuity';
-      a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), whole: true, ...saysOf(novelId, chapter.id, a.pid, kind, e.says), start: spot.start, end: spot.end });
+      a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), whole: true, ...saysOf(novelId, chapter.id, a.pid, kind, e.says, a.text.slice(0, spot.start)), start: spot.start, end: spot.end });
     }
-  }
-  /* laid beside what each passage's checking found — only on the words it read, and never over a fix there already
-   * or one he left as it is */
-  for (const a of asked.values()) {
-    if (!a.items.length) continue;
-    const home = homeOf(novelId, chapter.id, a.pid);
-    const c = home && store.peek('chapter', home);
-    const p = c && (c.passages || []).find((x) => x.id === a.pid);
-    const v = p && picked(p);
-    const e = v && v.id === a.vid && sigOf(v) === a.sig && c.checks && c.checks[a.pid] && c.checks[a.pid][a.vid];
-    if (!e || e.sig !== a.sig || e.aside) continue;
-    const left = (c.checksLeft && c.checksLeft[a.pid]) || [];
-    const there = (e.items || []).filter((x) => typeof x.replace === 'string' && x.find).map((x) => locate(a.text, x.find)).filter((x) => !x.why);
-    const add = a.items.filter((x) => !there.some((y) => overlaps(x, y)) && !left.some((l) => l.find === x.find && l.replace === x.replace));
-    if (!add.length) continue;
-    /* in the order they stand, the grade's card first */
-    const at = (x) => (x.kind === 'grade' ? -1 : x.start !== undefined ? x.start : (() => { const sp = x.find ? locate(a.text, x.find) : { why: 'none' }; return sp.why ? Infinity : sp.start; })());
-    const items = [...(e.items || []), ...add].map((x) => ({ x, at: at(x) })).sort((m, n) => m.at - n.at).map(({ x: { start: _s, end: _e, ...x } }) => x);
-    store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, items }), { checkpoint: true });
+    merge(r.refs);
+    await store.flush('chapter', chapter.id);
+    if (k + 1 < runs.length) wholePart.set(key, { pid: runs[k + 1].first.id, piece: runs[k + 1].piece === undefined ? -1 : runs[k + 1].piece });
   }
   wholeDone(chapter.id, sig, words);
+  wholePart.delete(key);
   wholeMiss.delete(key);
   wholeWait.delete(key);
   await store.flush('chapter', chapter.id);
@@ -1857,7 +2254,18 @@ export function tenseOnly(find, replace) {
 }
 /* (one that quotes the words of the book before it that it holds to, found there — `held` — holds the page to the
  * book itself, never to the notes: it may go in by itself as any small fix, 2.12.33) */
-const holdsToNotes = (item) => item.kind === 'continuity' && !tenseOnly(item.find, item.replace) && !item.held;
+/* what never goes in by itself: a fix to the book's continuity that holds to the notes (a fact the notes say may be the
+ * notes' slip, Cozy Tavern M447/M448) or to words of the book that are not there — or no longer: changed since (2.12.35);
+ * and a seam that quotes words not there, or opens after a scene break (2.12.35, the audit: a seam was put in by itself
+ * whatever it quoted, against what 2.12.33 said) */
+const waitsForHim = (novelId, item) => (item.kind === 'continuity' && !tenseOnly(item.find, item.replace) && (!item.held || !holdStands(novelId, item)))
+  || (item.kind === 'seam' && Boolean(item.unheld || item.afterBreak || (item.held && !holdStands(novelId, item))));
+function waitsForHimWhy(novelId, item) {
+  if (item.kind === 'seam' && item.afterBreak) return 'a scene break stands before it, and the jump in time or place is marked there';
+  if (item.held && !holdStands(novelId, item)) return 'the words of the book it holds to were changed since, so it may be wrong now';
+  if (item.unheld) return 'the words it quotes from the book before it are not there, so it may be wrong';
+  return 'it holds the page to the notes, and the notes may be what is wrong';
+}
 
 /* every suggestion of a passage that has words to put in, applied at once */
 function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) {
@@ -1875,7 +2283,7 @@ function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) 
     /* by itself: only a small fix — and never one that holds the page to
      * the notes (a fact the notes say may be the notes' slip, Cozy Tavern
      * M447/M448): continuity waits for him; the rest wait if large */
-    if (byItself && (holdsToNotes(item) || !smallFix(item, text))) { rest.push(item); continue; }
+    if (byItself && (waitsForHim(novelId, item) || !smallFix(item, text))) { rest.push(item); continue; }
     const spot = locate(text, item.find);
     if (spot.why || spots.some((s) => overlaps(s, spot))) { rest.push(item); continue; }
     spots.push({ ...spot, item });
@@ -1917,7 +2325,7 @@ export function waitsWhy(chapterId, passageId, item) {
     if (spansOf(p) >= MAX_SPANS) return `${numberWord(MAX_SPANS)} sentences of this passage were written again by itself already — Write it again does this one`;
     return '';
   }
-  if (holdsToNotes(item)) return item.unheld ? 'the words it quotes from the book before it are not there, so it may be wrong' : 'it holds the page to the notes, and the notes may be what is wrong';
+  if (waitsForHim(w.chapter.novelId, item)) return waitsForHimWhy(w.chapter.novelId, item);
   const text = String(v.text || '');
   if (!smallFix(item, text)) return 'it rewrites a large stretch of the passage';
   const spot = locate(text, item.find);
@@ -1957,8 +2365,18 @@ export function leaveOne(chapterId, passageId, itemId, { remember = true } = {})
 export function spotOf(chapterId, passageId, item) {
   const w = where(chapterId, passageId);
   if (w.why) return null;
-  const spot = locate(String(w.v.text || ''), item.find);
+  const spot = spanSpot(String(w.v.text || ''), item);
   return spot.why ? null : spot;
+}
+/* where the words a card writes again stand: its find — or, for a paragraph whose speech marks wait for a reading and
+ * which stands twice in the passage, the paragraph itself, inside the few words around it that find it (`line`,
+ * `lineAt`): the writer is given the paragraph alone, as the marks' mender is (2.12.35, the review: it was given the
+ * words around it too, so its answer was refused, by his button and by itself) */
+function spanSpot(text, item) {
+  const spot = locate(text, item.find);
+  if (spot.why || typeof item.line !== 'string' || !item.line || !Number.isInteger(item.lineAt)) return spot;
+  const at = spot.start + item.lineAt;
+  return text.slice(at, at + item.line.length) === item.line ? { start: at, end: at + item.line.length } : { why: 'those words are not there any more' };
 }
 
 /* the older passages too: a chapter, or every chapter */
@@ -2014,6 +2432,9 @@ function afterAutomatic(novelId, tried, key, out) {
   } else if (out.busy) schedule(novelId, 4000);
   return out;
 }
+/* a paragraph's speech marks written again: held to its marks alone (writer.js rewriteSelection `marks`) — by his
+ * button and by itself the same */
+export function spanMarks(item) { return item && item.marks ? { goesOn: Boolean(item.goesOn), carried: item.carried || null } : false; }
 /* what the writer is told for a sentence to write again — the same by his button (Suggestions → Write it again) and by itself */
 export function spanNote(item) {
   if (item && item.marks) return 'Set the quotation marks of this paragraph right — where each spoken line begins and ends, and a new paragraph where someone else begins to speak — and keep every word as it is.';
@@ -2026,6 +2447,9 @@ export function setEditing(passageId, on) { if (on) editingNow.add(passageId); e
 /* under his mark only for being untrue to the book: the notes may be what is wrong — never written again by itself (Cozy Tavern M447) */
 const onlyCanon = (g) => { const held = (g.faults || []).filter((f) => !f.unverified); return held.length > 0 && held.every((f) => f.check === 'canon'); };
 const lifting = new Map();
+/* novelId -> the passage being written again by itself just now: nothing else goes in on it, by itself, until its new
+ * words are in (2.12.35 — a look while it was written put the fixes it was waiting with into the old words) */
+const writingAgain = new Map();
 const checkOf = (c, p, v) => { const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id]; return e && e.sig === sigOf(v) ? e : null; };
 
 /* After each look at the book, passage by passage, one rule so the two never
@@ -2063,7 +2487,7 @@ function autoAfter(novelId) {
       /* never by itself on a page cut short or stopped: it waits for its Go on (Cozy Tavern M552) — nor under his hand in the edit box;
        * a version he put on show himself (the arrows, or the one on show removed) is never written again by itself (below), and
        * words he put back himself get nothing by themselves (fixesBack) */
-      if (!v || v.streaming || v.cut || editingNow.has(p.id)) continue;
+      if (!v || v.streaming || v.cut || editingNow.has(p.id) || writingAgain.get(novelId) === p.id) continue;
       let e = checkOf(c, p, v);
       if (!e) continue;
       if (a.lift !== null && judge) {
@@ -2120,9 +2544,9 @@ function autoAfter(novelId) {
     /* (the version keeps its id as its words change in place: tried once for these words) */
     const key = `${next.v.id}|${hashText(String(next.v.text || ''))}|${next.item.find}`;
     spanTried.add(key);
-    const spot = locate(String(next.v.text || ''), next.item.find);
+    const spot = spanSpot(String(next.v.text || ''), next.item);
     if (!spot.why) {
-      const job = writeSpanAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, start: spot.start, end: spot.end, note: spanNote(next.item), fromVersion: next.v, auto: true, fix: true })
+      const job = writeSpanAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, start: spot.start, end: spot.end, note: spanNote(next.item), fromVersion: next.v, auto: true, fix: true, marks: spanMarks(next.item) })
         .then((out) => {
           if (out && out.ok) archivist.nudge(novelId);
           /* failed for a real reason: kept on the version, never tried by itself again */
@@ -2133,7 +2557,8 @@ function autoAfter(novelId) {
         })
         .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
         .then((out) => afterAutomatic(novelId, spanTried, key, out))
-        .finally(() => lifting.delete(novelId));
+        .finally(() => { lifting.delete(novelId); writingAgain.delete(novelId); });
+      writingAgain.set(novelId, next.passageId);
       lifting.set(novelId, job);
     }
   } else if (next && !next.span && !writerBusy(novelId) && !lifting.has(novelId)) {
@@ -2150,10 +2575,11 @@ function autoAfter(novelId) {
       })
       .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
       .then((out) => afterAutomatic(novelId, liftTried, liftKey, out))
-      .finally(() => lifting.delete(novelId));
+      .finally(() => { lifting.delete(novelId); writingAgain.delete(novelId); });
+    writingAgain.set(novelId, next.passageId);
     lifting.set(novelId, job);
   }
   tell(novelId);
 }
 
-export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried, spanTried, wholeDue, wholeWait, wholeMiss, marksWait }; }
+export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried, spanTried, wholeDue, wholeWait, wholeMiss, wholePart, marksWait, proofWait, proofPart }; }

@@ -81,7 +81,10 @@ export function putBackWords({ novelId, chapterId, passageId, versionId = null, 
   if (v.streaming) return { ok: false, said: 'the passage is being written just now' };
   if (expect !== null && String(v.text || '') !== String(expect)) return { ok: false, said: 'the passage has changed since' };
   let back = putBackFields(v);
-  if (before !== null && (!back || back.patch.text !== String(before))) back = { patch: { text: String(before), words: countWords(String(before)) }, check: null, codex: null, by: '' };
+  /* (words put back that are not the newest kept: the base of the fixes by themselves is these words — nothing in them
+   * went in by itself since. Never the base before: it is of other words, and the changes kept on the version are not
+   * these words' — shape.js autoBaseOf would read one of them; 2.12.35, the review) */
+  if (before !== null && (!back || back.patch.text !== String(before))) back = { patch: { text: String(before), words: countWords(String(before)), autoBase: String(before) }, check: null, codex: null, by: '' };
   if (!back) return { ok: false, said: 'there are no words before to put back' };
   if (novelId && retire) retireIfSeen(novelId, chapterId, passageId, v.id);
   const now = codexNow(v);
@@ -139,6 +142,8 @@ export function grownFields(v, more) {
   const was = String((v && v.text) || '');
   const out = {};
   if (v && typeof v.written === 'string' && sameEnd(v.written, was)) out.written = v.written + more;
+  /* (the base of the fixes put in by itself grows with the words: what is added was never changed by itself) */
+  if (v && typeof v.autoBase === 'string') out.autoBase = sameEnd(v.autoBase, was) ? v.autoBase + more : undefined;
   if (v && Array.isArray(v.before) && v.before.length) {
     const kept = v.before.filter((b) => b && sameEnd(b.text, was)).map((b) => ({ ...b, text: b.text + more, check: undefined, codex: undefined }));
     out.before = kept.length ? kept.map((b) => JSON.parse(JSON.stringify(b))) : undefined;

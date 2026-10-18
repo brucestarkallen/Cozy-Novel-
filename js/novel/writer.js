@@ -17,9 +17,9 @@ import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock } from './textshape.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
 import { renameIn } from './names.js';
 import { changeInPlace, foldVersion, grownFields } from './inplace.js';
 
@@ -56,7 +56,7 @@ export function followersOf(house) {
   const roles = (house && house.roles) || {};
   const own = (role) => Boolean(roles[role] && connById(house, roles[role]));
   const out = ['partner', 'helper'].filter((r) => !own(r));
-  if (roles.checker !== 'off' && !own('checker') && out.includes('helper')) out.push('checker');
+  if ((roles.checker !== 'off' || superOn(house)) && !own('checker') && out.includes('helper')) out.push('checker');
   return out;
 }
 export function partsWords(parts) {
@@ -253,7 +253,9 @@ export function markupNote(taken = []) {
   return `Web page or code markup the writer left in the story${shown ? ` (${shown})` : ''} was taken off.`;
 }
 
-export function spliceSelection(fullText, start, end, answer) {
+/* keepQuotes: the speech marks of these words are what is being set — quotation marks around the whole answer are its
+ * own (2.12.35, the audit: taken off, they made speech narration) */
+export function spliceSelection(fullText, start, end, answer, { keepQuotes = false } = {}) {
   let a = tidyAnswer(answer).trim();
   const before = fullText.slice(0, start);
   const after = fullText.slice(end);
@@ -271,7 +273,7 @@ export function spliceSelection(fullText, start, end, answer) {
    * had none — never the quotes of dialogue inside it */
   const old = fullText.slice(start, end).trim();
   const pairs = [['"', '"'], ['“', '”'], ['«', '»']];
-  for (const [o, c] of pairs) {
+  for (const [o, c] of keepQuotes ? [] : pairs) {
     const inner = a.slice(o.length, a.length - c.length);
     if (a.startsWith(o) && a.endsWith(c) && a.length > 2 && !(old.startsWith(o) && old.endsWith(c)) && !inner.includes(o) && !inner.includes(c)) { a = inner.trim(); break; }
   }
@@ -488,6 +490,12 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
         notes.push(`${what} after the story ${fin.kinds.length > 1 ? 'were' : 'was'} taken off the page — the passage’s menu puts ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
       }
     }
+    /* (Super automatic) what the writer put after its line that is not story — a note, the next chapter's heading, an
+     * announcement of it — came off with the line: kept with the version, the passage's menu puts it back (2.12.35) */
+    if (endLine && endLine.matter) {
+      tookOff = [tookOff, endLine.matter].filter((x) => String(x || '').trim()).join('\n\n');
+      notes.push('What the writer wrote after the chapter’s end — a note or the next chapter’s heading — was taken off the page; the passage’s menu puts it back.');
+    }
     /* (Super automatic) what followed the writer's line was its note to him or its tracking, taken off the page just
      * now: the chapter ended there all the same — story after it, kept on the page, and it goes on */
     if (endLine && endLine.found && !endsChapter && endLine.before.trim()) {
@@ -517,6 +525,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       /* a whole new page that came as one block: parted where speech begins (Cozy Tavern M510-17) */
       const parted = from === 0 ? partBlock(unmarked.text).text : unmarked.text;
       finalText = mendMarks(parted, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
+      /* a space a slip of the hand left out or put in — white space only (2.12.35) */
+      finalText = mendSpacing(finalText, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
       /* one standing loose ("the 틀 door") is not taken off by itself — a word may hang on it: said, for the checker to mend or for him (Cozy Tavern M119) */
       const loose = straysIn(finalText).filter((x) => x.start >= from);
       if (loose.length) notes.push(`A stray character of another script stands in it (“…${loose[0].words}…”) — ${someoneChecks(h) ? 'the checker offers to mend it, or Edit takes it out' : 'Edit takes it out'}.`);
@@ -535,6 +545,19 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       undo();
       await store.flush('chapter', chapterId);
       return { ok: false, stopped: true, yielded: true };
+    }
+    if (!arrived && endLine && endLine.found && closing && !out.stopped) {
+      /* only the writer's line came: the chapter ends where it already stops (2.12.35 — through 2.12.34 this was said as
+       * "the model sent back nothing"). The empty page goes; the chapter's last page is the one that ends it */
+      undo();
+      const ch = store.peek('chapter', chapterId);
+      const lastPage = ch && [...(ch.passages || [])].reverse().find((x) => hasWords(x));
+      const lastV = lastPage && picked(lastPage);
+      /* (a last page cut short is not finished: it cannot end the chapter, and nothing is said to) */
+      const ends = Boolean(lastV && !lastV.streaming && !lastV.cut);
+      if (ends) store.change('chapter', chapterId, chapterSteps.setVersion(lastPage.id, lastV.id, { closes: true }), { now: true });
+      await store.flush('chapter', chapterId);
+      return { ok: false, endedHere: ends, error: ends ? 'the writer said the chapter ends where it already stops — nothing new was written, and your next page goes in the next chapter' : 'the writer said the chapter ends here and wrote nothing new — its last page is not finished, so nothing was changed' };
     }
     if (!arrived) {
       /* nothing came: the empty version goes, and the reason is said — and
@@ -844,7 +867,9 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
   /* what wakes a rule, read before the new version shows */
   const moment = momentOf(chapter, p, note);
   /* lift: the judge's own lift, the app writing it by itself (its try, 1 or 2) */
-  const version = newVersion({ how: 'rewrite', ask: { note }, streaming: true, from: from.id, ...(lift ? { lift } : {}) });
+  /* (his premise for the page goes with it: shown behind the Premise button even once the version it came from is gone) */
+  const premise = premiseOf(p);
+  const version = newVersion({ how: 'rewrite', ask: { note, ...(premise ? { premise } : {}) }, streaming: true, from: from.id, ...(lift ? { lift } : {}) });
   /* the app's own lift is written off the page, and shown once whole — never streamed over the words he reads */
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version, { show: !lift }), { now: true });
   const request = rewriteRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, text, last: lastInBook(book, chapterId, passageId) });
@@ -865,7 +890,12 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
  * was written for, the words before kept on it (his word, 2.12.2: only a
  * rewrite or another take is a new version). His own Rewrite of words he
  * selected stays a version of its own. */
-export async function rewriteSelection({ novelId, chapterId, passageId, start, end, note = '', fromVersion = null, auto = false, fix = false }) {
+/* marks: only the speech marks of these words are set — every word kept (Write it again on a card of a paragraph's
+ * speech marks, by his hand or by itself): what comes back goes in only when it changes nothing but its quotation marks
+ * (textshape.js marksOnlyResult), else nothing goes in and it is said (2.12.35, the audit: it went in by itself as any
+ * rewrite — 52 words made 18 — and quotation marks around the whole answer were taken off, so speech became narration).
+ * {goesOn, carried}: the speech going on past the words, or carried into them (textshape.js speechFaults) */
+export async function rewriteSelection({ novelId, chapterId, passageId, start, end, note = '', fromVersion = null, auto = false, fix = false, marks = false }) {
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -880,16 +910,39 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
   /* what wakes a rule, read before the new version shows */
   const moment = momentOf(chapter, p, note);
   /* a few words rewritten in place: the rest are the passage's as they were — his own, or from before the checker began, stay so (Cozy Tavern's M607) */
-  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV), ...keptTail(baseV), ...(auto ? { spanAuto: true } : {}) });
+  const premise = premiseOf(p);
+  const version = newVersion({ how: 'selection', ask: { note, from: start, to: end, ...(premise ? { premise } : {}) }, streaming: true, text: full, base: baseV.id, ...rootOf(baseV), ...keptTail(baseV), ...(auto ? { spanAuto: true } : {}) });
   /* by itself: written off the page, the words he reads untouched until the sentence is whole and goes in */
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version, { show: !auto }), { now: true });
-  const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked });
+  const request = selectionRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), note, marked, marks: Boolean(marks) });
   /* (given way to him, it is taken away whole — runVersion's undo — and the version on show before it is on show again) */
   const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'selection', length: 'paragraphs',
-    splice: (answer) => spliceSelection(full, start, end, answer),
+    splice: (answer) => spliceSelection(full, start, end, answer, { keepQuotes: Boolean(marks) }),
     /* the passage it is written into was cut at its end: so is this version, and Go on still carries it on */
     keepEnd: cutAtEnd(baseV) ? endOf(baseV) : null, carryEnd: Boolean(baseV.closes),
     build: { target: { chapterId, mark: passageId }, request, moment }, auto, hidden: auto });
+  /* only its speech marks: held to that, or taken away whole and said */
+  if (marks && out && out.ok) {
+    const live = store.peek('chapter', chapterId);
+    const lp = live && (live.passages || []).find((x) => x.id === passageId);
+    const made = lp && (lp.versions || []).find((x) => x.id === version.id);
+    const madeText = String((made && made.text) || '');
+    const after = full.slice(end);
+    const fresh = made && madeText.startsWith(full.slice(0, start)) && madeText.endsWith(after) && madeText.length >= start + after.length ? madeText.slice(start, madeText.length - after.length) : null;
+    const lead = full.slice(start, end).match(/^\s*/)[0];
+    const trail = full.slice(start, end).match(/\s*$/)[0];
+    const set = fresh !== null && !made.cut ? marksOnlyResult(full.slice(start, end).trim(), fresh.trim(), { goesOn: Boolean(marks.goesOn), carried: marks.carried || null }) : '';
+    if (!set) {
+      const shownWas = lp && picked(lp);
+      if (made) store.change('chapter', chapterId, chapterSteps.removeVersion(passageId, version.id), { now: true });
+      if (shownWas && shownWas.id === version.id) store.change('chapter', chapterId, chapterSteps.pick(passageId, baseV.id), { now: true });
+      await store.flush('chapter', chapterId);
+      return { ok: false, error: 'the writer changed its words, not only its quotation marks — nothing was put in; Edit sets the marks by hand', marksRefused: true };
+    }
+    /* the words as they were, with the marks it set */
+    const whole = full.slice(0, start) + lead + set + trail + after;
+    if (whole !== madeText) store.change('chapter', chapterId, chapterSteps.setVersion(passageId, version.id, { text: whole, words: countWords(whole) }), { now: true });
+  }
   /* a fix: on the version it was written for, while that still reads as it did */
   if ((fix || auto) && out && out.ok) {
     const live = store.peek('chapter', chapterId);
@@ -988,7 +1041,9 @@ export async function goOn({ novelId, chapterId, passageId }) {
   const request = goOnRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), between, tail, direction: asked, change, held,
     ...(origin.how === 'play' ? { transcript: origin.ask.transcript || '', who: origin.ask.who || '' } : {}), outcome: settled ? '' : outcomeOf(book.novel),
     close: closing && goesTo !== 'chapter' ? { words: chapterWords(chapter) } : null });
-  return runVersion({ novelId, chapterId, passageId, versionId: v.id, original, mode: 'append', how: 'go on', length: goesTo, closing,
+  /* a rewrite of the page that ended the chapter, cut short and carried on: it ends the chapter when it is done (2.12.35) */
+  const madeFrom = (v.how === 'rewrite' || v.how === 'selection') ? (p.versions || []).find((x) => x.id === (v.from || v.base)) : null;
+  return runVersion({ novelId, chapterId, passageId, versionId: v.id, original, mode: 'append', how: 'go on', length: goesTo, closing, carryEnd: Boolean(madeFrom && madeFrom.closes),
     splice: (answer) => ({ text: original.text + joinOn(original.text, answer) }),
     build: { target: { chapterId, through: passageId }, request, moment } });
 }
@@ -1034,15 +1089,23 @@ export function closedGoesOn(novelId, chapterId) {
   return next && !(next.passages || []).some(hasWords) ? { chapterId: next.id, number: at + 2 } : null;
 }
 /* …and the chapter it goes in, made when it is a new one (null: where he is) */
+/* (one at a time: two taps at once — Write twice, or Write and Turn it into prose — make one chapter, 2.12.35) */
+const afterClose = new Map();
 export async function chapterAfterClose(novelId, chapterId) {
-  const to = closedGoesOn(novelId, chapterId);
-  if (!to) return null;
-  if (to.chapterId) return to.chapterId;
-  const fresh = newChapter(novelId);
-  await store.create('chapter', fresh.id, fresh);
-  store.change('novel', novelId, novelSteps.addChapter(fresh.id, chapterId), { now: true });
-  recount(novelId);
-  return fresh.id;
+  const key = `${novelId}/${chapterId}`;
+  if (afterClose.has(key)) return afterClose.get(key);
+  const job = (async () => {
+    const to = closedGoesOn(novelId, chapterId);
+    if (!to) return null;
+    if (to.chapterId) return to.chapterId;
+    const fresh = newChapter(novelId);
+    await store.create('chapter', fresh.id, fresh);
+    store.change('novel', novelId, novelSteps.addChapter(fresh.id, chapterId), { now: true });
+    recount(novelId);
+    return fresh.id;
+  })();
+  afterClose.set(key, job);
+  try { return await job; } finally { afterClose.delete(key); }
 }
 /* a scene set where its chapter ends now — nothing written after the point it was set: its prose is that chapter's
  * next page (and, the chapter ended, goes on where the next page would: chapterAfterClose) */

@@ -19,10 +19,10 @@ import { estimateTokens } from '../util.js';
 import { assemble, requiredLength, SAFETY, partnerReply, PARTNER_FLOOR } from './context.js';
 import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount, rewrite as writerRewrite, busy as writerBusy } from './writer.js';
-import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, NOTE_KINDS, matchCard } from './shape.js';
+import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, chapterNumber, passageNumbers, NOTE_KINDS, matchCard } from './shape.js';
 import { newId, numberWords } from '../util.js';
-import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN, CHOICES_CLOSE } from './prompts.js';
-import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup, partBlock } from './textshape.js';
+import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, fence, entryReadWords, CHOICES_OPEN, CHOICES_CLOSE } from './prompts.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup, partBlock, mendSpacing } from './textshape.js';
 import { numberedText, partnerCut } from './context.js';
 import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, statusNow, sinceWords, changeShort, madeGone, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot, renamedTarget } from './changes.js';
 import { searchBook } from './search.js';
@@ -32,9 +32,9 @@ import * as archivist from './archivist.js';
 import { convSteps, conversationsOf, freeName, openName, cleanConvName, markedName } from './conversations.js';
 import { tellerOf, toTeller } from './teller.js';
 import { scenePlan } from './stretches.js';
-import { entriesOf, entryNamed, entryWords, KIND_TITLE } from './bibliography.js';
+import { entriesOf, entryNamed, entryWords, KIND_TITLE, recallOn } from './bibliography.js';
 import { pickEntries } from './bibpick.js';
-import { appliesOf } from './auto.js';
+import { appliesOf, superOn } from './auto.js';
 
 const running = new Map();        /* 'talk/<id>' | 'play/<id>' -> job */
 const jobFns = new Set();
@@ -72,6 +72,9 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
   const from = after ? list.findIndex((t) => t.id === after) + 1 : 0;
   /* what came of the partner's changes, told with his next message */
   let told = '';
+  /* the changes of the answer right before each of his messages (for the newest: the passages they went into, below) */
+  let lastChanges = null;
+  const changesBefore = new Map();
   const scene = Boolean(record.who !== undefined || record.chapterId);
   const bookId = record.novelId || record.id || null;
   for (const t of list.slice(Math.max(0, from))) {
@@ -88,16 +91,25 @@ export function turnsFor(record, { upto = null, conn, openWith = '', after = nul
       /* as it was told when he sent it (2.12.2) — the talk is never rewritten after; kept from before, as it stands now */
       const said = v && typeof v.told === 'string' ? v.told : told;
       out.push({ role: 'user', content: said ? `${said}\n\n${mine}` : mine, turn: t.id });
+      changesBefore.set(t.id, lastChanges);
       told = '';
     } else {
       out.push({ role: 'assistant', content: text, turn: t.id });
       told = outcomeWords(v.changes, bookId);
+      lastChanges = v.changes || null;
     }
   }
   if (told && out.length && upto) {
     /* the answer asked for again: what came of the changes before it still rides */
     const last = out[out.length - 1];
     if (last.role === 'user') last.content = `${told}\n\n${last.content}`;
+  }
+  /* the newest message: the passages the answer before it changed, as they read now (2.12.35) — never kept in the talk;
+   * at most half the talk's share of the model's room, so a small model's book open never gives way to them */
+  if (!scene && out.length && out[out.length - 1].role === 'user') {
+    const last = out[out.length - 1];
+    const touched = touchedNow(bookId, changesBefore.get(last.turn), Math.min(TOUCHED_ROOM, Math.floor(contextOf(conn) * share * 0.5 * 3.5)));
+    if (touched) last.content = `${touched}\n\n${last.content}`;
   }
   /* the answer asked for again: what its earlier answers changed is in the book, said (his report, 2.12.2) */
   if (upto && !scene && out.length && out[out.length - 1].role === 'user') {
@@ -214,7 +226,8 @@ export function shapeTelling(words, { cut = false, notes = null } = {}) {
     say(`${what} after the telling ${fin.kinds.length > 1 ? 'were' : 'was'} taken off — Put back what was taken off brings ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
   }
   const telling = fin.removed ? fin.text.replace(/\s+$/, '') + (rest ? '\n\n' : '') : fin.text;
-  return { text: mendMarks(telling, { leaveLast: cut && !rest }).text + rest, tookOff: fin.removed || '', tookOffTop: head.removed || '' };
+  const marked = mendMarks(telling, { leaveLast: cut && !rest }).text;
+  return { text: mendSpacing(marked, { leaveLast: cut && !rest }).text + rest, tookOff: fin.removed || '', tookOffTop: head.removed || '' };
 }
 /* What came off a telling's end, put back where it was — before the ways it
  * offers — as a new version of that answer; the one without it stays one
@@ -685,7 +698,7 @@ function readRows(novelId, asked) {
       if (m.ambiguous) return { label: `The entry “${n.entry}”`, text: '(more than one entry goes by that name — ask for it by its full name)', missing: true };
       if (!m.entry) return { label: `The entry “${n.entry}”`, text: '(there is no entry by that name in the bibliography)', missing: true };
       const e = m.entry;
-      const when = e.rides === 'always' ? 'The writer always reads it.' : e.rides === 'never' ? 'Only for me — the writer never reads it.' : 'The writer reads it when its name comes up.';
+      const when = entryReadWords(e.rides, recallOn(novel), superOn(store.peek('house', 'house') || {}));
       return { label: `The entry “${e.name}”`, text: `${entryWords(e)}\n(${KIND_TITLE[e.kind] || 'Lore'}. ${when})` };
     }
     /* a module's words, whole */
@@ -884,7 +897,7 @@ function cutWords(out) {
 
 /* a change that could not be made for its place or its words (not there,
  * there twice, no such passage, chapter, card or module): told back once */
-const MISSED = /not there|more than one place|has no passage|there is no chapter|not a passage number|not a chapter number|passage number has to be given|only in short|only by its first line|no module called|more than one module|in the notes$|stand nowhere|no .* in the notes|more than one card goes by|is no name|gave nothing to write|changes block could not be read/i;
+const MISSED = /would change nothing|not there|more than one place|has no passage|there is no chapter|not a passage number|not a chapter number|passage number has to be given|only in short|only by its first line|no module called|more than one module|in the notes$|stand nowhere|no .* in the notes|more than one card goes by|is no name|gave nothing to write|changes block could not be read/i;
 /* A change said to be made, with no block for it (Cozy Tavern's M118): the
  * partner saying it changed something — first person ("I've changed the
  * lamp…", "I rewrote passage 3"), or "now reads", or "the change is made".
@@ -919,7 +932,9 @@ export function claimsChange(prose) {
   });
 }
 function missedWords(list) {
-  return `Some of your changes couldn’t be made: ${list.map((c) => `${c.label} — ${c.said}`).join('; ')}. Give a changes block again for just those, quoting exactly what stands there now — enough of it to be found in one place only (a chapter you only have in short, read it whole first) — or say plainly that you’re leaving them. Don’t repeat the ones that were made.`;
+  /* (one that would change nothing: its new words are the ones there already — 2.12.35, his report: a third change of 2.3 came back so, and was let be) */
+  const same = list.some((c) => /would change nothing/i.test(String(c.said || '')));
+  return `Some of your changes couldn’t be made: ${list.map((c) => `${c.label} — ${c.said}`).join('; ')}. Give a changes block again for just those, quoting exactly what stands there now — enough of it to be found in one place only (a chapter you only have in short, read it whole first) — or say plainly that you’re leaving them.${same ? ' One that would change nothing found the words there already reading as its new words — another change of yours may have made it: leave it, unless it should read otherwise, and then give those words.' : ''} Don’t repeat the ones that were made.`;
 }
 const NOTHING_HAPPENED = 'Your last answer reads as if it made a change, but it holds no changes block, and a change happens only through the block — so that answer changed nothing (what your earlier answers changed stands in the book as you see it). Your words stay as they are; I am asking only for the block. If you meant to make a change now, send the changes block alone, quoting exactly the words you change, and nothing else. If no change was meant — I asked a question, you spoke of a change made earlier, you were thinking aloud — reply with the one word NOTHING and nothing else. If a change was asked and no block can make it, say so in one line, without saying it was done.';
 /* the one word NOTHING — or a short line beginning with it (“Nothing — you asked a question”) */
@@ -1133,6 +1148,40 @@ export async function partnerSay({ novelId, chapterId, text }) {
   store.change('talk', novelId, inConversation(rec, (d) => markTold(d, news.marks)), { now: true });
   return out;
 }
+/* THE PASSAGES ITS LAST ANSWER'S CHANGES WENT INTO, AS THEY READ NOW (2.12.35 — his report, 18 October: "why the
+ * partner suddenly can't see": the chapter it read to make its changes was in that answer only, the next message had it
+ * in short, and it asked him to read the passage to it, then said its own line was gone, then that it was there). Whole,
+ * on the newest message only — never kept in the talk — as many as `room` characters hold (TOUCHED_ROOM at most), the
+ * rest named. */
+const TOUCHED_ROOM = 16000;
+function touchedNow(novelId, changes, room = TOUCHED_ROOM) {
+  const novel = novelId && store.peek('novel', novelId);
+  if (!novel || !Array.isArray(changes)) return '';
+  const seen = new Set();
+  const rows = [];
+  const more = [];
+  let used = 0;
+  for (const c of changes) {
+    const u = c && c.status === 'made' && !c.superseded ? c.undo : null;
+    if (!u || (u.what !== 'words' && u.what !== 'passage')) continue;
+    const key = `${u.chapterId}/${u.passageId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ch = store.peek('chapter', u.chapterId);
+    const p = ch && (ch.passages || []).find((x) => x.id === u.passageId);
+    const n = ch && chapterNumber(novel, ch.id);
+    if (!p || !n) continue;
+    const label = `${n}.${passageNumbers(ch).get(p.id)}`;
+    const text = String((picked(p) || {}).text || '');
+    if (used + text.length > room) { more.push(label); continue; }
+    used += text.length;
+    rows.push(`[${label}] ${text}`);
+  }
+  if (!rows.length && !more.length) return '';
+  const rest = more.length ? `\n(${more.join(', ')} ${more.length === 1 ? 'is' : 'are'} not shown here for room — read ${more.length === 1 ? 'its chapter' : 'their chapters'} whole to see ${more.length === 1 ? 'it' : 'them'}.)` : '';
+  return rows.length ? `(The passages your last answer's changes went into, as they read now — whole:\n${fence(rows.join('\n\n'))}${rest})` : rest.trim();
+}
+
 /* What came of the partner's changes, for his next message: the answer
  * right before it — every change of it, as it stands; the others' — each
  * that changed since it was last told (applied, undone, left, or no longer

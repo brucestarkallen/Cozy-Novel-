@@ -28,11 +28,18 @@ async function ready(url) {
 }
 let failed = 0, passed = 0;
 let store, checker, archivist;
-function quiet() {
-  for (const module of [checker, archivist]) if (module) {
-    for (const timer of module.forTests().timers.values()) clearTimeout(timer && timer.t !== undefined ? timer.t : timer);
-    module.forTests().timers.clear();
-  }
+/* (a look still running from the check before — its proofreading, or a run rescheduled when its connection changed —
+ * is waited out first, as tests/app.mjs quietAll does: 2.12.35, a look that asks more may still be at work) */
+async function quiet() {
+  const clear = () => {
+    for (const module of [checker, archivist]) if (module) {
+      for (const timer of module.forTests().timers.values()) clearTimeout(timer && timer.t !== undefined ? timer.t : timer);
+      module.forTests().timers.clear();
+    }
+  };
+  clear();
+  for (let i = 0; i < 300 && ((archivist && archivist.forTests().running.size) || (checker && checker.forTests().running.size)); i++) await sleep(20);
+  clear();
 }
 try {
   await Promise.all([ready(`${BASE}/api/version`), ready(`${PROVIDER}/requests`)]);
@@ -42,7 +49,7 @@ try {
   archivist = await import('../js/novel/archivist.js');
   const writer = await import('../js/novel/writer.js');
   const shape = await import('../js/novel/shape.js');
-  const { JUDGE_CHECKS } = await import('../js/novel/prompts.js');
+  const { JUDGE_CHECKS, PROOF_ASK } = await import('../js/novel/prompts.js');
   const yes = () => Object.fromEntries(JUDGE_CHECKS.map(([key]) => [key, 'yes']));
   const conn = { id: 'edge-checker', name: 'Local checker', url: `${PROVIDER}/v1`, model: 'scripted', key: 'test-key' };
   async function house(extra = {}) {
@@ -65,14 +72,16 @@ try {
     return { id: novel.id, chapters };
   }
   const script = async queue => fetchLocal(`${PROVIDER}/script`, { method: 'POST', body: JSON.stringify({ queue }) });
-  const requests = async () => (await (await fetchLocal(`${PROVIDER}/requests`)).json()).requests;
+  /* the checker's requests — the proofreader's (2.12.35, every checked passage proofread once) counted apart */
+  const isProof = (x) => ((x.body && x.body.messages) || []).some((m) => m.role === 'user' && String(m.content || '').includes(PROOF_ASK));
+  const requests = async () => (await (await fetchLocal(`${PROVIDER}/requests`)).json()).requests.filter((x) => !isProof(x));
   const grade = checks => ({ passage: '1.1', checks, faults: [] });
   async function test(name, fn) {
-    quiet();
+    await quiet();
     await fetchLocal(`${PROVIDER}/reset`);
     try { await fn(); passed++; console.log('PASS', name); }
     catch (error) { failed++; console.error('FAIL', name, error); }
-    quiet();
+    await quiet();
   }
 
   await test('a partial grade is repaired once instead of becoming ten passes', async () => {
@@ -285,7 +294,7 @@ try {
 } catch (error) {
   failed++; console.error(error);
 } finally {
-  quiet();
+  await quiet();
   if (store) await store.flush().catch(() => {});
   globalThis.fetch = fetchLocal;
   for (const child of children) child.kill();

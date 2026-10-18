@@ -159,6 +159,9 @@ export function inPlaceFields(v, next, by, { at = Date.now(), check = null, code
   const older = (Array.isArray(v && v.before) ? v.before : []).map(({ codex: _x, ...rest }) => rest);
   const hands = handsOf(v).includes(by) ? handsOf(v).slice() : [...handsOf(v), by];
   const out = { text: next, words: countWords(next), before: keptBefore([...older, entry]), hands };
+  /* the words before the fixes put in by themselves since the last other change, kept on the version itself (autoBaseOf):
+   * a change by itself keeps them, or takes them from what it changed; any other change lets them go */
+  out.autoBase = extra && extra.auto ? autoBaseOf(v) : undefined;
   if (!(v && typeof v.written === 'string')) out.written = was;
   if (!keepEnd) for (const k of END_KEYS) out[k] = undefined;
   if (tail) { out.tookOff = undefined; out.tookOffTop = undefined; }
@@ -166,7 +169,12 @@ export function inPlaceFields(v, next, by, { at = Date.now(), check = null, code
 }
 /* the words before the fixes the checker has put in by itself since the last other change (`auto` on the words before):
  * what goes in by itself is measured against these, so a passage never drifts far by itself, a look at a time */
+/* (kept on the version since 2.12.35 — the audit: read from the changes kept, the base moved each time the oldest of
+ * them went past BEFORE_KEEP, so the checker's own fixes asked for the chapter to be read whole again, and the measure
+ * of how far a passage may change by itself loosened; with his edit let go among them, the base went back to the words
+ * before it. A version from before: read from its changes, as then.) */
 export function autoBaseOf(v) {
+  if (v && typeof v.autoBase === 'string') return v.autoBase;
   const list = Array.isArray(v && v.before) ? v.before : [];
   let base = String((v && v.text) || '');
   let i = list.length - 1;
@@ -181,7 +189,8 @@ export function putBackFields(v) {
   const last = list[list.length - 1];
   if (!last || typeof last.text !== 'string') return null;
   const rest = list.slice(0, -1);
-  const out = { text: last.text, words: countWords(last.text), before: rest.length ? rest : undefined };
+  /* (the fixes by themselves before it still in: their base stays; else the base is these words again) */
+  const out = { text: last.text, words: countWords(last.text), before: rest.length ? rest : undefined, autoBase: rest.length && rest[rest.length - 1] && rest[rest.length - 1].auto ? v.autoBase : undefined };
   for (const k of END_KEYS) out[k] = last.end ? last.end[k] : undefined;
   if (last.tail) { out.tookOff = last.tail.tookOff; out.tookOffTop = last.tail.tookOffTop; }
   /* back to its first words: no longer changed by anyone */
@@ -279,7 +288,10 @@ export function premiseOf(passage) {
   const r = requestOf(passage);
   if ((r.how === 'write' || r.how === 'another') && said(r.ask)) return said(r.ask);
   const v = (passage.versions || []).find((x) => x && (x.how === 'write' || x.how === 'another') && said(x.ask));
-  return v ? said(v.ask) : '';
+  if (v) return said(v.ask);
+  /* a rewrite carries the premise of the page it wrote again — the version it came from removed, the premise stays (2.12.35) */
+  const r2 = (passage.versions || []).find((x) => x && x.ask && String(x.ask.premise || '').trim());
+  return r2 ? String(r2.ask.premise).trim() : '';
 }
 export function passageText(passage) {
   if (!passage) return '';
@@ -813,7 +825,8 @@ export const chapterSteps = {
     c.checksLeft = c.checksLeft || {};
     const list = (c.checksLeft[pid] = c.checksLeft[pid] || []);
     const replace = typeof item.replace === 'string' ? item.replace : null;
-    if (!list.some((x) => x.find === item.find && x.replace === replace)) list.push({ find: item.find, replace });
+    /* (the speech marks of a paragraph: left whatever fix of them comes next — checker.js leftTest) */
+    if (!list.some((x) => x.find === item.find && x.replace === replace)) list.push({ find: item.find, replace, ...(item.marks ? { marks: true } : {}) });
     /* past sixty, what can never be offered again goes — words no version of
      * the passage holds any more — never the oldest he left (Cozy Tavern
      * M559: a cap that lets the oldest go brings them back) */

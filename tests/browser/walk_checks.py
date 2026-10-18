@@ -97,6 +97,23 @@ async def main():
                 check(f'the checker’s ring turns while it waits and while it checks ({label})', moving == [True, True])
                 check(f'and stands still in a tab out of sight ({label})', not await rp.evaluate(turn, ['checking', True]))
                 await ctx.close()
+            # 2.12.35: the phone's reduced motion with Ambient animation off too — the ring alone turns, and slowly; the
+            # notes' light does not breathe, nor the caret blink (the rules that keep them moving outranked reduced motion)
+            ctx = await b.new_context(viewport={'width': 412, 'height': 915}, reduced_motion='reduce')
+            rp = await ctx.new_page()
+            await H.new_book(rp, title='The Slow Ring')
+            await rp.evaluate("(m) => { document.documentElement.dataset.motion = m; }", 'off')
+            moving = [await rp.evaluate(turn, [s, False]) for s in ('waiting', 'checking')]
+            check('reduced motion and Ambient animation off: the ring still turns, waiting and checking', moving == [True, True])
+            slow = await rp.evaluate("() => getComputedStyle(document.querySelector('#checkBubble .ring')).animationDuration")
+            check(f'and slowly, as reduced motion asks ({slow})', slow == '2.4s')
+            still = await rp.evaluate("""() => {
+              const n = document.createElement('button'); n.className = 'notesbtn'; n.dataset.state = 'reading';
+              const d = document.createElement('span'); d.className = 'dot'; n.append(d); document.body.append(n);
+              const name = getComputedStyle(d).animationName; n.remove(); return name;
+            }""")
+            check(f'and the notes’ light does not breathe (animation: {still})', still == 'none')
+            await ctx.close()
             # 2.12.33: a chapter read whole once it has ended — a cup set down, and later still in her hand — its fix on a
             # card that says what the book says before it, and where it was found
             ctx = await b.new_context(viewport={'width': 412, 'height': 915})
