@@ -76,6 +76,27 @@ async def main():
             check('Put back the words before brings the words before the fix back', now == before[1] and now != before[0])
             check('and says so', 'The words before are back.' in await pg.inner_text('#toast'))
             check('no browser exceptions', not [x for x in logs if x.startswith('PAGEERROR')])
+            # the ring turns while the checker waits or checks — with Ambient animation off and the phone's reduced
+            # motion too, and stops only in a tab out of sight (2.12.32: "not circling, just stuck")
+            turn = """async ([state, hidden]) => {
+              const b = document.querySelector('#checkBubble');
+              b.dataset.state = state; b.textContent = ''; const r = document.createElement('span'); r.className = 'ring'; b.append(r);
+              if (hidden) document.documentElement.dataset.pageHidden = 'true'; else delete document.documentElement.dataset.pageHidden;
+              /* turning, not breathing: the ring's angle moves (a scale alone leaves it at nought) */
+              const angle = (t) => { const m = /matrix\(([^,]+), ([^,]+)/.exec(t); return m ? Math.round(Math.atan2(+m[2], +m[1]) * 180 / Math.PI) : 0; };
+              const seen = new Set();
+              for (let i = 0; i < 6; i++) { seen.add(angle(getComputedStyle(r).transform)); await new Promise((ok) => setTimeout(ok, 120)); }
+              return seen.size > 2;
+            }"""
+            for label, reduced, motion in (('motion on', 'no-preference', 'on'), ('Ambient animation off', 'no-preference', 'off'), ('reduced motion', 'reduce', 'on')):
+                ctx = await b.new_context(viewport={'width': 412, 'height': 915}, reduced_motion=reduced)
+                rp = await ctx.new_page()
+                await H.new_book(rp, title='The Ring')
+                await rp.evaluate("(m) => { document.documentElement.dataset.motion = m; }", motion)
+                moving = [await rp.evaluate(turn, [s, False]) for s in ('waiting', 'checking')]
+                check(f'the checker’s ring turns while it waits and while it checks ({label})', moving == [True, True])
+                check(f'and stands still in a tab out of sight ({label})', not await rp.evaluate(turn, ['checking', True]))
+                await ctx.close()
             await b.close()
     print(f'{passed} passed', flush=True)
 

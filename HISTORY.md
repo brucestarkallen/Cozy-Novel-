@@ -839,3 +839,13 @@ Checks: app — the new section, 1 (the premise whole as typed, two lines; kept 
 **Now** (desk.js). A **Premise** button beside Edit, only on a page that has one; the premise is hidden until he presses it, shown whole under the passage's line, and put away by pressing it again (the button marked while it is open). Pressing it changes nothing else on the page — no redraw, no scroll. Reading mode hides the controls, the button with them.
 
 Checks: browser — the main walk 81 (after writing, the box empty, the Premise button there and the premise hidden; pressed, "Your premise: She finds a bottle with a letter."; pressed again, hidden), the more walk whole 310, accessibility 56. Not run: the app suite — no code it reaches changed (shape.js premiseOf as in 2.12.30, tested there); the other walks — none of them reads the passage's controls.
+
+## 2.12.32, the Suggestions ring turns
+
+"Why is the Suggestions ring not animated circling, just stuck?"
+
+**Why.** Measured in the browser, three ways: with every animation on, the ring turned only while the checker checked — while it waited (the newest words checked in a moment, a page being written, a retry due) it only breathed, its coloured arc standing still, which reads as a spinner that hung; with **Ambient animation** off (the room's pause button) and with the phone's **reduced motion**, it did not move at all in either state — both switch off every animation in the app, the checker's ring with the room's candlelight.
+
+**Now** (css/novel.css). The ring turns while the checker waits (slowly, 2.4 s a turn) and while it checks (1 s). Ambient animation off pauses the room only: what is at work — the Suggestions ring, the notes' light while the helper reads, the caret of a page being written — goes on. With reduced motion the ring alone goes on, slowly (a ring standing still says nothing is happening); the rest stays still. A tab out of sight still pauses it. Settings → How it looks says so beside Ambient animation.
+
+Checks: browser — the checks walk 39 (new: the ring's angle moves while waiting and while checking, with animation on, with Ambient animation off and with reduced motion, and stands still in a tab out of sight — on 2.12.31's styles the first of these fails), the rooms walk 185 (the ambient animation switch, unchanged), settings 26. Not run: the app suite and the other walks — only the stylesheet and the hint's words changed.

@@ -734,11 +734,22 @@ body.reading .page { margin-top: 0; }
 .checkbubble[data-state="found"] { background: #e2a72a; color: #2a1a00; }
 .checkbubble[data-state="trouble"] { background: var(--danger); }
 .checkbubble .ring { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255,255,255,.45); border-top-color: #fff; }
-/* waiting (the newest words checked in a moment, a page still being written): the ring breathes — never a spinner standing still; checking: it turns */
-.checkbubble[data-state="waiting"] .ring { animation: ringwait 1.6s ease-in-out infinite; }
+/* waiting (the newest words checked in a moment, a page still being written): the ring turns slowly; checking: it turns.
+ * Through 2.12.31 it only breathed while waiting — its coloured arc stood still, and read as stuck (his report, 2.12.32) */
+.checkbubble[data-state="waiting"] .ring { animation: spin 2.4s linear infinite; opacity: .75; }
 .checkbubble[data-state="checking"] .ring { animation: spin 1s linear infinite; }
-@keyframes ringwait { 50% { transform: scale(.78); opacity: .55; } }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* WHAT IS AT WORK KEEPS MOVING (2.12.32). Ambient animation off pauses the room (worlds.css) — the checker's ring, the
+ * notes' light while the helper reads and the caret of a page being written are not the room, and go on. With the
+ * phone's reduced motion the ring alone goes on, slowly: a ring standing still says nothing is happening. Longhands, so
+ * a tab out of sight still pauses them (worlds.css data-page-hidden). */
+:root[data-motion="off"] .checkbubble[data-state="waiting"] .ring { animation-name: spin !important; animation-duration: 2.4s !important; animation-timing-function: linear !important; animation-iteration-count: infinite !important; }
+:root[data-motion="off"] .checkbubble[data-state="checking"] .ring { animation-name: spin !important; animation-duration: 1s !important; animation-timing-function: linear !important; animation-iteration-count: infinite !important; }
+:root[data-motion="off"] .notesbtn[data-state="reading"] .dot { animation-name: breathe !important; animation-duration: 1.6s !important; animation-timing-function: ease-in-out !important; animation-iteration-count: infinite !important; }
+:root[data-motion="off"] .passage.streaming .prose > p:last-child::after { animation-name: caret !important; animation-duration: 1s !important; animation-timing-function: steps(2) !important; animation-iteration-count: infinite !important; }
+@media (prefers-reduced-motion: reduce) {
+  .checkbubble[data-state="waiting"] .ring, .checkbubble[data-state="checking"] .ring { animation-name: spin !important; animation-duration: 2.4s !important; animation-timing-function: linear !important; animation-iteration-count: infinite !important; }
+}
 body.reading .checkbubble { display: none; }
 body.reading .scroller { bottom: 12px; }
 

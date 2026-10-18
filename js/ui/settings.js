@@ -1362,7 +1362,7 @@ function lookGroup(hs) {
   g.body.append(h('p.say', 'Choose a world to write in. Make it morning, or stay a little after dark.'), sw,
     h('div.world-mode-row', h('span', 'The light in your room'), modes),
     toggle('motion', 'Ambient animation', look.motion !== 'off'),
-    h('p.say.motion-hint', 'Slow ink, candlelight, rain or a gentle lamplight glow. Your device’s reduced-motion setting is always respected.'),
+    h('p.say.motion-hint', 'Slow ink, candlelight, rain or a gentle lamplight glow. Off, only the room is still: what is at work — the Suggestions ring, the notes’ light while the helper reads, the page being written — still moves. Your device’s reduced-motion setting is always respected; only the Suggestions ring still turns, slowly, so it never looks stuck.'),
     toggle('room', 'The room behind the page', look.room !== 'off'),
     toggle('tint', 'Tint the dialogue', look.tint !== 'off'),
     ...colourEditors.map(editor => editor.box),

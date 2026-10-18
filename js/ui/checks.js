@@ -139,9 +139,9 @@ function draw() {
   C.inputs = inputs;
   C.stateDirty = false;
   const st = checker.stateOf(C.novelId);
-  /* waiting and checking share one ring (the stylesheet moves it: a soft
-   * breath while it waits, a turn while it checks) — kept through the flip,
-   * never rebuilt, so the turn never restarts from nought (2.12.10) */
+  /* waiting and checking share one ring (the stylesheet turns it: slowly
+   * while it waits, quickly while it checks — 2.12.32) — kept through the
+   * flip, never rebuilt, so the turn never restarts from nought (2.12.10) */
   const face = st.state === 'waiting' || st.state === 'checking' ? 'ring' : `${st.state}:${st.state === 'found' ? Math.min(st.count, 100) : ''}`;
   if (bubble.dataset.state !== st.state) bubble.dataset.state = st.state;
   if (C.face !== face) {
