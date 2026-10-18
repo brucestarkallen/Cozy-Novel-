@@ -3878,6 +3878,10 @@ await test('writing from before the checker began, or brought in from a file, is
   checker.checkChapter(b.novelId, b.ids[0]);
   await checker.runCheck(b.novelId);
   r = await requests();
+  /* (2.12.33: Check this chapter reads the chapter whole too, once its passages are checked — one more request) */
+  const whole = r.filter((x) => String(x.body.messages.at(-1).content).includes(prompts.WHOLE_ASK));
+  assert.equal(whole.length, 1, 'and the chapter read whole');
+  r = r.filter((x) => !whole.includes(x));
   assert.equal(r.length, 1);
   ask = checked(r[0].body.messages.at(-1).content);
   assert.ok(ask.includes('Old words from before.') && ask.includes('Brought in from a file.') && !ask.includes('More old words.') && !ask.includes('New words of his.'), ask);
@@ -4607,10 +4611,11 @@ await test('the checker uses its own connection when he picks one', async () => 
 
 await test('a passage longer than the checker\'s model holds at once is read in parts, all of it kept for the passage; a model too small says so and is not asked', async () => {
   /* (the judge off: its grading takes room of its own — this is about the parts.
-   * 6,200 tokens: the checker's own words take about 1,600 of them (his humanize
-   * list, 2.11.1) and its answer 40%, leaving the passage about 600 — some 260
-   * words a part; at 6,000 that is under the 600 it needs, and it says so) */
-  await setHouse({ context: 6200 }, { checksFrom: 0, judge: { on: false } });
+   * 6,600 tokens: the checker's own words take about 1,800 of them (his humanize
+   * list, 2.11.1; where people and things are and what a fix quotes, 2.12.33 —
+   * about 200 more, so 6,200 left it under the 600 it needs) and its answer 40%,
+   * leaving the passage about 600 — some 260 words a part; at 4,000 it says so) */
+  await setHouse({ context: 6600 }, { checksFrom: 0, judge: { on: false } });
   const para = (i) => `Paragraph ${i} goes on about the sea and the light and the long night watch, word after word, until the lamp burns low and the keeper sleeps.`;
   const b = await makeBook([[Array.from({ length: 36 }, (_, i) => para(i + 1)).join('\n\n'), 'A short one.']]);
   await script([
@@ -12410,6 +12415,187 @@ await test('the premise he typed stays with its page — through another take an
   assert.equal(shape.premiseOf(b.ch().passages.at(-1)), '');
   assert.equal(shape.premiseOf(shape.newPassage('break')), '');
   assert.equal(shape.premiseOf(b.ch().passages[0]), '', 'a page made without a premise');
+  await putAway(b);
+});
+
+heading('the book held to itself: what a fix quotes, and the chapter read whole (2.12.33)');
+const wholeAsks = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content || '')).filter((m) => m.includes(prompts.WHOLE_ASK));
+const checkingAsks = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content || '')).filter((m) => m.includes('Check these passages from'));
+const unique = (tag, n) => Array.from({ length: n }, (_, i) => `${tag}${i}`).join(' ') + '.';
+
+await test('a continuity fix that quotes the book before it, found there, goes in by itself; one quoting words that are not there, or only after it, or nothing but the notes, waits — each saying why — and the checker is asked where people and things are, words said again and time', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const b = await makeBook([['Mara set the brass key on the kitchen table and sat down by the fire.', 'She stood at the window, the brass key in her pocket, and the lamp was green.']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.2', kind: 'continuity', find: 'She stood at the window', replace: 'She sat by the fire', why: 'she sat down by the fire', says: 'sat down by the fire' },
+    { passage: '1.2', kind: 'continuity', find: 'the brass key in her pocket', replace: 'the brass key on the table', why: 'she left it on the table', says: 'she left the key on the shelf' },
+    { passage: '1.2', kind: 'continuity', find: 'the lamp was green', replace: 'the lamp was red', why: 'the notes say red' },
+    { passage: '1.1', kind: 'continuity', find: 'on the kitchen table', replace: 'in her pocket', why: 'she has it in her pocket', says: 'the brass key in her pocket' },
+  ] }) }]);
+  await checker.runCheck(b.novelId);
+  const [ask] = await checkingAsks();
+  assert.ok(ask.includes('what each holds, wears or carries, and in which hand') && ask.includes('words said again (a line remembered, quoted or answered back is the line as it was said)') && ask.includes('and time (what came first, how long ago)'), 'the checker is asked where people and things are, words said again and time');
+  assert.ok(ask.includes('For a "continuity" or "seam" fix, "says" is the words of the story before it that the fix holds to') && ask.includes('"kind": "continuity", "find": "…", "replace": "…", "why": "…", "says": "…"'), 'and to quote what a fix holds to');
+  assert.equal((await wholeAsks()).length, 0, 'the chapter being written, short: not read whole yet');
+  assert.equal(picked(b.ch().passages[1]).text, 'She sat by the fire, the brass key in her pocket, and the lamp was green.', 'the fix that holds to the book went in by itself, on the page');
+  const left = checker.suggestions(b.novelId);
+  const by = (r) => left.find((x) => x.item.replace === r);
+  assert.deepEqual(left.map((x) => x.item.replace).sort(), ['in her pocket', 'the brass key on the table', 'the lamp was red'].sort());
+  assert.equal(by('the brass key on the table').item.unheld, 'she left the key on the shelf');
+  assert.equal(checker.waitsWhy(b.ids[0], by('the brass key on the table').passageId, by('the brass key on the table').item), 'the words it quotes from the book before it are not there, so it may be wrong');
+  assert.equal(checker.waitsWhy(b.ids[0], by('the lamp was red').passageId, by('the lamp was red').item), 'it holds the page to the notes, and the notes may be what is wrong');
+  assert.ok(by('in her pocket').item.unheld && !by('in her pocket').item.held, 'words from after the passage are never what it holds to');
+  /* the one that went in kept what it held to, as the page says it */
+  const v2 = picked(b.ch().passages[1]);
+  assert.deepEqual(v2.hands, ['checker']);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a chapter is read whole once it has ended and every passage in it is checked: one request with the whole chapter, its fix laid beside what each passage’s checking found, put in by itself under Super automatic, the chapter not read again for that — and again, after a while, once his own words change it', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, ...SUPER() });
+  const b = await makeBook([[
+    'She set the cup down on the sill and looked out at the rain.',
+    'The wind had come up off the sea.',
+    'She turned back to the room, the cup still warm in her hand.',
+  ], ['Morning came grey over the cliffs.']]);
+  await reset();
+  await script([{ whole: true, text: JSON.stringify({ edits: [
+    { passage: '1.3', kind: 'continuity', find: 'the cup still warm in her hand', replace: 'the cup cooling on the sill', why: 'she set it down', says: 'She set the cup down on the sill' },
+    { passage: '1.9', kind: 'continuity', find: 'x', replace: 'y', why: 'no such passage' },
+  ] }) }]);
+  await checker.runCheck(b.novelId);
+  const asks = await wholeAsks();
+  assert.equal(asks.length, 1, 'Chapter One read whole once; Chapter Two, one passage and the one being written, not');
+  const a = asks[0];
+  assert.ok(a.includes('Chapter One, whole — each passage numbered as it is on the page:') && a.includes('[1.1] She set the cup down') && a.includes('[1.2] The wind') && a.includes('[1.3] She turned back'), a.slice(-3000));
+  assert.ok(a.includes('who holds, wears or carries what') || a.includes('what each holds, wears or carries, and in which hand'), 'where people and things are');
+  assert.ok(a.includes('never the earlier words to fit one later line') && a.includes('Never change what happens'), 'never the story');
+  assert.ok(!a.includes('Check these passages from') && !a.includes('Morning came grey'), 'its own ask, and nothing after the chapter');
+  const c = b.ch();
+  assert.equal(picked(c.passages[2]).text, 'She turned back to the room, the cup cooling on the sill.', 'put in by itself, on the page');
+  assert.equal(c.wholeRead.sig, checker.wholeSig(c), 'read as it stands: its own fix going in never asks for another read');
+  assert.equal(c.wholeRead.n, 1);
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 0, 'nothing changed: not read again');
+  /* his own edit of the first passage: read again — once it is checked, and not within ten minutes of the last */
+  const p1 = c.passages[0];
+  inplace.changeInPlace({ novelId: b.novelId, chapterId: b.ids[0], passageId: p1.id, versionId: picked(p1).id, next: 'She set the cup down on the sill and looked out at the dark rain.', by: 'you' });
+  await checker.runCheck(b.novelId);
+  assert.equal((await checkingAsks()).length, 1, 'his words checked');
+  assert.equal((await wholeAsks()).length, 0, 'not read whole again so soon');
+  const due = checker.forTests().wholeDue(b.novelId);
+  assert.ok(due && due.wait > 9 * 60000 && due.wait <= 10 * 60000, JSON.stringify(due));
+  store.change('chapter', b.ids[0], (x) => { x.wholeRead.at -= 11 * 60000; }, { now: true });
+  await reset();
+  await checker.runCheck(b.novelId);
+  const again = await wholeAsks();
+  assert.equal(again.length, 1, 'read whole again once the while is over');
+  assert.ok(again[0].includes('[1.1] She set the cup down on the sill and looked out at the dark rain.') && again[0].includes('the cup cooling on the sill'), 'as it stands now');
+  assert.equal(b.ch().wholeRead.n, 2, 'twice that day');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('without its fixes going in by themselves, what the chapter read whole found waits like any suggestion — what it holds to and where it was found said on its card; never over a fix already there, never one he left, never on a passage changed since', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([[
+    'She set the cup down on the sill and looked out at the rain.',
+    'The wind had come up off the sea.',
+    'She turned back to the room, the cup still warm in her hand.',
+  ], ['Morning came grey over the cliffs.']]);
+  await reset();
+  await script([
+    { text: JSON.stringify({ edits: [{ passage: '1.3', kind: 'grammar', find: 'warm in her hand', replace: 'warm in her hands', why: 'both hands' }] }) },
+    { whole: true, text: JSON.stringify({ edits: [
+      { passage: '1.3', kind: 'continuity', find: 'the cup still warm in her hand', replace: 'the cup cooling on the sill', why: 'she set it down', says: 'She set the cup down on the sill' },
+      { passage: '1.2', kind: 'seam', find: 'The wind had come up', replace: 'Outside, the wind had come up', why: 'she was looking out', says: 'looked out at the rain' },
+    ] }) },
+  ]);
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 1);
+  const list = checker.suggestions(b.novelId);
+  assert.deepEqual(list.map((x) => [x.number, x.item.kind, x.item.replace]), [[2, 'seam', 'Outside, the wind had come up'], [3, 'grammar', 'warm in her hands']], 'the one over the grammar fix’s words is not laid beside it');
+  const seam = list[0].item;
+  assert.deepEqual([seam.whole, seam.held], [true, 'looked out at the rain']);
+  assert.equal(picked(b.ch().passages[1]).text, 'The wind had come up off the sea.', 'nothing changed by itself');
+  /* he leaves it — and his edit of the chapter has it read whole again: not offered again */
+  checker.leaveOne(b.ids[0], list[0].passageId, seam.id);
+  const p3 = b.ch().passages[2];
+  inplace.changeInPlace({ novelId: b.novelId, chapterId: b.ids[0], passageId: p3.id, versionId: picked(p3).id, next: 'She turned back to the room at last, the cup still warm in her hand.', by: 'you' });
+  store.change('chapter', b.ids[0], (x) => { x.wholeRead.at -= 11 * 60000; }, { now: true });
+  await reset();
+  await script([{ whole: true, text: JSON.stringify({ edits: [
+    { passage: '1.2', kind: 'seam', find: 'The wind had come up', replace: 'Outside, the wind had come up', why: 'she was looking out', says: 'looked out at the rain' },
+  ] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 1, 'read whole again');
+  assert.ok(!checker.suggestions(b.novelId).some((x) => x.item.kind === 'seam'), 'what he left stays left');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the chapter being written is read whole when he asks (Check this chapter), and by itself once it has grown by four thousand words since — not before; a chapter longer than its model holds is read in parts, each told the chapter up to it', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['Mara climbed the stairs.', 'The lamp room was cold.']]);
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 0, 'the chapter being written, short: not by itself');
+  assert.equal(checker.wholeOwed(b.novelId, b.ids[0]), true, 'Check this chapter offers it');
+  checker.checkChapter(b.novelId, b.ids[0]);
+  assert.equal(b.ch().wholeAsked, true);
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 1, 'asked: read whole');
+  assert.equal(b.ch().wholeAsked, undefined, 'and his asking answered');
+  assert.equal(checker.wholeOwed(b.novelId, b.ids[0]), false);
+  /* it grows: three long pages of his — past four thousand words since — read whole once the while is over, in parts */
+  for (const tag of ['a', 'b', 'c']) writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: unique(tag, 3000) });
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, 0, 'within the while after the last read');
+  store.change('chapter', b.ids[0], (x) => { x.wholeRead.at -= 11 * 60000; }, { now: true });
+  await reset();
+  await checker.runCheck(b.novelId);
+  const parts = await wholeAsks();
+  assert.ok(parts.length >= 2, `in parts (${parts.length})`);
+  assert.ok(parts[0].includes(`Chapter One, part 1 of ${parts.length}`) && parts[0].includes('[1.1] Mara climbed the stairs.'), parts[0].slice(-600));
+  const last = parts.at(-1);
+  assert.ok(last.includes(`Chapter One, part ${parts.length} of ${parts.length}`) && last.includes('Chapter One up to these passages, as it stands:'), 'the next part is told the chapter up to it');
+  assert.ok(last.includes('c2999.'), 'the last words read');
+  assert.equal(b.ch().wholeRead.sig, checker.wholeSig(b.ch()));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a chapter its model will not read whole is let be after two tries until its words change — never asked in a loop — and a passing fault is waited out', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['Mara climbed the stairs.', 'The lamp room was cold.'], ['Morning.']]);
+  await reset();
+  await script([1, 2, 3, 4].map(() => ({ whole: true, status: 503, message: 'overloaded' })));
+  await checker.runCheck(b.novelId);
+  const t = checker.forTests();
+  const key = `${b.ids[0]}:${checker.wholeSig(b.ch())}`;
+  assert.ok(t.wholeWait.get(key) && t.wholeWait.get(key).until > Date.now(), 'a passing fault: waited out');
+  const due = t.wholeDue(b.novelId);
+  assert.ok(due && due.wait > 0, JSON.stringify(due));
+  assert.equal(b.ch().wholeRead, undefined, 'not marked read');
+  /* its model answers, but never this: twice, and the chapter is let be */
+  t.wholeWait.clear();
+  await reset();
+  await script([1, 2, 3, 4, 5, 6].map(() => ({ whole: true, text: 'I would rather not read this one.' })));
+  await checker.runCheck(b.novelId);
+  assert.equal(b.ch().wholeRead, undefined, 'once: tried again on a later look');
+  assert.equal(t.wholeMiss.get(`${b.ids[0]}:${checker.wholeSig(b.ch())}`), 1);
+  await checker.runCheck(b.novelId);
+  assert.ok(b.ch().wholeRead && b.ch().wholeRead.missed && b.ch().wholeRead.sig === checker.wholeSig(b.ch()), JSON.stringify(b.ch().wholeRead));
+  const asked = (await wholeAsks()).length;
+  assert.ok(asked >= 2, String(asked));
+  await checker.runCheck(b.novelId);
+  assert.equal((await wholeAsks()).length, asked, 'never asked in a loop');
+  assert.equal(checker.wholeOwed(b.novelId, b.ids[0]), false, 'and not offered while its words stand');
+  await setHouse();
   await putAway(b);
 });
 

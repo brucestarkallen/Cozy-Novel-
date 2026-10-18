@@ -1063,6 +1063,10 @@ function straysLine(strays) {
   return `\nA stray character of another script stands in these passages, among words in the Latin alphabet — take it out and mend the words around it (a garbled repeat kept once), unless someone in the scene speaks or writes that language: ${rows.map(([n, list]) => `[${n}] ${list.map((w) => `“…${w}…”`).join(', ')}`).join('; ')}.`;
 }
 
+/* what a fix to the book's continuity holds to, in the book's own words — found in the story before the passage, it
+ * may go in by itself (checker.js heldBy); one that holds only to the notes waits for him, the notes may be wrong */
+const SAYS_RULE = 'For a "continuity" or "seam" fix, "says" is the words of the story before it that the fix holds to, copied exactly — from an earlier passage, the chapter up to these passages or the end of the chapter before — left out only when it holds to the notes or the bibliography.';
+
 export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, strays = {}, repeats = {}, his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', gradesOnly = false, bib = '' }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });
@@ -1091,18 +1095,51 @@ Answer with one JSON object and nothing else: {"grades": [{"passage": "2.3", "ch
 - "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs, or a flat one where a precise one belongs; a word out of the book's voice or time, unless a character talks that way; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${repeatsLine(repeats)}${straysLine(strays)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
 - "seam": this is to be a finished book, so each passage must carry on smoothly from the end of the one before it — no beat told twice, no line answered twice, no jump in time or place nobody marks, no one standing where the passage before left them gone. Where an opening doesn't carry on, fix the opening.
-- "continuity": something that disagrees with the book, its notes or its bibliography — a name, a look, a fact, who knows what. A slip needs a written fact it goes against: something new the notes or the earlier chapters do not hold yet — a sister, a scar, a past — is the story growing, never a slip. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix. But someone knowing what they never lived, saw or were told — a secret, how another’s power works or its limits, what my words to the writer explain — beyond what anyone there would plainly make of it, is a slip.
+- "continuity": something that disagrees with the book, its notes or its bibliography — a name, a look, a fact, who knows what; where people and things are (who is in the room and who has gone; who sits, stands or lies, how near, on which side; what each holds, wears or carries, and in which hand; a wound, a door, a light, the weather, the hour, the day — what changed must have been changed on the page); words said again (a line remembered, quoted or answered back is the line as it was said); and time (what came first, how long ago). A slip needs a written fact it goes against: something new the notes or the earlier chapters do not hold yet — a sister, a scar, a past — is the story growing, never a slip. Only what the telling gives as true is a slip: what someone says that is wrong on purpose or in character — a lie, a joke, a tease, an exaggeration, sarcasm, a memory gone wrong, someone who does not know — is the story, and never a fix. But someone knowing what they never lived, saw or were told — a secret, how another’s power works or its limits, what my words to the writer explain — beyond what anyone there would plainly make of it, is a slip.
 
 Keep the book’s voice: a fragment, dialect, a character’s own way of talking, or a choice of style the book makes on purpose is not a mistake${his && his.trim() ? ', and nothing I ask the writer for (above) is one' : ''}. ${SOUND_STYLE[soundOf(novel)]} Leave what is right alone; a passage that needs nothing gets nothing.
 
-Each fix replaces a stretch of words: "find" is the words exactly as they stand in that passage — copied exactly, enough of them to stand in only one place in it — "replace" the new words, and "why" a few words on why.${judge ? `
+Each fix replaces a stretch of words: "find" is the words exactly as they stand in that passage — copied exactly, enough of them to stand in only one place in it — "replace" the new words, and "why" a few words on why. ${SAYS_RULE}${judge ? `
 
 Then judge each passage’s craft as a page of a finished novel, by ten checks. Answer every check of every passage "yes" or "no" — "no" only where you can point to the words in it that fail the check; a check with nothing to try in a passage (nobody speaks: the voices) is "yes". Judged like this, a page from a published novelist fails one or two; a page that reads machine-made fails most. More figures, longer sentences or rarer words are never better writing: overwriting fails "fresh".
 ${JUDGE_CHECKS.map(([k, , what]) => `- ${k}: ${what}.`).join('\n')}
 For each "no", a fault: the check, "words" — the words that fail it, copied exactly from the passage, no more than a sentence — and "why", in a few words. A passage with ${allowed ? `more than ${numberWords(allowed).toLowerCase()} “no”` : 'any “no”'} is under my mark of ${judge.target}: for it, add fixes of kind "craft" — small changes in place that lift it — and in "lift" say, in a few lines in my voice, what writing it again would need to reach ${judge.target} (“Slow the moment she falls…”).` : ''}
 
-Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "grammar", "find": "…", "replace": "…", "why": "…"}]${judge ? `, "grades": [{"passage": "2.3", "checks": {${JUDGE_CHECKS.map(([k], i) => `"${k}": "${i === 9 ? 'no' : 'yes'}"`).join(', ')}}, "faults": [{"check": "ending", "words": "…", "why": "…"}], "lift": "…"}]` : ''}} — or {"edits": []${judge ? ', "grades": […]' : ''}} when nothing needs fixing.`);
+Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "grammar", "find": "…", "replace": "…", "why": "…"}, {"passage": "2.4", "kind": "continuity", "find": "…", "replace": "…", "why": "…", "says": "…"}]${judge ? `, "grades": [{"passage": "2.3", "checks": {${JUDGE_CHECKS.map(([k], i) => `"${k}": "${i === 9 ? 'no' : 'yes'}"`).join(', ')}}, "faults": [{"check": "ending", "words": "…", "why": "…"}], "lift": "…"}]` : ''}} — or {"edits": []${judge ? ', "grades": […]' : ''}} when nothing needs fixing.`);
   return parts.join('\n\n');
+}
+
+/* THE CHAPTER READ WHOLE (checker.js runWhole): once every passage of a chapter is checked, the chapter read start
+ * to end — in parts, each with the chapter up to it, when it is longer than its model holds — for what disagrees
+ * across it: where people and things are, who knows what, words said again, time, the seams. The later words are
+ * put right to the earlier with the smallest fix, never what happens; each fix quotes what it holds to. */
+export const WHOLE_ASK = 'Read it as one chapter';
+export function wholeRequest({ novel, chapterLabel, numbered, before = '', beforeFrom = 'this', his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', bib = '', part = 1, parts = 1 }) {
+  const out = [];
+  const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });
+  if (notes) out.push(`${NOTES_FOR_A_READER}\n${behind ? `${behind}\n` : ''}${notes}`);
+  if (bib) out.push(`${BIB_FOR_A_READER}\n\n${bib}`);
+  const about = aboutTheBook(novel, { plans: false });
+  if (about) out.push(about);
+  out.push(...writerSees({ his, sofar, left }));
+  if (before && before.trim()) out.push(beforeFrom === 'last' ? `The end of the chapter before, for where ${chapterLabel} picks up:\n${fence(before)}` : `${chapterLabel} up to these passages, as it stands:\n${fence(before)}`);
+  const askedPart = askedLines(asked);
+  if (askedPart) out.push(askedPart);
+  out.push(`${parts > 1 ? `${chapterLabel}, part ${part} of ${parts}` : `${chapterLabel}, whole`} — each passage numbered as it is on the page:\n${fence(numbered)}`);
+  out.push(`${WHOLE_ASK}, start to end, the way a careful editor reads a finished chapter for its continuity: hold every passage to everything before it — in this chapter, the chapter before, the story so far, the notes and the bibliography — and find only what disagrees:
+- where people and things are: who is in the room and who has gone; who sits, stands or lies, how near, on which side; what each holds, wears or carries, and in which hand; a wound, a stain, a door open or shut, a light lit or out, the weather, the hour, the day. What changed must have been changed on the page — someone seated a line ago does not walk off without getting up, a cup set down is not still in her hand.
+- who knows what: no one knowing what they never saw, heard or were told, and no one forgetting what they plainly know.
+- words said again: a line remembered, quoted or answered back is the line as it was said — the same words where it is given as the same words.
+- time: what came first, how long ago, the hour and the day, kept in order.
+- names, looks and facts, as the book gave them.
+- the seams: each passage carrying on from the end of the one before — no beat told twice, no line answered twice, no jump in time or place nobody marks.
+
+Never change what happens, who the people are, or the voice it is told in. Put the later words right to the earlier, with the smallest fix that does it — a word, a phrase, a sentence at most — and never the earlier words to fit one later line. A slip needs a written fact it goes against: something new is the story growing, never a slip; what someone says wrong on purpose or in character — a lie, a joke, a tease, a memory gone wrong, someone who does not know — is the story, and never a fix. Leave what is right alone; a chapter that holds together gets nothing.
+
+Each fix replaces a stretch of words in one passage: "passage" its number, "kind" "continuity" — or "seam", where a passage does not carry on from the one before — "find" the words exactly as they stand in that passage, copied exactly, enough of them to stand in only one place in it, "replace" the new words, "why" a few words on why, and "says" the words of the story before it that the fix holds to, copied exactly — from an earlier passage or the end of the chapter before — left out only when it holds to the notes or the bibliography.
+
+Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kind": "continuity", "find": "…", "replace": "…", "why": "…", "says": "…"}]} — or {"edits": []} when the chapter holds together.`);
+  return out.join('\n\n');
 }
 
 /* The judge's head to head (Cozy Tavern's duel): two versions of one passage,

@@ -29,12 +29,12 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain, rewriteSelection as writeSpanAgain } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, howOf, bornOf, chapterText, duelMatches, writtenOf, mixedHands, autoBaseOf } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, howOf, bornOf, chapterText, duelMatches, writtenOf, mixedHands, autoBaseOf, hasWords, chapterClosed } from './shape.js';
 import { changeInPlace } from './inplace.js';
 import { numberedText, shortOf, notesBehind, passagesAfter } from './context.js';
 import { bibItems, ridingItems } from './bibliography.js';
 import { superOn, superFrom, autoOf } from './auto.js';
-import { checkerFrame, checkRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
+import { checkerFrame, checkRequest, wholeRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
 import { locate, chapterNumber as chapterNum } from './changes.js';
 import { findIn } from './search.js';
 import { stockIn, repeatsIn } from './stock.js';
@@ -505,6 +505,9 @@ export async function runCheck(novelId) {
         await checkBatch(novelId, conn, batch, limit, choice);
       }
       choice.beforeAsk();
+      /* each chapter read whole once its passages are checked, for what disagrees across it */
+      await runWhole(novelId, conn, choice);
+      choice.beforeAsk();
       /* the judge's head to head, once the reading is done */
       if (judgeOf(store.peek('house', 'house') || {})) await runDuels(novelId, conn, choice);
       choice.beforeAsk();
@@ -776,6 +779,40 @@ function homeOf(novelId, chapterId, pid) {
   return null;
 }
 
+/* WHAT A FIX HOLDS TO (2.12.33): a fix to the book's continuity, or a seam, quotes the words of the story before it
+ * that it holds to ("says", prompts.js SAYS_RULE) — found in the passages before the one it fixes, nearest first,
+ * that passage's chapter and then the chapters before it, it is `held` (the words as they stand there): it holds the
+ * page to the book itself, not to the notes, and may go in by itself as any small fix (holdsToNotes). Words it quotes
+ * that are not there are kept as `unheld`, and it waits for him. A few words at least: four. */
+const SAYS_MIN = 4;
+function heldBy(novelId, chapterId, pid, says) {
+  const want = clean(says, 1200);
+  if (countWords(want) < SAYS_MIN) return '';
+  const list = chaptersOf(novelId);
+  const at = list.findIndex((c) => c.id === chapterId);
+  if (at < 0) return '';
+  /* a quick look first, by its longest plain word: most passages never hold it */
+  const key = (want.toLowerCase().match(/[a-z]+/g) || []).sort((a, b) => b.length - a.length)[0] || '';
+  for (let i = at; i >= 0; i--) {
+    const ps = list[i].passages || [];
+    const end = i === at ? ps.findIndex((p) => p.id === pid) : ps.length;
+    if (end < 0) return '';
+    for (let j = end - 1; j >= 0; j--) {
+      if (ps[j].by === 'break') continue;
+      const t = String((picked(ps[j]) || {}).text || '');
+      if (!t || (key.length >= 4 && !t.toLowerCase().includes(key))) continue;
+      const [hit] = findIn(t, want, { words: true, max: 1 });
+      if (hit) return cutWords(t.slice(hit.start, hit.end), 600);
+    }
+  }
+  return '';
+}
+function saysOf(novelId, chapterId, pid, kind, says) {
+  if ((kind !== 'continuity' && kind !== 'seam') || typeof says !== 'string' || !says.trim()) return {};
+  const held = heldBy(novelId, chapterId, pid, says);
+  return held ? { held } : { unheld: clean(says, 300) };
+}
+
 /* a passage its model would not check, set aside while its words stand:
  * kept as checked, nothing found, and why — Check it again lets it go */
 function setAsideCheck(novelId, chapterId, a, why, conn) {
@@ -942,7 +979,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     /* two fixes over the same words: the first stands */
     if (a.items.some((x) => overlaps(x, spot)) || wasLeft(a, find, e.replace)) continue;
     const kind = CHECK_KINDS.includes(String(e.kind || '').toLowerCase()) ? String(e.kind).toLowerCase() : 'humanize';
-    a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), start: spot.start, end: spot.end });
+    a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), ...saysOf(novelId, chapter.id, a.pid, kind, e.says), start: spot.start, end: spot.end });
   }
   if (!gradeOnly) for (const a of asked.values()) foundHere(a, avoid, (find) => wasLeft(a, find, null));
   const graded = new Map();
@@ -1291,6 +1328,218 @@ async function runDuels(novelId, conn, choice) {
   }
 }
 
+/* ------------------------------------------------------------ the chapter read whole */
+
+/* THE CHAPTER READ WHOLE (his word, 17 October: "checked the passage as whole and summary to make sure consistency
+ * and everything, especially spatial or other awareness … not changing story but edit to make sure quote or
+ * everything is correct … in the background … super auto mode made sure it doesn't happen"). A checking reads a
+ * passage with as much of the story right before it as its model holds; this reads a chapter start to end once every
+ * passage in it is checked, for what disagrees across it (prompts.js wholeRequest) — told the chapters before by
+ * their summaries, the notes and the bibliography, as a checking is. A chapter longer than its model holds is read in
+ * parts, each told the chapter up to it. What it finds joins what was found in each passage, and is kept, shown and
+ * put in by itself as every suggestion is (Apply the checker's fixes by themselves, or Super automatic) — a fix that
+ * quotes the words of the book before it that it holds to, found there (heldBy), holds the page to the book itself.
+ * When: once the chapter has ended (a chapter after it holds words, its END OF CHAPTER under Super automatic) or he
+ * asked (Check this chapter, Check the whole book) — or once it has grown by WHOLE_GROW words since it was last read
+ * whole; again only when its words change — as they stood before the fixes put in by themselves (autoBaseOf), so its
+ * own fixes going in never ask for another read — never sooner than WHOLE_REST after the last, and at most
+ * WHOLE_A_DAY times a day, unless he asks. */
+const WHOLE_GROW = 4000;
+const WHOLE_REST = 10 * 60000;
+const WHOLE_A_DAY = 6;
+const WHOLE_WORDS = 9000;
+const WHOLE_BEFORE = 24000;
+const dayOf = (t) => Math.floor(t / 86400000);
+/* chapterId:sig -> {n, until}: a passing fault waited out; chapterId:sig -> n: its model would not read it (twice, and it is let be) */
+const wholeWait = new Map();
+const wholeMiss = new Map();
+const wholeList = (c) => (c.passages || []).filter((p) => p.by !== 'break' && hasWords(p));
+const wordsOf = (ps) => ps.reduce((n, p) => n + countWords(String(picked(p).text || '')), 0);
+export function wholeSig(c) {
+  return hashText(wholeList(c).map((p) => { const v = picked(p); return `${p.id}:${v.id}:${hashText(autoBaseOf(v))}`; }).join('|'));
+}
+/* a chapter whose words as they stand were never read whole — Check this chapter reads it (ui/checks.js) */
+export function wholeOwed(novelId, chapterId) {
+  const c = store.peek('chapter', chapterId);
+  return Boolean(c && store.peek('novel', novelId) && wholeList(c).length >= 2 && (c.wholeRead || {}).sig !== wholeSig(c) && !(wholeMiss.get(`${c.id}:${wholeSig(c)}`) >= 2));
+}
+/* the next chapter to read whole — {chapter, sig} — or {wait} until one may be, or null */
+function wholeDue(novelId, now = Date.now()) {
+  const list = chaptersOf(novelId);
+  let last = -1;
+  list.forEach((c, i) => { if (wholeList(c).length) last = i; });
+  let wait = null;
+  const later = (ms) => { wait = wait === null ? ms : Math.min(wait, ms); };
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    const ps = wholeList(c);
+    if (ps.length < 2 || ps.some((p) => picked(p).streaming || !entryFor(c, p))) continue;
+    const sig = wholeSig(c);
+    const r = c.wholeRead || {};
+    if (r.sig === sig) continue;
+    const key = `${c.id}:${sig}`;
+    if ((wholeMiss.get(key) || 0) >= 2) continue;
+    const words = wordsOf(ps);
+    if (!c.wholeAsked && !(i < last || chapterClosed(c) || words - (Number(r.words) || 0) >= WHOLE_GROW)) continue;
+    const held = wholeWait.get(key);
+    if (held && held.until > now) { later(held.until - now); continue; }
+    if (!c.wholeAsked) {
+      if (r.day === dayOf(now) && (r.n || 0) >= WHOLE_A_DAY) continue;
+      const rest = (Number(r.at) || 0) + WHOLE_REST - now;
+      if (rest > 0) { later(rest); continue; }
+    }
+    return { chapter: c, sig, words };
+  }
+  return wait === null ? null : { wait };
+}
+function wholeDone(chapterId, sig, words, extra = {}) {
+  const c = store.peek('chapter', chapterId);
+  if (!c) return;
+  const r = c.wholeRead || {};
+  const now = Date.now();
+  const day = dayOf(now);
+  store.change('chapter', chapterId, chapterSteps.setWholeRead({ sig, at: now, day, n: r.day === day ? (r.n || 0) + 1 : 1, words, ...extra }), { checkpoint: true });
+}
+
+/* a few chapters at a time (the rest in a moment) */
+async function runWhole(novelId, conn, choice) {
+  for (let n = 0; ; n++) {
+    choice.beforeAsk();
+    if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+    const due = wholeDue(novelId);
+    if (!due) return;
+    if (due.wait) { schedule(novelId, due.wait + 1000); return; }
+    if (n >= 3) { schedule(novelId, 3000); return; }
+    const out = await readWhole(novelId, conn, due.chapter, due.sig, due.words, choice);
+    if (out && out.gaveWay) { schedule(novelId, 20000); return; }
+    if (out && out.stop) throw out.stop;
+    /* its model would not read it: once more on a later look, never straight away (a passing fault set its own wait) */
+    if (out && out.missed) { schedule(novelId, 30000); return; }
+    if (out && out.passing) return;
+  }
+}
+
+/* one chapter read whole: its passages as they read when asked, in parts as its model holds them */
+async function readWhole(novelId, conn, chapter, sig, words, choice) {
+  const house = store.peek('house', 'house') || {};
+  const novel = store.peek('novel', novelId);
+  if (!novel) return null;
+  const key = `${chapter.id}:${sig}`;
+  const view = namedBook(standingNotes(novel), house);
+  const notesFit = archivist.notesRoomOf(conn);
+  const ci = chapterNumber(novel, chapter.id);
+  const nums = passageNumbers(chapter);
+  const label = chapterLabel(novel, chapter);
+  const system = checkerFrame(house, view);
+  const his = hisWords(house);
+  const inHand = Object.fromEntries(chaptersOf(novelId).map((c) => [c.id, c]));
+  const ps = wholeList(chapter);
+  const asked = new Map();
+  for (const p of ps) { const v = picked(p); asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, sig: sigOf(v), text: String(v.text || ''), ask: askWords(v), items: [] }); }
+  const keys = new Set(asked.keys());
+  const byPid = new Map([...asked.values()].map((a) => [a.pid, a]));
+  /* the parts: as many passages as one ask carries — a longer passage alone, in pieces */
+  const limit = Math.max(150, Math.min(WHOLE_WORDS, Math.floor((archivist.readingRoom(conn, fixedOf(house, novel, conn)) * 0.5) / 1.4)));
+  const runs = [];
+  let run = null;
+  for (const p of ps) {
+    const a = byPid.get(p.id);
+    const w = countWords(a.text);
+    if (w > limit) {
+      if (run) { runs.push(run); run = null; }
+      const pieces = archivist.partsOf(a.text, limit);
+      pieces.forEach((piece, k) => runs.push({ first: p, numbered: `[${ci}.${nums.get(p.id)}] ${piece}`, lead: pieces.slice(0, k).join('\n\n'), refs: [`${ci}.${nums.get(p.id)}`] }));
+      continue;
+    }
+    if (run && run.words + w > limit) { runs.push(run); run = null; }
+    if (!run) run = { first: p, list: [], words: 0, refs: [] };
+    run.list.push(p); run.words += w; run.refs.push(`${ci}.${nums.get(p.id)}`);
+  }
+  if (run) runs.push(run);
+  for (let k = 0; k < runs.length; k++) {
+    const r = runs[k];
+    choice.beforeAsk();
+    if (writerBusy(novelId)) { schedule(novelId, 4000); return null; }
+    setState(novelId, 'checking', `Reading ${chapterLabel(novel, chapter, { withName: false })} whole${runs.length > 1 ? ` (part ${k + 1} of ${runs.length})` : ''}, for what disagrees across it…`);
+    const numbered = r.numbered || numberedText(novel, chapter, r.list);
+    /* the chapter up to these words — or, for its opening, the end of the chapter before */
+    const lead = storyBefore(novel, chapter, r.first.id);
+    const leadText = r.lead ? [lead.from === 'this' ? lead.text : '', r.lead].filter((x) => x && x.trim()).join('\n\n') : lead.text;
+    const leadFrom = r.lead ? 'this' : lead.from;
+    const askList = r.refs.map((n) => ({ n, words: asked.get(n).ask }));
+    const askCost = askList.reduce((t, x) => t + estimateTokens(x.words) + 12, 0);
+    const spare = archivist.readingRoom(conn, fixedOf(house, novel, conn)) - estimateTokens(numbered) - askCost;
+    const before = tailOf(leadText, Math.max(0, Math.min(leadFrom === 'last' ? 2500 : WHOLE_BEFORE, Math.floor(spare * 0.4 * 3.5))));
+    const story = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
+    const behind = notesBehind(view, inHand, chapter, { before: r.first.id }, 'write');
+    const bib = ridingItems(bibItems(view, inHand, { facts: true }), { near: numbered,
+      budget: Math.max(0, Math.min(2500, Math.floor(spare * 0.2))), skip: passagesAfter(novel, inHand, chapter.id, { before: r.first.id }, 'write') }).words.join('\n\n');
+    const req = wholeRequest({ novel: view, chapterLabel: label, numbered, before, beforeFrom: leadFrom, his, sofar: story.text, left: story.left, notesFit, asked: askList, behind, bib, part: k + 1, parts: runs.length });
+    const got = await archivist.askJson(conn, system, req, { want: (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
+    await archivist.mustHold('checker', novelId);
+    if (!got.ok) {
+      /* it made way for his page: read again once the page has gone */
+      if (got.leashed === 'gaveway') return { gaveWay: true };
+      const fault = got.leashed === 'long' ? 'words' : got.leashed ? 'model' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
+      /* the connection's own: the checker stops, as for any checking */
+      if (fault && typeof fault === 'object') return { stop: failed(fault) };
+      /* the words': its model would not read this chapter — twice, and it is let be until its words change */
+      if (fault === 'words') {
+        const n = (wholeMiss.get(key) || 0) + 1;
+        wholeMiss.set(key, n);
+        if (n >= 2) wholeDone(chapter.id, sig, words, { missed: cutWords(got.error || 'its model would not read it', 200) });
+        return { missed: true };
+      }
+      /* passing (down, busy, too slow): waited out, a minute and then longer, never holding up the rest */
+      const was = wholeWait.get(key);
+      const n = ((was && was.n) || 0) + 1;
+      const ms = Math.max([60000, 180000, 600000][Math.min(n - 1, 2)], Number(got.retryAfterMs) || 0);
+      wholeWait.set(key, { n, until: Date.now() + ms });
+      schedule(novelId, ms + 1000);
+      return { passing: true };
+    }
+    /* each fix where its words stand in the passage as it was read; two over the same words, the first stands */
+    for (const e of got.obj.edits) {
+      if (!e || typeof e !== 'object' || typeof e.find !== 'string' || typeof e.replace !== 'string') continue;
+      const ref = refOf(e.passage, keys);
+      const a = ref && r.refs.includes(ref) ? asked.get(ref) : null;
+      if (!a) continue;
+      const spot = locate(a.text, e.find);
+      if (spot.why) continue;
+      const find = a.text.slice(spot.start, spot.end);
+      if (find === e.replace || find.replace(/\s+/g, ' ').trim() === e.replace.replace(/\s+/g, ' ').trim()) continue;
+      if (a.items.some((x) => overlaps(x, spot))) continue;
+      const kind = String(e.kind || '').toLowerCase() === 'seam' ? 'seam' : 'continuity';
+      a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), whole: true, ...saysOf(novelId, chapter.id, a.pid, kind, e.says), start: spot.start, end: spot.end });
+    }
+  }
+  /* laid beside what each passage's checking found — only on the words it read, and never over a fix there already
+   * or one he left as it is */
+  for (const a of asked.values()) {
+    if (!a.items.length) continue;
+    const home = homeOf(novelId, chapter.id, a.pid);
+    const c = home && store.peek('chapter', home);
+    const p = c && (c.passages || []).find((x) => x.id === a.pid);
+    const v = p && picked(p);
+    const e = v && v.id === a.vid && sigOf(v) === a.sig && c.checks && c.checks[a.pid] && c.checks[a.pid][a.vid];
+    if (!e || e.sig !== a.sig || e.aside) continue;
+    const left = (c.checksLeft && c.checksLeft[a.pid]) || [];
+    const there = (e.items || []).filter((x) => typeof x.replace === 'string' && x.find).map((x) => locate(a.text, x.find)).filter((x) => !x.why);
+    const add = a.items.filter((x) => !there.some((y) => overlaps(x, y)) && !left.some((l) => l.find === x.find && l.replace === x.replace));
+    if (!add.length) continue;
+    /* in the order they stand, the grade's card first */
+    const at = (x) => (x.kind === 'grade' ? -1 : x.start !== undefined ? x.start : (() => { const sp = x.find ? locate(a.text, x.find) : { why: 'none' }; return sp.why ? Infinity : sp.start; })());
+    const items = [...(e.items || []), ...add].map((x) => ({ x, at: at(x) })).sort((m, n) => m.at - n.at).map(({ x: { start: _s, end: _e, ...x } }) => x);
+    store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, items }), { checkpoint: true });
+  }
+  wholeDone(chapter.id, sig, words);
+  wholeMiss.delete(key);
+  wholeWait.delete(key);
+  await store.flush('chapter', chapter.id);
+  tell(novelId);
+  return { ok: true };
+}
+
 /* ------------------------------------------------------------ the benchmark */
 
 /* stock wording counted in a version, kept for it while its words stay */
@@ -1457,7 +1706,9 @@ export function tenseOnly(find, replace) {
   }
   return moved > 0;
 }
-const holdsToNotes = (item) => item.kind === 'continuity' && !tenseOnly(item.find, item.replace);
+/* (one that quotes the words of the book before it that it holds to, found there — `held` — holds the page to the
+ * book itself, never to the notes: it may go in by itself as any small fix, 2.12.33) */
+const holdsToNotes = (item) => item.kind === 'continuity' && !tenseOnly(item.find, item.replace) && !item.held;
 
 /* every suggestion of a passage that has words to put in, applied at once */
 function applyPassage(novelId, chapterId, passageId, { byItself = false } = {}) {
@@ -1516,7 +1767,7 @@ export function waitsWhy(chapterId, passageId, item) {
     if (spansOf(p) >= MAX_SPANS) return `${numberWord(MAX_SPANS)} sentences of this passage were written again by itself already — Write it again does this one`;
     return '';
   }
-  if (holdsToNotes(item)) return 'it holds the page to the notes, and the notes may be what is wrong';
+  if (holdsToNotes(item)) return item.unheld ? 'the words it quotes from the book before it are not there, so it may be wrong' : 'it holds the page to the notes, and the notes may be what is wrong';
   const text = String(v.text || '');
   if (!smallFix(item, text)) return 'it rewrites a large stretch of the passage';
   const spot = locate(text, item.find);
@@ -1754,4 +2005,4 @@ function autoAfter(novelId) {
   tell(novelId);
 }
 
-export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried, spanTried }; }
+export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried, spanTried, wholeDue, wholeWait, wholeMiss }; }

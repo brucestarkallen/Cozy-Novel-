@@ -862,8 +862,11 @@ export const chapterSteps = {
     delete c.checks[pid][vid];
     if (!Object.keys(c.checks[pid]).length) delete c.checks[pid];
   },
-  /* he asked for the whole chapter to be checked, older passages too */
-  checkAll: () => (c) => { c.checkAll = true; },
+  /* he asked for the whole chapter to be checked, older passages too — and read whole once they are (checker.js runWhole) */
+  checkAll: () => (c) => { c.checkAll = true; c.wholeAsked = true; },
+  /* the chapter read whole by the checker: the words it read (checker.js wholeSig), when, how many times that day,
+   * how long it was — or that its model would not read it (missed); his asking for it is answered */
+  setWholeRead: (row) => (c) => { c.wholeRead = JSON.parse(JSON.stringify(row)); delete c.wholeAsked; },
 };
 
 /* ----------------------------------------------------- turns (talk, play) */

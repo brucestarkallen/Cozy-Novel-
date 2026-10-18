@@ -97,6 +97,30 @@ async def main():
                 check(f'the checker’s ring turns while it waits and while it checks ({label})', moving == [True, True])
                 check(f'and stands still in a tab out of sight ({label})', not await rp.evaluate(turn, ['checking', True]))
                 await ctx.close()
+            # 2.12.33: a chapter read whole once it has ended — a cup set down, and later still in her hand — its fix on a
+            # card that says what the book says before it, and where it was found
+            ctx = await b.new_context(viewport={'width': 412, 'height': 915})
+            wp = await ctx.new_page()
+            wlogs = []
+            wp.on('pageerror', lambda e: wlogs.append(str(e)))
+            await H.new_book(wp, title='The Cup')
+            await H.add_conn(wp)
+            await wp.evaluate("""async () => {
+              const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const w = await import('/js/novel/writer.js');
+              const id = location.hash.split('/')[2]; const one = s.peek('novel', id).order[0];
+              for (const t of ['She set the cup down on the sill and looked out at the rain.', 'The wind had come up off the sea.', 'She turned back to the room, the cup still warm in her hand.']) w.addMine({ novelId: id, chapterId: one, text: t });
+              const two = sh.newChapter(id);
+              await s.create('chapter', two.id, two);
+              s.change('novel', id, (n) => { n.order.push(two.id); }, { now: true });
+              w.addMine({ novelId: id, chapterId: two.id, text: 'Morning came grey over the cliffs.' });
+            }""")
+            await wp.wait_for_function("document.querySelector('#checkBubble').dataset.state === 'found'", timeout=60000)
+            await wp.click('#checkBubble')
+            await wp.wait_for_selector('.sug .sugheld', timeout=10000)
+            card = await wp.inner_text('.sug:has(.sugheld)')
+            check('the chapter read whole: its fix on a card — what it holds to in the book’s words, and where it was found', 'As the book says before it:' in card and 'She set the cup down on the sill' in card and 'Found when the chapter was read whole.' in card and 'the cup cooling on the sill' in card)
+            check('no browser exceptions reading the chapter whole', not wlogs)
+            await ctx.close()
             await b.close()
     print(f'{passed} passed', flush=True)
 

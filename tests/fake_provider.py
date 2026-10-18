@@ -38,6 +38,15 @@ def answer_for(body):
         rows = last_user.split("Entries it doesn’t have:", 1)[-1].split("\n\nName the ones", 1)[0]
         want = [int(m.group(1)) for m in re.finditer(r"^(\d+)\. .*PICKME", rows, re.M)] if "PICKME" in asked else []
         return json.dumps({"entries": want})
+    if "Read it as one chapter" in last_user:
+        # the checker reading a chapter whole (2.12.33): a cup set down earlier and still in her hand later
+        edits = []
+        part = last_user.split("— each passage numbered as it is on the page:", 1)[-1].split("Read it as one chapter", 1)[0]
+        if "She set the cup down on the sill" in last_user:
+            for m in re.finditer(r"\[(\d+\.\d+)\] ([\s\S]*?)(?=\n\n\[\d+\.\d+\] |\n\"\"\"|$)", part):
+                if "the cup still warm in her hand" in m.group(2):
+                    edits.append({"passage": m.group(1), "kind": "continuity", "find": "the cup still warm in her hand", "replace": "the cup cooling on the sill", "why": "she set it down", "says": "She set the cup down on the sill"})
+        return json.dumps({"edits": edits})
     if "Check these passages from" in last_user:
         # the checker: a fix for the stand-in's own stock words, wherever they stand
         edits = []

@@ -98,8 +98,12 @@ class H(BaseHTTPRequestHandler):
             backfill = "were read into the notes before the book’s bibliography was kept" in last_user
             # the helper picking what a page needs from the bibliography (2.12.27): nothing, unless the test queued an answer for it ({"pick": true})
             pick = 'Answer with only this: {"entries": [the numbers]}' in last_user
-            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")):
+            # the checker reading a chapter whole (2.12.33): nothing found, unless the test queued an answer for it ({"whole": true})
+            whole = "Read it as one chapter" in last_user
+            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole):
                 beh = QUEUE.pop(0)
+            elif whole:
+                beh = {"text": json.dumps({"edits": []})}
             elif pick:
                 beh = {"text": '{"entries": []}'}
             elif backfill:

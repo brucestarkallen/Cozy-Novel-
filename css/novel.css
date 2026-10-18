@@ -775,6 +775,10 @@ body.reading .scroller { bottom: 12px; }
 .sug ins { text-decoration: none; background: rgba(143,191,122,.18); border-radius: 4px; padding: 0 2px; }
 .sug mark { background: rgba(233,180,76,.35); color: inherit; border-radius: 3px; padding: 0 1px; }
 .sug .sugwhy { font-size: 13px; line-height: 1.45; color: var(--chrome-soft); margin-top: 5px; }
+/* what a fix holds to, in the book's words before it; found reading the chapter whole (2.12.33) */
+.sug .sugheld { font-style: italic; }
+.sug .sugheld b { font-style: normal; }
+.sug .sugwhole { font-size: 12px; opacity: .85; }
 .sug .btnrow { margin-top: 8px; }
 
 /* ------------------------------------------------------------- search */
