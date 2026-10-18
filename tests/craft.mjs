@@ -262,7 +262,7 @@ test('an explicitly edited craft retains its persona and original rules unchange
 });
 
 
-const appMetaWords = /\b(?:robot(?:ic)?|persona|AI|assistant|language model|LLM|chatbot|few[- ]shot|the model|NPCs?|role ?play(?:ing)?)\b/i;
+const appMetaWords = /\b(?:robot(?:ic)?|persona|AI|assistant|language model|LLM|chatbot|few[- ]shot|the model|NPCs?|role ?play(?:ing)?|spawn(?:s|ed)?|slop|belief state)\b/i;
 for (const purpose of ['write', 'play']) {
   test(`${purpose}: the assembled default craft speaks directly without machine labels`, () => {
     const words = 'Batman, keep your dry humor as we write.';
