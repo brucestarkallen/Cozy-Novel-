@@ -38,6 +38,29 @@ def answer_for(body):
         rows = last_user.split("Entries it doesn’t have:", 1)[-1].split("\n\nName the ones", 1)[0]
         want = [int(m.group(1)) for m in re.finditer(r"^(\d+)\. .*PICKME", rows, re.M)] if "PICKME" in asked else []
         return json.dumps({"entries": want})
+    if "Add the quotation marks each spoken line is missing" in last_user:
+        # the marks' mender (2.12.34): a speech opened while one is still open is closed before the space in front of it
+        out = []
+        for m in re.finditer(r"^(\d+)\. «(.*)»$", last_user, re.M):
+            line = m.group(2)
+            opened = False
+            fixed = None
+            for i, ch in enumerate(line):
+                if ch != '"':
+                    continue
+                before = line[i - 1] if i else " "
+                after = line[i + 1] if i + 1 < len(line) else " "
+                opens = before.isspace() and not after.isspace()
+                if opens and opened:
+                    j = i
+                    while j > 0 and line[j - 1].isspace():
+                        j -= 1
+                    fixed = line[:j] + '"' + line[j:]
+                    break
+                opened = opens
+            if fixed:
+                out.append({"n": int(m.group(1)), "text": fixed})
+        return json.dumps({"paragraphs": out})
     if "Read it as one chapter" in last_user:
         # the checker reading a chapter whole (2.12.33): a cup set down earlier and still in her hand later
         edits = []

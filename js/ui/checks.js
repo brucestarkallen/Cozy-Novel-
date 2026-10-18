@@ -416,7 +416,7 @@ function card(novelId, x) {
       });
     } }, 'Apply'));
   } else {
-    btns.append(h('button.btn.primary.small', { title: 'The writer writes this sentence again without them, on the page itself — ⋯ → Put back the words before takes it back out.', onclick: () => {
+    btns.append(h('button.btn.primary.small', { title: item.marks ? 'The writer writes this paragraph again with its quotation marks set and every word kept, on the page itself — ⋯ → Put back the words before takes it back out.' : 'The writer writes this sentence again without them, on the page itself — ⋯ → Put back the words before takes it back out.', onclick: () => {
       const spot = checker.spotOf(x.chapterId, x.passageId, item);
       if (!spot) { toast('Those words are not there any more.'); checker.leaveOne(x.chapterId, x.passageId, item.id, { remember: false }); return; }
       if (C.sheet) C.sheet.close();

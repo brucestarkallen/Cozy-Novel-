@@ -4611,11 +4611,12 @@ await test('the checker uses its own connection when he picks one', async () => 
 
 await test('a passage longer than the checker\'s model holds at once is read in parts, all of it kept for the passage; a model too small says so and is not asked', async () => {
   /* (the judge off: its grading takes room of its own — this is about the parts.
-   * 6,600 tokens: the checker's own words take about 1,800 of them (his humanize
-   * list, 2.11.1; where people and things are and what a fix quotes, 2.12.33 —
-   * about 200 more, so 6,200 left it under the 600 it needs) and its answer 40%,
-   * leaving the passage about 600 — some 260 words a part; at 4,000 it says so) */
-  await setHouse({ context: 6600 }, { checksFrom: 0, judge: { on: false } });
+   * 7,000 tokens: the checker's own words take about 2,000 of them (his humanize
+   * list, 2.11.1; where people and things are and what a fix quotes, 2.12.33;
+   * how dialogue is set, 2.12.34 — each left the room before under the 600 it
+   * needs) and its answer 40%, leaving the passage some 300 words a part; at
+   * 4,000 it says so) */
+  await setHouse({ context: 7000 }, { checksFrom: 0, judge: { on: false } });
   const para = (i) => `Paragraph ${i} goes on about the sea and the light and the long night watch, word after word, until the lamp burns low and the keeper sleeps.`;
   const b = await makeBook([[Array.from({ length: 36 }, (_, i) => para(i + 1)).join('\n\n'), 'A short one.']]);
   await script([
@@ -8128,7 +8129,10 @@ await test('pages kept from before are made whole once, when the book opens — 
     { passage: '1.1', kind: 'grammar', find: 'Gulls cried', replace: 'Gulls cried out', why: 'x' },
     { passage: '1.1', kind: 'grammar', find: 'I hope this captures', replace: 'x', why: 'in the note' }] }) }]);
   await checker.runCheck(b.novelId);
-  assert.equal(checker.suggestions(b.novelId).length, 2);
+  /* (2.12.34: and his own “Wait, — a quotation opened and never closed — has its speech marks set, a fix the repair knows) */
+  const shut = checker.suggestions(b.novelId).filter((x) => x.item.marks);
+  assert.deepEqual(shut.map((x) => [x.number, x.item.find, x.item.replace]), [[2, `${story200.split(' ').slice(-2).join(' ')} “Wait,`, `${story200.split(' ').slice(-2).join(' ')} “Wait,”`]]);
+  assert.equal(checker.suggestions(b.novelId).length - shut.length, 2);
   /* a scene's tellings: one kept from before with tracking after it, one he put back whole */
   const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
   store.change('play', playId, shape.turnSteps.addTurn(shape.newTurn('ai', `${story200}\n\n${block}`)), { now: true });
@@ -8144,7 +8148,7 @@ await test('pages kept from before are made whole once, when the book opens — 
   assert.equal(picked(b.ch().passages[1]).text, `${story200} “Wait,\n\nshe said.`, 'his own words, as he wrote them');
   assert.ok(picked(b.ch().passages[2]).text.endsWith('Would you like me to continue?'), 'a page cut short keeps its end');
   assert.equal(archivist.pendingWork(b.novelId), false, 'nothing read again');
-  assert.deepEqual(checker.suggestions(b.novelId).map((x) => x.item.find), ['Gulls cried'], 'what it found still stands — but for what was in the note');
+  assert.deepEqual(checker.suggestions(b.novelId).filter((x) => !x.item.marks).map((x) => x.item.find), ['Gulls cried'], 'what it found still stands — but for what was in the note');
   assert.equal(b.novel().memory.mended, mend.MEND_V);
   /* once: a version made since is shaped at its own door, never again by the mend */
   store.change('chapter', b.ids[0], shape.chapterSteps.addVersion(p3.id, shape.newVersion({ text: `${story200}\n\nWould you like me to continue?`, how: 'partner' })), { now: true });
@@ -12597,6 +12601,128 @@ await test('a chapter its model will not read whole is let be after two tries un
   assert.equal(checker.wholeOwed(b.novelId, b.ids[0]), false, 'and not offered while its words stand');
   await setHouse();
   await putAway(b);
+});
+
+heading('the speech marks pair up (2.12.34)');
+/* his page, 18 October: a quotation mark left out mid-line, under a green light */
+const HIS_PARA = `"Close Hana's eyes," Emilia said. Two pulse-beats of pavement went by under her heels. "Tck. Tck. "You did not look at her closely enough, or you would know what that would take. Leave them as they fell. Their own people are coming with the light, and their own people will put their own litany over them, and that is a better grave than anything you or I could arrange with bare hands and a stolen hour." She did not turn her head. "Nothing that died in my cellar tonight goes unburied. The chain retrieves its dead. I have read a hundred of their recovery reports off my desk and not one of them ended with a body left on the stone."`;
+const HIS_SET = HIS_PARA.replace('Tck. Tck. "You', 'Tck. Tck." "You');
+const askOfLast = async (needle) => (await requests()).map((x) => String(x.body.messages.at(-1).content || '')).filter((m) => m.includes(needle));
+
+await test('the repair reads each paragraph’s speech marks in order: a mark standing where the lost quote belongs is made that quote, a pair in two kinds is written in one, an asterisk left open closes inside its own stretch, speech wrapped in asterisks is unwrapped — and a quote simply left out (his page) is found, never guessed at', async () => {
+  const m = (x) => textshape.mendMarks(x).text;
+  assert.equal(m('"A gift,* she said, slowly. "From my sister."'), '"A gift," she said, slowly. "From my sister."', 'an asterisk where the close belongs');
+  assert.equal(m('"Go," she said. "Now,\' he said.'), '"Go," she said. "Now," he said.', 'a single quote where the close belongs');
+  assert.equal(m('“A gift," she said.'), '“A gift,” she said.', 'one kind');
+  assert.equal(m('"I *mean it," she said.'), '"I *mean it,*" she said.', 'closed inside the speech, not after the narration');
+  assert.equal(m('He heard a *thud and turned.'), 'He heard a *thud and turned.*');
+  assert.equal(m('*"Nngh—!"* she cried.'), '"Nngh—!" she cried.', 'the sound law’s two lanes never mixed');
+  assert.equal(m('"Well," she said, "maybe later.'), '"Well," she said, "maybe later."');
+  for (const kept of ['He was 6\'2" tall.', '“Dear John,\nI miss you.\nLove, Mary”', 'He said, “I will go.\n“And I will stay.”', '„Komm,“ sagte sie.']) assert.equal(textshape.mendMarks(kept).changed, false, kept);
+  /* his page: no mark stands in for the one left out — left to the letter, and found */
+  assert.equal(textshape.mendMarks(HIS_PARA).changed, false, 'never a guess');
+  const [f] = textshape.speechFaults(`The rain had stopped.\n${HIS_PARA}`);
+  assert.ok(f && f.start === 'The rain had stopped.\n'.length && f.line === HIS_PARA && f.mended === '' && f.near.includes('Tck. Tck. "You'), JSON.stringify(f));
+  assert.deepEqual(textshape.speechFaults(HIS_SET), [], 'set right, it pairs');
+  assert.deepEqual(textshape.speechFaults('He said, “I will go.\n“And I will stay.”'), [], 'a speech going on into the next paragraph is no fault');
+  /* the mender may only add quotation marks */
+  assert.equal(textshape.insertsOnlyMarks(HIS_PARA, HIS_SET), true);
+  assert.equal(textshape.insertsOnlyMarks(HIS_PARA, HIS_PARA.replace('Tck. Tck. "You', 'Tck. Tck. You')), false, 'nothing taken away');
+  assert.equal(textshape.insertsOnlyMarks(HIS_PARA, HIS_SET.replace('stolen hour', 'stolen night')), false, 'no word changed');
+  /* what a card shows: only the stretch that changed, enough to stand once */
+  const c = textshape.changeSpan(HIS_PARA, 0, HIS_PARA.length, HIS_SET);
+  assert.deepEqual([c.find, c.replace], ['heels. "Tck. Tck. "You did', 'heels. "Tck. Tck." "You did']);
+});
+
+await test('a new page that came as one block is parted where speech begins — white space only — and a page with its paragraphs is left as it came', async () => {
+  const b = await makeBook([['The rain had stopped.']]);
+  const block = `${'She came in from the rain and stood by the door. '.repeat(18)}"Sit," he said. She sat. "Now," she said. Then nothing.`;
+  await script([{ text: block }, { text: `First.\n\n${block}` }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  const v = picked(b.ch().passages.at(-1));
+  assert.ok(v.text.endsWith('the door.\n\n"Sit," he said. She sat.\n\n"Now," she said. Then nothing.'), v.text.slice(-120));
+  assert.equal(v.text.replace(/\s+/g, ' '), block, 'never a word');
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  assert.equal(picked(b.ch().passages.at(-1)).text, `First.\n\n${block}`, 'paragraphs it had: as it came');
+  await putAway(b);
+});
+
+await test('the checker is told the paragraphs whose speech marks do not pair and how dialogue is set; what it leaves, the marks’ mender sets — only quotation marks — and the fix goes in by itself', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const b = await makeBook([[`The rain had stopped.\n\n${HIS_PARA}`]]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [] }) }, { marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: HIS_SET }] }) }]);
+  await checker.runCheck(b.novelId);
+  const [ask] = await askOfLast('Check these passages from');
+  assert.ok(ask.includes('Speech marks that do not pair, counted in these paragraphs') && ask.includes('[1.1] «…her heels. "Tck. Tck. "You did not look at her…»'), ask.slice(-1500));
+  assert.ok(ask.includes('a new speaker begins a new paragraph') && ask.includes('every spoken line opens and closes its quotation marks'), 'how dialogue is set');
+  const [mender] = await askOfLast(prompts.MARKS_ASK);
+  assert.ok(mender && mender.includes(`1. «${HIS_PARA}»`) && mender.includes('Change no word and no other mark'), mender);
+  const v = picked(b.ch().passages[0]);
+  assert.equal(v.text, `The rain had stopped.\n\n${HIS_SET}`, 'set on the page itself, by itself');
+  assert.deepEqual(v.hands, ['checker']);
+  assert.deepEqual(textshape.speechFaults(v.text), []);
+  assert.equal(checker.suggestions(b.novelId).length, 0);
+  /* nothing asked again for words that pair */
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a page checked before its marks were read is found too, never sent to the checker again; a mender’s answer that changes a word is refused — the paragraph offered to be written again with every word kept, and written again by itself when fixes go in by themselves', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([[HIS_PARA]]);
+  const p = b.ch().passages[0];
+  const v0 = picked(p);
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p.id, v0.id, { round: 'ck-old', sig: util.hashText(v0.text), at: Date.now() - 86400000, items: [] }), { now: true });
+  await reset();
+  await script([{ marks: true, text: JSON.stringify({ paragraphs: [{ n: 1, text: HIS_SET.replace('stolen hour', 'stolen night') }] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.equal((await askOfLast('Check these passages from')).length, 0, 'not checked again');
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 1, 'its marks read and the mender asked');
+  assert.equal(picked(b.ch().passages[0]).text, HIS_PARA, 'a word changed: refused');
+  const [sug] = checker.suggestions(b.novelId);
+  assert.ok(sug && sug.item.marks && sug.item.replace === null && sug.item.asked && sug.item.find === HIS_PARA && sug.item.phrases[0].includes('Tck. Tck. "You'), JSON.stringify(sug && sug.item));
+  assert.ok(checker.spanNote(sug.item).includes('keep every word as it is'));
+  /* asked once for these words */
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0, 'never asked in a loop');
+  /* fixes by themselves: written again by itself, with every word kept */
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  await reset();
+  await script([{ text: HIS_SET }]);
+  await checker.runCheck(b.novelId);
+  const job = checker.forTests().lifting.get(b.novelId);
+  if (job) await job;
+  const [w] = (await requests()).map((x) => x.body.messages.map((mm) => String(mm.content || '')).join('\n')).filter((x) => x.includes('Set the quotation marks of this paragraph right'));
+  assert.ok(w, 'the writer asked to set them');
+  assert.equal(picked(b.ch().passages[0]).text, HIS_SET);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('his own words checked: a mark that stands in for the lost quote is set with no model asked, and goes in by itself; a page kept before is mended once when the book opens', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const b = await makeBook([['The rain had stopped.']]);
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: '"A gift,* she said, slowly. "From my sister."' });
+  await reset();
+  await checker.runCheck(b.novelId);
+  assert.equal((await askOfLast(prompts.MARKS_ASK)).length, 0, 'known: no model asked');
+  assert.equal(picked(b.ch().passages[1]).text, '"A gift," she said, slowly. "From my sister."');
+  await setHouse();
+  await putAway(b);
+  /* a writer's page kept before 2.12.34 */
+  const old = await makeBook([['“A gift," she said, and set the box down. "From my sister.* Then she left.']]);
+  store.change('novel', old.novelId, shape.novelSteps.setMemory({ mended: 3 }), { now: true });
+  const got = await mend.mendBook(old.novelId);
+  assert.equal(got.pages, 1);
+  /* (the kind the page uses most: three straight marks to one curly) */
+  assert.equal(picked(old.ch().passages[0]).text, '"A gift," she said, and set the box down. "From my sister." Then she left.');
+  assert.deepEqual(await mend.mendBook(old.novelId), { pages: 0, tellings: 0, versions: 0 }, 'once');
+  await putAway(old);
 });
 
 /* ------------------------------------------------------------ done */

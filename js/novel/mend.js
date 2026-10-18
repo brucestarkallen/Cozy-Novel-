@@ -21,7 +21,7 @@
 import * as store from '../store.js';
 import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked } from './shape.js';
 import { foldVersion } from './inplace.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, dropMarkup } from './textshape.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, dropMarkup, partBlock } from './textshape.js';
 import { shapeTelling } from './talk.js';
 import { resign } from './archivist.js';
 import { locate } from './changes.js';
@@ -32,7 +32,11 @@ import { carriedCodex } from './bibliography.js';
 /* 2: a plan or a draft above the page, and its check of its own work after it, come off too; a lift echoed from an old example is said again
  * 3: a web page's or code's markup left in a page (“…paid for.</code>”, his report 2.12.2) comes off; and a fix made as a
  *    version of its own (foldOld) goes on the version it was made from */
-export const MEND_V = 3;
+/* 4: speech marks paired in order — a mark standing where a lost quote belongs made that quote, a pair in two kinds
+ *    written in one, a curly mark facing the wrong way turned, speech wrapped in asterisks unwrapped, an asterisk left
+ *    open closed inside its own stretch, and a page that came as one block parted where speech begins (Cozy Tavern
+ *    M753, M510-17, 2.12.34) */
+export const MEND_V = 4;
 const HIS = ['mine', 'edit', 'imported'];
 
 /* one version's words made whole as a new page's are: {text, tookOff, tookOffTop} */
@@ -40,7 +44,7 @@ export function mendPage(v, { names = [] } = {}) {
   const given = String((v && v.text) || '');
   const cut = Boolean(v && v.cut);
   const head = dropTop(given, { names });
-  let text = joinSoftWraps(head.text);
+  let text = joinSoftWraps(partBlock(head.text).text);
   let tail = '';
   /* the unfinished end of a page cut short is story still to be carried on — never a note */
   if (!cut) {

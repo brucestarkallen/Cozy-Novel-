@@ -1056,6 +1056,12 @@ function writerSees({ his = '', sofar = '', left = 0 }) {
   else if (gone) out.push(gone);
   return out;
 }
+/* the paragraphs whose speech marks do not pair (textshape.js speechFaults), one line (2.12.34) */
+function marksLine(marks) {
+  const rows = Object.entries(marks || {}).filter(([, list]) => list && list.length);
+  if (!rows.length) return '';
+  return `\nSpeech marks that do not pair, counted in these paragraphs — a quotation mark left out or one too many, so speech and narration run together: set each right where its spoken words begin and end, in the kind of mark the book uses, changing no word: ${rows.map(([n, list]) => `[${n}] ${list.map((w) => `«${w}»`).join(' ')}`).join('; ')}.`;
+}
 /* strays of another script counted in the passages (textshape.js straysIn), one line */
 function straysLine(strays) {
   const rows = Object.entries(strays || {}).filter(([, list]) => list && list.length);
@@ -1067,7 +1073,7 @@ function straysLine(strays) {
  * may go in by itself (checker.js heldBy); one that holds only to the notes waits for him, the notes may be wrong */
 const SAYS_RULE = 'For a "continuity" or "seam" fix, "says" is the words of the story before it that the fix holds to, copied exactly — from an earlier passage, the chapter up to these passages or the end of the chapter before — left out only when it holds to the notes or the bibliography.';
 
-export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, strays = {}, repeats = {}, his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', gradesOnly = false, bib = '' }) {
+export function checkRequest({ novel, chapterLabel, numbered, avoid = [], before = '', beforeFrom = 'this', judge = null, stock = {}, strays = {}, repeats = {}, marks = {}, his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', gradesOnly = false, bib = '' }) {
   const parts = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });
   if (notes) parts.push(`${NOTES_FOR_A_READER}\n${behind ? `${behind}\n` : ''}${notes}`);
@@ -1090,7 +1096,7 @@ Answer with one JSON object and nothing else: {"grades": [{"passage": "2.3", "ch
     return parts.join('\n\n');
   }
   parts.push(`Suggest only what is worth changing, each a fix in place — a word, a phrase, or a whole sentence written again when a small fix won't do:
-- "grammar": spelling, grammar, punctuation; a word missing, doubled, or wrong for the meaning (their/there, affect/effect, lay/lie); agreement; a tense slip, inside a sentence or from the tense the book is told in; a slip from the point of view the book is told in; capitals; and the book kept consistent — a word spelled one way throughout (grey/gray, half-light/half light), numbers and quote marks as the book writes them.
+- "grammar": spelling, grammar, punctuation; a word missing, doubled, or wrong for the meaning (their/there, affect/effect, lay/lie); agreement; a tense slip, inside a sentence or from the tense the book is told in; a slip from the point of view the book is told in; capitals; and the book kept consistent — a word spelled one way throughout (grey/gray, half-light/half light), numbers and quote marks as the book writes them. And dialogue set as a book sets it: every spoken line opens and closes its quotation marks, in one kind of mark; a new speaker begins a new paragraph — where a second person speaks inside the same paragraph, part it there (the fix's words with a line break where the new paragraph begins); the comma, question or exclamation mark inside the closing quote before a tag, and the tag after it in small letters unless it begins with a name ("Go," she said); a quotation inside speech in the other kind of mark; a sentence of speech run on into the narration, or narration left inside a quote.${marksLine(marks)}
 - "clarity": a sentence hard to follow, tangled, or running on; padding; phrasing unnatural in the book's language (a wrong preposition, words that don't go together); a weak passive or buried verb where the active is plainer (a passive the book means stays) — the sentence written again whole when it needs it.
 - "humanize": what reads machine-made rather than written, said the way this book would say it. Most often: a phrase that is awkward, or not how anyone would put it; a sentence that is clumsy, overloaded, or the same shape as the ones around it; explaining what the scene already shows, or what a look or a line meant; a cliché or stock phrase (a heart hammering against ribs, a voice barely above a whisper, a breath she didn’t know she was holding, a testament to); a purple or overwritten line, figures piled on figures; a vague word where a particular detail belongs, or a flat one where a precise one belongs; a word out of the book's voice or time, unless a character talks that way; the turn “it wasn’t X — it was Y”; a feeling given only by the same stock bodily cue; a closing line that says what it all meant; things in threes by habit; a named person called by a string of descriptions instead of their name; the same word twice close together, or a phrase the book keeps reaching for.${stockLine(stock)}${repeatsLine(repeats)}${straysLine(strays)}${avoid.length ? `
 - "avoid": anything on my list of words to avoid (${avoid.map((w) => `“${w}”`).join(', ')}), said another way.` : ''}
@@ -1114,6 +1120,19 @@ Answer with one JSON object and nothing else: {"edits": [{"passage": "2.3", "kin
  * across it: where people and things are, who knows what, words said again, time, the seams. The later words are
  * put right to the earlier with the smallest fix, never what happens; each fix quotes what it holds to. */
 export const WHOLE_ASK = 'Read it as one chapter';
+
+/* THE SPEECH MARKS THE REPAIR CANNOT SET (Cozy Tavern M753, checker.js runMarks): a paragraph whose quotation marks do
+ * not pair, where no mark stands in for the one left out — where it belongs is a reading of the sentence, not of its
+ * marks. Only quotation marks may be added (textshape.js insertsOnlyMarks): no word, no other mark, nothing taken away. */
+export const MARKS_ASK = 'Add the quotation marks each spoken line is missing';
+export function marksRequest({ rows }) {
+  return `The speech marks of these paragraphs do not pair, so the page runs narration into speech and speech into narration:
+${rows.map((r) => `${r.n}. «${r.line}»`).join('\n')}
+
+${MARKS_ASK}, where its spoken words begin and end, in the kind of quotation mark the paragraph already uses. Change no word and no other mark, and take nothing away — each paragraph comes back whole, every letter as it stands, with only quotation marks added.
+
+Answer with one JSON object and nothing else: {"paragraphs": [{"n": 1, "text": "…the paragraph with its quotation marks set…"}]}`;
+}
 export function wholeRequest({ novel, chapterLabel, numbered, before = '', beforeFrom = 'this', his = '', sofar = '', left = 0, notesFit = 0, asked = [], behind = '', bib = '', part = 1, parts = 1 }) {
   const out = [];
   const notes = notesText(novel, { forHelper: true, fit: notesFit, focus: `${before}\n${numbered}` });

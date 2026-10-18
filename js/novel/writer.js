@@ -19,7 +19,7 @@ import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
 import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
-import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds } from './textshape.js';
+import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock } from './textshape.js';
 import { renameIn } from './names.js';
 import { changeInPlace, foldVersion, grownFields } from './inplace.js';
 
@@ -514,7 +514,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       if (unglued.changed) notes.push('A stray character of another script, stuck to the front of a word, was taken off.');
       const unmarked = dropMarkup(unglued.text, { from });
       if (unmarked.changed) notes.push(markupNote(unmarked.taken));
-      finalText = mendMarks(unmarked.text, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
+      /* a whole new page that came as one block: parted where speech begins (Cozy Tavern M510-17) */
+      const parted = from === 0 ? partBlock(unmarked.text).text : unmarked.text;
+      finalText = mendMarks(parted, { from, leaveLast: Boolean(out.cut || out.stopped) }).text;
       /* one standing loose ("the 틀 door") is not taken off by itself — a word may hang on it: said, for the checker to mend or for him (Cozy Tavern M119) */
       const loose = straysIn(finalText).filter((x) => x.start >= from);
       if (loose.length) notes.push(`A stray character of another script stands in it (“…${loose[0].words}…”) — ${someoneChecks(h) ? 'the checker offers to mend it, or Edit takes it out' : 'Edit takes it out'}.`);

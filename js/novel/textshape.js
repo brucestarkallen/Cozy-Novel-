@@ -271,12 +271,23 @@ export function dropTop(text, { names = [], minLeft = 200 } = {}) {
  * paragraph opens with one (one speaker going on, a novel's way), or a later
  * one closes it (a letter, a song, a speech written over several lines); an
  * empty pair of quotes goes; a lone asterisk that opens an emphasis is closed
- * at the paragraph's end. Marks only — never a word: a quote is never taken
+ * where its stretch ends. Marks only — never a word: a quote is never taken
  * out (after a dialogue tag, "maybe later" is speech going on, not a stray),
  * and italics stay italics (in a novel they carry thoughts). A scene break
  * and a heading are left as they are; so is every paragraph that begins
  * before `from` (Go on: only what is new), and the last one of a page that
- * was cut (`leaveLast`: it is not finished — Go on finishes it). */
+ * was cut (`leaveLast`: it is not finished — Go on finishes it).
+ *
+ * THE MARKS OF SPEECH PAIR UP (Cozy Tavern M753, 2.12.34 — his page: `"Tck. Tck. "You did not look at her…`, under a
+ * green light). Through 2.12.33 only a quote left open at the END of a paragraph was seen; one opened mid-line while
+ * another was still open, or a close with nothing open, stood on the page, and the checker was never told. Now each
+ * paragraph's speech marks are read in order, each by where it stands (a quote before a word opens, after one closes;
+ * a curly mark by its own face where its place says nothing). Where they do not pair, the one mark standing where the
+ * missing quote belongs is made that quote when it alone makes every pair whole — a lone asterisk, or a single quote
+ * after the punctuation that ends a spoken line; a pair written in two kinds ("…” or “…") is written in one, and a
+ * curly mark facing the wrong way is turned. Speech wrapped in asterisks too (*"…"*: the sound law's two lanes never
+ * mixed) loses the asterisks. What no mark accounts for — a quote simply left out — is left as it is, and found
+ * (speechFaults) for the checker to set. */
 const HEADING_LINE = /^\s{0,3}#{1,4}\s+\S/;
 const OPENS_BEFORE = /[\s(\[—–-]/;
 function straightOpens(line, at) { return (at === 0 || OPENS_BEFORE.test(line[at - 1])) && /\S/.test(line[at + 1] || ''); }
@@ -299,9 +310,174 @@ function closedLater(lines, i, curly) {
   }
   return false;
 }
+const OPENER_BEFORE = /[\s(\[{—–-]/; /* what may stand right before an opening quote */
+const CLOSER_AFTER = /[\s.,!?;:)\]}…—–-]/; /* what may stand right after a closing quote */
+const SPOKEN = /["“”]/;
+const OTHER_LANGUAGE = /[„«»]/; /* „…“ and «…» keep their own language's rules */
+const blankAt = (text, i) => i < 0 || i >= text.length || /\s/.test(text[i]);
+/* where a mark stands says what it is: before a word it opens, after one it closes; between two words, or between two
+ * spaces, its place says nothing ('either') */
+function placeOf(text, i) {
+  const prevBlank = blankAt(text, i - 1);
+  const nextBlank = blankAt(text, i + 1);
+  const opens = (prevBlank || OPENER_BEFORE.test(text[i - 1])) && !nextBlank;
+  const closes = !prevBlank && (nextBlank || CLOSER_AFTER.test(text[i + 1]));
+  return opens && !closes ? 'open' : closes && !opens ? 'close' : 'either';
+}
+/* the double quotes of a paragraph, in order — a quote right after a figure is a measure (5'9", a 12" blade), not speech */
+export function speechMarks(text) {
+  const src = String(text == null ? '' : text);
+  const out = [];
+  for (let i = 0; i < src.length; i += 1) {
+    const c = src[i];
+    if (!SPOKEN.test(c)) continue;
+    if (c === '"' && /\d/.test(src[i - 1] || '')) continue;
+    const face = c === '“' ? 'open' : c === '”' ? 'close' : 'either';
+    const place = placeOf(src, i);
+    out.push({ at: i, curly: c !== '"', face, role: place !== 'either' ? place : face });
+  }
+  return out;
+}
+/* the marks walked in order: the pairs they make, and how many places do not pair (goesOn: the speech left open goes
+ * on in the paragraph after — the next one speaks, or a later one closes it) */
+export function pairWalk(marks, goesOn = false) {
+  let open = null;
+  let faults = 0;
+  const pairs = [];
+  const bad = [];
+  for (const m of marks) {
+    if (m.role === 'open' || (m.role === 'either' && !open)) {
+      if (open) { faults += 1; bad.push(m.at); } /* a speech opened while the last one never closed */
+      open = m;
+    } else {
+      if (!open) { faults += 1; bad.push(m.at); continue; } /* a close with nothing open */
+      pairs.push([open, m]);
+      open = null;
+    }
+  }
+  if (open && !goesOn) { faults += 1; bad.push(open.at); }
+  return { faults, pairs, open, bad };
+}
+const EMPHASIS_PAIR = /(?<!\*)\*(?=[^\s*])[^*\n]*?[^\s*]\*(?!\*)/g;
+function loneAsterisks(text) {
+  const taken = new Set();
+  for (const m of text.matchAll(EMPHASIS_PAIR)) { taken.add(m.index); taken.add(m.index + m[0].length - 1); }
+  const out = [];
+  for (let i = 0; i < text.length; i += 1) if (text[i] === '*' && text[i - 1] !== '*' && text[i + 1] !== '*' && !taken.has(i)) out.push(i);
+  return out;
+}
+const wordChar = (c) => /[\p{L}\p{N}]/u.test(c || '');
+/* the marks that may stand where a lost quote belongs, each with the part it would play */
+function standIns(text) {
+  const out = [];
+  const lone = loneAsterisks(text);
+  if (lone.length === 1) {
+    const i = lone[0];
+    const prevBlank = blankAt(text, i - 1);
+    const nextBlank = blankAt(text, i + 1);
+    if (!prevBlank && (nextBlank || CLOSER_AFTER.test(text[i + 1]))) out.push({ at: i, as: 'close' });
+    else if ((prevBlank || OPENER_BEFORE.test(text[i - 1])) && !nextBlank) out.push({ at: i, as: 'open' });
+  }
+  /* a single quote stands in only after the punctuation that ends a spoken line, with nothing after it but a space or
+   * the paragraph's end, and only when no other single quote stands in it to pair with (never an apostrophe in a word,
+   * never the plural's "boys' ", never a quotation inside the speech) */
+  const singles = [];
+  for (let i = 0; i < text.length; i += 1) if (/['‘’]/.test(text[i]) && !(wordChar(text[i - 1]) && wordChar(text[i + 1]))) singles.push(i);
+  if (singles.length === 1) {
+    const i = singles[0];
+    if (/[,.!?…—–-]/.test(text[i - 1] || '') && blankAt(text, i + 1)) out.push({ at: i, as: 'close' });
+  }
+  return out;
+}
+function quoteFor(marks, at, as) {
+  if (as === 'close') {
+    const before = pairWalk(marks.filter((m) => m.at < at), true);
+    return before.open ? (before.open.curly ? '”' : '"') : '';
+  }
+  const next = marks.find((m) => m.at > at);
+  return next && next.curly ? '“' : '"';
+}
+export function pairSpeech(text, goesOn = false) {
+  const src = String(text == null ? '' : text);
+  if (!SPOKEN.test(src) || OTHER_LANGUAGE.test(src)) return src;
+  let out = src;
+  let marks = speechMarks(out);
+  let walk = pairWalk(marks, goesOn);
+  if (walk.faults) {
+    const whole = [];
+    for (const c of standIns(src)) {
+      const q = quoteFor(marks, c.at, c.as);
+      if (!q) continue;
+      const tried = src.slice(0, c.at) + q + src.slice(c.at + 1);
+      if (!pairWalk(speechMarks(tried), goesOn).faults) whole.push(tried);
+    }
+    if (whole.length !== 1) return src; /* no mark accounts for it, or more than one could: as it came */
+    out = whole[0];
+    marks = speechMarks(out);
+    walk = pairWalk(marks, goesOn);
+  }
+  /* every pair in one kind, every curly mark facing the part it plays */
+  const curly = marks.filter((m) => m.curly).length;
+  const straight = marks.length - curly;
+  const chars = out.split('');
+  for (const [o, c] of walk.pairs) {
+    if (o.curly === c.curly && (!o.curly || (o.face === 'open' && c.face === 'close'))) continue;
+    const asCurly = o.curly === c.curly ? o.curly : curly > straight ? true : curly < straight ? false : o.curly;
+    chars[o.at] = asCurly ? '“' : '"';
+    chars[c.at] = asCurly ? '”' : '"';
+  }
+  if (walk.open && walk.open.curly && walk.open.face !== 'open') chars[walk.open.at] = '“'; /* a long speech's open mark, facing in */
+  return chars.join('');
+}
+/* an asterisk opened and never closed is closed at the end of the stretch it opened in — the page reads emphasis inside
+ * one line of speech or one stretch of narration, never across a quote (M753: closed at the paragraph's end,
+ * '"I *mean it," she said.*' showed two stray asterisks where there had been one). Speech that does not pair leaves no
+ * place to know: the asterisk is left as it is. */
+function closeEmphasis(line, goesOn) {
+  let single = -1;
+  let count = 0;
+  for (let i = 0; i < line.length; i += 1) if (line[i] === '*' && line[i - 1] !== '*' && line[i + 1] !== '*') { count += 1; single = i; }
+  if (!(count % 2 === 1 && single !== -1 && (single === 0 || /\s/.test(line[single - 1])) && /\S/.test(line[single + 1] || ''))) return line;
+  const marks = speechMarks(line);
+  if (!marks.some((m) => m.at > single)) return line + '*';
+  const walk = pairWalk(marks, goesOn);
+  if (walk.faults) return line;
+  const inside = walk.pairs.find(([o, c]) => o.at < single && single < c.at);
+  if (inside) return line.slice(0, inside[1].at) + '*' + line.slice(inside[1].at);
+  if (walk.open && walk.open.at < single) return line + '*';
+  const opener = walk.pairs.map(([o]) => o).concat(walk.open ? [walk.open] : []).filter((m) => m.at > single).sort((a, b) => a.at - b.at)[0];
+  if (!opener) return line + '*';
+  let end = opener.at;
+  while (end > single + 1 && /\s/.test(line[end - 1])) end -= 1;
+  return end > single + 1 ? line.slice(0, end) + '*' + line.slice(end) : line;
+}
+/* what follows a paragraph, for whether a speech left open in it goes on */
+function goesOnAt(lines, i) {
+  let next = '';
+  for (let k = i + 1; k < lines.length; k++) if (lines[k].trim()) { next = isBreakLine(lines[k]) ? '' : lines[k]; break; }
+  const nextSpeaks = /^\s*[*_]*[“"]/.test(next);
+  return { nextSpeaks, curlyLater: closedLater(lines, i, true), straightLater: closedLater(lines, i, false) };
+}
+/* one paragraph's marks made whole (its words never) */
+function mendCore(core0, { nextSpeaks, curlyLater, straightLater }) {
+  let core = core0;
+  /* an empty pair of quotes goes, with the one space it leaves */
+  const noEmpty = core.replace(/(^|[ \t(])(?:""|“[ \t]*”)(?=[ \t.,!?;:)]|$)/g, (m, pre) => (pre === ' ' || pre === '\t' ? '' : pre));
+  if (noEmpty !== core) core = noEmpty.replace(/^[ \t]+/, '');
+  /* speech wrapped in asterisks: the quote alone (M458) */
+  core = core.replace(/\*+[ \t]*(["“][^"“”\n]*["”])[ \t]*\*+/g, '$1');
+  const goesOn = nextSpeaks || curlyLater || straightLater;
+  core = pairSpeech(core, goesOn);
+  const opens = (core.match(/“/g) || []).length;
+  const closes = (core.match(/”/g) || []).length;
+  if (opens === closes + 1 && core.lastIndexOf('“') > core.lastIndexOf('”') && !nextSpeaks && !curlyLater && !OTHER_LANGUAGE.test(core)) core += '”';
+  const straight = quotesAt(core);
+  if (straight.length % 2 === 1 && !nextSpeaks && straightOpens(core, straight[straight.length - 1]) && !straightLater) core += '"';
+  return closeEmphasis(core, goesOn);
+}
 export function mendMarks(text, { from = 0, leaveLast = false } = {}) {
   const given = String(text == null ? '' : text);
-  if (!/["“*]/.test(given)) return { text: given, changed: false };
+  if (!/["“”*]/.test(given)) return { text: given, changed: false };
   const lines = given.split('\n');
   let last = -1;
   if (leaveLast) for (let i = lines.length - 1; i >= 0; i--) if (lines[i].trim()) { last = i; break; }
@@ -314,26 +490,89 @@ export function mendMarks(text, { from = 0, leaveLast = false } = {}) {
     if (start < from || i === last || !line.trim() || isBreakLine(line) || HEADING_LINE.test(line)) continue;
     const lead = line.match(/^\s*/)[0];
     const tail = line.slice(lead.length).match(/\s*$/)[0];
-    let core = line.slice(lead.length, line.length - tail.length);
-    /* an empty pair of quotes goes, with the one space it leaves */
-    const noEmpty = core.replace(/(^|[ \t(])(?:""|“[ \t]*”)(?=[ \t.,!?;:)]|$)/g, (m, pre) => (pre === ' ' || pre === '\t' ? '' : pre));
-    if (noEmpty !== core) core = noEmpty.replace(/^[ \t]+/, '');
-    let next = '';
-    for (let k = i + 1; k < lines.length; k++) if (lines[k].trim()) { next = isBreakLine(lines[k]) ? '' : lines[k]; break; }
-    const nextSpeaks = /^\s*[*_]*[“"]/.test(next);
-    const opens = (core.match(/“/g) || []).length;
-    const closes = (core.match(/”/g) || []).length;
-    if (opens === closes + 1 && core.lastIndexOf('“') > core.lastIndexOf('”') && !nextSpeaks && !closedLater(lines, i, true)) core += '”';
-    const straight = quotesAt(core);
-    if (straight.length % 2 === 1 && !nextSpeaks && straightOpens(core, straight[straight.length - 1]) && !closedLater(lines, i, false)) core += '"';
-    let single = -1;
-    let count = 0;
-    for (let k = 0; k < core.length; k++) if (core[k] === '*' && core[k - 1] !== '*' && core[k + 1] !== '*') { count++; single = k; }
-    if (count % 2 === 1 && (single === 0 || /\s/.test(core[single - 1])) && /\S/.test(core[single + 1] || '')) core += '*';
+    const core = mendCore(line.slice(lead.length, line.length - tail.length), goesOnAt(lines, i));
     const mended = core ? lead + core + tail : '';
     if (mended !== line) { lines[i] = mended; changed = true; }
   }
   return changed ? { text: lines.join('\n'), changed: true } : { text: given, changed: false };
+}
+/* A PAGE THAT CAME AS ONE BLOCK IS PARTED WHERE SPEECH BEGINS (Cozy Tavern M510-17 partParagraphs, 2.12.34): a new
+ * page of more than 900 characters with not one paragraph break is parted before each line of speech that opens after
+ * a finished sentence — white space only, never a word. A page that has its paragraphs is left as it is. */
+export function partBlock(text) {
+  const given = String(text == null ? '' : text);
+  const trimmed = given.trim();
+  if (trimmed.length <= 900 || /\n/.test(trimmed)) return { text: given, changed: false };
+  const parted = trimmed.replace(/([.!?…]["”’)]?)[ \t]+(?=["“][^\s])/g, '$1\n\n');
+  return parted === trimmed ? { text: given, changed: false } : { text: given.replace(trimmed, parted), changed: true };
+}
+/* an edit that only ADDS speech marks — every character kept, in order, and nothing new but a quotation mark — is the
+ * only edit the marks' mender may make (Cozy Tavern M753) */
+export function insertsOnlyMarks(before, after) {
+  const a = String(before == null ? '' : before);
+  const b = String(after == null ? '' : after);
+  if (b.length <= a.length) return false;
+  let i = 0;
+  for (let j = 0; j < b.length; j += 1) {
+    if (i < a.length && a[i] === b[j]) { i += 1; continue; }
+    if (!/["“”]/.test(b[j])) return false;
+  }
+  return i === a.length;
+}
+/* THE PARAGRAPHS WHOSE SPEECH MARKS DO NOT PAIR (Cozy Tavern M753 speechFaults, for a book): [{start, end, line,
+ * mended}] — each paragraph's place in the words, its words, and the paragraph as the repair would leave it when that
+ * alone pairs every mark (mended, '' when only a reading of the sentence can say where the quote belongs). A scene
+ * break, a heading, a paragraph in „…“ or «…», and a speech going on into the paragraph after are not faults. */
+export function speechFaults(text) {
+  const given = String(text == null ? '' : text);
+  if (!SPOKEN.test(given)) return [];
+  const lines = given.split('\n');
+  const out = [];
+  let pos = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const start = pos;
+    const line = lines[i];
+    pos += line.length + 1;
+    if (!SPOKEN.test(line) || OTHER_LANGUAGE.test(line) || isBreakLine(line) || HEADING_LINE.test(line)) continue;
+    const at = goesOnAt(lines, i);
+    const goesOn = at.nextSpeaks || at.curlyLater || at.straightLater;
+    const walk = pairWalk(speechMarks(line), goesOn);
+    if (!walk.faults) continue;
+    const lead = line.match(/^\s*/)[0].length;
+    const tail = line.length - line.trimEnd().length;
+    const core = line.slice(lead, line.length - tail);
+    const fixed = mendCore(core, at);
+    /* where it first goes wrong, with a few words either side: what a card marks */
+    const k = walk.bad[0];
+    const near = line.slice(Math.max(lead, k - 28), Math.min(line.length - tail, k + 28)).replace(/^\S*\s+(?=\S)/, (m) => (k - 28 > lead ? '' : m)).replace(/\s+\S*$/, (m) => (k + 28 < line.length - tail ? '' : m));
+    out.push({ start: start + lead, end: start + line.length - tail, line: core, goesOn, near: near.trim(), mended: fixed !== core && !pairWalk(speechMarks(fixed), goesOn).faults ? fixed : '' });
+  }
+  return out;
+}
+/* the smallest stretch of `text` that one change makes, from `start` to `end` replaced by `next` — a few words either
+ * side, enough to stand in only one place in the text: {find, replace, start, end} (a card shows only what changed) */
+export function changeSpan(text, start, end, next) {
+  const src = String(text == null ? '' : text);
+  const was = src.slice(start, end);
+  const now = String(next == null ? '' : next);
+  let a = 0;
+  while (a < was.length && a < now.length && was[a] === now[a]) a++;
+  let b = 0;
+  while (b < was.length - a && b < now.length - a && was[was.length - 1 - b] === now[now.length - 1 - b]) b++;
+  for (let words = 2; ; words += 2) {
+    let s = start + a;
+    let e = start + was.length - b;
+    for (let k = 0; k < words && s > start; ) { s--; if (/\s/.test(src[s]) && !/\s/.test(src[s + 1] || '')) k++; }
+    while (s > start && !/\s/.test(src[s - 1])) s--;
+    for (let k = 0; k < words && e < end; ) { if (/\s/.test(src[e]) && !/\s/.test(src[e - 1] || '')) k++; e++; }
+    while (e < end && !/\s/.test(src[e])) e++;
+    while (s < e && /\s/.test(src[s])) s++;
+    while (e > s && /\s/.test(src[e - 1])) e--;
+    const find = src.slice(s, e);
+    const replace = now.slice(s - start, now.length - (end - e));
+    const unique = src.indexOf(find) === src.lastIndexOf(find);
+    if ((unique && find.trim()) || (s === start && e === end)) return { find, replace, start: s, end: e };
+  }
 }
 
 /* A STRAY OF ANOTHER SCRIPT GLUED TO THE FRONT OF A WORD COMES OFF (Cozy

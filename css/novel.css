@@ -776,6 +776,8 @@ body.reading .scroller { bottom: 12px; }
 .sug mark { background: rgba(233,180,76,.35); color: inherit; border-radius: 3px; padding: 0 1px; }
 .sug .sugwhy { font-size: 13px; line-height: 1.45; color: var(--chrome-soft); margin-top: 5px; }
 /* what a fix holds to, in the book's words before it; found reading the chapter whole (2.12.33) */
+/* a fix that parts a paragraph shows its line break (2.12.34) */
+.sug .word-comparison del, .sug .word-comparison ins { white-space: pre-wrap; }
 .sug .sugheld { font-style: italic; }
 .sug .sugheld b { font-style: normal; }
 .sug .sugwhole { font-size: 12px; opacity: .85; }

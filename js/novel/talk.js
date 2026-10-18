@@ -22,7 +22,7 @@ import { connFor, connName, recount, rewrite as writerRewrite, busy as writerBus
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, NOTE_KINDS, matchCard } from './shape.js';
 import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, CHOICES_OPEN, CHOICES_CLOSE } from './prompts.js';
-import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup } from './textshape.js';
+import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup, partBlock } from './textshape.js';
 import { numberedText, partnerCut } from './context.js';
 import { READ_AT_ONCE, blocksIn, opsOf, readAsks, makeChange, makeTogether, groupsOf, undoChange, outcomeWords, statusNow, sinceWords, changeShort, madeGone, labelOf, whyNot, wordsOf, withEdits, directionsIn, unreadableRead, targetOf, baseOf, driftOf, numbersOf, whereOf, fieldsOf, snapshotForChanges, changedSinceSnapshot, renamedTarget } from './changes.js';
 import { searchBook } from './search.js';
@@ -208,7 +208,7 @@ export function shapeTelling(words, { cut = false, notes = null } = {}) {
   if (unglued.changed) say('A stray character of another script, stuck to the front of a word, was taken off.');
   const unmarked = dropMarkup(unglued.text);
   if (unmarked.changed) say(`Web page or code markup the narrator left in the telling (${unmarked.taken.slice(0, 3).map((x) => `“${x}”`).join(', ')}) was taken off.`);
-  const fin = finishTail(joinSoftWraps(unmarked.text));
+  const fin = finishTail(joinSoftWraps(partBlock(unmarked.text).text));
   if (fin.removed) {
     const what = fin.kinds.includes('tracking') && fin.kinds.includes('note') ? 'A block of tracking and a note to you' : fin.kinds.includes('tracking') ? 'A block of tracking' : 'A note to you';
     say(`${what} after the telling ${fin.kinds.length > 1 ? 'were' : 'was'} taken off — Put back what was taken off brings ${fin.kinds.length > 1 ? 'them' : 'it'} back.`);
