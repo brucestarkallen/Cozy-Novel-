@@ -15,6 +15,7 @@ import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
+import { pickEntries } from './bibpick.js';
 import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup } from './textshape.js';
@@ -371,7 +372,17 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
    * one whose window closed */
   const beating = setInterval(() => { if (Date.now() - lastSave > 25000) checkpoint(); }, 30000);
   try {
+    /* what the page needs from his bibliography that no word near it names (bibpick.js) — asked while the page waits
+     * for a reading on its way, so the one wait is not added to the other; none, and the page goes as it would. A few
+     * words written again inside a passage are not asked for: the passage around them carries its names */
+    const picking = how === 'selection' ? Promise.resolve({ refs: [] }) : (() => {
+      try {
+        const { novel, chapters } = bookNow(novelId);
+        return pickEntries({ conn: connFor(h, 'helper'), house: h, novel, chapters, purpose, target: build.target, request: build.request, moment: build.moment || '', play: build.play, signal: ctl.signal }).catch(() => ({ refs: [] }));
+      } catch (e) { console.error(e); return Promise.resolve({ refs: [] }); }
+    })();
     if (notesWait) { try { await notesWait(novelId, 5000, ctl.signal); } catch (_) { /* it goes anyway */ } }
+    const picks = (await picking).refs || [];
     if (!automaticAllowed()) { undo(); await store.flush('chapter', chapterId); return { ok: false, stopped: true, yielded: true }; }
     /* what the last request built held of the chapter open (context.js stats) */
     let told = null;
@@ -380,7 +391,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
         if (!ownsPage()) { job.gone = true; throw new Error('that passage is not there any more'); }
         if (!automaticAllowed()) throw new Error('automatic writing stopped');
         const { novel, chapters } = bookNow(novelId);
-        const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '' });
+        const a = assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '', picks });
         told = a.stats;
         return { system: a.system, systemParts: a.systemParts, messages: a.messages, maxTokens: wireOf(c) === 'anthropic' ? requiredLength(c, length) : (Number.isFinite(c.maxTokens) ? c.maxTokens : undefined), refuse: a.refuse, least: a.stats.least, seed: a.seed };
       },

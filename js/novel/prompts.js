@@ -26,6 +26,7 @@ import { LENGTHS, soundOf, povOf, tenseOf, hisField, NOTE_KINDS } from './shape.
 import { numberWords, estimateTokens, cutWords } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
 import { tellerOf, toTeller } from './teller.js';
+import { PICK_MAX, recallOn } from './bibliography.js';
 
 /* ------------------------------------------------- the starting words */
 /* What the boxes in Settings → Your instructions start with, and what
@@ -527,13 +528,43 @@ export const BIB_LEAD = `Who and what is named here, from my bibliography of the
 /* the partner sees every entry by its name and line, and the ones named here whole */
 /* the checker: who and what the passages name, as the book set them down before them (and his entries) */
 export const BIB_FOR_A_READER = 'From the book’s bibliography — who and what these passages name, as the book set them down before them, and my own entries. Where the notes say how things stand now, the notes are right:';
-export const BIB_INDEX = 'My bibliography of the book — every entry by its name and line. The writer reads an entry only when its name comes up, unless I say always or never:';
+/* …and with the entries the page needs that no word here names (bibpick.js) among them */
+export const BIB_LEAD_PICKED = `Who and what is named here, and what else this part needs, from my bibliography of the book — background for the writing. ${NOTES_KNOW} Where the pages or the notes say otherwise, the pages and the notes are right.`;
+/* when the writer reads an entry set to ride when it comes up: by its name — and, with Smart recall on, when a page needs it */
+const READS_WHEN = (recall) => (recall ? 'when its name comes up or a page needs it' : 'when its name comes up');
+export const BIB_INDEX = `My bibliography of the book — every entry by its name and line. The writer reads an entry ${READS_WHEN(true)}, unless I say always or never:`;
+const bibIndexLead = (recall) => (recall ? BIB_INDEX : `My bibliography of the book — every entry by its name and line. The writer reads an entry only ${READS_WHEN(false)}, unless I say always or never:`);
 export const BIB_NAMED = 'The entries named here, whole:';
-export function bibPart(rows, { index = '', indexLeft = 0 } = {}) {
+export function bibPart(rows, { index = '', indexLeft = 0, picked = false, recall = true } = {}) {
   const parts = [];
-  if (index) parts.push(`${BIB_INDEX}\n${index}${indexLeft ? `\n(and ${numberWords(indexLeft).toLowerCase()} more — ask for one by its name to read it)` : ''}`);
-  if (rows.length) parts.push(`${index ? BIB_NAMED : BIB_LEAD}\n\n${rows.join('\n\n')}`);
+  if (index) parts.push(`${bibIndexLead(recall)}\n${index}${indexLeft ? `\n(and ${numberWords(indexLeft).toLowerCase()} more — ask for one by its name to read it)` : ''}`);
+  if (rows.length) parts.push(`${index ? BIB_NAMED : picked ? BIB_LEAD_PICKED : BIB_LEAD}\n\n${rows.join('\n\n')}`);
   return parts.join('\n\n');
+}
+
+/* WHAT A PAGE NEEDS FROM THE BIBLIOGRAPHY, BY WHAT IT MEANS (bibpick.js; Cozy Tavern's smart recall, M510-50): the
+ * helper reads his words for what comes next and the words before it against his entries that would not ride — each
+ * by its name and line — and names the ones it needs. It writes nothing of the story: what rides is his entry, word for
+ * word. */
+export function pickRequest({ house, novel, purpose = 'write', rows = [], riding = [], moment = '', plan = '', near = '' }) {
+  const name = nameOf(house);
+  const scene = purpose === 'play';
+  const system = `${FICTION_WORK}\n\nYou keep the world of ${titled(novel)}, a novel ${name ? `${name} is writing` : 'being written'}, at hand for the writer: before each new ${scene ? 'telling of a scene we play in it' : 'part of it'} is written, you pick from the book’s bibliography the entries that part needs and would not otherwise have. You write nothing of the story.`;
+  const about = String(novel.brief || '').trim() || keptText(novel, 'about');
+  const before = String(near || '').trim();
+  const asked = String(moment || '').trim();
+  const parts = [
+    scene ? 'Next comes the narrator’s telling in a scene we’re playing.' : 'Next comes a new part of the book.',
+    asked ? `${scene ? 'My newest moves in it' : 'What I’ve asked for in it'}:\n${fence(cutWords(asked, 2400))}` : scene ? '' : 'I’ve left what happens to the writer.',
+    String(plan || '').trim() ? `My plan for this chapter:\n${fence(cutWords(plan, 1600))}` : '',
+    before ? `How it stands right before it${scene ? ', and the scene so far' : ''}:\n${fence(before)}` : 'Nothing is written before it in this chapter yet.',
+    about ? `What the book is about:\n${fence(cutWords(about, 1800))}` : '',
+    riding.length ? `Entries the writer has with it already: ${riding.slice(0, 40).join(', ')}${riding.length > 40 ? ', and more' : ''}.` : '',
+    `Entries it doesn’t have:\n${rows.map((r) => `${r.n}. ${r.head}`).join('\n')}`,
+    `Name the ones whose particulars this part needs and doesn’t have — someone who will be there or be spoken of, the place it happens in or passes through, a group someone here belongs to or answers to, a thing that will be used or carried, how a power, a technique or a rule of the world works when it comes into play, a word of the world that will be said. Read for what it means, not only for the words: guards storming the docks may need the order they answer to, and a spell being cast how magic works. Pick none rather than guess, and ${numberWords(PICK_MAX).toLowerCase()} at most.`,
+    'Answer with only this: {"entries": [the numbers]} — for example {"entries": [2, 7]}, or {"entries": []}.',
+  ];
+  return { system, user: parts.filter(Boolean).join('\n\n') };
 }
 
 /* A sentence for a request that opens on the writer's own notebook: the
@@ -763,7 +794,7 @@ const LANDS = {
   now: 'I see every change as it lands, and any of them can be undone.',
   wait: 'Each change waits until I apply it — until then nothing in the book changes, and what waits is not in the book: to change the same passage or card again in a later answer, give it whole as it should finally read (the newer proposal replaces the older one waiting for that thing), never a small change on top of words that are only waiting. I apply everything waiting at once, in the order you proposed it, or pick.',
 };
-const partnerChanges = (applies) => `When I ask for a change — or you see one that plainly needs making and I’d want it — make it yourself, in the same answer: a changes block at the very top, then a line for each change saying what you changed and why. ${LANDS[applies] || LANDS.now}
+const partnerChanges = (applies, recall = true) => `When I ask for a change — or you see one that plainly needs making and I’d want it — make it yourself, in the same answer: a changes block at the very top, then a line for each change saying what you changed and why. ${LANDS[applies] || LANDS.now}
 
 ${CHANGES_OPEN}[
   {"passage": "2.3", "find": "the exact words", "replace": "the new words", "why": "…"},
@@ -786,7 +817,7 @@ ${CHANGES_OPEN}[
 - "2.3" is passage 3 of Chapter Two as the page numbers it — a passage may hold many paragraphs, even a whole chapter (1.1 can be all of Chapter One); the number is never a paragraph’s. Quote "find" exactly — enough to be found in one place only. "rewrite" hands the passage to the writer — who works from my instructions and the craft — to write it again from your note: say what must change and what must stay, nothing about how to write. "text" is your own prose for it — only when I ask for your words. Either makes a new version, one arrow from the words before. "replace_all": the same words in the chapters named ("2-5", "3", "all"); "rename": a name everywhere at once, never an ordinary word.
 - "book" is "title", "subtitle", "about", "style" or "plans": "find"/"replace", "text" for all of it, or "add" a paragraph. "summary": a chapter's summary. "plan": what a chapter is for — my plan for it, which the writer reads only while writing in that chapter; the number after the last chapter makes a new, empty chapter to hold it, so a few in a row map the chapters ahead.
 - "note" is "people", "places", "lore" or "threads" (with "open": false once resolved), the card named as the notes name it: only the parts you give change — leave the rest out; "aka" adds other names, "dropAka" takes one off; "newName" renames a card; "remove": true takes it out. "module" changes one of my modules' words — only when I ask.
-- "entry" is an entry in my bibliography — the world behind the book: what is true of a name whether or not a page has said it yet. How someone looks and what makes them unlike anyone else, where they come from and what they carry, what a place is like, how a power or a technique works and what it costs, what a word of the world means, what a group is and who leads it. The writer reads an entry when its name comes up and writes from it as the truth of the world; I read it when I tap the name. This is where the world is made up, and that is your job in it: when I ask for an entry, write it — whole, in the block, in that same answer — richly and particularly, the way a novelist builds a world, inventing freely wherever the pages have not spoken and never against what they have said; what I tell you is true of them is true. Never ask me for the particulars first or offer me choices instead of the entry: write it, and I change what I see differently. "kind" is "people", "places", "things", "groups" or "lore"; "line" says in a line who or what it is; "text" is the entry whole, "add" a paragraph added to it; "rides" is "named" (the writer reads it when its name comes up — the usual), "always" or "never" (only for me); "newName", "aka", "dropAka" and "remove" as for a card.
+- "entry" is an entry in my bibliography — the world behind the book: what is true of a name whether or not a page has said it yet. How someone looks and what makes them unlike anyone else, where they come from and what they carry, what a place is like, how a power or a technique works and what it costs, what a word of the world means, what a group is and who leads it. The writer reads an entry ${READS_WHEN(recall)}, and writes from it as the truth of the world; I read it when I tap the name. This is where the world is made up, and that is your job in it: when I ask for an entry, write it — whole, in the block, in that same answer — richly and particularly, the way a novelist builds a world, inventing freely wherever the pages have not spoken and never against what they have said; what I tell you is true of them is true. Never ask me for the particulars first or offer me choices instead of the entry: write it, and I change what I see differently. "kind" is "people", "places", "things", "groups" or "lore"; "line" says in a line who or what it is; "text" is the entry whole, "add" a paragraph added to it; "rides" is "named" (the writer reads it ${READS_WHEN(recall)} — the usual), "always" (what every page needs — how the world works at its root) or "never" (only for me); "newName", "aka", "dropAka" and "remove" as for a card.
 - To read more first: ${READ_OPEN}[2]${READ_CLOSE} sends Chapter Two whole (the chapter open too, when some of it is left out), ${READ_OPEN}["find: Name Surname"]${READ_CLOSE} every place those words stand, ${READ_OPEN}["card: Name"]${READ_CLOSE} a card shown by its first line, whole, ${READ_OPEN}["entry: Name"]${READ_CLOSE} an entry of my bibliography, whole, ${READ_OPEN}["about"]${READ_CLOSE} the book’s own words as they stand now — what it’s about, how it reads, where it’s headed — to quote exactly before changing them, ${READ_OPEN}["module: The novel craft"]${READ_CLOSE} a module's words — then you go on with the same answer.
 - The pages already written are yours to change when I ask — "rewrite", or "find"/"replace" — every passage the change touches, chapter by chapter. Never write the passage yourself unless I ask for your words. When the story changes, everything that tells the old story changes with it in the same block — every card, thread and entry, What it's about and Where it's headed, and the plans of the chapters ahead; a thread about a thing that no longer happens is taken out. A premise in ${DIRECTION_OPEN}…${DIRECTION_CLOSE} is for the page not written yet — never hand me one for a page that exists, and never leave a page as it was because changing it is "a real edit". When I ask whether the story should change — "would it be better if…", "is it possible to edit…", "do you agree?" — say what you think, make the changes to the notes and the bibliography that follow, and name the passages that would have to be written again, offering it in a line: "Say rewrite and I hand 1.3–1.5 to the writer with my notes." When I say so — or ask for the change plainly — do it in that same answer.
 - A passage you write is the book: in it, people know only what they have lived, seen or been told — what we say here stays ours unless I ask for it on the page.
@@ -801,7 +832,7 @@ export function partnerFrame(house, novel, { notesAs = 'system', tools = true, n
     `We’re talking over our novel, ${titleLine(novel)}, the way two writers do — you as my writing partner. The book comes to you fresh with every message of mine, just as it reads right now — any change of yours that went in is already there, and I never paste pages to you. Where some of it is cut short or left out to save room, it says so right there, with how to read it. Say what you really think — what works and what doesn’t, and why; what the people in it would truly do; where it could go — and keep the book straight, changing it when I ask. Keep what the pages actually say apart from what you’re guessing at or suggesting. ${tools ? 'Before a change that hangs on words you can’t see here, read those pages first; if you can’t, tell me what’s still uncertain.' : 'Go only by what’s here, and never claim to have read pages you haven’t.'} ${notesKept ? NOTES_KEEP : NOTES_UNKEPT} You don’t write the next pages: the writer does, from my premise. A premise I could hand it goes in its own ${DIRECTION_OPEN}…${DIRECTION_CLOSE}, in my voice, as I’d type it. ${FICTION_TELL}`,
     PROSE_GUIDE,
     /* Ideas reads nothing more and changes nothing: it is never told it could (Cozy Tavern's M241) */
-    tools ? partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now') : '',
+    tools ? partnerChanges(house && house.partnerApplies === 'wait' ? 'wait' : 'now', recallOn(novel)) : '',
     notesAs === 'system' ? hereIs('partner') : '',
   ].filter(Boolean).join('\n\n');
 }

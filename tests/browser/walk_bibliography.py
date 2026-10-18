@@ -149,6 +149,17 @@ async def scenario(browser):
     check('filled by hand only: the helper adds nothing more, and what it found stays beside his entries', 'Rukia Kuchiki' in v and 'Gotei 13' in v and 'Sode no Shirayuki' in v and 'The helper adds nothing to it just now' in v, v)
     await pg.locator('.bibview label.toggle', has_text='Fill it from the book by itself').locator('input').click()
     await pg.wait_for_timeout(300)
+    # Smart recall (2.12.27): on by itself, said in the card; off for the book is kept on the phone, and said so
+    on_at_first = await pg.locator('.bibview label.toggle', has_text='Smart recall').locator('input').is_checked()
+    said_on = await pg.locator('.bibview .bibintro').inner_text()
+    await pg.locator('.bibview label.toggle', has_text='Smart recall').locator('input').click()
+    await pg.wait_for_timeout(400)
+    said_off = await pg.locator('.bibview .bibintro').inner_text()
+    kept_off = await pg.evaluate("nid => fetch('/api/store/novel/' + nid).then((r) => r.json()).then((x) => (x.data.prefs || {}).bibRecall || '')", nid)
+    await pg.locator('.bibview label.toggle', has_text='Smart recall').locator('input').click()
+    await pg.wait_for_timeout(400)
+    kept_on = await pg.evaluate("nid => fetch('/api/store/novel/' + nid).then((r) => r.json()).then((x) => (x.data.prefs || {}).bibRecall || '')", nid)
+    check('Smart recall is on by itself and says what it does; off for the book is kept on the phone, and the card says names only', on_at_first and 'with Smart recall, when a page needs it' in said_on and 'with Smart recall' not in said_off and kept_off == 'off' and kept_on == '', (on_at_first, said_off[-160:], kept_off, kept_on))
     async with pg.expect_download() as dl:
         await pg.locator('.bibview button', has_text='Take it out as a lorebook').click()
     d = await dl.value

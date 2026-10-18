@@ -33,6 +33,7 @@ import { convSteps, conversationsOf, freeName, openName, cleanConvName, markedNa
 import { tellerOf, toTeller } from './teller.js';
 import { scenePlan } from './stretches.js';
 import { entriesOf, entryNamed, entryWords, KIND_TITLE } from './bibliography.js';
+import { pickEntries } from './bibpick.js';
 
 const running = new Map();        /* 'talk/<id>' | 'play/<id>' -> job */
 const jobFns = new Set();
@@ -379,6 +380,16 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     try { store.change(kind, id, turnSteps.setVersion(turnId, versionId, { ...(keptNow() ? { text: keptNow() } : {}), thinking: allThought(thinking) || undefined, ...alive() }), { checkpoint: true, delay: 50 }); } catch (_) { /* gone */ }
   }, 30000);
   try {
+    /* a scene's telling: what it needs from his bibliography that no word near it names (bibpick.js), asked once
+     * before it is written — none, and it goes as it would */
+    let picks = [];
+    if (kind === 'play') {
+      try {
+        const { novel, chapters } = bookNow(novelId);
+        const args = buildArgs(store.peek(kind, id), conn);
+        picks = (await pickEntries({ conn: connFor(house, 'helper'), house, novel, chapters, purpose: args.purpose, target: args.target, request: args.request || '', moment: args.moment || '', turns: args.turns || [], play: args.play, signal: ctl.signal })).refs || [];
+      } catch (e) { console.error(e); picks = []; }
+    }
     let out;
     const askNow = () => ask(conn, {
         build: (c) => {
@@ -388,7 +399,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           snapshot = kind === 'talk' ? snapshotForChanges(novelId) : null;
           const rec = store.peek(kind, id);
           let args = buildArgs(rec, c);
-          const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length, notesKept: archivist.keepingNotes(novelId) });
+          const made = (extra) => assemble({ house, novel, chapters, conn: c, ...args, turns: [...(args.turns || []), ...extra.messages], length, notesKept: archivist.keepingNotes(novelId), picks });
           let extra = extraOf();
           let a = made(extra);
           /* the book open comes before old talk (his report, 2.12.2: a passage of the chapter open left out while the

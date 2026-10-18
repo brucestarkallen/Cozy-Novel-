@@ -27,7 +27,7 @@ import { chapterLabel, chapterText, chapterPrint, passageText, chapterNumber, pa
 import { ownWordsFor } from './ownwords.js';
 import { tellerOf, personFor, hasSelf, toTeller, groundingWeave, groundingSeed, oneYouAre, naturalLook, swapPerson, headsInPerson } from './teller.js';
 import { aboutTheBook, notesText, earlierText, currentText, endingWords, writerFrame, partnerFrame, playFrame, withHis, notesAsOf, notesOpening, PICK_UP, PICK_UP_FIRST, DEFAULT_NARRATOR, avoidList, avoidLine, lateFor, lateRoleFor, notReadWords, asideWords, standingNotes, macroNames, withMacros, namedBook, bibPart, READ_OPEN, READ_CLOSE } from './prompts.js';
-import { entriesOf, entryIndex, bibShare, bibItems, ridingItems } from './bibliography.js';
+import { entriesOf, entryIndex, bibShare, bibItems, ridingItems, pickRows, recallOn } from './bibliography.js';
 import { notesAtPoint, unread, asideRows } from './readings.js';
 import { ridingFor } from './modules.js';
 import { wakesOn } from './crafts.js';
@@ -464,6 +464,8 @@ export function narratorWords(instr) {
  * words right before it, as a reader holds them (SillyTavern's scan depth,
  * for a book). */
 export const BIB_NEAR_WORDS = 2500;
+/* how much of those words the pick reads (bibpick.js) */
+export const PICK_NEAR_WORDS = 1200;
 const lastWords = (text, n) => { const w = String(text || '').split(/\s+/); return w.length <= n ? String(text || '') : w.slice(-n).join(' '); };
 const firstWords = (text, n) => { const w = String(text || '').split(/\s+/); return w.length <= n ? String(text || '') : w.slice(0, n).join(' '); };
 /* Whether the helper fills the bibliography from the book by itself (Bibliography → Fill it from the book by itself) */
@@ -495,25 +497,60 @@ export function passagesAfter(novel, chapters, chapterId, target = {}, purpose =
  * none of the book's facts (the first fitting, before it is known which
  * chapters ride whole). The partner also sees every entry of his by its name
  * and line. */
-export function bibliographyFor({ items, opened, purpose, request = '', moment = '', plan = '', turns = [], names = {}, free = 0, skip = null, skipAll = false, factsMost = Infinity }) {
-  if (!items || !items.length) return { text: '', ids: [], left: 0 };
-  const filled = items.map((it) => ({ ...it, ...(skipAll ? { facts: [] } : {}), ...(it.entry ? { entry: { ...it.entry, line: withMacros(it.entry.line || '', names), text: withMacros(it.entry.text || '', names) } } : {}) }));
+export function bibliographyFor({ items, opened, purpose, request = '', moment = '', plan = '', turns = [], names = {}, free = 0, skip = null, skipAll = false, factsMost = Infinity, picks = [], recall = true }) {
+  if (!items || !items.length) return { text: '', ids: [], left: 0, picked: [] };
+  const filled = withEntryNames(items, names, { skipAll });
+  const { his, near } = bibWords({ opened, request, moment, plan, turns });
+  const share = bibShare(free);
+  if (purpose === 'partner') {
+    const mine = filled.filter((it) => it.entry).map((it) => it.entry);
+    const index = mine.length ? entryIndex(mine, Math.floor(share / 3)) : { text: '', left: 0 };
+    const ride = ridingItems(filled, { his, near, budget: share - (mine.length ? Math.floor(share / 3) : 0), skip, purpose, factsMost });
+    const text = ride.words.length || index.text ? bibPart(ride.words, { index: index.text, indexLeft: index.left, recall }) : '';
+    return { text, ids: ride.items.map((it) => it.ref), left: ride.left, picked: [] };
+  }
+  /* what the page needs that no word here names (bibpick.js), after his words' names */
+  const wanted = new Set(picks || []);
+  const ride = ridingItems(filled, { his, near, picked: [...wanted], budget: share, skip, purpose, factsMost });
+  const picked = ride.items.filter((it) => wanted.has(it.ref)).map((it) => it.ref);
+  return { text: ride.words.length ? bibPart(ride.words, { picked: picked.length > 0 }) : '', ids: ride.items.map((it) => it.ref), left: ride.left, picked };
+}
+
+/* his entries' words with {{user}} and {{char}} filled, as they ride (skipAll: none of the book's facts) */
+function withEntryNames(items, names, { skipAll = false } = {}) {
+  return (items || []).map((it) => ({ ...it, ...(skipAll ? { facts: [] } : {}), ...(it.entry ? { entry: { ...it.entry, line: withMacros(it.entry.line || '', names), text: withMacros(it.entry.text || '', names) } } : {}) }));
+}
+
+/* the words the bibliography is found in for one request — his (what he asks, his own words that set it going, the
+ * chapter's plan) and those near the point (the words right before it, the start of what follows, the newest talk of
+ * a scene or with the partner, nearest last) — one answer for what rides and for what the pick reads */
+function bibWords({ opened, request = '', moment = '', plan = '', turns = [] }) {
   const his = [request, moment, plan].filter(Boolean).join('\n');
   const before = opened ? String(opened.before !== undefined ? opened.before : opened.text || '') : '';
   const after = opened ? String(opened.after !== undefined ? opened.after : opened.afterText || '') : '';
   const talk = (turns || []).slice(-8).map((t) => String(t.content || '')).join('\n\n');
   /* nearest last: the talk of a scene or with the partner comes after the chapter's words */
   const near = [lastWords(before, BIB_NEAR_WORDS), firstWords(after, 300), lastWords(talk, BIB_NEAR_WORDS)].filter((x) => x.trim()).join('\n\n');
-  const share = bibShare(free);
-  if (purpose === 'partner') {
-    const mine = filled.filter((it) => it.entry).map((it) => it.entry);
-    const index = mine.length ? entryIndex(mine, Math.floor(share / 3)) : { text: '', left: 0 };
-    const ride = ridingItems(filled, { his, near, budget: share - (mine.length ? Math.floor(share / 3) : 0), skip, purpose, factsMost });
-    const text = ride.words.length || index.text ? bibPart(ride.words, { index: index.text, indexLeft: index.left }) : '';
-    return { text, ids: ride.items.map((it) => it.ref), left: ride.left };
-  }
-  const ride = ridingItems(filled, { his, near, budget: share, skip, purpose, factsMost });
-  return { text: ride.words.length ? bibPart(ride.words) : '', ids: ride.items.map((it) => it.ref), left: ride.left };
+  return { his, near };
+}
+
+/* What the pick reads for one request of the writer or the narrator (bibpick.js), worked out where assemble works out
+ * the bibliography's words — the same point, the same words of his, the same words near it: {rows, riding, moment,
+ * plan, near, novel} — rows, his entries the page could still need (bibliography.js pickRows); riding, the names of
+ * those that ride anyway; moment, his own words for it; plan, the chapter's; near, the newest of the words near the
+ * point; novel, the book with its names filled. null when there is nothing to pick from. Never a model call. */
+export function pickInput({ house, novel, chapters, purpose = 'write', target = {}, request = '', moment = '', turns = [], play = null, cap = 6000 }) {
+  if ((purpose !== 'write' && purpose !== 'play') || !novel || !recallOn(novel) || !entriesOf(novel).length) return null;
+  const chapter = chapters[target.chapterId] || chapters[(novel.order || [])[(novel.order || []).length - 1]] || { id: '', passages: [] };
+  const opened = chapter.id ? currentPart(novel, chapter, target, purpose, notesAsOf(house)) : null;
+  const plan = String(chapter.plan || '').trim();
+  const items = withEntryNames(bibItems(novel, chapters, { facts: false }), macroNames(house, purpose, play));
+  const words = bibWords({ opened, request, moment, plan, turns });
+  const { rows, riding } = pickRows(items, { ...words, cap });
+  if (!rows.length) return null;
+  /* his own words for it — what he asked for, his newest moves — the chapter's plan, and the newest of the words near
+   * the point: the pick reads for meaning, and a page's worth is enough for that */
+  return { rows, riding: riding.map((it) => it.name), moment: String(moment || '').trim(), plan, near: lastWords(words.near, PICK_NEAR_WORDS), novel: namedBook(novel, house) };
 }
 
 /* Build what one of them reads. purpose: 'write' | 'partner' | 'play'.
@@ -534,7 +571,7 @@ export function bibliographyFor({ items, opened, purpose, request = '', moment =
  * the request ready up to there); a rule waking or going back to sleep
  * changes the system message before it, so that one request is not kept
  * ready — the next one is. */
-export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null, moment = '', tools = true, notesKept = true }) {
+export function assemble({ house, novel, chapters, conn, purpose = 'write', target = {}, request = '', turns = [], length = 'scene', play = null, moment = '', tools = true, notesKept = true, picks = [] }) {
   const instr = (house && house.instructions) || {};
   const notesAs = notesAsOf(house);
   const chapter = chapters[target.chapterId] || chapters[(novel.order || [])[novel.order.length - 1]] || { id: '', passages: [] };
@@ -649,7 +686,8 @@ export function assemble({ house, novel, chapters, conn, purpose = 'write', targ
    * share of the room; the partner sees every entry by its name and line too */
   /* the book's facts ride whenever the helper has gathered them — Fill it from the book by itself only says whether it goes on gathering them (a portrait made short leaves its lasting details to them) */
   const bibItemsNow = bibItems(named, chapters, { facts: true });
-  const bibArgs = { items: bibItemsNow, opened, purpose, request, moment, plan: planHere, turns, names, free: total - reserve - instructions - afterCost };
+  /* (picks: what the pick named this page needs, bibpick.js — the writer's and the narrator's only) */
+  const bibArgs = { items: bibItemsNow, opened, purpose, request, moment, plan: planHere, turns, names, free: total - reserve - instructions - afterCost, picks, recall: recallOn(novel) };
   const afterPoint = passagesAfter(novel, chapters, chapter.id, target, purpose);
   /* first fitted with his entries alone; the book's facts come once it is known which chapters ride word for word */
   let bib = bibliographyFor({ ...bibArgs, skipAll: true });

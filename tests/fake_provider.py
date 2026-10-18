@@ -31,6 +31,13 @@ def answer_for(body):
         if m.get("role") == "user":
             last_user = m.get("content") or ""
             break
+    if 'Answer with only this: {"entries": [the numbers]}' in last_user:
+        # the helper picking what a page needs from the bibliography (2.12.27): the entries whose line says the
+        # premise's own word PICKME, else none
+        asked = last_user.split("Entries it doesn’t have:", 1)[0]
+        rows = last_user.split("Entries it doesn’t have:", 1)[-1].split("\n\nName the ones", 1)[0]
+        want = [int(m.group(1)) for m in re.finditer(r"^(\d+)\. .*PICKME", rows, re.M)] if "PICKME" in asked else []
+        return json.dumps({"entries": want})
     if "Check these passages from" in last_user:
         # the checker: a fix for the stand-in's own stock words, wherever they stand
         edits = []

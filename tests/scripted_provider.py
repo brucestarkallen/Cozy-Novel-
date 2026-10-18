@@ -96,8 +96,12 @@ class H(BaseHTTPRequestHandler):
         with LOCK:
             REQUESTS.append(entry)
             backfill = "were read into the notes before the book’s bibliography was kept" in last_user
-            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")):
+            # the helper picking what a page needs from the bibliography (2.12.27): nothing, unless the test queued an answer for it ({"pick": true})
+            pick = 'Answer with only this: {"entries": [the numbers]}' in last_user
+            if QUEUE and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")):
                 beh = QUEUE.pop(0)
+            elif pick:
+                beh = {"text": '{"entries": []}'}
             elif backfill:
                 # the bibliography filled for pages read before it (2.12): nothing found, unless the test queued an answer for it ({"bib": true})
                 beh = {"text": json.dumps({"bibliography": []})}

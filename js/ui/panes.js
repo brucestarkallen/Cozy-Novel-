@@ -1310,6 +1310,10 @@ async function drawPartner() {
 /* Ready-made requests for the partner (Cozy Tavern's housekeeper's quick asks,
  * made for a book): sent at once, or put in the box for a name. */
 const QUICK = [
+  /* his world before the opening (2.12.27: "before opening, create the world about a faction and a world bible"): the partner
+   * makes the bibliography from what the book is about, each entry his to change, with Undo — CozyMaker's "build it", inside the book */
+  { label: 'Build the world', hint: 'Your partner makes the bibliography from what the book is about — people, places, groups and who leads them, how its powers work, the words of its world — each an entry you can change, with Undo.',
+    ask: 'Let’s build this book’s world before we write on. From what it’s about — and from what is written, if anything is — make my bibliography: the people at its heart, the places, the groups and who leads them, how its powers or its rules work and what they cost, the words of its world. Each one an entry, written richly, inventing wherever nothing is settled yet; the few that every page needs set to always. Then tell me in a few lines what you made and what is still open for me to decide.' },
   /* one button, one meaning: the same check as the notes' own, made by the helper — its verdict and its reasons show in the notes */
   { label: 'Check the notes against the book', hint: 'The helper holds every card against the book, puts right what drifted and folds cards that repeat each other — why for each shows in the notes.', audit: true },
   { label: 'Find what contradicts itself', hint: 'Names, looks, times, who knows what — by passage number, with a fix for each.',

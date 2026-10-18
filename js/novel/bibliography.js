@@ -9,9 +9,12 @@
  * So that it never crowds the request, the writer, the narrator and the
  * checker read an entry only when its name comes up — in his words, or in
  * the words right before the point being written — or always, when he says
- * so; never, when he keeps it for himself. What rides is fitted to a share
- * of the room, his words' names first, then the nearest. The partner sees
- * every entry by its name and line, and the ones named here whole.
+ * so; never, when he keeps it for himself. The writer and the narrator also
+ * read the ones a page needs that no word near it names, found by what they
+ * mean (pickRows, bibpick.js). What rides is fitted to a share of the room,
+ * his words' names first, then what the page needs, then the nearest. The
+ * partner sees every entry by its name and line, and the ones named here
+ * whole.
  *
  * A name is found the way it is written: one written with capitals only with
  * them (or in all capitals, shouted), so "Will" is never "she will"; one in
@@ -27,7 +30,7 @@ export const KIND_ONE = { people: 'person', places: 'place', things: 'thing', gr
 /* when the writer reads it */
 export const RIDES = ['named', 'always', 'never'];
 export const RIDES_WORDS = {
-  named: 'When its name comes up',
+  named: 'When it comes up',
   always: 'Always',
   never: 'Never — it’s only for me',
 };
@@ -116,6 +119,11 @@ export function nameParts(name) {
   return words.map((w) => w.replace(/^[^\p{L}]+|[^\p{L}'’-]+$/gu, '')).filter((w) => w.length >= 3 && cased(w[0]) && !PART_STOP.has(w.toLowerCase()));
 }
 
+/* a name as it is looked for: without the article it starts with when a name follows it ("The Iron Covenant" is
+ * found as "Iron Covenant", "the Iron Covenant" too) — a description in small letters keeps it ("the girl") */
+/* (no i flag: with it \p{Lu} takes small letters too, and "the old road" would lose its article) */
+const bareName = (n) => cleanName(n).replace(/^(?:[Tt][Hh][Ee]|[Aa][Nn]?)\s+(?=\p{Lu})/u, '');
+
 /* Every name a set of entries and cards answers to, each once: [{form, refs}] —
  * refs are 'e:<id>' (an entry) and 'c:<kind>:<id>' (a card of the notes).
  * A card is found only by a name written with a capital — never by a
@@ -133,7 +141,7 @@ export function nameForms(entries, cards = {}) {
   };
   for (const e of entries || []) {
     if (!e || !cleanName(e.name)) continue;
-    const names = [e.name, ...(e.aka || [])];
+    const names = [e.name, ...(e.aka || [])].map(bareName);
     for (const n of names) add(n, `e:${e.id}`);
     if (kindOf(e.kind) === 'people') for (const n of names) for (const w of nameParts(n)) add(w, `e:${e.id}`);
   }
@@ -586,7 +594,10 @@ export function itemForms(items) {
     const names = [it.name, ...(it.aka || [])];
     const forms = [...names, ...(it.kind === 'people' ? names.flatMap(nameParts) : [])];
     for (const n of forms) {
-      const f = cleanName(n).replace(/^(?:the|a|an)\s+(?=\p{Lu})/u, '').normalize('NFC');
+      /* a name with its article ("The Iron Covenant") is found by its name, written with the article in small letters
+       * mid-sentence too ("bowed to the Iron Covenant") — as a card's is (nameForms); never a description in small
+       * letters ("the girl") */
+      const f = bareName(n).normalize('NFC');
       if (f.length < 2 || !/\p{L}/u.test(f)) continue;
       /* the book's own names are found only as names (with a capital); his entries also by a word in small letters */
       if (!it.entry && !cased(f)) continue;
@@ -642,20 +653,33 @@ function asTheBookHasIt(it) {
  * alone tells of taking room only with its first fact — so the one told of
  * most never pushes out the others, nor is left out for having told so
  * much. {items, words, cost, left} — left: those that found no room. */
-export function ridingItems(items, { his = '', near = '', budget = 4000, skip = null, purpose = 'write', factsMost = Infinity } = {}) {
-  const forPartner = purpose === 'partner';
-  const usable = forPartner ? items || [] : (items || []).flatMap((it) => (it.rides === 'never' ? asTheBookHasIt(it) : [it]));
-  const always = forPartner ? [] : usable.filter((it) => it.rides === 'always');
+/* what the writer, the narrator and the checker may read of the items — an entry he keeps for himself only as the book
+ * has it — and the partner all of them */
+function usableFor(items, purpose) {
+  return purpose === 'partner' ? items || [] : (items || []).flatMap((it) => (it.rides === 'never' ? asTheBookHasIt(it) : [it]));
+}
+/* the items his words name, in their order, and those the words near the point name, the nearest first */
+function namedOrder(usable, his, near) {
   const finder = makeFinder(itemForms(usable));
-  const order = [];
-  const seen = new Set(always.map((it) => it.ref));
-  const take = (refs) => { for (const r of refs) if (!seen.has(r)) { seen.add(r); order.push(r); } };
   const refsIn = (text, nearestFirst) => {
     const hits = finder.find(text);
     return (nearestFirst ? [...hits].reverse() : hits).flatMap((x) => finder.refsOf(x.key));
   };
-  take(refsIn(his, false));
-  take(refsIn(near, true));
+  return { his: refsIn(his, false), near: refsIn(near, true) };
+}
+
+export function ridingItems(items, { his = '', near = '', picked = [], budget = 4000, skip = null, purpose = 'write', factsMost = Infinity } = {}) {
+  const forPartner = purpose === 'partner';
+  const usable = usableFor(items, purpose);
+  const always = forPartner ? [] : usable.filter((it) => it.rides === 'always');
+  const order = [];
+  const seen = new Set(always.map((it) => it.ref));
+  const take = (refs) => { for (const r of refs) if (!seen.has(r)) { seen.add(r); order.push(r); } };
+  const found = namedOrder(usable, his, near);
+  take(found.his);
+  /* what the page needs that no word here names (pickRows): after his words' names, before the ones near the point */
+  take(forPartner ? [] : picked || []);
+  take(found.near);
   const byRef = new Map(usable.map((it) => [it.ref, it]));
   const queue = [...always, ...order.map((r) => byRef.get(r)).filter(Boolean)];
   /* each part costed as the very words that ride: its first line (with the other names), his words, the facts' heading, each fact */
@@ -707,3 +731,83 @@ export function ridingItems(items, { his = '', near = '', budget = 4000, skip = 
   }
   return { items: out, words, cost: spent, left };
 }
+
+/* ------------------------------------------------- what a page needs */
+
+/* THE PICK (Cozy Tavern's smart recall, M510-50, made for the bibliography — his question, 2.12.27: "is the injection
+ * of the bible smart, so it knows what to inject?"). A name rides when it is named (above). An entry the page needs
+ * that its words never name — the order the city guard answers to when the guard storms the docks, how magic works
+ * when a spell is cast — is found by what it means: the helper reads his words for the page and the words before the
+ * point against his entries that would not ride, each by its name and line, and names the ones the page needs
+ * (bibpick.js). Only names: what rides is his entry, word for word, as a named one does. */
+export const PICK_MAX = 5;
+/* Bibliography → Smart recall (Cozy Tavern's own name for it, M510-50): on unless he turned it off for the book */
+export const recallOn = (novel) => !(novel && novel.prefs && novel.prefs.bibRecall === 'off');
+
+/* the words that tell what something is about: letters only, four or more, the commonest left out */
+const COMMON = new Set(['that', 'this', 'with', 'from', 'they', 'them', 'their', 'there', 'then', 'than', 'have', 'had', 'has', 'were', 'what', 'when', 'where', 'which', 'while', 'will', 'would', 'could', 'should', 'into', 'onto', 'over', 'under', 'about', 'after', 'before', 'again', 'just', 'like', 'only', 'some', 'more', 'most', 'much', 'very', 'been', 'being', 'each', 'every', 'other', 'others', 'your', 'yours', 'mine', 'here', 'still', 'even', 'back', 'down', 'through', 'once', 'also', 'away', 'upon', 'does', 'done', 'make', 'made', 'said', 'says', 'know', 'knew', 'come', 'came', 'goes', 'went', 'gone', 'take', 'took', 'look', 'looks', 'looked', 'want', 'wants', 'something', 'nothing', 'anything', 'everything', 'someone', 'because', 'though', 'without', 'against', 'between', 'around', 'until', 'these', 'those', 'himself', 'herself', 'itself', 'themselves']);
+function topicWords(text) {
+  const out = new Set();
+  for (const w of String(text || '').toLowerCase().normalize('NFC').split(/[^\p{L}]+/u)) if (w.length >= 4 && !COMMON.has(w)) out.add(w);
+  return out;
+}
+
+/* one entry as the helper is shown it: its name, the other names it goes by, what kind it is and its line (else the
+ * first sentence of its words) */
+function pickHead(it) {
+  const e = it.entry || {};
+  const line = String(e.line || '').trim() || firstSentence(String(e.text || '').trim()).slice(0, 240);
+  return `${it.name}${(it.aka || []).length ? ` (also ${it.aka.join(', ')})` : ''} — ${KIND_ONE[kindOf(it.kind)]}${line ? `: ${line.replace(/\s+/g, ' ')}` : ''}`;
+}
+
+/* What the pick is asked about: {rows, riding}. rows — his entries a page could still need: set to ride when named,
+ * with words to give, that his words and the words near the point do not name — numbered, each by pickHead; the ones
+ * that share the most words with the moment first, fitted to `cap` tokens, then numbered in the bibliography's order.
+ * riding — his entries that ride anyway (always, or named here), for the helper to know what the page has. Pure. */
+export function pickRows(items, { his = '', near = '', cap = 6000 } = {}) {
+  const usable = usableFor(items, 'write');
+  const found = namedOrder(usable, his, near);
+  const named = new Set([...found.his, ...found.near]);
+  const riding = usable.filter((it) => it.entry && (it.rides === 'always' || named.has(it.ref)));
+  const open = (items || []).filter((it) => it.entry && ridesOf(it.rides) === 'named' && !named.has(it.ref) && String(it.entry.text || it.entry.line || '').trim());
+  if (!open.length) return { rows: [], riding };
+  const moment = topicWords(`${his}\n${near}`);
+  const scored = open.map((it, i) => {
+    const head = pickHead(it);
+    let score = 0;
+    for (const w of topicWords(`${head}\n${String(it.entry.text || '').slice(0, 800)}`)) if (moment.has(w)) score++;
+    return { it, i, head, score };
+  }).sort((a, b) => b.score - a.score || a.i - b.i);
+  const chosen = [];
+  let used = 0;
+  for (const x of scored) {
+    const c = estimateTokens(x.head) + 4;
+    if (used + c > cap) continue;
+    chosen.push(x);
+    used += c;
+  }
+  chosen.sort((a, b) => a.i - b.i);
+  return { rows: chosen.map((x, k) => ({ n: k + 1, ref: x.it.ref, name: x.it.name, head: x.head })), riding };
+}
+
+/* the entries the helper named, as refs: only numbers on the list, each once, at most PICK_MAX; anything it wrote that
+ * cannot be read is none */
+export function readPick(raw, rows) {
+  const t = String(raw == null ? '' : raw);
+  /* the answer's own: the last list it gave (a thought written before it may name one too) */
+  const all = [...t.matchAll(/"entries"\s*:/g)];
+  if (!all.length) return [];
+  const at = all[all.length - 1].index;
+  const open = t.indexOf('[', at);
+  const close = open < 0 ? -1 : t.indexOf(']', open);
+  if (open < 0 || close < 0) return [];
+  const byN = new Map((rows || []).map((r) => [r.n, r.ref]));
+  const out = [];
+  for (const m of t.slice(open + 1, close).matchAll(/\d+/g)) {
+    const ref = byN.get(Number(m[0]));
+    if (ref && !out.includes(ref)) out.push(ref);
+    if (out.length >= PICK_MAX) break;
+  }
+  return out;
+}
+
