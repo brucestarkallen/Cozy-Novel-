@@ -21,7 +21,7 @@ import { wireOf, contextOf } from '../model/providers.js';
 import { assemble, requiredLength } from './context.js';
 import { connFor } from './writer.js';
 import { picked, passageNumbers, chapterLabel, premisesOf } from './shape.js';
-import { quickAddRequest, premisesPart, entriesPart, JSON_AGAIN, JSON_CUT } from './prompts.js';
+import { quickAddRequest, JSON_AGAIN, JSON_CUT } from './prompts.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { findIn } from './search.js';
 import { namesAndFigures, foldedText, nameInText } from './names.js';
@@ -197,28 +197,24 @@ function putEntries(novelId, entries) {
 
 /* ------------------------------------------------------------- asking */
 
-function fitList(all, part, room) {
-  let n = all.length;
-  while (n > 0 && estimateTokens(part(all.slice(0, n), all.length - n)) > room) n--;
-  return n;
-}
-
 /* the request as his partner's connection sees the book now, for these words */
 function requestFor(novelId, words, c) {
   const { novel, chapters } = bookNow(novelId);
   const room = Math.max(1500, Math.floor(contextOf(c) * 0.25));
-  const premAll = premisesOf(novel, chapters);
-  const pn = fitList(premAll, premisesPart, Math.floor(room / 4));
   const names = namesIn(words, novel, chapters);
+  /* his premises — those naming what his words name first, then the newest — and his entries for those names, fitted in
+   * one pass (archivist.js premisesFitted, entriesFitted — 2.12.40, the audit: the earliest only, rebuilt for every one
+   * let go, and none at all when the first was long) */
+  const prem = archivist.premisesFitted(novel, chapters, Math.floor(room / 4), { names });
   /* (his entries his words name, found as the page finds a name — 2.12.40, the audit: any word of a name in small
    * letters counted; the partner reads every entry, Never ones too) */
   const byWords = new Set(entriesNamed(entriesOf(novel), words).map((e) => e.id));
   const named = entriesOf(novel).filter((e) => byWords.has(e.id) || names.some((n) => entryNamed([e], n).entry));
-  const en = fitList(named, entriesPart, Math.floor(room / 4));
+  const ent = archivist.entriesFitted(named, Math.floor(room / 4));
   const pas = passagesNaming(novel, chapters, names, Math.floor(room / 2));
   /* what was said before in Quick add, the newest few (never the one being asked) */
   const earlier = quickLog(novel).filter((r) => r.state === 'done').slice(-4);
-  return quickAddRequest({ words, earlier, premises: premAll.slice(0, pn), premisesLeft: premAll.length - pn, entries: named.slice(0, en), entriesLeft: named.length - en, ...pas });
+  return quickAddRequest({ words, earlier, ...prem, ...ent, ...pas });
 }
 
 const want = (o) => Boolean(o) && typeof o === 'object' && !Array.isArray(o) && (Array.isArray(o.entries) || typeof o.verdict === 'string' || Array.isArray(o.conflicts));

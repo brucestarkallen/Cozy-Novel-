@@ -11,7 +11,7 @@
 import * as store from '../store.js';
 import { h, icon, toast, undoToast, openSheet, confirmIt, field, pickFile, download } from './dom.js';
 import { picked, novelSteps } from '../novel/shape.js';
-import { bibItems, itemForms, nameForms, makeFinder, formKey, codexNow, ENTRY_KINDS, KIND_TITLE, RIDES, RIDES_WORDS, BY_PAGE_WORDS, newEntry, tidyEntry, entriesOf, nameTaken, entriesFromLorebook, lorebookOf, recallOn } from '../novel/bibliography.js';
+import { bibItems, itemForms, nameForms, makeFinder, formKey, codexNow, ENTRY_KINDS, KIND_TITLE, RIDES, RIDES_WORDS, BY_PAGE_WORDS, newEntry, tidyEntry, entriesOf, nameTaken, entriesFromLorebook, lorebookOf, recallOn, nameRows, cardRefs } from '../novel/bibliography.js';
 import { bibAutoOn } from '../novel/context.js';
 import { superActive } from '../novel/auto.js';
 
@@ -103,43 +103,25 @@ export function tapName(novelId, key, e) {
 }
 /* one item of the bibliography by its ref ('e:<id>' for his entry) */
 export function showRef(novelId, ref) { showRefs(novelId, [ref]); }
-/* what the bibliography holds for a card of the notes (2.12.37): his entry it stands for, or what the book told under its name */
+/* what the bibliography holds for a card of the notes (2.12.37): his entry it stands for, or what the book told under its
+ * name (bibliography.js cardRefs) */
 function refsForCard(novelId, kind, cardId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return [];
-  return bibItems(novel, chaptersOf(novel), { facts: true }).filter((it) => it.card && it.card.id === cardId && (it.entry || it.facts.length)).map((it) => it.ref);
+  return cardRefs(novel, chaptersOf(novel), kind, cardId);
 }
 export function bibHas(novelId, kind, cardId) { return refsForCard(novelId, kind, cardId).length > 0; }
 export function showForCard(novelId, kind, cardId) {
   const refs = refsForCard(novelId, kind, cardId);
-  if (refs.length) showRefs(novelId, [...refs, `c:${kind}:${cardId}`]);
+  if (refs.length) showRefs(novelId, refs);
   else toast('Nothing is kept in the bibliography for this card yet.');
 }
 
 function showRefs(novelId, refs, { said = '' } = {}) {
   const novel = store.peek('novel', novelId);
   if (!novel) return;
-  const chapters = chaptersOf(novel);
-  const items = bibItems(novel, chapters, { facts: true });
-  const byRef = new Map(items.map((it) => [it.ref, it]));
-  const rows = [];
-  const cardOf = (kind, id) => ((novel.notes || {})[kind] || []).find((c) => c.id === id) || null;
-  for (const ref of refs) {
-    const it = byRef.get(ref) || null;
-    const m = /^c:(people|places|lore):(.+)$/.exec(ref);
-    /* his entry with the notes' card it stands for (bibliography.js cardForEntry): one, never two who go by the name (2.12.37) */
-    const joined = !m && it && it.entry && it.card ? cardOf(it.card.kind, it.card.id) : null;
-    const card = m ? cardOf(m[1], m[2]) : joined;
-    if (!it && !card) continue;
-    rows.push({ it, card, cardKind: m ? m[1] : (it && it.card ? it.card.kind : '') });
-  }
-  /* a card shown with his entry is not shown again on its own — what the book told under the card's name goes with it */
-  for (const r of rows.filter((x) => x.it && x.it.entry && x.card)) {
-    for (const other of rows.filter((x) => x !== r && x.card && x.card.id === r.card.id && !(x.it && x.it.entry))) {
-      if (other.it && other.it.facts.length) r.it = { ...r.it, facts: [...r.it.facts, ...other.it.facts.filter((f) => !r.it.facts.some((g) => g.id === f.id))] };
-      rows.splice(rows.indexOf(other), 1);
-    }
-  }
+  /* one row for each who goes by the name, his entry with the notes' card it stands for (bibliography.js nameRows) */
+  const rows = nameRows(novel, chaptersOf(novel), refs);
   if (!rows.length) { toast('Nothing is kept for that name just now.'); return; }
   const title = rows.length === 1 ? (rows[0].it ? rows[0].it.name : rows[0].card.name) : `${rows.length} who go by that name`;
   const s = openSheet(title, { small: true });

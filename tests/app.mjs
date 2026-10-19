@@ -6747,7 +6747,9 @@ await test('his hand is kept field by field: a card he touched only in its other
   const p = (id) => out.notes.people.find((c) => c.id === id);
   assert.equal(p('a').about, 'A kitchen maid, and the duke’s daughter.', 'who she is was never his: written');
   assert.deepEqual(p('a').aka, ['Mar'], 'the names he gave stand');
-  assert.deepEqual(p('a').updated, { by: 'you', his: ['aka'], chapterId: 'c1', at: 5 }, 'still his where it was');
+  /* (2.12.40: the mark keeps when his words were written, `hisAt` — the helper's change moves only `at`; a premise of his
+   * is weighed against when he wrote the card, never against when the helper last touched it) */
+  assert.deepEqual(p('a').updated, { by: 'you', his: ['aka'], hisAt: 1, chapterId: 'c1', at: 5 }, 'still his where it was');
   assert.equal(p('b').about, 'A kitchen maid.', 'his words stand');
   assert.equal(p('b').since, 'She is the lost princess.', 'what the book added rides beside them');
   assert.equal(p('c').about, 'A ferryman.', 'a card his before fields were told apart is his whole');
@@ -13607,6 +13609,254 @@ await test('what the book is about, kept by the helper, is written from the book
   await putAway(b);
 });
 
+/* (2.12.40, the audit of 2.12.36 — his newest word wins: a premise outlived his own later word on its passage) */
+await test('his later word on a passage stands over its premise — written again with his note, his own edit, his partner’s passage written anew: the reading is shown it beside the premise, and the premise is no longer the book, so a name only it gave goes; the Premise button still shows what he typed', async () => {
+  await setHouse();
+  const TOM = 'Tom, Mara’s brother, comes home from the war.';
+  const NOTE = 'Tom is not in this book at all — Mara is an only child.';
+  const book = async () => {
+    const b = await makeBook([['The alley was quiet.', { text: 'Tom came home from the war. Mara held him at the door.', ask: { direction: TOM, length: 'scene' } }]], { manual: true });
+    markAllSeen(b);
+    store.change('novel', b.novelId, (n) => {
+      n.notes.people.push({ id: 'pe-t', name: 'Tom', aka: [], about: 'Mara’s brother, home from the war.', updated: { chapterId: b.ids[0], at: 1 } });
+      n.notes.people.push({ id: 'pe-m', name: 'Mara', aka: [], about: 'She waits at the door.', updated: { chapterId: b.ids[0], at: 1 } });
+    }, { now: true });
+    return b;
+  };
+  const readingOf = async (b) => {
+    await reset();
+    await script([{ text: JSON.stringify({ gone: [{ kind: 'people', name: 'Tom' }] }) }]);
+    await archivist.run(b.novelId);
+    return (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes')) || '';
+  };
+  /* written again with his note */
+  const b = await book();
+  assert.equal(archivist.groundsOf(b.novel()).loose.includes(' tom '), true, 'before: his premise is the book');
+  await script([{ text: 'Mara waited alone at the door. Nobody came; she had never had a brother.' }]);
+  const rw = await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[1].id, note: NOTE });
+  assert.equal(rw.ok, true, rw.error);
+  let sent = await readingOf(b);
+  assert.ok(sent.includes(`My premise for it, as I typed it:\n"""\n${TOM}\n"""`), 'the premise beside the page');
+  assert.ok(sent.includes(`Since then I had it written again with the note “${NOTE}” — my newer word on this passage: where it and the premise differ, it stands.`), sent.slice(sent.indexOf('My premise'), sent.indexOf('My premise') + 400));
+  assert.ok(sent.includes('Where I say beside a premise what I did to its passage since, that is my newer word on it'), 'told what it is');
+  assert.equal(b.novel().notes.people.some((c) => c.id === 'pe-t'), false, 'Tom goes — the premise no longer keeps his name in the book');
+  assert.equal(archivist.groundsOf(b.novel()).loose.includes(' tom '), false, 'and it is no ground for a card');
+  assert.equal(shape.premiseOf(b.ch().passages[1]), TOM, 'the Premise button: what he typed, as he typed it');
+  /* the check: listed with what he did since */
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.' }) }]);
+  await archivist.run(b.novelId);
+  const check = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes(prompts.AUDIT_ASK)) || '';
+  assert.ok(check.includes(`[Chapter One, Passage 2] ${TOM} — since then I had it written again with the note “${NOTE}”, which stands over it where they differ`), check.slice(check.indexOf('My premises'), check.indexOf('My premises') + 900));
+  assert.ok(check.includes('is not the book where the two differ'), 'the check told so');
+  await putAway(b);
+  /* his own edit, on the page itself */
+  const c = await book();
+  assert.equal(writer.saveEdit({ novelId: c.novelId, chapterId: c.ids[0], passageId: c.ch().passages[1].id, text: 'Mara waited alone at the door. She had never had a brother.' }), true);
+  sent = await readingOf(c);
+  assert.ok(sent.includes('Since then I changed its words myself — my newer word on this passage'), 'his edit beside the premise');
+  assert.equal(c.novel().notes.people.some((x) => x.id === 'pe-t'), false, 'Tom goes');
+  await putAway(c);
+  /* his partner's passage written anew, at his word */
+  const e = await book();
+  assert.equal(changes.makeChange(e.novelId, { passage: '1.2', text: 'Mara waited alone at the door. She had never had a brother.' }).status, 'made');
+  sent = await readingOf(e);
+  assert.ok(sent.includes('Since then my partner wrote it anew for me — my newer word on this passage'), 'his partner’s words beside the premise');
+  assert.equal(e.novel().notes.people.some((x) => x.id === 'pe-t'), false, 'Tom goes');
+  await putAway(e);
+  /* the same page with the premise standing (nothing done to it since): Tom stays */
+  const d = await book();
+  await readingOf(d);
+  assert.equal(d.novel().notes.people.some((x) => x.id === 'pe-t'), true, 'a premise that stands keeps his name in the book');
+  await putAway(d);
+});
+
+await test('the check never takes a premise of his older than his own card for the book overturning it — one he typed after the card is his newer word, though the helper has added to the card since', async () => {
+  await setHouse();
+  const ask = async (b, answer) => { await reset(); archivist.askAudit(b.novelId); await script([{ text: JSON.stringify({ clear: false, verdict: 'Checked.', ...answer }) }]); await archivist.run(b.novelId); };
+  /* the premise first, his card after it */
+  const b = await makeBook([['The alley was quiet.', { text: 'Jovan Wessex hit the wall. The pale woman stood over him.', ask: { direction: 'Jovan Wessex is a fledgling vampire, turned last winter.', length: 'scene' } }]], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-j', name: 'Jovan Wessex', aka: [], about: 'Jovan Wessex is a higher vampire — the Sanguelis raised him.', updated: { by: 'you', at: Date.now() + 5 } }); }, { now: true });
+  await ask(b, { mine: [{ kind: 'people', name: 'Jovan Wessex', holds: false, contradicts: 'Jovan Wessex is a fledgling vampire', about: 'Jovan Wessex is a fledgling vampire, turned last winter.', why: 'the book says he is a fledgling' }] });
+  const card = b.novel().notes.people.find((c) => c.id === 'pe-j');
+  assert.deepEqual([card.about, shape.hisField(card, 'about')], ['Jovan Wessex is a higher vampire — the Sanguelis raised him.', true], 'his newer card stands');
+  assert.ok((b.novel().memory.audit.refused || []).some((r) => r.name === 'Jovan Wessex'), 'and the quote is said to be no word of the book’s');
+  await putAway(b);
+  /* his card first; the premise after it; the helper's "Since then" laid on the card after that */
+  const t0 = Date.now() - 60000;
+  const c = await makeBook([['The alley was quiet.', { text: 'Jovan rose in the cathedral.', ask: { direction: 'Jovan Wessex is now an elder vampire of the Sanguelis.', length: 'scene' } }]], { manual: true });
+  markAllSeen(c);
+  store.change('novel', c.novelId, (n) => { n.notes.people.push({ id: 'pe-j', name: 'Jovan Wessex', aka: [], about: 'A novice hunter of the Order.', since: 'Jovan Wessex is now an elder vampire of the Sanguelis.', updated: { by: 'you', hisAt: t0, chapterId: c.ids[0], at: Date.now() + 5 } }); }, { now: true });
+  await ask(c, { mine: [{ kind: 'people', name: 'Jovan Wessex', holds: false, contradicts: 'Jovan Wessex is now an elder vampire of the Sanguelis', about: 'An elder vampire of the Sanguelis.', why: 'his premise made him an elder' }] });
+  const cc = c.novel().notes.people.find((x) => x.id === 'pe-j');
+  assert.deepEqual([cc.about, shape.hisField(cc, 'about')], ['An elder vampire of the Sanguelis.', false], 'his newer premise: the card is put right from it');
+  await putAway(c);
+});
+
+await test('his premises shown to the check by what matters — those naming the cards checked first, then the newest — in the book’s order, how many were left out said; a long one never keeps the rest out', async () => {
+  await setHouse({ context: 32000 });
+  const filler = 'Mara walks the cliff path at dusk and listens to the sea, thinking of the letter she has not opened yet, and of the council that waits for her answer in the hall below the tower. ';
+  const passages = [];
+  for (let i = 0; i < 200; i++) {
+    const d = i === 0 ? 'Jovan Wessex is a fledgling vampire, turned last winter.' : i === 199 ? 'Jovan Wessex is now a higher vampire: the Sanguelis council raised him.' : `${filler}${filler} (${i})`;
+    passages.push({ text: `Passage words ${i}.`, ask: { direction: d, length: 'scene' } });
+  }
+  const b = await makeBook([passages], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-j', name: 'Jovan Wessex', aka: [], about: 'A hunter.', updated: { chapterId: b.ids[0], at: 1 } }); }, { now: true });
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.' }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes(prompts.AUDIT_ASK)) || '';
+  const part = sent.slice(sent.indexOf('My premises —'), sent.indexOf(prompts.AUDIT_ASK));
+  assert.ok(part.includes('Jovan Wessex is now a higher vampire') && part.includes('Jovan Wessex is a fledgling vampire'), 'both that name the card checked');
+  assert.ok(part.indexOf('fledgling') < part.indexOf('higher vampire'), 'told in the book’s order');
+  assert.ok(part.includes('(198)') && !part.includes('(1)\n'), 'the newest first, the earliest left out');
+  assert.match(part, /\((?:One Hundred and )?[A-Za-z -]+ more premises are left out here to save room\.\)/, 'how many left out, said');
+  /* Quick add's: those naming what his words name first */
+  const chs = Object.fromEntries(b.novel().order.map((id) => [id, store.peek('chapter', id)]));
+  const byNames = archivist.premisesFitted(b.novel(), chs, 300, { names: ['Jovan Wessex'] });
+  assert.deepEqual(byNames.premises.map((x) => x.text.slice(0, 24)), ['Jovan Wessex is a fledgl', 'Jovan Wessex is now a hi'], 'his words’ names first');
+  await putAway(b);
+  /* one long premise first, the room smaller than it: the rest still go, and it is said left out */
+  const { novel, chapter } = shape.newNovel({ title: 'Long first' });
+  for (let i = 0; i < 10; i++) chapter.passages.push(shape.newPassage('ai', `W ${i}.`, { how: 'write', ask: { direction: i === 0 ? 'The Sanguelis rule the city from the old cathedral. '.repeat(100) : `A short premise ${i}.`, length: 'scene' } }));
+  const fit = archivist.premisesFitted(novel, { [chapter.id]: chapter }, 1140);
+  assert.deepEqual([fit.premises.length, fit.premisesLeft], [9, 1], 'the nine short ones, the long one left out');
+  assert.ok(prompts.premisesPart(fit.premises, fit.premisesLeft).endsWith('(One more premise is left out here to save room.)'));
+  const none = archivist.premisesFitted(novel, { [chapter.id]: chapter }, 0);
+  assert.equal(prompts.premisesPart(none.premises, none.premisesLeft), '(My premises — ten of them, my word on the book — are left out here to save room.)', 'none fits: said all the same');
+  await setHouse();
+});
+
+await test('the notes’ check never gives the book’s room to his premises: a chapter that rides whole without them still rides whole, and they take what is left, said', async () => {
+  await setHouse({ context: 24000 });
+  const PREM = 'Jovan Wessex walks the council hall of the Sanguelis at dusk; the elders weigh whether a hunter turned by an elder may sit among them, and what the turning cost him, once in a thousand. ';
+  const passages = [];
+  for (let i = 0; i < 160; i++) passages.push({ text: `Jovan climbed the stair, step ${i}, and the lamp swung over the old council hall where the keepers waited; the wind came through the broken window and he counted the doors, one by one, until the last of them opened onto the night and the long road down to the harbour.`, ask: { direction: `${PREM}(${i})`, length: 'scene' } });
+  const b = await makeBook([passages], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => {
+    for (let i = 0; i < 12; i++) n.notes.people.push({ id: `pe-${i}`, name: `Keeper ${['Ash', 'Bram', 'Cole', 'Dane', 'Eli', 'Finn', 'Gus', 'Hal', 'Ivo', 'Jon', 'Kit', 'Lew'][i]}`, aka: [], about: 'A keeper of the council hall who knows every stair and every lamp. '.repeat(3), updated: { chapterId: b.ids[0], at: 1 } });
+  }, { now: true });
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.' }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes(prompts.AUDIT_ASK)) || '';
+  assert.ok(sent.includes('step 159, and the lamp swung') && sent.includes('step 80, and the lamp swung') && sent.includes('step 0, and the lamp swung'), 'the chapter whole, its middle too');
+  assert.ok(!sent.includes('not summarised yet — its opening and close'), 'never by its opening and close');
+  assert.ok(sent.includes('My premises —') && /more premises are left out here to save room/.test(sent), 'his premises in what is left, how many left out said');
+  /* what the book is about, written from the book: the same */
+  store.change('novel', b.novelId, (n) => { n.auto = { about: true, style: false }; }, { now: true });
+  await reset();
+  archivist.keepAgain(b.novelId, 'about');
+  await script([{ text: JSON.stringify({ about: 'Jovan climbs the stair of the council hall. The keepers wait above him.' }) }]);
+  await archivist.run(b.novelId);
+  const keep = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('for the writer to read before every page')) || '';
+  assert.ok(keep.includes('step 80, and the lamp swung') && !keep.includes('not summarised yet — its opening and close'), 'What it’s about: the chapter whole');
+  assert.ok(/more premises are left out here to save room/.test(keep), 'his premises in what is left');
+  await putAway(b);
+  await setHouse();
+});
+
+await test('a long premise rides beside its page by its opening, said so, and only the page’s first part is made smaller for it: the page’s notes come on a small helper', async () => {
+  await setHouse({ context: 8000 });
+  const sentence = 'Jovan crossed the hall of the elders, counting the lamps, and the council watched him without a word while the rain beat on the high windows. ';
+  const premiseSentence = 'The Sanguelis rule the city from the old cathedral, and a hunter turned by an elder keeps his oath to the house that turned him. ';
+  for (const words of [600, 2200]) {
+    const b = await makeBook([['The alley was quiet.']], { manual: true });
+    markAllSeen(b);
+    store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', sentence.repeat(45), { how: 'write', ask: { direction: premiseSentence.repeat(Math.ceil(words / 25)), length: 'scene' } })), { now: true });
+    await reset();
+    await script(Array.from({ length: 12 }, () => ({ text: JSON.stringify({ people: [] }) })));
+    await archivist.run(b.novelId);
+    const reads = (await requests()).filter((x) => String(x.body.messages.at(-1).content).includes('Update the notes'));
+    const sizes = reads.map((x) => util.estimateTokens(x.body.messages.map((m) => String(m.content)).join('\n')));
+    assert.ok(reads.length >= 2 && reads.length <= 3, `${words}: ${reads.length} readings`);
+    assert.ok(Math.max(...sizes) <= 4800, `${words}: every reading within its room (${sizes.join(', ')})`);
+    assert.equal(String(reads[0].body.messages.at(-1).content).includes('My premise for it, as I typed it:'), true, 'beside the first part');
+    if (words > 1500) assert.ok(String(reads[0].body.messages.at(-1).content).includes('(the rest of it is left out here to save room)'), 'a long one by its opening, said');
+    assert.deepEqual(archivist.changesIn(b.novel(), b.ch()).changes, [], `${words}: the page read`);
+    await putAway(b);
+  }
+  await setHouse();
+});
+
+await test('a thousand premises are fitted in one pass, never built again for each one let go', () => {
+  const { novel, chapter } = shape.newNovel({ title: 'Many premises' });
+  const words = 'He climbs the tower stair with the lamp, and the council waits above with its oldest question about the turning. ';
+  for (let i = 0; i < 1000; i++) chapter.passages.push(shape.newPassage('ai', `W ${i}.`, { how: 'write', ask: { direction: `${words}${words.slice(0, 60)} (${i})`, length: 'scene' } }));
+  const t = performance.now();
+  const fit = archivist.premisesFitted(novel, { [chapter.id]: chapter }, 4900);
+  const ms = performance.now() - t;
+  assert.ok(fit.premises.length > 50 && fit.premises.length + fit.premisesLeft === 1000);
+  assert.ok(ms < 400, `${ms.toFixed(0)} ms`);
+});
+
+await test('the notes far past their room let go just as many cards as must go — found in a few tries, never the whole notes made again for each card let go', () => {
+  const people = Array.from({ length: 2000 }, (_, i) => ({ id: `p${i}`, name: `Mender${String(i).padStart(4, '0')}`, about: 'Someone of the harbour who mends the nets at dusk.', updated: { at: i } }));
+  /* how often the notes were made: the card touched last is never let go, so its name is read once each time */
+  let made = 0;
+  Object.defineProperty(people[1999], 'name', { get() { made++; return 'Mender1999'; }, enumerable: true });
+  const novel = { notes: { people, places: [], lore: [], threads: [] }, order: [], memory: {} };
+  const fit = 3700;
+  const text = prompts.notesText(novel, { fit });
+  const m = text.match(/\n\n\(To fit, the cards the words below do not name are shown by their names only, and (\d+) more are left out here\.\)$/);
+  assert.ok(m, text.slice(-200));
+  const body = text.slice(0, m.index);
+  const left = Number(m[1]);
+  assert.equal(body.split('\n').filter((l) => l.startsWith('- Mender')).length, 2000 - left, 'the count said is the count gone');
+  assert.ok(!body.includes('- Mender0000\n') && body.includes(`- Mender${String(left).padStart(4, '0')}\n`) && body.endsWith('- Mender1999'), 'the ones touched longest ago went');
+  assert.ok(util.estimateTokens(body) <= fit, 'what is left fits');
+  /* one fewer let go — the newest of those that went, back in its place — would not fit: no more went than must */
+  const back = `People\n- Mender${String(left - 1).padStart(4, '0')}\n${body.slice('People\n'.length)}`;
+  assert.ok(util.estimateTokens(back) > fit, `one fewer would have fit (${util.estimateTokens(back)} ≤ ${fit})`);
+  assert.ok(made <= 40, `the notes made ${made} times`);
+});
+
+await test('a card only his premise names rides whole beside the page it was typed for — the reading is told to put the premise’s world on it', async () => {
+  await setHouse({ context: 8000 });
+  const b = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => {
+    for (let i = 0; i < 40; i++) n.notes.people.push({ id: `pe-${i}`, name: `Keeper ${i}`, aka: [], about: `Keeper ${i} keeps the lamps of the council hall. ${'He knows every stair, every door and every draught of the old hall, and he talks to nobody about any of it. '.repeat(2)}`, updated: { chapterId: b.ids[0], at: 1 } });
+    n.notes.lore.push({ id: 'lo-s', name: 'Sanguelis', aka: [], about: 'The council of the elder houses. It meets at dusk in the old cathedral, and only an elder may speak there.', updated: { chapterId: b.ids[0], at: 1 } });
+  }, { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'Jovan waited in the rain until the bell rang.', { how: 'write', ask: { direction: 'The Sanguelis summon Jovan to the cathedral at dusk.', length: 'scene' } })), { now: true });
+  await reset();
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes')) || '';
+  assert.ok(sent.includes('(To fit, the cards the words below do not name'), 'the notes past their room');
+  assert.ok(sent.includes('It meets at dusk in the old cathedral, and only an elder may speak there.'), 'the card his premise names, whole');
+  assert.ok(!sent.includes('Keeper 3 keeps the lamps of the council hall. He knows every stair'), 'the others by their first line');
+  await putAway(b);
+  await setHouse();
+});
+
+await test('a book whose chapter has not come when it opens is weighed once every chapter is in hand — never marked weighed without it', async () => {
+  await setHouse();
+  const b = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(b);
+  /* a second chapter, on the phone but not opened in this page (as one that failed to open), holding his premise */
+  const ch2 = shape.newChapter(b.novelId);
+  ch2.passages.push(shape.newPassage('ai', 'Jovan hit the wall.', { how: 'write', ask: { direction: PREMISE_36, length: 'scene' } }));
+  const put = await realFetch(`${BASE}/api/store/chapter/${ch2.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: ch2 }) });
+  assert.equal(put.status < 300, true, `saved: ${put.status}`);
+  store.change('novel', b.novelId, (n) => { n.order.push(ch2.id); n.notes.people.push({ id: 'pe-j', name: 'Jovan Wessex', aka: [], about: 'A novice hunter.', updated: { chapterId: b.ids[0], at: 1 } }); n.memory = { ...(n.memory || {}), audit: { at: 1, reads: 0, v: 10, checked: true } }; }, { now: true });
+  assert.equal(store.peek('chapter', ch2.id), undefined, 'not in hand');
+  archivist.firstCheck(b.novelId);
+  assert.deepEqual([b.novel().memory.audit.v, Boolean(b.novel().memory.auditAsked)], [10, false], 'not weighed without it');
+  await store.open('chapter', ch2.id);
+  archivist.firstCheck(b.novelId);
+  assert.deepEqual([b.novel().memory.audit.v, b.novel().memory.auditAsked], [archivist.AUDIT_V, true], 'in hand: weighed, and his premise in it owes the check');
+  await putAway(b);
+});
+
 heading('Quick add, and the notes, the Timeline and the bibliography held together (2.12.37)');
 const quickadd = await import(path.join(ROOT, 'js/novel/quickadd.js'));
 const putEntries = (b, list) => store.change('novel', b.novelId, (n) => { n.bibliography = list.map((e) => bib.tidyEntry(bib.newEntry(e))); }, { now: true });
@@ -13709,6 +13959,173 @@ await test('the helper reads a page with his entries for the names it gives — 
   const plain = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes'));
   assert.ok(plain && !plain.includes('My bibliography’s entries') && !plain.includes('never says the opposite'), 'none named: none ride');
   await putAway(b);
+});
+
+/* (2.12.40, the audit of 2.12.37) */
+const auditAsked = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes(prompts.AUDIT_ASK)) || '';
+await test('an entry judged in a check never also rules the cards in it; put right under a card, a check is owed at once, and that check holds the card to the entry as put right', async () => {
+  await setHouse();
+  const b = await makeBook([[{ text: 'Emilia Vermaine had black hair, cut short.', how: 'mine' }]], { manual: true, brief: '' });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-e', name: 'Emilia Vermaine', aka: [], about: 'A vampire with black hair.', updated: { chapterId: b.ids[0], at: 1 } }); }, { now: true });
+  putEntries(b, [{ name: 'Emilia Vermaine', kind: 'people', text: 'Silver hair. An elder of the Sanguelis.' }]);
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', mine: [{ kind: 'entry', name: 'Emilia Vermaine', holds: false, contradicts: 'Emilia Vermaine had black hair', text: 'Black hair. An elder of the Sanguelis.', why: 'his own page' }] }) }]);
+  await archivist.run(b.novelId);
+  const first = await auditAsked();
+  const judging = first.indexOf('My own words the writer reads as true on every page');
+  assert.ok(judging >= 0 && first.indexOf('Silver hair. An elder of the Sanguelis.', judging) > judging, 'judged against the book');
+  assert.ok(!first.includes('My bibliography’s entries for the names here') && !first.includes('put the card right to my entry'), 'and never ruling the card in the same check');
+  assert.equal(bib.entriesOf(b.novel())[0].text, 'Black hair. An elder of the Sanguelis.', 'put right as the book has it');
+  assert.equal(archivist.auditDue(b.novel()), true, 'a check owed at once');
+  await reset();
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.' }) }]);
+  await archivist.run(b.novelId);
+  const second = await auditAsked();
+  assert.ok(second.includes('My bibliography’s entries for the names here') && second.includes('Black hair. An elder of the Sanguelis.') && second.includes('put the card right to my entry'), 'the next check holds the card to it');
+  assert.ok(!second.includes('"entry" "Emilia Vermaine"'), 'never judged again for what it was just made');
+  assert.equal(archivist.auditDue(b.novel()), false, 'nothing more owed');
+  await putAway(b);
+});
+
+await test('the helper reads his own words beside his entry as his newer word — the card follows them — and a writer’s page that says otherwise as the page’s slip', async () => {
+  await setHouse();
+  const b = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Emilia Vermaine', kind: 'people', text: 'Silver hair; the youngest elder of the Sanguelis.' }]);
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'Emilia Vermaine had dyed her hair black that winter.' });
+  await reset();
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  const own = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes')) || '';
+  assert.ok(own.includes('These are my own words — I wrote or changed them myself.\nNew in'), 'his own words said so');
+  assert.ok(own.includes('unless they are my own words, said so above them: those are my newer word, and the card follows them'), 'and what that means beside his entry');
+  await reset();
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'Emilia Vermaine stood in the rain, her hair dark with it.', { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  const page = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes')) || '';
+  assert.ok(page.includes('that is the page’s slip, not the card’s. What changes over the story'), 'the writer’s page: his entry stands');
+  assert.ok(!page.includes('These are my own words') && !page.includes('unless they are my own words'), 'nothing of his own said');
+  await putAway(b);
+});
+
+await test('his entry joins the notes’ card for its name only where they are one — name to name first, a name either goes by only for one card and never two people, a fuller or shorter form of a person’s card only for a person — and against the whole notes, never the cards of one check', () => {
+  const E = (name, kind, aka = []) => bib.tidyEntry(bib.newEntry({ name, kind, aka, text: 'x' }));
+  const C = (id, name, aka = []) => ({ id, name, aka, about: '' });
+  const notes = (o) => ({ people: [], places: [], lore: [], threads: [], ...o });
+  const join = (e, n) => { const c = bib.cardForEntry(e, n); return c ? `${c.kind}:${c.id}` : null; };
+  assert.equal(join(E('Kuchiki', 'groups'), notes({ people: [C('pe-r', 'Rukia Kuchiki')] })), null, 'a clan is none of its people');
+  assert.equal(join(E('Wells', 'groups'), notes({ people: [C('pe-t', 'Tom Wells')] })), null);
+  assert.equal(join(E('Gotei 13', 'groups'), notes({ people: [C('pe-g', 'Gotei')] })), null);
+  assert.equal(join(E('Uchiha', 'groups'), notes({ people: [C('pe-s', 'Sasuke Uchiha')], lore: [C('lo-u', 'Uchiha clan')] })), null);
+  assert.equal(join(E('Kurosaki', 'lore'), notes({ people: [C('pe-i', 'Ichigo Kurosaki')] })), null);
+  assert.equal(join(E('Mei Lin', 'people', ['Mei']), notes({ people: [C('pe-ml', 'Mei Ling', ['Mei'])] })), null, 'two people who both go by Mei');
+  assert.equal(join(E('Mei Lin', 'people', ['Mei']), notes({ people: [C('pe-a', 'Mei Lin'), C('pe-ml', 'Mei Ling', ['Mei'])] })), 'people:pe-a', 'name to name first');
+  assert.equal(join(E('Hayes', 'people'), notes({ people: [C('pe-h', 'Captain Hayes')] })), 'people:pe-h', 'a person by a name of theirs');
+  assert.equal(join(E('Lieutenant Hayes', 'people'), notes({ people: [C('pe-h', 'Captain Hayes')] })), null);
+  assert.equal(join(E('Emilia', 'people'), notes({ people: [C('pe-v', 'Emilia Vermaine'), C('pe-h', 'Emilia Hart')] })), null);
+  assert.equal(join(E('Batwing', 'things'), notes({ lore: [C('lo-b', 'Bruce’s Batwing')] })), 'lore:lo-b');
+  assert.equal(join(E('Sanguelis', 'groups'), notes({ lore: [C('lo-s', 'The Sanguelis', ['Sanguelis'])] })), 'lore:lo-s');
+  /* the check of a group of cards: joined against the whole notes, then kept where its card is checked */
+  const novel = { id: 'n-join', notes: notes({ people: [C('pe-a', 'Mei Lin'), C('pe-ml', 'Mei Ling', ['Mei'])] }), bibliography: [bib.tidyEntry(bib.newEntry({ id: 'bb-ml', name: 'Mei Lin', aka: ['Mei'], kind: 'people', text: 'A healer.' }))] };
+  assert.deepEqual(archivist.entriesForCards(novel, { people: [novel.notes.people[1]] }).map((e) => e.name), [], 'a group holding only Mei Ling is never given Mei Lin’s entry');
+  assert.deepEqual(archivist.entriesForCards(novel, { people: [novel.notes.people[0]] }).map((e) => e.name), ['Mei Lin']);
+  const two = { id: 'n-two', notes: notes({ people: [C('pe-v', 'Emilia Vermaine'), C('pe-h', 'Emilia Hart')] }), bibliography: [bib.tidyEntry(bib.newEntry({ id: 'bb-em', name: 'Emilia', kind: 'people', text: 'An elder.' }))] };
+  assert.deepEqual(archivist.entriesForCards(two, { people: [two.notes.people[1]] }).map((e) => e.name), [], '“Emilia”, two cards’ in the notes: never given to the one a group holds');
+  /* Rukia's card in the bibliography: her own entry, never the clan's beside it */
+  const rb = { id: 'n-rukia', order: [], notes: notes({ people: [C('pe-r', 'Rukia Kuchiki', ['Rukia'])] }), bibliography: [bib.tidyEntry(bib.newEntry({ id: 'bb-k', name: 'Kuchiki', kind: 'groups', text: 'A noble house.' })), bib.tidyEntry(bib.newEntry({ id: 'bb-r', name: 'Rukia Kuchiki', kind: 'people', text: 'Adopted into the Kuchiki.' }))] };
+  assert.deepEqual(bib.nameRows(rb, {}, bib.cardRefs(rb, {}, 'people', 'pe-r')).map((r) => r.it && r.it.ref), ['e:bb-r'], 'one: hers');
+});
+
+/* a passage whose facts the bibliography keeps: one fact, under the name given */
+const factBook = (text, name) => ({ c1: { id: 'c1', passages: [{ id: 'p1', by: 'ai', versions: [{ id: 'v1', text, codex: { schema: 1, fp: util.hashText(text), complete: true, facts: [{ id: 'f1', name, kind: 'people', fact: `${name} has silver hair.`, evidence: ['Her silver hair caught the light'] }] } }] }] } });
+const cardBook = (bibliography) => ({ id: 'n-fold', order: ['c1'], meta: { title: 'T' }, notes: { people: [{ id: 'pe-e', name: 'Emilia Vermaine', aka: [], about: 'An elder.' }], places: [], lore: [], threads: [] }, bibliography });
+await test('a card with the book’s facts and no entry of his opens from its sheet as itself, once — never as two who go by that name', () => {
+  const chapters = factBook('Emilia smiled. Her silver hair caught the light.', 'Emilia');
+  const novel = cardBook([]);
+  const rows = bib.nameRows(novel, chapters, bib.cardRefs(novel, chapters, 'people', 'pe-e'));
+  assert.deepEqual(rows.map((r) => [r.it && r.it.ref, r.card && r.card.id, r.it ? r.it.facts.length : 0]), [['c:people:pe-e', 'pe-e', 1]]);
+});
+
+await test('his entry and the notes’ card for one name are one row of the bibliography, with what the book told under either name — and the card’s name in the page opens his entry', () => {
+  /* his entry by the card's own name, a fact told under a shorter one */
+  const ch = factBook('Emilia smiled. Her silver hair caught the light.', 'Emilia');
+  const novel = cardBook([bib.tidyEntry(bib.newEntry({ id: 'bb-e', name: 'Emilia Vermaine', kind: 'people', text: 'An elder of the Sanguelis.' }))]);
+  const items = bib.bibItems(novel, ch, { facts: true });
+  assert.deepEqual(items.map((it) => [it.ref, it.card && it.card.id, it.facts.map((f) => f.fact)]), [['e:bb-e', 'pe-e', ['Emilia has silver hair.']]], 'one row: his entry, the fact with it');
+  /* his entry by a shorter name, the card and its fact by the fuller one */
+  const ch2 = factBook('Emilia Vermaine smiled. Her silver hair caught the light.', 'Emilia Vermaine');
+  const novel2 = cardBook([bib.tidyEntry(bib.newEntry({ id: 'bb-e', name: 'Emilia', kind: 'people', text: 'An elder of the Sanguelis.' }))]);
+  const items2 = bib.bibItems(novel2, ch2, { facts: true });
+  assert.deepEqual(items2.map((it) => [it.ref, it.facts.length]), [['e:bb-e', 1]]);
+  const finder = bib.makeFinder(bib.itemForms(items2));
+  for (const said of ['Emilia Vermaine', 'Vermaine']) {
+    const hit = finder.find(`${said} smiled.`)[0];
+    assert.deepEqual(hit ? finder.refsOf(hit.key) : null, ['e:bb-e'], `“${said}” in the page finds his entry`);
+  }
+  assert.deepEqual(bib.nameRows(novel2, ch2, ['c:people:pe-e']).map((r) => [r.it && r.it.ref, r.card && r.card.id]), [['e:bb-e', 'pe-e']], 'the card opens his entry with it');
+});
+
+await test('the join of his entries and the notes’ cards is kept while their names stand: the bibliography is gathered again with no join to work out', () => {
+  const first = ['Mara', 'Tom', 'Emilia', 'Jovan', 'Rukia', 'Ichigo', 'Byakuya', 'Kaelen', 'Theron', 'Aldric', 'Selene', 'Orin', 'Vael', 'Isolde', 'Corwin', 'Lyra', 'Dorian', 'Sable', 'Garrick', 'Wren'];
+  const last = ['Vermaine', 'Kuchiki', 'Kurosaki', 'Wessex', 'Hart', 'Stone', 'Ash', 'Thorne', 'Vale', 'Black', 'Grey', 'Moore', 'Reed', 'Hale', 'Crane', 'Frost', 'Marsh', 'Locke', 'Pike', 'Rook'];
+  const name = (i) => `${first[i % 20]} ${last[Math.floor(i / 20) % 20]}${i >= 400 ? ' ' + i : ''}`;
+  const entries = Array.from({ length: 1500 }, (_, i) => bib.tidyEntry(bib.newEntry({ id: `bb-${i}`, name: i % 3 === 0 ? `House ${last[i % 20]} ${i}` : name(i + 7), kind: i % 3 === 0 ? 'groups' : 'people', text: 'x' })));
+  const people = Array.from({ length: 400 }, (_, i) => ({ id: `pe-${i}`, name: name(i), aka: [first[i % 20]], about: '' }));
+  const novel = { id: 'n-many', order: [], notes: { people, places: [], lore: [], threads: [] }, bibliography: entries };
+  const once = bib.bibItems(novel, {}, { facts: true });
+  const t = performance.now();
+  let again = null;
+  for (let k = 0; k < 3; k++) again = bib.bibItems(novel, {}, { facts: true });
+  const ms = (performance.now() - t) / 3;
+  assert.deepEqual(again.map((it) => [it.ref, it.card && it.card.id]), once.map((it) => [it.ref, it.card && it.card.id]), 'the same joins');
+  assert.ok(ms < 150, `${ms.toFixed(0)} ms a gathering`);
+});
+
+await test('the notes owe a check for his entries only when an entry under a card changed — never for a card made for a name his entry already had, nor the same entries in another order; one under a card taken out owes it; a print kept before is read as it was made', () => {
+  const E = (o) => bib.tidyEntry(bib.newEntry(o));
+  const novel = { id: 'n-print', notes: { people: [{ id: 'pe-k', name: 'Kaelen', aka: [] }], places: [], lore: [], threads: [] }, bibliography: [E({ id: 'bb-k', name: 'Kaelen', kind: 'people', text: 'A knight.' }), E({ id: 'bb-t', name: 'Theron', kind: 'people', text: 'A priest.' })], memory: {} };
+  const checked = () => { novel.memory.audit = { at: 1, reads: 0, v: archivist.AUDIT_V, checked: true, entries: archivist.entriesPrint(novel) }; };
+  checked();
+  assert.equal(archivist.auditDue(novel), false);
+  novel.notes = { ...novel.notes, people: [...novel.notes.people, { id: 'pe-t', name: 'Theron', aka: [] }] };
+  assert.equal(archivist.auditDue(novel), false, 'a card made for a name his entry already had');
+  novel.bibliography = [novel.bibliography[1], novel.bibliography[0]];
+  assert.equal(archivist.auditDue(novel), false, 'the same entries in another order');
+  novel.bibliography = [{ ...novel.bibliography[0], text: 'A priest of the sun.' }, novel.bibliography[1]];
+  assert.equal(archivist.auditDue(novel), true, 'his entry under a card changed');
+  checked();
+  novel.bibliography = novel.bibliography.filter((e) => e.id !== 'bb-k');
+  assert.equal(archivist.auditDue(novel), true, 'his entry under a card taken out');
+  checked();
+  novel.bibliography = [...novel.bibliography, E({ id: 'bb-h', name: 'Hollow Gate', kind: 'places', text: 'A ruin.' })];
+  assert.equal(archivist.auditDue(novel), false, 'one under no card');
+  /* a print kept before 2.12.40: one hash of the joined entries' words, in their order */
+  const rows = novel.bibliography.filter((e) => e.id === 'bb-t').map((e) => [e.name, e.aka || [], e.line || '', e.text || '']);
+  novel.memory.audit = { ...novel.memory.audit, entries: util.hashText(JSON.stringify(rows)) };
+  assert.equal(archivist.auditDue(novel), false, 'kept before, nothing changed since');
+  novel.bibliography = novel.bibliography.map((e) => (e.id === 'bb-t' ? { ...e, text: 'A priest of the moon.' } : e));
+  assert.equal(archivist.auditDue(novel), true, 'kept before, changed since');
+});
+
+await test('one long entry never keeps the others from the helper: it is passed by, the rest ride, and how many were left out is said — even when none fits', async () => {
+  await setHouse({ context: 8000 });
+  const b = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Sanguelis', kind: 'groups', text: 'The council of the elder houses, as the old books tell it. '.repeat(160) }, { name: 'Hollow Gate', kind: 'places', text: 'A ruin north of the city.' }]);
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'The Sanguelis met at the Hollow Gate.', { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await reset();
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content)).find((m) => m.includes('Update the notes')) || '';
+  assert.ok(sent.includes('My bibliography’s entries for the names here') && sent.includes('A ruin north of the city.'), 'the short one rides');
+  assert.ok(sent.includes('(One more entry is left out here to save room.)'), 'the long one said left out');
+  const none = archivist.entriesFitted(bib.entriesOf(b.novel()), 0);
+  assert.equal(prompts.entriesPart(none.entries, none.entriesLeft), '(My bibliography’s entries for the names here — two of them, my word on what each name means — are left out here to save room.)');
+  await putAway(b);
+  await setHouse();
 });
 
 const turnBook = async () => {
