@@ -141,7 +141,10 @@ function wanted(house, chapter, p) {
   if (chapter.checkAll) return true;
   /* by itself, only a finished page: one cut short or stopped waits for its Go on (Cozy Tavern M552) */
   if (v.cut) return false;
-  if (howOf(v) === 'imported') return false;
+  /* (words brought in from a file wait to be asked for — the version as it is, never its root: his Rewrite of the selected
+   * words on such a page is his writing on it, checked by itself as any, 2.12.41, the review; what goes in by itself
+   * still never changes words brought in from a file — autoAfter, by the root) */
+  if (v.how === 'imported') return false;
   /* every page of the book, in either mode — written before checking began too, and words changed since they were
    * checked (his word, 18 October: "make it like Grammarly that fixes everything"; and 19 October: manual decides
    * what goes in, never whether the book is looked at — 2.12.38); the newest first (nextBatch). What its fixes do is
@@ -477,7 +480,7 @@ function nextBatch(novelId, limit, { one = false } = {}) {
     const v = picked(p);
     const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id];
     if (e) return e.sig !== sigOf(v);
-    return Number.isFinite(from) && howOf(v) !== 'imported' && Math.max(Number(v.at) || 0, Number(v.done) || 0) >= from;
+    return Number.isFinite(from) && v.how !== 'imported' && Math.max(Number(v.at) || 0, Number(v.done) || 0) >= from;
   };
   /* THREE IN TURN (2.12.41, the review — a chapter he asked for counted as new, in the book's order, and Check the whole
    * book put a page written now fifth, behind every chapter asked, while the bubble said "the newest first"): what is

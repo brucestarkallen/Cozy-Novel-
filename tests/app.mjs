@@ -459,6 +459,12 @@ await test('the phone\'s time holds still and never runs back — two things don
   let back = 0;
   for (let i = 0; i < 40; i++) { const t = store.phoneNow(); if (t < last) back++; last = t; await store.api('GET', '/api/version'); await sleep(60); }
   assert.equal(back, 0, 'never back in time from one answer to the next');
+  /* (and steady: what it makes of the phone's clock hardly moves once a few answers are in — each one only narrows it;
+   * the newest answer alone would move it by up to a second either way) */
+  const seen = [];
+  for (let i = 0; i < 16; i++) { await store.api('GET', '/api/version'); await sleep(70); seen.push(store.phoneNow() - Date.now()); }
+  const late = seen.slice(6);
+  assert.ok(Math.max(...late) - Math.min(...late) < 150, `steady: ${late.join(', ')}`);
   assert.ok(Math.abs(store.phoneNow() - Date.now()) < 1500, `the phone's time (here the same machine's): ${store.phoneNow() - Date.now()} ms`);
   const real = Date.now;
   try {
@@ -17295,6 +17301,30 @@ await test('a book brought in from a file after the checker was chosen: Check th
   await putAway(b);
 });
 
+/* (2.12.41, the review of the review: words brought in from a file wait to be asked for — but his Rewrite of the selected
+ * words on such a page, a version of its own carrying the page's root, was never checked by itself nor new by its time) */
+await test('his Rewrite of the selected words on a page brought in from a file is his writing on it: checked by itself, as new — the words brought in still wait to be asked for, and nothing goes in on them by itself', async () => {
+  await setHouse({}, { checksFrom: Date.now() - 86400000, judge: { on: false } });
+  const long = Date.now() - 10 * 86400000;
+  const b = await makeBook([[{ text: 'An older page of his, never checked.', at: long, done: long }], [{ text: 'The letter lay on the table, folded twice, and nobody read it.', how: 'imported', at: long, done: long }, { text: 'Brought in and never touched.', how: 'imported', at: long, done: long }]]);
+  assert.equal(checker.waiting(b.novelId), 1, 'words brought in: waiting to be asked for; his older page waits to be checked');
+  const p = b.ch(1).passages[0];
+  const t = picked(p).text;
+  const start = t.indexOf('folded twice');
+  await reset();
+  await script([{ text: 'creased and creased again' }]);
+  assert.equal((await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[1], passageId: p.id, start, end: start + 'folded twice'.length, note: '' })).ok, true);
+  await quietAll();
+  assert.equal(checker.waiting(b.novelId), 2, 'his rewrite: checked by itself');
+  await reset();
+  await script([CK_NONE, CK_NONE]);
+  await checker.runCheck(b.novelId);
+  const asks = await checkAsk();
+  assert.ok(asks.length === 2 && checkedPart(asks[0]).includes('creased and creased again') && !checkedPart(asks[0]).includes('never touched'), 'his rewrite first, as new — never the words brought in beside it');
+  assert.ok(checkedPart(asks[1]).includes('An older page of his'), 'then his older page');
+  await putAway(b);
+});
+
 /* (2.12.41, the review of 2.12.41: the cased fold let no card ride whole for "O'Brien", "D'Arcy", a name in a script with
  * no capitals, or one he writes in small letters himself) */
 await test('the notes fitted to their room ride whole a card its words name by a lone word of its name — one with an apostrophe in it, one in a script with no capitals, one he writes in small letters — and still never "will" for Will Turner', () => {
@@ -17304,27 +17334,26 @@ await test('the notes fitted to their room ride whole a card its words name by a
     { id: 'p2', name: 'דוד כהן', aka: [], about: long('דוד כהן') },
     { id: 'p3', name: 'kuro mori', aka: [], about: long('kuro mori') },
     { id: 'p4', name: 'Will Turner', aka: [], about: long('Will Turner') },
+    { id: 'p5', name: 'Kira Sato', aka: [], about: long('Kira Sato') },
   ], places: [], lore: [], threads: [] } };
   const rode = (focus) => { const shortIds = new Map(); prompts.notesText(novel, { forHelper: true, fit: 520, focus, shortIds }); return novel.notes.people.map((c) => (shortIds.has(c.id) ? shortIds.get(c.id) : 0)); };
   assert.equal(rode('O’Brien kept the gate, and she will go.')[0], 0, 'O’Brien: whole');
   assert.equal(rode('כהן kept the gate.')[1], 0, 'a name in a script with no capitals: whole');
   assert.equal(rode('and kuro watched.')[2], 0, 'a name he writes small: whole');
   assert.notEqual(rode('O’Brien kept the gate, and she will go.')[3], 0, 'never "will" for Will Turner');
+  assert.equal(rode('Kira’s sword broke at the gate.')[4], 0, 'a name in the possessive: whole');
 });
 
-/* (2.12.41, the review of 2.12.41: a name his partner swaps on one page alone was his partner's hand there, while one from
- * before 2.12.41 is marked no one's when the book opens — one rule) */
-await test('a name his partner swaps on one page alone, and nothing else, is no one’s hand on the page, as a name changed everywhere is', async () => {
+/* (2.12.41, the review of the review: a name his partner swapped on one page was made no one's hand — but "Tom held the
+ * door" become "Jovan held the door" is who did it, never a name changed: only a name changed everywhere is no one's) */
+await test('his partner swapping who did it on one page is his partner\'s change — the name it took out kept, never "a name changed"', async () => {
   await setHouse();
-  const b = await makeBook([['Mara climbed the stair. Mara found the letter.', 'Tom ran to the gate.']], { manual: true });
-  const made = changes.makeChange(b.novelId, { passage: '1.1', find: 'Mara climbed the stair. Mara found', replace: 'Marla climbed the stair. Marla found' });
+  const b = await makeBook([['Tom held the door. Tom waited in the rain.']], { manual: true });
+  const made = changes.makeChange(b.novelId, { passage: '1.1', find: 'Tom held the door. Tom waited', replace: 'Jovan held the door. Jovan waited' });
   assert.equal(made.status, 'made', made.said);
   const v = picked(b.ch().passages[0]);
-  assert.deepEqual([v.text, Boolean(v.before && v.before.at(-1).rename), shape.handsOf(v)], ['Marla climbed the stair. Marla found the letter.', true, []]);
-  /* a change of more than a name is his partner's */
-  const more = changes.makeChange(b.novelId, { passage: '1.2', find: 'ran to the gate', replace: 'walked to the old gate' });
-  assert.equal(more.status, 'made', more.said);
-  assert.deepEqual(shape.handsOf(picked(b.ch().passages[1])), ['partner']);
+  const last = v.before.at(-1);
+  assert.deepEqual([v.text, Boolean(last.rename), shape.handsOf(v), (last.took || []).includes('tom')], ['Jovan held the door. Jovan waited in the rain.', false, ['partner'], true]);
   await putAway(b);
 });
 

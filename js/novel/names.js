@@ -326,7 +326,9 @@ export function nameInText(folded, name, { words = true } = {}) {
     if (f.casedFolded === undefined) f.casedFolded = f.cased.replace(/([\p{L}\p{M}])['’‘ʼ](?=\p{L})/gu, '$1');
     /* any casing after its first letter ("McAllister", "DuBois"): only the first letter has to be a capital */
     const re = new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'giu');
-    for (const m of f.casedFolded.matchAll(re)) { const c = m[0][0]; if (c !== c.toLowerCase() || c === c.toUpperCase()) return true; }
+    /* (in the words as written — "Kira's", "Mara'll" — or with an apostrophe inside a name folded — "O'Brien": both,
+     * 2.12.41, the review of the review: folding alone lost the possessive) */
+    for (const t of [f.cased, f.casedFolded]) for (const m of t.matchAll(re)) { const c = m[0][0]; if (c !== c.toLowerCase() || c === c.toUpperCase()) return true; }
     return false;
   };
   const has = present;
