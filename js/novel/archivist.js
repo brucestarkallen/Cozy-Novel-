@@ -27,7 +27,7 @@ import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writ
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows, plural } from '../util.js';
 import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps, renameCount, renamesSince, wordsElsewhere } from './shape.js';
-import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures, premiseNames, bookEvidence } from './names.js';
+import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures, premiseNames, bookEvidence, splitSentences } from './names.js';
 import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, entryOverWords, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook, BESIDE_FLOOR } from './prompts.js';
 import { fitBook, bibAutoOn, shortOf } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
@@ -790,11 +790,12 @@ export function thins(standing, offered, besides = '') {
   if (!telling(old).size) return false;
   return heldIn(old, besides ? `${neu} ${besides}` : neu) < 0.6 && neu.length < old.length;
 }
-/* the sentences of `add` that `have` does not say already */
+/* the sentences of `add` that `have` does not say already — never parted after a title's short form or an initial ("Dr.
+ * Halloway…" one sentence, never a lone "Dr." let go: names.js splitSentences, 2.12.41, the fourth review of Quick add) */
 export function newSentences(have, add) {
   const key = (x) => String(x || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   const h = key(have);
-  return String(add || '').trim().split(/(?<=[.!?…])\s+/).map((x) => x.trim()).filter((x) => { const k = key(x); return k && !h.includes(k); });
+  return splitSentences(String(add || '').trim()).map((x) => x.trim()).filter((x) => { const k = key(x); return k && !h.includes(k); });
 }
 /* a field kept with what an answer adds to it — never its older lines lost */
 /* HOW SOMEONE STANDS WITH THE OTHERS GROWS AT ITS END — the newest turn is
@@ -1453,7 +1454,7 @@ function judgeWords(novelId, list, answer) {
     if (inventedIn(next, [x.text], store.peek('novel', novelId))) { said.set(x.key, 'unfounded'); continue; }
     /* and his words are put right, never lost: of a long telling (four sentences or more), at least half its sentences come back as he wrote them —
      * a short one may be overturned whole (a chapter's plan with nothing left of it aside) */
-    const was = String(x.text).split(/(?<=[.!?…])\s+/).map((t) => foldedText(t).loose.trim()).filter((t) => t.split(' ').length >= 3);
+    const was = splitSentences(String(x.text)).map((t) => foldedText(t).loose.trim()).filter((t) => t.split(' ').length >= 3);
     const nowF = foldedText(next).loose;
     if (next.trim() && was.length >= 4 && was.filter((t) => nowF.includes(' ' + t + ' ')).length / was.length < 0.5) { said.set(x.key, 'unfounded'); continue; }
     const why = cleanText(row.why, 400) || `the book now says “${clipQuote(q)}”`;
@@ -3681,7 +3682,7 @@ async function keepHardTokens({ novelId, conn, frame, novel, label, text, summar
   if (!got || !got.ok) return { summary, again: Boolean(got && !got.unreadable && !got.permanent), error: got && got.error, ...(got && got.leashed ? { leashed: got.leashed, ...leashKept(got) } : {}) };
   const again = summaryWords(got.obj.summary);
   const left = tokensMissing(text, again, known);
-  const sentences = again.split(/(?<=[.!?…])\s+/).filter((x) => x.trim());
+  const sentences = splitSentences(again).filter((x) => x.trim());
   if (again && left.names.length + left.figures.length + figuresInvented(text, again).length < lost && again.length >= summary.length * 0.8 && !sentences.some(looksLikeTokenDump)) return { summary: again, again: false };
   return { summary, again: false };
 }
@@ -4659,7 +4660,7 @@ function auditKept(novel, answer, asked) {
     const text = cleanText(answer && answer[key]);
     const before = (novel.kept && novel.kept[key]) || null;
     if (!text || text === String((before && before.text) || '').trim()) continue;
-    if (text.length < 200 && text.split(/(?<=[.!?…])\s+/).filter((x) => x.trim()).length < 2) continue;
+    if (text.length < 200 && splitSentences(text).filter((x) => x.trim()).length < 2) continue;
     out[key] = { before: clone(before), after: { text, at: Date.now(), ownFp: ownFp(asked, key) } };
   }
   return out;
@@ -4769,7 +4770,7 @@ async function keepTheBook(novelId, conn) {
     if (k && (k.by === 'you' || ((k.at || 0) > started && !k.again))) continue;
     /* only what the answer gave, and only a whole of it — a line is not the book (Cozy Tavern M517, M478) */
     const text = cleanText(got.obj[key]);
-    const whole = text && (text.length >= 200 || text.split(/(?<=[.!?…])\s+/).filter((x) => x.trim()).length >= 2);
+    const whole = text && (text.length >= 200 || splitSentences(text).filter((x) => x.trim()).length >= 2);
     if (!whole) { left.push(key); continue; }
     /* stamped with his words as they were when it was asked: his rewriting them meanwhile is seen */
     keepIfUnchanged(novelId, key, k, { text, at: Date.now(), ownFp: ownFp(asked, key) });

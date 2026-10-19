@@ -190,6 +190,17 @@ async def scenario(browser, w, hgt, mobile):
           and told == 'She has no family of her own yet.'
           and await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').count() == 1, [row, told])
 
+    # (2.12.41, the fourth review) its own words for his newer word, that cannot go in as they are: his entry as he wrote it,
+    # and the row says so in those words — never that it gave none — with Ask again
+    await ask(pg, 'SHAPE Emilia has a brother.')
+    row = await pg.locator('.bibview .quickrow').last.inner_text()
+    told = await pg.evaluate("(nid) => import('/js/store.js').then((s) => ((s.peek('novel', nid).bibliography || []).find((e) => e.name === 'Emilia Vermaine') || {}).text || '')", nid)
+    check(f'{tag} its words for a newer word that cannot go in as they are: said so, never “gave no words”, with Ask again',
+          'said “She has no family of her own yet”; it did not go in — its words for it could not go in as they were.' in row
+          and 'One newer word of yours did not go in — your partner’s words for it could not go in as they were.' in row and 'gave no words' not in row
+          and told == 'She has no family of her own yet.'
+          and await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').count() == 1, [row, told])
+
     # set aside: "yours went in" only where the entry put in says his words — never "not held back" unchecked
     await ask(pg, 'ASIDE Emilia Vermaine is an elder whose eyes are green.')
     row = await pg.locator('.bibview .quickrow').last.inner_text()

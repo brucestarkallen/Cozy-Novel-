@@ -239,18 +239,12 @@ export function samePersonName(a, b) {
   }
   return false;
 }
-/* A FAMILY'S NAME ALONE (2.12.41, the third review of Quick add: "Kuchiki" — the Kuchiki, a noble house — was put into
- * Rukia Kuchiki's entry, and his partner's change made her a group): a name of one word past its titles that is the last
- * word of a longer name and not its first ("Kuchiki", "Captain Venn" for Mara Venn). It names a family, or another of it,
- * as well as anyone — so a bibliography never finds an entry by it alone (bibliography.js entryFor); a given name is
- * found ("Mara" for Mara Venn). Only for that: who is the same person stays samePersonName's. */
-export function familyNameOnly(a, b) {
-  const A = parseName(a);
-  const B = parseName(b);
-  const [one, more] = A.words.length === 1 && B.words.length > 1 ? [A, B] : B.words.length === 1 && A.words.length > 1 ? [B, A] : [null, null];
-  if (!one) return false;
-  return more.words[more.words.length - 1] === one.words[0] && more.words[0] !== one.words[0];
-}
+/* (2.12.41, the fourth review of Quick add: the word-position rule that read a lone last word of a person's name as a
+ * family's — familyNameOnly — is gone. It lost "Mr. Darcy", "Captain Venn" and "Sasuke" for Fitzwilliam Darcy, Mara
+ * Venn and Uchiha Sasuke, and still found the house "Kuchiki" in Kuchiki Rukia, whose family's name comes first. The kind
+ * asked for decides, and an entry of another kind going by that word: bibliography.js entryFor.) */
+/* the words of a name past its titles, folded ("Captain Venn": venn) — as samePersonName reads it */
+export const wordsOfName = (name) => [...parseName(name).words];
 
 /* every word of a name as written is a name's — a capital, or a script with
  * no capitals — or one of the little words names carry (da, van, bin) */
@@ -392,7 +386,9 @@ export function namesAndFigures(text) {
     if (tok.length < 2) continue;
     let k = m.index - 1;
     while (k >= 0 && /\s/.test(t[k])) k--;
-    if (k < 0 || /[.!?…:"“‘(\[]/.test(t[k])) continue;
+    /* (a word after a title's short form or an initial opens no sentence — "Dr. Halloway", "J. Hale": stopEndsNoSentence,
+     * 2.12.41, the fourth review of Quick add — or a name there was never one, and a change letting it go kept no name) */
+    if (k < 0 || (/[.!?…:"“‘(\[]/.test(t[k]) && !(t[k] === '.' && stopEndsNoneAt(t, k)))) continue;
     out.push(tok.replace(/['’]s$/i, ''));
   }
   return out;
@@ -439,7 +435,11 @@ export function hardTokens(text, knownNames = []) {
   const folded = foldedText(t);
   for (const n of knownNames || []) if (String(n || '').trim().length >= 2 && nameInText(folded, n, { words: false })) names.add(String(n).trim());
   const counts = new Map();
-  for (const m of t.matchAll(/(?<![.!?…]\s|^|["“‘(—–]|\n)\b(\p{Lu}[\p{Ll}'’-]{2,})(?![\p{L}])/gmu)) {
+  for (const m of t.matchAll(/(?<!^|["“‘(—–]|\n)\b(\p{Lu}[\p{Ll}'’-]{2,})(?![\p{L}])/gmu)) {
+    /* (a word opening a sentence is none — but a stop after a title's short form or an initial ends none: "Dr. Halloway"
+     * is a name the summary must keep, stopEndsNoSentence — 2.12.41, the fourth review of Quick add) */
+    const before = t.slice(Math.max(0, m.index - 2), m.index);
+    if (/[.!?…]\s$/.test(before) && !(before[0] === '.' && stopEndsNoneAt(t, m.index - 2))) continue;
     let w = m[1];
     if (/^I['’]/.test(w) || CONTRACTION.test(w)) continue;
     const bare = w.replace(/['’]s$/i, '');
@@ -1000,4 +1000,37 @@ export function firstSentence(text) {
     return head;
   }
   return x;
+}
+/* A STOP THAT ENDS NO SENTENCE — after a title's short form, an initial, "e.g." (TITLE_STOP: "Dr. Halloway", "J. Hale",
+ * "St. Ives"; "No." only before a figure) — for every split of words into sentences that decides what is written
+ * (2.12.41, the fourth review of Quick add: "Dr. Halloway treats the hunters in secret." was cut after "Dr.", and the
+ * lone "Dr." let go). "I." ends one but before another initial ("so did I. She…", "I. M. Pei"). `head`: the words up to
+ * the stop; `next`: those after it */
+export function stopEndsNoSentence(head, next = '') {
+  const h = String(head || '');
+  if (!/\.$/.test(h) || !TITLE_STOP.test(h)) return false;
+  if (/(?:^|[\s(“"'])I\.$/.test(h)) return /^\s*\p{Lu}\.(?![\p{L}])/u.test(String(next || ''));
+  return !/(?:^|[\s(“"'])No\.$/.test(h) || /^\s*\d/.test(String(next || ''));
+}
+/* whether the stop at t[k] ends no sentence, read from the word it closes and the few letters after it — never the whole
+ * text before it (a chapter read for its names word by word) */
+function stopEndsNoneAt(t, k) {
+  let s = k;
+  while (s > 0 && !/\s/.test(t[s - 1])) s -= 1;
+  return stopEndsNoSentence(` ${t.slice(s, k + 1)}`, t.slice(k + 1, k + 6));
+}
+/* some words split into their sentences at `gap` — a stop and the space after it unless told otherwise — never after a
+ * stop that ends none; as String.split gives them */
+export function splitSentences(text, gap = /(?<=[.!?…])\s+/g) {
+  const t = String(text || '');
+  const re = new RegExp(gap.source, gap.flags.includes('g') ? gap.flags : `${gap.flags}g`);
+  const out = [];
+  let from = 0;
+  for (const m of t.matchAll(re)) {
+    if (!m[0].includes('\n') && stopEndsNoSentence(t.slice(from, m.index), t.slice(m.index + m[0].length))) continue;
+    out.push(t.slice(from, m.index));
+    from = m.index + m[0].length;
+  }
+  out.push(t.slice(from));
+  return out;
 }
