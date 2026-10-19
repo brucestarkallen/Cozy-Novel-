@@ -474,6 +474,17 @@ export function withCarriedFacts(codex, before, text) {
   }
   return { ...codex, facts };
 }
+/* the facts of words before a change that a reading of it neither carries to the new words (withCarriedFacts: their
+ * words and name standing in them) nor gives again — a name changed everywhere since, the words put another way or
+ * taken out (archivist.js factsUnvouched: read whole again, 2.12.40) */
+export function factsLost(codex, before, text) {
+  if (!before || !Array.isArray(before.facts)) return [];
+  const folded = foldedText(text);
+  const have = (codex && Array.isArray(codex.facts)) ? codex.facts : [];
+  return before.facts.filter((f) => f && typeof f.fact === 'string' && typeof f.name === 'string'
+    && !(Array.isArray(f.evidence) && f.evidence.length && f.evidence.every((q) => quoteIn(text, q)) && nameInText(folded, f.name))
+    && !have.some((x) => x.id === f.id || (x.fact === f.fact && nameKey(x.name) === nameKey(f.name))));
+}
 
 /* a source as an answer may say it — "Chapter Three, passage 4", "Chapter 3,
  * Passage 4.", "chapter three passage 4", "Passage 4" — as one key */

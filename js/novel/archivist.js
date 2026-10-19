@@ -31,8 +31,8 @@ import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDum
 import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook, bibAutoOn, shortOf } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
-import { continuityOf, mergeContinuity, continuityStep, timelineOf, continuityDone, continuityNow, turnsOfPrint, withCarriedTurns, sameTurn, turnStands, turnsPassed, turnsOwed, setAsideNow } from './timeline.js';
-import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey, entriesOf, entriesForNotes, entriesNamed, entryWords, CODEX_SCHEMA, entryJoins, nameForms, makeFinder } from './bibliography.js';
+import { continuityOf, mergeContinuity, continuityStep, timelineOf, continuityDone, continuityNow, turnsOfPrint, withCarriedTurns, sameTurn, turnStands, turnsPassed, turnsOwed, setAsideNow, turnsLost } from './timeline.js';
+import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, factsLost, sourceKey, entriesOf, entriesForNotes, entriesNamed, entryWords, CODEX_SCHEMA, entryJoins, nameForms, makeFinder } from './bibliography.js';
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
 import { setHelperHooks } from './inplace.js';
 import { applyCheck, checkSig, checkedNow } from './summarycheck.js';
@@ -2491,15 +2491,19 @@ async function readChanges(novelId, conn) {
             const history = histories.get(c.sig);
             if (!history) continue;
             const cid = movedTo.get(c.pid) || chapter.id;
+            /* (what its words before were read for cannot vouch for the rest: left owed, read whole by itself — turnsUnvouched) */
+            const owed = turnsUnvouched(novelId, chapter.id, c, history);
             /* This step checks the selected version and words again when
              * a refused save is replayed over another browser's changes. */
-            store.change('chapter', cid, continuityStep(c.pid, c.sig.split(SIG_SEP)[0], history));
+            store.change('chapter', cid, continuityStep(c.pid, c.sig.split(SIG_SEP)[0], owed ? { ...history, complete: false } : history));
             histories.delete(c.sig);
           }
           for (const c of done) {
             const codex = codexes.get(c.sig);
             if (!codex) continue;
-            store.change('chapter', movedTo.get(c.pid) || chapter.id, codexStep(c.pid, c.sig.split(SIG_SEP)[0], codex));
+            /* (owed as the turns are — factsUnvouched: from its start, `upTo` 0, bibDue) */
+            const owed = factsUnvouched(novelId, chapter.id, c, codex);
+            store.change('chapter', movedTo.get(c.pid) || chapter.id, codexStep(c.pid, c.sig.split(SIG_SEP)[0], owed ? { ...codex, complete: false, upTo: 0 } : codex));
             codexes.delete(c.sig);
           }
           keepReading(novelId, chapter, done, acc, accKept, { mixed: B.removed.length > 0 || B.chapters.length > 0 });
@@ -3159,9 +3163,6 @@ export function bibReading(novel, conn) { return bibAutoOn(novel) && Boolean(con
 /* the print of the words a change is read against: the words as the helper read them (`was`, kept on every part of a
  * change read in parts — only its first part carries them: 2.12.40, the audit) */
 const oldPrint = (c) => (c && c.was ? c.was.split(SIG_SEP)[1] || '' : '') || (c && c.old && !c.oldOnly ? hashText(c.old) : '');
-/* the facts the version a change replaced had for its words (the version whose words the change was read against) —
- * and, first, the facts its new words already have (carried to them with a change in place, put back with them, or
- * read before: another version picked), kept as the turns are (turnsBefore) */
 /* the passage a reading read, where it stands now: moved to another chapter while it was read (A new chapter from here),
  * there — as what it read is laid there (readChanges, movedTo: 2.12.40, the review — looked for only where it stood,
  * the words before's turns and facts were not found, and a fix read there took them all) */
@@ -3176,13 +3177,14 @@ function passageNow(novelId, chapterId, pid) {
   }
   return null;
 }
-function codexBefore(novelId, chapterId, c) {
+/* the facts the version a change replaced had for its words (the version whose words the change was read against) —
+ * and, first, the facts its new words already have (carried to them with a change in place, put back with them, or
+ * read before: another version picked), kept as the turns are (turnsBefore): {own, old} */
+function factsKept(novelId, chapterId, c) {
   const p = passageNow(novelId, chapterId, c.pid);
-  if (!p) return [];
-  const out = [];
+  if (!p) return { own: null, old: null };
   const shown = (p.versions || []).find((x) => x.id === String(c.sig || '').split(SIG_SEP)[0]);
-  const now = shown && codexNow({ text: c.whole !== undefined ? c.whole : c.text, codex: shown.codex });
-  if (now) out.push(now);
+  const own = (shown && codexNow({ text: c.whole !== undefined ? c.whole : c.text, codex: shown.codex })) || null;
   const fp = oldPrint(c);
   const ofThem = (k) => (k && k.schema === CODEX_SCHEMA && Array.isArray(k.facts) && fp && k.fp === fp ? k : null);
   for (const v of p.versions || []) {
@@ -3190,27 +3192,51 @@ function codexBefore(novelId, chapterId, c) {
      * the facts of the words before a Go on were looked for only on a version still reading as they did, and lost) */
     /* (words changed in place since, 2.12.2: their facts kept with the words before) */
     const k = ofThem(v.codex) || (v.before || []).map((b) => b && ofThem(b.codex)).find(Boolean);
-    if (k) { out.push(k); break; }
+    if (k) return { own, old: k };
   }
-  return out;
+  return { own, old: null };
 }
+const codexBefore = (novelId, chapterId, c) => { const { own, old } = factsKept(novelId, chapterId, c); return [own, old].filter(Boolean); };
 /* THE TURNS A CHANGE'S NEW WORDS ALREADY HAVE, AND THOSE OF THE WORDS IT REPLACED (2.12.40, the audit): the new words'
  * own — carried to them with a change in place, put back with them, or read before (another version picked) — and
- * the words before's, found as their facts are (codexBefore): a version's own, of words it had or kept with the words a
- * Go on grew from, or kept with the newest words before a change in place (shape.js inPlaceFields) */
-function turnsBefore(novelId, chapterId, c) {
+ * the words before's, found as their facts are (factsKept): a version's own, of words it had or kept with the words a
+ * Go on grew from, or kept with the newest words before a change in place (shape.js inPlaceFields): {own, old} */
+function turnsKept(novelId, chapterId, c) {
   const p = passageNow(novelId, chapterId, c.pid);
-  if (!p) return [];
-  const out = [];
+  if (!p) return { own: null, old: null };
   const v = (p.versions || []).find((x) => x.id === String(c.sig || '').split(SIG_SEP)[0]);
   const whole = String((c.whole !== undefined ? c.whole : c.text) || '');
-  if (v && turnsOfPrint(v.continuity, hashText(whole))) out.push(v.continuity);
+  const own = v && turnsOfPrint(v.continuity, hashText(whole)) ? v.continuity : null;
   const fp = oldPrint(c);
   for (const x of fp ? p.versions || [] : []) {
     const k = turnsOfPrint(x.continuity, fp) ? x.continuity : (x.before || []).map((b) => b && b.continuity).find((t) => turnsOfPrint(t, fp));
-    if (k) { out.push(k); break; }
+    if (k) return { own, old: k };
   }
-  return out;
+  return { own, old: null };
+}
+const turnsBefore = (novelId, chapterId, c) => { const { own, old } = turnsKept(novelId, chapterId, c); return [own, old].filter(Boolean); };
+/* WHAT A CHANGE'S READING CANNOT VOUCH FOR IS READ WHOLE (2.12.40, the review: a name changed everywhere between a Go on
+ * and its reading — the turns and facts kept for the words before quoted the old name, so none of them was carried, and
+ * the passage was said read whole with them lost). A change to a version's own words is read for what it adds; the
+ * rest of the passage stands on what its words before were read for. When that cannot vouch for it — nothing kept for
+ * the words before, their turns not read whole, or one of their turns or facts neither carried to the new words nor
+ * given by the reading again — the passage is never said read whole: it is left owed, and the helper reads it whole by
+ * itself (timelineDue, bibDue — one ask; what the reading found kept beside it). A plain Go on carries them all and costs
+ * nothing more. A change to another version (another take) leaves the words before with their own version. */
+/* (read as a change, against the words before of the version itself — a passage read whole, as new, is read for all of it) */
+const ownWordsBefore = (c) => Boolean(c && (c.old || c.fromChange) && c.was) && c.was.split(SIG_SEP)[0] === String(c.sig || '').split(SIG_SEP)[0];
+const wholeOf = (c) => String((c.whole !== undefined ? c.whole : c.text) || '');
+function turnsUnvouched(novelId, chapterId, c, history) {
+  if (!ownWordsBefore(c) || !history || history.complete !== true) return false;
+  const { own, old } = turnsKept(novelId, chapterId, c);
+  if (own && own.complete === true) return false;
+  return !old || old.complete !== true || turnsLost(history, old, wholeOf(c)).length > 0;
+}
+function factsUnvouched(novelId, chapterId, c, codex) {
+  if (!ownWordsBefore(c) || !codex) return false;
+  const { own, old } = factsKept(novelId, chapterId, c);
+  if (own && own.complete === true && !Number.isInteger(own.upTo)) return false;
+  return !old || factsLost(codex, old, wholeOf(c)).length > 0;
 }
 /* the backfill's tries, by version: a batch its model will not read is read one passage at a time (bibNarrow), and a
  * passage tried twice alone is passed by — never asked for ever, never paid for again */
@@ -3372,8 +3398,12 @@ async function bibBackfill(novelId, conn) {
       let codex = rows.length ? null : codexOf(undefined, { text: x.shown, whole: x.text });
       for (const row of rows) codex = mergeCodex(codex, codexOf(row.facts, { text: x.shown, whole: x.text }));
       if (rows.length !== 1) codex.complete = false;
-      if (x.whole) lay(x, codex);
-      else {
+      if (x.whole) {
+        /* (begun in parts, or left owed by a change's reading — factsUnvouched: what it found kept beside what this one
+         * finds, each fact once, as the Timeline keeps an earlier reading's turns) */
+        const had = codexNow(askedVersion(x));
+        lay(x, had && Number.isInteger(had.upTo) ? withCarriedFacts(codex, had, x.text) : codex);
+      } else {
         /* a part read: what the parts before it found kept with it, read as far as its end */
         const out = factsTo(x, codex);
         const had = codexNow(askedVersion(x));
