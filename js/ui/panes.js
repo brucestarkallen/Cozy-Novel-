@@ -316,7 +316,11 @@ function drawChapters() {
     name.style.opacity = c?.name ? '' : '.75';
     setText(li.querySelector('.w'), plural(words, 'word'));
     const summary = li.querySelector('.sum');
-    setText(summary, c?.summary?.text || '');
+    /* (one its model would not write as the chapter reads now: said so — never nothing, nor the summary from before its
+     * changes, which never rides: 2.12.41, round 7) */
+    const passedBy = !c?.summary?.text && c && archivist.summaryWait(P.novelId, id)?.passed;
+    setText(summary, c?.summary?.text || (passedBy ? 'Not summed up — the helper’s model would not sum it up as it reads now.' : ''));
+    summary.style.fontStyle = passedBy ? 'italic' : '';
     summary.hidden = !summary.textContent;
     if (list.children[i] !== li) list.insertBefore(li, list.children[i] || null);
   });
@@ -374,8 +378,10 @@ function chapterMenu(anchor, id, i) {
  * as it stands — or why there is none to send — with its check, and a long
  * chapter's stretches, each in its fold (the level between: archivist.js,
  * context.js stretchesOf). A scene's stretches the same (sceneShortSheet). */
-function checkWords(entry, unit) {
+/* (`wait`: its check's next try waiting its time after a stall — archivist.js checkWait) */
+function checkWords(entry, unit, wait = null) {
   const k = entry && entry.checked;
+  if ((!k || !checkedNow(entry)) && wait && wait.when) return `Not checked yet — the helper’s model was too slow to answer for it, so the helper holds it against the ${unit} again ${wait.when}.`;
   if (!k || !checkedNow(entry)) return `Not checked yet — the helper holds it against the ${unit} next.`;
   if (k.unread) return 'Its model would not check it. It is checked again once its words change.';
   const fixes = (k.fixed || []).map((f) => `“${f.from}” → “${f.to}”`);
@@ -384,24 +390,65 @@ function checkWords(entry, unit) {
   return `Checked against the ${unit}, and put right${fixes.length ? `: ${fixes.join('; ')}` : ''}${adds.length ? `${fixes.length ? '. Added' : ' — added'}: ${adds.join(' ')}` : ''}`;
 }
 const shortText = (text) => h('p', { style: { lineHeight: '1.6', whiteSpace: 'pre-wrap', margin: '6px 0 0' } }, text);
+/* (each row's `wait`: its summing up passed by — its model would not — or waiting its time after a stall, kept with the
+ * book: archivist.js stretchWait, 2.12.41, round 7; `check`, its check's) */
 function stretchFolds(rows, unit) {
   const state = (st) => (!checkedNow(st) ? 'not checked yet' : st.checked.unread ? 'its model would not check it' : 'checked');
-  return rows.map((r) => h('details.pane-guide.summary-stretch', h('summary', r.text ? `${r.label} · ${state(r.st)}` : `${r.label} · not summed up yet`),
-    ...(r.text ? [h('p.hint', checkWords(r.st, unit)), shortText(r.text)] : [h('p.hint', 'The helper sums it up next.')])));
+  const owed = (r) => (r.wait && r.wait.passed
+    ? 'Its model would not sum it up — the helper sums it up again once its words change. Until then it rides by its opening and close.'
+    : r.wait && r.wait.when ? `The helper’s model was too slow to answer for it — the helper sums it up again ${r.wait.when}.` : 'The helper sums it up next.');
+  return rows.map((r) => h('details.pane-guide.summary-stretch', h('summary', r.text ? `${r.label} · ${state(r.st)}` : `${r.label} · ${r.wait && r.wait.passed ? 'not summed up' : 'not summed up yet'}`),
+    ...(r.text ? [h('p.hint', checkWords(r.st, unit, r.check)), shortText(r.text)] : [h('p.hint', owed(r))])));
+}
+/* A SHEET WHOSE WORDS TELL A TIME THAT PASSES (2.12.41, round 7 — the review of round 5, its F11: "again in fifteen
+ * minutes" stood for as long as a sheet or the pane stayed open): its words worked out again every half minute while
+ * it is open, and drawn again only when they changed — the folds he opened stay open. `parts()`: what it shows now, or
+ * null once what it is of is gone */
+function liveSheet(title, parts) {
+  let tick = 0;
+  const s = openSheet(title, { onClose: () => clearInterval(tick) });
+  s.box.classList.add('summary-sheet');
+  let said = null;
+  const fill = () => {
+    const list = parts();
+    if (!list) { s.close(); return; }
+    const box = h('div', ...list);
+    if (box.textContent === said) return;
+    said = box.textContent;
+    const open = [...s.body.querySelectorAll('details')].map((d) => d.open);
+    s.body.replaceChildren(...box.childNodes);
+    [...s.body.querySelectorAll('details')].forEach((d, i) => { if (open[i]) d.open = true; });
+  };
+  fill();
+  tick = setInterval(fill, 30000);
+  return s;
 }
 function summarySheet(chapterId) {
   const n = store.peek('novel', P.novelId);
   const c = store.peek('chapter', chapterId);
   if (!n || !c) return;
-  const s = openSheet(chapterLabel(n, c));
-  s.box.classList.add('summary-sheet');
+  const novelId = P.novelId;
+  liveSheet(chapterLabel(n, c), () => summaryParts(novelId, chapterId));
+}
+function summaryParts(novelId, chapterId) {
+  const n = store.peek('novel', novelId);
+  const c = store.peek('chapter', chapterId);
+  if (!n || !c || !(n.order || []).includes(chapterId)) return null;
   const sum = c.summary && String(c.summary.text || '').trim() ? c.summary : null;
   const current = sum && (!sum.fp || sum.fp === chapterPrint(c));
   const parts = [];
+  /* (passed by — its model would not sum it up as it reads now — or its next try waiting its time after a stall: said,
+   * with when — 2.12.41, round 7) */
+  const wait = archivist.summaryWait(novelId, chapterId);
+  const again = wait && wait.when ? ` The helper’s model was too slow to answer for it — the helper sums it up again ${wait.when}.` : '';
   if (sum && sum.by === 'you' && current) parts.push(h('p.hint', 'Your own summary — the helper keeps your words and never changes them.'), shortText(sum.text));
-  else if (current) parts.push(h('p.hint', checkWords(sum, 'chapter')), shortText(sum.text));
-  else if (sum) parts.push(h('p.hint', 'Waiting for the chapter’s latest changes: the summary from before them is never sent. Until the helper sums it up again, the chapter rides by its unchanged stretches, or by its opening and close.'));
-  else parts.push(h('p.hint', 'Not summed up yet. The helper sums a chapter up once the writing has moved on from it, or after it has been quiet ten minutes; until then it rides by its stretches, or by its opening and close.'));
+  else if (current) {
+    /* (its names and figures asked for again after a stall) */
+    const tokens = sum.again ? archivist.tokensWait(novelId, chapterId) : null;
+    parts.push(h('p.hint', checkWords(sum, 'chapter', archivist.checkWait(novelId, 'chapter', chapterId, sum)) + (tokens && tokens.when ? ` The names and figures it may have left out are asked for again ${tokens.when} — the helper’s model was too slow to answer for them.` : '')), shortText(sum.text));
+  } else if (wait && wait.passed) parts.push(h('p.hint', 'Not summed up — the helper’s model would not sum it up as it reads now. It sums it up again once the chapter changes, or when you press Read it again, under Cards. Until then the chapter rides by its stretches, or by its opening and close.'));
+  else if (sum) parts.push(h('p.hint', `Waiting for the chapter’s latest changes: the summary from before them is never sent. Until the helper sums it up again, the chapter rides by its unchanged stretches, or by its opening and close.${again}`));
+  else parts.push(h('p.hint', again ? `Not summed up yet.${again} Until then it rides by its stretches, or by its opening and close.` : 'Not summed up yet. The helper sums a chapter up once the writing has moved on from it, or after it has been quiet ten minutes; until then it rides by its stretches, or by its opening and close.'));
   /* a long chapter's stretches: what rides for it while the room holds them, before its one summary */
   const order = n.order || [];
   const plan = stretchPlan(c, { closeLast: order.indexOf(chapterId) < order.length - 1 });
@@ -410,28 +457,32 @@ function summarySheet(chapterId) {
     const list = c.passages || [];
     const rows = plan.stretches.map((st) => {
       const ns = list.filter((p) => st.ids.includes(p.id)).map((p) => nums.get(p.id)).filter(Boolean);
-      return { st, text: st.text, label: ns.length ? `Passages ${ns[0]}–${ns[ns.length - 1]}` : 'A stretch' };
+      return { st, text: st.text, label: ns.length ? `Passages ${ns[0]}–${ns[ns.length - 1]}` : 'A stretch',
+        wait: st.text ? null : archivist.stretchWait(novelId, 'chapter', chapterId, st.fp), check: st.text ? archivist.checkWait(novelId, 'stretch', chapterId, st, st) : null };
     });
     parts.push(h('h3.summary-head', 'Its stretches, in short'), h('p.hint', 'A long chapter is kept in stretches of about 2,500 words. When it cannot ride whole, it rides by these while the room holds them — before its one summary.'), ...stretchFolds(rows, 'chapter'));
   }
-  s.body.append(...parts);
+  return parts;
 }
 function sceneShortSheet(playId) {
   const p = store.peek('play', playId);
   if (!p) return;
-  const s = openSheet(`You play ${p.who} — in short`);
-  s.box.classList.add('summary-sheet');
+  liveSheet(`You play ${p.who} — in short`, () => sceneShortParts(playId));
+}
+function sceneShortParts(playId) {
+  const p = store.peek('play', playId);
+  if (!p) return null;
   const plan = scenePlan(p);
   if (!Array.isArray(p.stretches) || !p.stretches.length) {
-    s.body.append(h('p.hint', 'Not needed yet: the narrator reads this scene whole. Once it grows long for the narrator’s room, the helper sums its earliest turns up in stretches, and those ride in their place — never just left out.'));
-    return;
+    return [h('p.hint', 'Not needed yet: the narrator reads this scene whole. Once it grows long for the narrator’s room, the helper sums its earliest turns up in stretches, and those ride in their place — never just left out.')];
   }
   const turns = p.turns || [];
   const rows = plan.stretches.map((st) => {
     const a = turns.findIndex((t) => t.id === st.from) + 1, b = turns.findIndex((t) => t.id === st.to) + 1;
-    return { st, text: st.text, label: `Turns ${a}–${b}` };
+    return { st, text: st.text, label: `Turns ${a}–${b}`,
+      wait: st.text ? null : archivist.stretchWait(p.novelId, 'scene', playId, st.fp), check: st.text ? archivist.checkWait(p.novelId, 'scene', playId, st, st) : null };
   });
-  s.body.append(h('p.hint', 'Once the scene is longer than the narrator holds, its earliest turns ride as these — the fewest that fit.'), ...stretchFolds(rows, 'scene'));
+  return [h('p.hint', 'Once the scene is longer than the narrator holds, its earliest turns ride as these — the fewest that fit.'), ...stretchFolds(rows, 'scene')];
 }
 
 async function removeChapter(id) {
@@ -567,6 +618,22 @@ function paintLight(el) {
 function drawLight() {
   paintLight(ui.light);
   for (const el of document.querySelectorAll('.noteslight')) paintLight(el);
+  tickLight();
+}
+/* WORDS THAT TELL A TIME THAT PASSES ARE DRAWN AGAIN AS IT PASSES (2.12.41, round 7 — the review of round 5, its F11:
+ * "again in fifteen minutes" stood on an open pane until something else changed): while the light tells a wait — a
+ * failure's, or what waits its time (archivist.js lightTimed) — the light and the open notes are drawn again every half
+ * minute; never once nothing waits */
+let lightTick = 0;
+function tickLight() {
+  clearTimeout(lightTick);
+  lightTick = 0;
+  if (!P.novelId || !archivist.lightTimed(P.novelId)) return;
+  lightTick = setTimeout(() => {
+    lightTick = 0;
+    drawLight();
+    if (P.side === 'notes' && sideVisible()) drawSideSoon();
+  }, 30000);
 }
 /* the notes' light for a full screen: the same colours as on the Notes button; a tap says how the notes stand */
 export function notesLight(cls = '') {
@@ -919,7 +986,8 @@ function drawNotes() {
   row.append(h('button.btn.small', { title: `The helper holds every card against the book as it stands — puts right what drifted, folds cards that repeat each other into one, and says why for each; your own words stay. It does this by itself every ${archivist.AUDIT_EVERY} readings.`, disabled: asked && !off && cards > 0, onclick: () => {
     if (off) { toast('No helper is chosen, so the notes are not kept or checked. Choose one in Settings → Connections.', 6000); return; }
     if (!cards) { toast('There are no notes to check yet — the helper writes them as the book is read.'); return; }
-    archivist.askAudit(novelId);
+    /* (by his hand: asked now, afresh — a wait after a stall is his to overrule, 2.12.41, round 7) */
+    archivist.askAudit(novelId, { byHand: true });
     toast('The helper is checking the notes against the book — what it finds shows here.');
     drawSide();
   } }, asked && !off && cards > 0 ? 'Checking the notes…' : 'Check the notes against the book'));
@@ -1021,11 +1089,18 @@ function checkReport(n, { asked, off, cards }) {
   const a = m.audit || {};
   const box = h('div.lightcard.checkbox', h('div.note-report-label', icon('check', 14), 'Notes & continuity'));
   const left = Math.max(0, archivist.AUDIT_EVERY - (a.reads || 0));
-  const next = left ? `It checks again by itself after ${plural(left, 'more reading')}.` : 'It checks again as soon as what is new is read.';
+  /* (its next try waiting its time after a stall: said, with when — 2.12.41, round 7) */
+  const wait = archivist.stageWait(n.id, 'audit');
+  const slow = wait && wait.when ? `the helper’s model was too slow to answer for them, so the helper checks them again ${wait.when}` : '';
+  const next = slow ? `It checks them again by itself — ${slow}.` : left ? `It checks again by itself after ${plural(left, 'more reading')}.` : 'It checks again as soon as what is new is read.';
+  /* (asked while the helper waits on a model that kept silent for as long as it is ever waited — nothing is asked of it
+   * until then: said, with when, never "as soon as what is new has been read" — 2.12.41, round 7, F4) */
+  const quiet = asked && !slow ? archivist.silentWait(n.id) : null;
+  const silent = quiet ? `The helper’s model sent nothing for ${archivist.waitWords(quiet.leashMs)} — the helper asks it again ${quiet.when}, and checks them once what is new is read` : '';
   if (off) { box.classList.add('note-report-quiet'); box.append(h('b', 'Not checked: no helper is chosen.')); return box; }
   if (!cards) { box.append(h('b', 'Nothing to check yet.'), ` The helper writes the notes as the book is read, and checks them against the book every ${archivist.AUDIT_EVERY} readings.`); return box; }
   if (asked) {
-    box.append(h('b', 'Checking the notes against the book…'), ' It begins as soon as what is new has been read; what it finds shows here.');
+    box.append(h('b', 'Checking the notes against the book…'), slow ? ` ${slow.charAt(0).toUpperCase()}${slow.slice(1)}; what it finds shows here.` : silent ? ` ${silent}; what it finds shows here.` : ' It begins as soon as what is new has been read; what it finds shows here.');
     if (!a.checked) return box;
     box.append(h('p.notekey', 'The check before this one:'));
   }

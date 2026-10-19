@@ -22,7 +22,7 @@ import {
   KNOB_FIELDS, knobRefused, hasLateSystem, hasLateVoice, lateVoiceFitted, hermesLike, prefillGap, contextFrom, inputFrom, replyLimitFrom, contextOf,
   modelsUrl, headersFor, reportedIdentity, spokenAs, describePrefill, prefillProfile, deepseekBetaBase, structuredPlanFor, prefillPlan,
 } from './providers.js';
-import { estimateTokens } from '../util.js';
+import { estimateTokens, numberWords } from '../util.js';
 import { makeStructuredDecoder, STRUCTURED_REFUSAL, unwrapStructured, readTemplate } from './structured.js';
 
 /* ------------------------------------------------------------- lessons */
@@ -61,6 +61,32 @@ export function learn(conn, fact) {
   return next;
 }
 
+/* WHAT ANOTHER WINDOW LEARNED OF THE SAME MODEL AT THE SAME ADDRESS, KEPT BESIDE WHAT THIS ONE LEARNED (2.12.41, a step
+ * laid again over another window's newer copy: the lessons this window had were set whole, and a lesson learned there
+ * meanwhile went — a refusal taught twice): the two joined as learn() joins a lesson to what was known; a lesson of
+ * another model, or of none, is this one's whole */
+export function joinLessons(cur, next) {
+  if (!next || !cur || cur.for !== next.for) return next;
+  const most = (a, b) => (Number.isFinite(a) || Number.isFinite(b) ? Math.max(Number(a) || 0, Number(b) || 0) : (a || b || null));
+  return {
+    ...next,
+    at: most(cur.at, next.at),
+    efforts: next.efforts || cur.efforts || null,
+    drop: [...new Set([...(cur.drop || []), ...(next.drop || [])])],
+    offThinks: next.offThinks === true || cur.offThinks === true,
+    noLateSystem: next.noLateSystem === true || cur.noLateSystem === true,
+    noLateVoice: next.noLateVoice === true || cur.noLateVoice === true,
+    downAt: most(cur.downAt, next.downAt),
+    prefillDownAt: most(cur.prefillDownAt, next.prefillDownAt),
+    context: next.context || cur.context || null,
+    contextGuess: next.context ? next.contextGuess === true : cur.contextGuess === true,
+    maxOut: next.maxOut || cur.maxOut || null,
+    completionField: next.completionField === true || cur.completionField === true,
+    structuredDownAt: most(cur.structuredDownAt, next.structuredDownAt),
+    quietMs: most(cur.quietMs, next.quietMs),
+  };
+}
+
 function lessonFor(detail, body) {
   const l = lessonFrom(detail, body);
   if (l.allowed) return { efforts: l.allowed };
@@ -90,8 +116,11 @@ async function repairHermesKey(conn, status) {
     const data = await res.json();
     const key = data && typeof data.key === 'string' && data.key && data.key !== conn.key ? data.key : '';
     if (!key) return false;
+    /* (with the key it took the place of and the address it is for: kept only while the connection still reads so — a
+     * key he typed, or an address he changed, meanwhile in another window stays: 2.12.41) */
+    const was = { url: conn.url, key: conn.key };
     conn.key = key;
-    for (const fn of keyKeepers) { try { fn(conn.id, key); } catch (_) { /* ignore */ } }
+    for (const fn of keyKeepers) { try { fn(conn.id, key, was); } catch (_) { /* ignore */ } }
     return true;
   } catch (_) { return false; }
 }
@@ -1190,13 +1219,26 @@ export async function measureSpeed(conn, { now = () => (typeof performance !== '
   return { firstMs: first === null ? null : Math.round(first), totalMs: Math.round(totalMs), tokens, estimated: counted === null, tps };
 }
 
+/* A MODEL ONLY SLOW IS NEVER "NOT WORKING" (2.12.41, round 7 — the review of round 5, its F9: Test's ask was not
+ * streamed, so its leash measured the whole answer, and a model that took longer than the leash to answer "ready" was
+ * said to be not working): its ask is streamed, so the leash hears silence — a model thinking before it answers is
+ * heard thinking — and one whose provider sends nothing until the whole answer is done is waited the quiet leash for
+ * it, three minutes at least; past that, it is said to have given no answer in that time, as it is */
+const minutesSaid = (ms) => { const m = Math.max(1, Math.round((Number(ms) || 0) / 60000)); return m === 1 ? 'a minute' : `${numberWords(m).toLowerCase()} minutes`; };
+/* (and how long his page waits, as it does: a word from it for as long as the phone's relay waits on his page — a
+ * minute past the longest a silent provider is waited, unleashedWait — and an answer that only makes no progress until
+ * he presses Stop: his page has no leash but his Stop) */
+function noAnswerWords(out) {
+  if (out.leashed === 'long') return `Its answer made no progress for ${minutesSaid(out.leashMs)} — it may only be slow, or its provider may be stuck. Test waits no longer than that; a page waits for it until you press Stop.`;
+  return `It gave no answer in ${minutesSaid(out.leashMs)} — it may only be slow to answer, or its provider may be down. Test waits no longer than that; a page waits up to ${minutesSaid(unleashedWait() * 1000)} for a word from it, or until you press Stop.`;
+}
 export async function tryConnection(conn, { speed = true } = {}) {
   const level = conn && conn.thinking ? String(conn.thinking) : '';
   /* (on a worker's leash: Test has no Stop — 2.12.41, round 5: a silent provider held it for up to three asks of sixteen
    * minutes each) */
-  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: false, worker: false, noStructured: true, noSearch: true, leash: true });
+  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: true, worker: false, noStructured: true, noSearch: true, leash: true });
   const first = await go(conn);
-  if (!first.ok) return { ok: false, words: `Not working — ${first.error}` };
+  if (!first.ok) return { ok: false, words: first.leashed && first.leashed !== 'gaveway' ? noAnswerWords(first) : `Not working — ${first.error}` };
   const answered = String(first.text || '').trim();
   const said = answered ? ` It answered “${answered.slice(0, 30)}”.` : ` It wrote no answer — ${emptyWhy(first, first.thinking)}.`;
   const at = level ? `Asked at “${level}” (${spokenAs(conn)})` : 'Asked with nothing said about thinking, so the model decided';
@@ -1212,7 +1254,7 @@ export async function tryConnection(conn, { speed = true } = {}) {
     /* none at this level: once more at the top, to tell the level from the address */
     const top = await go({ ...conn, thinking: 'max' });
     const back = top.ok && (String(top.thinking || '').trim() || top.thinkTokens > 0 || top.hiddenThought);
-    verdict = `${at} — the answer came, but NO thinking with it.` + (!top.ok ? ' (The top level was refused, so it could not be compared.)'
+    verdict = `${at} — the answer came, but NO thinking with it.` + (!top.ok ? (top.leashed && top.leashed !== 'gaveway' ? ` (Asked again at “max”, it gave no answer in ${minutesSaid(top.leashMs)}, so the two could not be compared.)` : ' (The top level was refused, so it could not be compared.)')
       : back ? ` Asked again at “max” — ${String(top.thinking || '').trim() ? `${String(top.thinking).trim().length.toLocaleString()} characters came back` : top.thinkTokens > 0 ? `${top.thinkTokens.toLocaleString()} thinking tokens were reported` : 'it thought, kept hidden'}. So it is this LEVEL that gives none here, not the address: choose a higher one.`
         : ' Nor at “max” — this address sends no thinking back at any level, though the model may still think inside it.');
   }

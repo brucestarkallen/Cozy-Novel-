@@ -293,7 +293,18 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
     if (clash) { toast(`Another entry goes by ${clash} already — give this one another name, or change that one.`, 6000); return; }
     if (!tidy.line && !tidy.text) { toast('Write what it is — in a line, or the entry.'); return; }
     const saved = { ...tidy, at: Date.now(), by: 'you' };
-    store.change('novel', novelId, novelSteps.putEntry(saved), { now: true });
+    /* (only what he typed, onto the entry as the copy the step is laid on has it — laid again over a newer copy, what
+     * another window wrote into the parts he left alone stays: 2.12.41, a step laid again over another window's newer
+     * copy — the whole entry as this window had it was written) */
+    const typedKeys = [...Object.keys(t), ...(cur && t.name !== undefined && nameKey(t.name) !== nameKey(live.name) ? ['aka'] : [])];
+    store.change('novel', novelId, (nn) => {
+      const there = cur ? entriesOf(nn).find((x) => x.id === cur.id) : null;
+      if (!there) { novelSteps.putEntry(saved)(nn); return true; }
+      const next = JSON.parse(JSON.stringify(there));
+      for (const k of typedKeys) if (saved[k] !== undefined) next[k] = JSON.parse(JSON.stringify(saved[k]));
+      novelSteps.putEntry({ ...tidyEntry(next), at: saved.at, by: 'you' })(nn);
+      return true;
+    }, { now: true });
     /* an entry under a card of the notes: the notes are checked against it (archivist.js auditDue, 2.12.37) */
     archivist.nudge(novelId);
     keepEntryDraft(novelId, draftKey, undefined);

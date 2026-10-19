@@ -89,15 +89,18 @@ export async function mendBook(novelId) {
         const was = String(v.text || '');
         const m = mendPage(v, { names: [c.name].filter(Boolean) });
         if (m.text === was || !m.text.trim()) continue;
-        store.change('chapter', c.id, chapterSteps.setVersion(p.id, v.id, {
+        const mended = chapterSteps.setVersion(p.id, v.id, {
           text: m.text, words: countWords(m.text),
           /* (the words before the fixes by themselves mended the same way: what went in by itself is still measured
            * from them — shape.js autoBaseOf) */
           ...(typeof v.autoBase === 'string' ? { autoBase: mendPage({ ...v, text: v.autoBase }, { names: [c.name].filter(Boolean) }).text } : {}),
           ...(m.tookOff ? { tookOff: joined(m.tookOff, v.tookOff) } : {}),
           ...(m.tookOffTop ? { tookOffTop: joined(v.tookOffTop, m.tookOffTop) } : {}),
+        });
         /* (not a checkpoint: the chapter as it was before the mend is kept among its earlier copies) */
-        }));
+        /* (laid only while the page still reads as it was mended from — never over his edit, or the checker's fix, made
+         * meanwhile in another window: 2.12.41, a step laid again over another window's newer copy) */
+        store.change('chapter', c.id, (ch) => { const q = (ch.passages || []).find((x) => x.id === p.id); const w = q && (q.versions || []).find((x) => x.id === v.id); if (!w || w.streaming || String(w.text || '') !== was) return false; mended(ch); return true; });
         /* what the checker found for these words: on the mended words, what still stands in them */
         store.change('chapter', c.id, (ch) => {
           const e = ch.checks && ch.checks[p.id] && ch.checks[p.id][v.id];
@@ -174,11 +177,13 @@ export async function mendBook(novelId) {
         const was = String(v.text || '');
         const m = shapeTelling(unglueSounds(was), { cut: Boolean(v.cut) });
         if (m.text === was || !m.text.trim()) continue;
-        store.change('play', id, turnSteps.setVersion(t.id, v.id, {
+        const mendedTelling = turnSteps.setVersion(t.id, v.id, {
           text: m.text,
           ...(m.tookOff ? { tookOff: joined(m.tookOff, v.tookOff) } : {}),
           ...(m.tookOffTop ? { tookOffTop: joined(v.tookOffTop, m.tookOffTop) } : {}),
-        }));
+        });
+        /* (only while the telling still reads as it was mended from: 2.12.41) */
+        store.change('play', id, (d) => { const x = (d.turns || []).find((y) => y.id === t.id); const w = x && (x.versions || []).find((y) => y.id === v.id); if (!w || w.streaming || String(w.text || '') !== was) return false; mendedTelling(d); return true; });
         told++;
       }
     }

@@ -583,6 +583,36 @@ export function sameEnd(a, b) {
   return tail(a) === tail(b);
 }
 
+/* A CHANGE MADE ON WORDS THAT HAVE CHANGED SINCE, LAID WHERE IT CAN BE LAID EXACTLY (2.12.41, a step laid again over
+ * another window's newer copy): the stretch it changed in `was`, with a few whole words either side of it, standing once
+ * in the newer words `now` — the change goes in there, and the rest of them stay as they are; standing nowhere, or more
+ * than once, nothing (null). Only the words the change found are ever replaced, never another window's. */
+const RELAY_WORDS = 3;
+export function relaidOn(was, after, now) {
+  const a = String(was || '');
+  const b = String(after || '');
+  const n = String(now || '');
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let t = 0;
+  while (t < a.length - s && t < b.length - s && a[a.length - 1 - t] === b[b.length - 1 - t]) t++;
+  let start = s;
+  let end = a.length - t;
+  for (let w = 0; w < RELAY_WORDS && start > 0; w++) {
+    while (start > 0 && /\s/.test(a[start - 1])) start--;
+    while (start > 0 && !/\s/.test(a[start - 1])) start--;
+  }
+  for (let w = 0; w < RELAY_WORDS && end < a.length; w++) {
+    while (end < a.length && /\s/.test(a[end])) end++;
+    while (end < a.length && !/\s/.test(a[end])) end++;
+  }
+  const found = a.slice(start, end);
+  if (!found.trim()) return null;
+  const at = n.indexOf(found);
+  if (at < 0 || n.indexOf(found, at + 1) >= 0) return null;
+  return n.slice(0, at) + b.slice(start, b.length - (a.length - end)) + n.slice(at + found.length);
+}
+
 export function newPassage(by, text = '', fields = {}) {
   return { id: newId('p'), by, pick: 0, versions: [newVersion({ text, how: by === 'you' ? 'mine' : by, ...fields })] };
 }
@@ -1075,11 +1105,21 @@ export function withStamps(prev, next, { elsewhere = null } = {}) {
 
 /* ------------------------------------------------------- steps (novel) */
 
+/* (a step that writes words where the change found other words — `from`, given: laid only while the copy it is laid on
+ * still reads so, so laid again over another window's newer copy it never writes over what that window wrote there:
+ * 2.12.41, a step laid again over another window's newer copy) */
+const readsAs = (cur, from) => String(cur == null ? '' : cur) === String(from == null ? '' : from);
 export const novelSteps = {
   touchWritten: (at) => (n) => { n.meta.written = Math.max(n.meta.written || 0, at); },
   opened: (at) => (n) => { n.meta.opened = Math.max(n.meta.opened || 0, at); },
-  setMeta: (patch) => (n) => { Object.assign(n.meta, patch); },
-  setField: (key, value) => (n) => { n[key] = value; },
+  setMeta: (patch, from = undefined) => (n) => {
+    if (from && Object.entries(from).some(([k, v]) => !readsAs((n.meta || {})[k], v))) return false;
+    Object.assign(n.meta, patch);
+  },
+  setField: (key, value, from = undefined) => (n) => {
+    if (from !== undefined && !readsAs(n[key], from)) return false;
+    n[key] = value;
+  },
   setPref: (key, value) => (n) => { n.prefs = n.prefs || {}; if (value === '' || value === null || value === undefined) delete n.prefs[key]; else n.prefs[key] = value; },
   counts: (words, chapters) => (n) => { n.meta.words = words; n.meta.chapters = chapters; },
   addChapter: (chapterId, afterId = null) => (n) => {
@@ -1105,16 +1145,26 @@ export const novelSteps = {
   /* A hand-edited card saves only the fields written. Replaying a refused
    * save over another window's copy must preserve its untouched fields and
    * must never recreate a card that window removed. */
-  editNote: (kind, card, fields, { create = false } = {}) => {
+  /* (`found`: the card as a change made for him found it — his partner's: a field his own words were written into since,
+   * on the copy it is laid on (his mark's time moved on, and the field no longer reads as it found it), is never written
+   * over — laid again over a newer copy, his typing in another window stays; laid again over the copy that holds it,
+   * nothing; none left to write, nothing — 2.12.41, a step laid again over another window's newer copy) */
+  editNote: (kind, card, fields, { create = false, found = undefined } = {}) => {
     const words = JSON.parse(JSON.stringify(card));
-    const wrote = [...new Set(fields)].filter((k) => CARD_FIELDS.includes(k) || k === 'since');
+    const asked = [...new Set(fields)].filter((k) => CARD_FIELDS.includes(k) || k === 'since');
     const at = (words.updated && words.updated.at) || Date.now();
+    const as = (x) => JSON.stringify(x === undefined ? null : x);
+    /* (the card as it was found, kept as it stood when the step was made) */
+    const was = found === undefined ? undefined : JSON.parse(JSON.stringify(found));
+    const hisSince = (cur, k) => hisField(cur, k) && hisAtOf(cur.updated) > hisAtOf(was && was.updated) && as(cur[k]) !== as(was ? was[k] : undefined);
     return (n) => {
       n.notes = n.notes || {};
       const list = n.notes[kind] || (n.notes[kind] = []);
       const i = list.findIndex((c) => c.id === words.id);
       const cur = i >= 0 ? list[i] : null;
       if (!cur && !create) return false;
+      const wrote = was !== undefined && cur ? asked.filter((k) => !hisSince(cur, k)) : asked;
+      if (was !== undefined && !wrote.length) return false;
       const next = JSON.parse(JSON.stringify(cur || words));
       for (const field of wrote) {
         if (words[field] === undefined) delete next[field];
@@ -1242,12 +1292,15 @@ export const novelSteps = {
     if (prior.length) next.prior = JSON.parse(JSON.stringify(prior));
     all[pid] = { ...(all[pid] || {}), [vid]: next };
   },
+  /* ([pid, vid, sig]: that reading only while it is still the one of those words — a newer reading of the version, laid
+   * meanwhile in another window, stays: 2.12.41, a step laid again over another window's newer copy) */
   dropReadings: (list) => (n) => {
     const all = n.memory && n.memory.readings;
     if (!all) return;
-    for (const [pid, vid] of list || []) {
+    for (const [pid, vid, sig] of list || []) {
       if (!all[pid]) continue;
       if (vid === '*') delete all[pid];
+      else if (sig !== undefined && !(all[pid][vid] && all[pid][vid].sig === sig)) continue;
       else { delete all[pid][vid]; if (!Object.keys(all[pid]).length) delete all[pid]; }
     }
   },
@@ -1258,11 +1311,14 @@ export const novelSteps = {
    * count was lower, in whichever browser either was made, whatever their clocks say — renamesSince. 2.12.41, round 5:
    * judged by the renaming browser's clock against the reading's, a rename made where the clock runs behind was missed,
    * and what the reading found lost) */
-  noteRenames: (pairs, at) => (n) => {
+  /* (`mark`: {id} — the change of names, by its own mark — or {undoes} — the Undo of the change so marked: an Undo puts each
+   * page's words back as they were, which no change of names does — names.js renameSteps, 2.12.41, round 7) */
+  noteRenames: (pairs, at, mark = {}) => (n) => {
     n.memory = n.memory || {};
     const count = (Number(n.memory.renameN) || 0) + 1;
     n.memory.renameN = count;
-    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at, n: count }))].filter((x) => at - x.at < 3600000).slice(-20);
+    const tag = { ...(mark && mark.id ? { id: mark.id } : {}), ...(mark && mark.undoes ? { undoes: mark.undoes } : {}) };
+    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at, n: count, ...tag }))].filter((x) => at - x.at < 3600000).slice(-20);
   },
   /* what the helper's model would not read, set aside with why (archivist.js) */
   setAside: (entries) => (n) => { n.memory = n.memory || {}; n.memory.aside = { ...(n.memory.aside || {}), ...entries }; },
@@ -1277,7 +1333,31 @@ export const novelSteps = {
   /* What it's about / How it reads: Manual or Automatic, and what the helper keeps */
   setAuto: (key, on) => (n) => { n.auto = { ...(n.auto || {}), [key]: Boolean(on) }; },
   setKept: (key, value) => (n) => { n.kept = { ...(n.kept || {}) }; if (value) n.kept[key] = value; else delete n.kept[key]; },
-  seen: (chapterId, map) => (n) => { n.memory = n.memory || {}; n.memory.seen = { ...(n.memory.seen || {}), [chapterId]: map }; },
+  /* A CHAPTER'S MARKS OF READ (2.12.41, a step laid again over another window's newer copy): given the marks as the
+   * change found them (`was`), only the marks it changed, each only where it still reads as it found it — laid again over
+   * a newer copy, the marks another window's reading made meanwhile stay, and nothing is read again and paid for twice;
+   * laid again over a copy that holds it, nothing. Without `was`, the chapter's marks set whole (a book marked read). */
+  seen: (chapterId, map, was = undefined) => {
+    /* (both as they stood when the step was made: the marks here may change after) */
+    const found = was === undefined ? undefined : { ...(was || {}) };
+    const marks = was === undefined ? map : { ...(map || {}) };
+    return (n) => {
+      n.memory = n.memory || {};
+      const all = n.memory.seen || {};
+      if (found === undefined) { n.memory.seen = { ...all, [chapterId]: marks }; return; }
+      const cur = { ...(all[chapterId] || {}) };
+      let any = false;
+      for (const pid of new Set([...Object.keys(found), ...Object.keys(marks)])) {
+        const from = found[pid];
+        const to = marks[pid];
+        if (from === to || cur[pid] !== from) continue;
+        if (to === undefined) delete cur[pid]; else cur[pid] = to;
+        any = true;
+      }
+      if (!any) return false;
+      n.memory.seen = { ...all, [chapterId]: cur };
+    };
+  },
   forgetChapterSeen: (chapterId) => (n) => { if (n.memory && n.memory.seen) delete n.memory.seen[chapterId]; },
   pushRemoved: (entry) => (n) => {
     n.memory = n.memory || {};
@@ -1296,6 +1376,8 @@ export const renamesSince = (novel, count) => (((novel || {}).memory || {}).rena
 
 function findPassage(c, pid) { return (c.passages || []).find((p) => p.id === pid); }
 function findVersion(p, vid) { return p && (p.versions || []).find((v) => v.id === vid); }
+/* a passage's words as they stand — each version's, and the one on show — for a step taken only while they read so */
+export const passagePrint = (p) => (p ? hashText(JSON.stringify([(p.versions || []).map((v) => [v.id, String(v.text || ''), Boolean(v.streaming)]), p.pick])) : '');
 /* Go on keeps the version's id while changing its words. A comparison
  * belongs to the words it read, including when its save is replayed. */
 /* (head to head reads the writers' own words — a fix put in since does not undo it) */
@@ -1330,7 +1412,11 @@ function checksBack(c, pid) {
 }
 
 export const chapterSteps = {
-  setName: (name, by) => (c) => { c.name = name; c.nameBy = by; },
+  /* (`from`, given: only while the chapter is still called so — novelSteps.setField, 2.12.41) */
+  setName: (name, by, from = undefined) => (c) => {
+    if (from !== undefined && !readsAs(c.name, from)) return false;
+    c.name = name; c.nameBy = by;
+  },
   /* add a passage after another (or at the end), if it is not there yet */
   addPassage: (passage, afterId = null) => (c) => {
     if (findPassage(c, passage.id)) return;
@@ -1342,7 +1428,12 @@ export const chapterSteps = {
     }
     checksBack(c, copy.id);
   },
-  removePassage: (pid) => (c) => { c.passages = c.passages.filter((p) => p.id !== pid); },
+  /* (`found`, given: the passage's words as the change found them — passagePrint — taken out only while it still reads
+   * so, never with words another window put on it meanwhile: 2.12.41) */
+  removePassage: (pid, found = undefined) => (c) => {
+    if (found !== undefined && passagePrint(findPassage(c, pid)) !== found) return false;
+    c.passages = c.passages.filter((p) => p.id !== pid);
+  },
   /* a new version on a passage (if not there yet), shown — knowing the one
    * that was on show when it came (`was`): if it goes unkept (nothing came,
    * Stop before a word, its writer's window closed, an Undo), that one is on
@@ -1450,13 +1541,25 @@ export const chapterSteps = {
     const j = afterId ? c.passages.findIndex((x) => x.id === afterId) : -1;
     if (j >= 0) c.passages.splice(j + 1, 0, p); else c.passages.push(p);
   },
-  setSummary: (summary) => (c) => { c.summary = summary; },
+  /* (`from`, given: only while the summary still reads as the change found it — his own words, the helper's, or none —
+   * 2.12.41: an Undo, his partner's change, a name changed) */
+  setSummary: (summary, from = undefined) => {
+    const was = from === undefined ? undefined : JSON.stringify(from || null);
+    return (c) => {
+      if (was !== undefined && JSON.stringify(c.summary || null) !== was) return false;
+      c.summary = summary;
+    };
+  },
   /* the summaries of the chapter as it read before (each by its words'
    * fingerprint): a version brought back brings its summary back too */
   clearSummaries: () => (c) => { c.summaries = []; },
   dropSummary: (fp) => (c) => { c.summaries = (c.summaries || []).filter((x) => x.fp !== fp); },
   /* his plan for the chapter (the story map): empty takes it away */
-  setPlan: (text) => (c) => { const t = String(text || '').trim(); if (t) c.plan = String(text).replace(/\s+$/, ''); else delete c.plan; },
+  setPlan: (text, from = undefined) => (c) => {
+    /* (`from`, given: only while his plan still reads as the change found it — novelSteps.setField, 2.12.41) */
+    if (from !== undefined && !readsAs(c.plan, from)) return false;
+    const t = String(text || '').trim(); if (t) c.plan = String(text).replace(/\s+$/, ''); else delete c.plan;
+  },
   /* the chapter's stretches (stretches.js): their bounds, and each one's summary while it fits its words */
   setStretches: (list) => (c) => { if (Array.isArray(list) && list.length) c.stretches = JSON.parse(JSON.stringify(list)); else delete c.stretches; },
   keepSummary: (entry) => (c) => {
@@ -1477,13 +1580,27 @@ export const chapterSteps = {
   setPassages: (passages) => (c) => { c.passages = passages; },
   /* what the checker found in one version of a passage (checker.js) — kept
    * only while that version still reads as it did when it was checked */
-  setCheck: (pid, vid, entry) => (c) => {
-    const p = findPassage(c, pid);
-    const v = p && findVersion(p, vid);
-    if (!v || hashText(String(v.text || '')) !== entry.sig) return;
-    c.checks = c.checks || {};
-    c.checks[pid] = c.checks[pid] || {};
-    c.checks[pid][vid] = JSON.parse(JSON.stringify(entry));
+  /* (`found`, given: the entry the new one was made from, as it stood here — laid only while the copy still holds that
+   * one: his Check it again, or a checking laid meanwhile in another window, is never undone by an older entry laid
+   * again over it — 2.12.41, a step laid again over another window's newer copy) */
+  setCheck: (pid, vid, entry, found = undefined) => {
+    /* (as it stood when the step was made: the entry here may change after) */
+    const was = found === undefined ? undefined : JSON.stringify(found || null);
+    return (c) => {
+      const p = findPassage(c, pid);
+      const v = p && findVersion(p, vid);
+      if (!v || hashText(String(v.text || '')) !== entry.sig) return;
+      if (was !== undefined && JSON.stringify((c.checks && c.checks[pid] && c.checks[pid][vid]) || null) !== was) return false;
+      c.checks = c.checks || {};
+      c.checks[pid] = c.checks[pid] || {};
+      const next = JSON.parse(JSON.stringify(entry));
+      /* WHAT HE LEFT STAYS LEFT (2.12.41, a step laid again over another window's newer copy): a suggestion he left as it
+       * is on the copy it is laid on — in another window, while this one's checker looked — is never laid back on it (a
+       * fix he left came back to Suggestions, and could go in by itself); the grade's own card is his to leave each time */
+      const left = (c.checksLeft && c.checksLeft[pid]) || [];
+      if (left.length && Array.isArray(next.items)) next.items = next.items.filter((x) => !x || x.kind === 'grade' || !left.some((l) => l && l.find === x.find && l.replace === (typeof x.replace === 'string' ? x.replace : null)));
+      c.checks[pid][vid] = next;
+    };
   },
   /* one suggestion let go; one he left as it is (remember) is never offered
    * for that passage again — the same words, the same change */
