@@ -418,13 +418,16 @@ export function retireBeforeReplace(novelId, chapterId, nextPassages) {
 export function moveSeen(novelId, fromId, toId, passageIds) {
   const novel = store.peek('novel', novelId);
   if (!novel || !novel.memory || !novel.memory.seen) return;
-  const from = { ...(novel.memory.seen[fromId] || {}) };
-  const to = { ...(novel.memory.seen[toId] || {}) };
+  const fromWas = novel.memory.seen[fromId] || {};
+  const toWas = novel.memory.seen[toId] || {};
+  const from = { ...fromWas };
+  const to = { ...toWas };
   let moved = 0;
   for (const pid of passageIds) if (from[pid]) { to[pid] = from[pid]; delete from[pid]; moved++; }
   if (!moved) return;
-  store.change('novel', novelId, novelSteps.seen(fromId, from));
-  store.change('novel', novelId, novelSteps.seen(toId, to));
+  /* (only the marks moved, each where it still reads as found: 2.12.41, novelSteps.seen) */
+  store.change('novel', novelId, novelSteps.seen(fromId, from, fromWas));
+  store.change('novel', novelId, novelSteps.seen(toId, to, toWas));
 }
 
 /* A whole chapter is going: what it held is kept for the helper — all of
@@ -515,10 +518,11 @@ function commitPlans(novelId, chapterId, plans, { mark = {}, unmark = [], label 
     if (p.kept.length) store.change('novel', novelId, novelSteps.moveKept(p.kept));
   }
   const live = store.peek('novel', novelId);
-  const map = { ...((live.memory && live.memory.seen && live.memory.seen[chapterId]) || {}) };
+  const was = (live.memory && live.memory.seen && live.memory.seen[chapterId]) || {};
+  const map = { ...was };
   for (const pid of unmark) delete map[pid];
   for (const [pid, sig] of Object.entries(mark)) map[pid] = sig;
-  store.change('novel', novelId, novelSteps.seen(chapterId, map));
+  store.change('novel', novelId, novelSteps.seen(chapterId, map, was));
   const changed = plans.flatMap((p) => changedBy(p.moves));
   if (changed.length) store.change('novel', novelId, novelSteps.setMemory({ lit: { at: Date.now(), label, changed: changed.slice(0, 40) } }));
 }
@@ -641,9 +645,11 @@ export function putBackReading(novelId, pid, vid, { readAgain: again = false, si
   const drop = [];
   for (const other of covers) if (other !== pid) for (const [ov, x] of Object.entries(all[other] || {})) if (x && x.in && x.in.pid === pid && x.in.vid === vid && x.in.sig === r.sig) drop.push([other, ov]);
   /* that reading alone: the version's readings of its other words stay */
+  /* (the newest reading of the version let go only while it is still the one put back — a newer reading laid meanwhile
+   * in another window stays: 2.12.41) */
   if (top && top.sig !== r.sig) store.change('novel', novelId, (n) => { const t = n.memory.readings[pid] && n.memory.readings[pid][vid]; if (t && Array.isArray(t.prior)) t.prior = t.prior.filter((x) => x && x.sig !== r.sig); }, { now: true });
-  else if (top && Array.isArray(top.prior) && top.prior.length) store.change('novel', novelId, (n) => { const t = n.memory.readings[pid] && n.memory.readings[pid][vid]; if (!t) return; const [next, ...rest] = t.prior; n.memory.readings[pid][vid] = { ...next, ...(rest.length ? { prior: rest } : {}) }; }, { now: true });
-  else drop.push([pid, vid]);
+  else if (top && Array.isArray(top.prior) && top.prior.length) store.change('novel', novelId, (n) => { const t = n.memory.readings[pid] && n.memory.readings[pid][vid]; if (!t || t.sig !== r.sig || !Array.isArray(t.prior) || !t.prior.length) return false; const [next, ...rest] = t.prior; n.memory.readings[pid][vid] = { ...next, ...(rest.length ? { prior: rest } : {}) }; }, { now: true });
+  else drop.push([pid, vid, r.sig]);
   if (drop.length) store.change('novel', novelId, novelSteps.dropReadings(drop), { now: true });
   const changed = changedBy(plan.moves);
   store.change('novel', novelId, novelSteps.setMemory({ lit: changed.length ? { at: Date.now(), label: `${r.label || 'a reading'} — put back`, changed } : null }), { now: true });
@@ -651,9 +657,10 @@ export function putBackReading(novelId, pid, vid, { readAgain: again = false, si
     for (const id of novel.order || []) {
       const c = store.peek('chapter', id);
       if (!c || !covers.some((x) => (c.passages || []).some((p) => p.id === x))) continue;
-      const map = { ...((store.peek('novel', novelId).memory || {}).seen || {})[id] };
+      const was = ((store.peek('novel', novelId).memory || {}).seen || {})[id] || {};
+      const map = { ...was };
       for (const x of covers) delete map[x];
-      store.change('novel', novelId, novelSteps.seen(id, map), { now: true });
+      store.change('novel', novelId, novelSteps.seen(id, map, was), { now: true });
     }
     failures.delete(novelId);
     blocked.delete(novelId);
@@ -1454,20 +1461,22 @@ function judgeWords(novelId, list, answer) {
     if (x.what === 'book') {
       const before = String(novel[x.field] || '');
       if (before.trim() !== x.text) continue;
-      store.change('novel', novelId, novelSteps.setField(x.field, next), { now: true });
+      /* (laid only while his words read as the check found them — never over his newer words, typed meanwhile in another
+       * window: 2.12.41, a step laid again over another window's newer copy) */
+      store.change('novel', novelId, novelSteps.setField(x.field, next, before), { now: true });
       changes.push({ key: x.key, what: 'book', field: x.field, before, after: next, label: x.label, why });
     } else if (x.what === 'plan') {
       const c = store.peek('chapter', x.chapterId);
       const before = c && typeof c.plan === 'string' ? c.plan : '';
       if (!c || before.trim() !== x.text) continue;
-      store.change('chapter', x.chapterId, chapterSteps.setPlan(next), { now: true });
+      store.change('chapter', x.chapterId, chapterSteps.setPlan(next, before), { now: true });
       changes.push({ key: x.key, what: 'plan', chapterId: x.chapterId, before, after: String((store.peek('chapter', x.chapterId) || {}).plan || ''), label: x.label, why });
     } else {
       const e = (novel.bibliography || []).find((y) => y && y.id === x.id);
       if (!e || String(e.text || '').trim() !== x.text) continue;
       /* (when each of its words was written, as the entry's one write keeps it — so its Undo finds it as left: shape.js withStamps) */
       const after = withStamps(e, { ...clone(e), text: next, at: Date.now() }, { elsewhere: () => wordsElsewhere(novel, e.id) });
-      store.change('novel', novelId, novelSteps.putEntry(after), { now: true });
+      store.change('novel', novelId, novelSteps.entryBack(e.id, after, clone(e)), { now: true });
       changes.push({ key: x.key, what: 'entry', id: x.id, before: clone(e), after, label: x.label, why });
     }
     said.set(x.key, 'changed');
@@ -1493,8 +1502,8 @@ function wordsBack(novelId, list) {
   for (const w of list || []) {
     const novel = store.peek('novel', novelId);
     if (!novel) return;
-    if (w.what === 'book') { if (String(novel[w.field] || '') === w.after) store.change('novel', novelId, novelSteps.setField(w.field, w.before), { now: true }); }
-    else if (w.what === 'plan') { const c = store.peek('chapter', w.chapterId); if (c && String(c.plan || '') === w.after) store.change('chapter', w.chapterId, chapterSteps.setPlan(w.before), { now: true }); }
+    if (w.what === 'book') { if (String(novel[w.field] || '') === w.after) store.change('novel', novelId, novelSteps.setField(w.field, w.before, w.after), { now: true }); }
+    else if (w.what === 'plan') { const c = store.peek('chapter', w.chapterId); if (c && String(c.plan || '') === w.after) store.change('chapter', w.chapterId, chapterSteps.setPlan(w.before, w.after), { now: true }); }
     else if (w.what === 'entry') store.change('novel', novelId, novelSteps.entryBack(w.id, w.before, w.after), { now: true });
   }
 }
@@ -2265,10 +2274,11 @@ function setAside(novelId, chapter, B, why, conn = null) {
   const by = conn ? { conn: connPrint(conn) } : {};
   const entries = {};
   if (chapter && (B.items.length || B.removed.length)) {
-    const map = { ...((novel.memory || {}).seen || {})[chapter.id] };
+    const was = ((novel.memory || {}).seen || {})[chapter.id] || {};
+    const map = { ...was };
     for (const c of B.items.filter((x) => !x.partial)) map[c.pid] = c.sig;
     for (const r of B.removed.filter((x) => !x.partial)) delete map[r.pid];
-    store.change('novel', novelId, novelSteps.seen(chapter.id, map));
+    store.change('novel', novelId, novelSteps.seen(chapter.id, map, was));
     const keys = B.removed.filter((r) => r.key && !r.partial).map((r) => r.key);
     if (keys.length) store.change('chapter', chapter.id, chapterSteps.clearRetired(keys));
     const label = readLabel(novel, chapter, B.items) || chapterLabel(novel, chapter);
@@ -2322,9 +2332,10 @@ function unsetAside(novelId, key) {
   const now = asideNow(novel, { all: true }).find((x) => x.key === key);
   const cid = (now && now.chapterId) || a.chapterId;
   if (cid && a.sig) {
-    const map = { ...((novel.memory || {}).seen || {})[cid] };
+    const was = ((novel.memory || {}).seen || {})[cid] || {};
+    const map = { ...was };
     if (map[key] === a.sig) delete map[key];
-    store.change('novel', novelId, novelSteps.seen(cid, map), { now: true });
+    store.change('novel', novelId, novelSteps.seen(cid, map, was), { now: true });
   }
   store.change('novel', novelId, novelSteps.dropAside([key]), { now: true });
   return true;
@@ -2356,7 +2367,7 @@ function takeBackInParts(novelId, parts) {
   if ((parts.cards || []).length) store.change('novel', novelId, novelSteps.undoCards(parts.cards), { now: true });
   for (const [key, k] of Object.entries(parts.kept || {})) {
     const cur = (live.kept && live.kept[key]) || null;
-    if (JSON.stringify(cur) === JSON.stringify(k.after || null)) store.change('novel', novelId, novelSteps.setKept(key, k.before || null), { now: true });
+    if (JSON.stringify(cur) === JSON.stringify(k.after || null)) store.change('novel', novelId, novelSteps.moveKept([{ key, from: k.after || null, to: k.before || null }]), { now: true });
   }
   store.change('novel', novelId, novelSteps.setMemory({ ...(parts.from ? { undo: parts.from.undo, lit: parts.from.lit } : {}), inParts: null }), { now: true });
 }
@@ -3077,7 +3088,10 @@ async function readChanges(novelId, conn) {
       const cn = cleanName(got.obj.chapterName);
       const liveCh = chapter ? store.peek('chapter', chapter.id) : null;
       if (liveCh && cn && !liveCh.name && liveCh.nameBy !== 'you' && chapterWords(liveCh) >= 600) {
-        store.change('chapter', chapter.id, chapterSteps.setName(cn.replace(/^chapter\s+\w+\s*[:—-]\s*/i, '').slice(0, 80), 'helper'));
+        /* (on the chapter as the copy it is laid on has it: never over a name he gave it, or took off, meanwhile in another
+         * window — 2.12.41, a step laid again over another window's newer copy) */
+        const named = chapterSteps.setName(cn.replace(/^chapter\s+\w+\s*[:—-]\s*/i, '').slice(0, 80), 'helper');
+        store.change('chapter', chapter.id, (ch) => (ch.name || ch.nameBy === 'you' ? false : named(ch)));
       }
       /* what was read is marked read. A passage he changed while it was being
        * read is marked as read as it WAS, with those words kept — so the next
@@ -3085,7 +3099,9 @@ async function readChanges(novelId, conn) {
       if (chapter) {
         const live = store.peek('chapter', chapter.id);
         const done = B.items.filter((c) => !c.partial);
-        const map = { ...((store.peek('novel', novelId).memory || {}).seen || {})[chapter.id] };
+        /* (the marks this reading makes, each laid where it still reads as found — another window's marks stay: 2.12.41) */
+        const mapWas = ((store.peek('novel', novelId).memory || {}).seen || {})[chapter.id] || {};
+        const map = { ...mapWas };
         const clear = [];
         for (const r of (live && live.retired) || []) {
           if (B.removed.some((x) => x.key && x.key === r.key && !x.partial)) clear.push(r.key);
@@ -3103,9 +3119,10 @@ async function readChanges(novelId, conn) {
         }
         for (const [pid, id] of movedTo) {
           const c = done.find((x) => x.pid === pid);
-          const there = { ...(((store.peek('novel', novelId).memory || {}).seen || {})[id] || {}) };
+          const thereWas = ((store.peek('novel', novelId).memory || {}).seen || {})[id] || {};
+          const there = { ...thereWas };
           there[pid] = c.sig;
-          store.change('novel', novelId, novelSteps.seen(id, there));
+          store.change('novel', novelId, novelSteps.seen(id, there, thereWas));
           delete map[pid];
         }
         for (const c of done) {
@@ -3128,7 +3145,7 @@ async function readChanges(novelId, conn) {
         }
         /* a passage taken out is done with once its last part is told */
         for (const r of B.removed) if (!r.partial) delete map[r.pid];
-        store.change('novel', novelId, novelSteps.seen(chapter.id, map));
+        store.change('novel', novelId, novelSteps.seen(chapter.id, map, mapWas));
         /* a passage once set aside, read now: no longer said to be left out */
         const aside = ((store.peek('novel', novelId).memory || {}).aside) || {};
         const back = done.map((c) => c.pid).filter((pid) => aside[pid]);
@@ -3328,7 +3345,9 @@ async function stretchUp(novelId, conn) {
     const opts = { closeLast: i < order.length - 1 };
     const plan = stretchPlan(c, opts);
     const kept = keptStretches(plan);
-    if (JSON.stringify(kept) !== JSON.stringify(c.stretches || [])) store.change('chapter', c.id, chapterSteps.setStretches(kept));
+    /* (worked out again on the copy the step is laid on — a stretch summed up meanwhile in another window keeps its
+     * summary, and nothing is summed up twice: 2.12.41, a step laid again over another window's newer copy) */
+    if (JSON.stringify(kept) !== JSON.stringify(c.stretches || [])) store.change('chapter', c.id, (ch) => { if ((ch.passages || []).some((x) => (picked(x) || {}).streaming)) return false; const k = keptStretches(stretchPlan(ch, opts)); if (JSON.stringify(k) === JSON.stringify(ch.stretches || [])) return false; chapterSteps.setStretches(k)(ch); return true; });
     const now = store.peek('novel', novelId);
     const label = chapterLabel(now, c, { withName: true });
     const frame = helperFrame(house, now);
@@ -3685,7 +3704,8 @@ async function sceneStretchUp(novelId, conn) {
     if (!sceneWantsStretches(house, estimateTokens(chapterText(scene)))) continue;
     const plan = stretchPlan(scene);
     const kept = keptStretches(plan);
-    if (JSON.stringify(kept) !== JSON.stringify(p.stretches || [])) store.change('play', pid, turnSteps.set({ stretches: kept }));
+    /* (worked out again on the copy the step is laid on, as a chapter's: 2.12.41) */
+    if (JSON.stringify(kept) !== JSON.stringify(p.stretches || [])) store.change('play', pid, (d) => { if ((d.turns || []).some((t) => (picked(t) || {}).streaming)) return false; const k = keptStretches(stretchPlan(sceneChapter(d))); if (JSON.stringify(k) === JSON.stringify(d.stretches || [])) return false; turnSteps.set({ stretches: k })(d); return true; });
     const now = store.peek('novel', novelId);
     const c = store.peek('chapter', p.chapterId);
     const label = `the scene played as ${p.who || 'my character'} from ${c ? chapterLabel(now, c, { withName: true }) : 'the book'}`;
@@ -4796,13 +4816,15 @@ export function firstCheck(novelId) {
   if (!novel0) return false;
   /* cards whose words carry the notes' own lines, put right at open (shape.js cleanCard) — their mark as it was */
   const mended = NOTE_KINDS.flatMap((k) => ((novel0.notes || {})[k] || []).map((c) => [k, cleanCard(c, k)]).filter(([, c]) => c));
-  if (mended.length) store.change('novel', novelId, (n) => { for (const [k, c] of mended) n.notes[k] = (n.notes[k] || []).map((x) => (x.id === c.id ? c : x)); }, { now: true });
+  /* (each put right as the copy it is laid on has it — never this window's older card over his edit made meanwhile in
+   * another window: 2.12.41, a step laid again over another window's newer copy) */
+  if (mended.length) store.change('novel', novelId, (n) => { for (const [k, c] of mended) n.notes[k] = (n.notes[k] || []).map((x) => (x.id === c.id ? cleanCard(x, k) || x : x)); }, { now: true });
   /* what the helper keeps of the book, frozen before 2.12.19 by a correction typed into it (or his partner's): handed back to the
    * helper, to be written afresh from the book beside his words — what it said used until then, and kept in the book's record */
   for (const key of ['about', 'style']) {
     const k = novel0.kept && novel0.kept[key];
     if (!k || k.by !== 'you' || !autoOn(novel0, key)) continue;
-    store.change('novel', novelId, novelSteps.setKept(key, { text: String(k.text || ''), at: k.at || Date.now(), again: true, was: { text: String(k.text || ''), at: k.at || 0 } }), { now: true });
+    store.change('novel', novelId, novelSteps.moveKept([{ key, from: clone(k), to: { text: String(k.text || ''), at: k.at || Date.now(), again: true, was: { text: String(k.text || ''), at: k.at || 0 } } }]), { now: true });
   }
   const novel = store.peek('novel', novelId);
   const a = (novel.memory && novel.memory.audit) || null;
@@ -4825,7 +4847,12 @@ export function firstCheck(novelId) {
   const premised = has && (!a || (a.v || 1) < 11) && premisesOf(novel, chapters).length > 0;
   /* 12 (2.12.37): his entries and the Timeline shown to the check — a book with an entry under a card of the notes is held to them once, soon */
   const entered = has && (!a || (a.v || 1) < 12) && joinedEntries(novel).length > 0;
-  store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, entries: entriesPrint(novel), ...(owed ? { owed } : {}) }, ...(sinceHis || premised || entered ? { auditAsked: true } : {}) }), { now: true });
+  /* (laid only while the check's record still reads as it was found — a check that landed meanwhile from another window,
+   * or this same first look made there, is never put back to the record before it: 2.12.41, a step laid again over
+   * another window's newer copy) */
+  const first = novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, entries: entriesPrint(novel), ...(owed ? { owed } : {}) }, ...(sinceHis || premised || entered ? { auditAsked: true } : {}) });
+  const found = JSON.stringify(a);
+  store.change('novel', novelId, (n) => (JSON.stringify(((n.memory || {}).audit) || null) === found ? first(n) : false), { now: true });
   return has;
 }
 /* A check owed by a book opened for the first time since the check learned
@@ -4839,9 +4866,17 @@ function owedCheck(novelId, conn, bibLeft) {
   if (!a || !a.owed) return;
   const filling = bibReading(novel, conn);
   if (filling && (bibLeft || bibDue(novelId).length)) return;
-  const { owed, ...rest } = a;
+  const { owed } = a;
   const ask = (owed === 'all' || filling) && NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length);
-  store.change('novel', novelId, novelSteps.setMemory({ audit: rest, ...(ask ? { auditAsked: true } : {}) }), { now: true });
+  /* (its mark taken off the check's record as the copy has it — never this window's older record laid back over a check
+   * that landed meanwhile in another window: 2.12.41) */
+  store.change('novel', novelId, (n) => {
+    const cur = n.memory && n.memory.audit;
+    if (!cur || !cur.owed) return false;
+    const { owed: _o, ...rest } = cur;
+    novelSteps.setMemory({ audit: rest, ...(ask ? { auditAsked: true } : {}) })(n);
+    return true;
+  }, { now: true });
 }
 /* Check the notes against the book, now (by hand, and for notes kept before the auditor) */
 /* (`byHand`: his press of Check the notes against the book — asked now, afresh: a wait after a stall, and what was counted,
@@ -4914,11 +4949,32 @@ function auditStamp(novel, chapters) {
 }
 /* the shape of the check's answer: the notes' parts, or at least whether they are clear or its verdict — never an empty object */
 export const auditShape = (o) => notesShape(o) && (truthOf(o.clear) !== undefined || Boolean(cleanText(o.verdict)) || [...NOTE_KINDS, 'gone', 'mine'].some((k) => Array.isArray(o[k]) && o[k].length));
+/* what was said of his cards, set card by card — each only while it still reads as it was found (`was`), so laid again
+ * over a newer copy his Undo's "held" made meanwhile in another window stays, and a count is never counted twice
+ * (2.12.41, a step laid again over another window's newer copy: the whole list was set as this window had it) */
+const mineStep = (keys, found, now) => {
+  const was = clone(found || {});
+  return (n) => mineLaid(n, keys, was, now);
+};
+const mineLaid = (n, keys, was, now) => {
+  n.memory = n.memory || {};
+  const cur = { ...(n.memory.mine || {}) };
+  let any = false;
+  for (const k of keys) {
+    if (JSON.stringify(cur[k] || null) !== JSON.stringify(was[k] || null)) continue;
+    if (now[k] === undefined) delete cur[k]; else cur[k] = clone(now[k]);
+    any = true;
+  }
+  if (!any) return false;
+  n.memory.mine = cur;
+  return true;
+};
 async function auditNotes(novelId, conn) {
   const novel = store.peek('novel', novelId);
   if (!novel) return;
   /* asked of notes that have no cards (any more): nothing to check, and never "checking" for good */
-  if (novel.memory && novel.memory.auditAsked && !NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length)) { store.change('novel', novelId, novelSteps.setMemory({ auditAsked: false })); return; }
+  /* (only while the copy has none either: cards written in another window are checked as asked — 2.12.41) */
+  if (novel.memory && novel.memory.auditAsked && !NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length)) { store.change('novel', novelId, (n) => (NOTE_KINDS.some((k) => ((n.notes || {})[k] || []).length) ? false : novelSteps.setMemory({ auditAsked: false })(n))); return; }
   /* (a page the notes' reading waits to ask again after a stall holds it back no longer: the notes of the others are
    * checked meanwhile — 2.12.41, round 6) */
   if (!auditDue(novel) || pendingNow(novelId)) return;
@@ -5173,7 +5229,8 @@ async function auditNotes(novelId, conn) {
   const joinsNow = entryJoins(entriesOf(afterAll), afterAll.notes || {});
   const ruled = new Map(judged.changes.filter((w) => w.what === 'entry' && w.after && joinsNow.get(w.id)).map((w) => [w.key, hashText([String(w.after.text || '').trim(), hisPrint(afterAll)].join('\n'))]));
   /* what it said of each card of his it was asked to judge: held is not asked again until its Since then changes; put right or gone, nothing to keep; not answered, counted */
-  const mineNow = { ...((store.peek('novel', novelId).memory || {}).mine || {}) };
+  const mineWas = (store.peek('novel', novelId).memory || {}).mine || {};
+  const mineNow = { ...mineWas };
   const judgedOf = [...mineList.map((x) => ({ key: x.id, h: x.h, said: folded.mineSaid.get(x.id) })), ...wordsList.map((x) => ({ key: x.key, h: x.h, said: judged.said.get(x.key) }))];
   for (const x of judgedOf) {
     if (x.said === 'changed' && ruled.has(x.key)) mineNow[x.key] = { h: ruled.get(x.key), held: true };
@@ -5181,7 +5238,7 @@ async function auditNotes(novelId, conn) {
     else if (x.said === 'held') mineNow[x.key] = { h: x.h, held: true };
     else mineNow[x.key] = { h: x.h, n: ((mineNow[x.key] && mineNow[x.key].h === x.h ? mineNow[x.key].n : 0) || 0) + 1 };
   }
-  if (judgedOf.length) store.change('novel', novelId, novelSteps.setMemory({ mine: mineNow }));
+  if (judgedOf.length) store.change('novel', novelId, mineStep(judgedOf.map((x) => x.key), mineWas, mineNow));
   /* (the cards of the entries put right here, and those carried here and not checked in it: carried on, first in the next
    * group — of the round, or of the check owed for them: never the entry and its card left saying opposite things with
    * nothing owed — 2.12.41, the review) */
@@ -5219,21 +5276,24 @@ export function undoLast(novelId) {
   const u = novel && novel.memory && novel.memory.undo;
   if (!u) return false;
   if (Array.isArray(u.cards)) store.change('novel', novelId, novelSteps.undoCards(u.cards), { now: true });
-  else if (u.notes) store.change('novel', novelId, novelSteps.setNotes(clone(u.notes)), { now: true });
+  /* (a reading kept before the helper kept its changes card by card: the notes put back whole only while they still read
+   * as they are here — never over a card he changed meanwhile in another window: 2.12.41) */
+  else if (u.notes) { const found = JSON.stringify(novel.notes || {}); store.change('novel', novelId, (n) => (JSON.stringify(n.notes || {}) === found ? novelSteps.setNotes(clone(u.notes))(n) : false), { now: true }); }
   /* his other words the check put right, put back where they still read as it left them */
   if (Array.isArray(u.words)) wordsBack(novelId, u.words);
   /* what its judgment changed and he undid: held as it is now, never changed again by the next check unless it changes (2.12.18) */
   if (Array.isArray(u.judged) && u.judged.length) {
     const n1 = store.peek('novel', novelId);
     const hold = new Map([...mineToJudge(n1).map((x) => [x.id, x.h]), ...wordsToJudge(n1, chaptersOf(n1)).map((x) => [x.key, x.h])]);
-    const mineNow = { ...((n1.memory || {}).mine || {}) };
+    const mineWas = (n1.memory || {}).mine || {};
+    const mineNow = { ...mineWas };
     for (const k of u.judged) if (hold.has(k)) mineNow[k] = { h: hold.get(k), held: true };
-    store.change('novel', novelId, novelSteps.setMemory({ mine: mineNow }), { now: true });
+    store.change('novel', novelId, mineStep(u.judged.filter((k) => hold.has(k)), mineWas, mineNow), { now: true });
   }
   /* what it keeps of the book goes back too — unless he corrected it since */
   for (const [key, k] of Object.entries(u.kept || {})) {
     const cur = (novel.kept && novel.kept[key]) || null;
-    if (JSON.stringify(cur) === JSON.stringify(k.after || null)) store.change('novel', novelId, novelSteps.setKept(key, k.before || null), { now: true });
+    if (JSON.stringify(cur) === JSON.stringify(k.after || null)) store.change('novel', novelId, novelSteps.moveKept([{ key, from: k.after || null, to: k.before || null }]), { now: true });
   }
   /* Read the whole book again, undone (while it reads, or after): stopped, and
    * what was read put back as it was */
@@ -5255,34 +5315,44 @@ export function undoLast(novelId) {
 export function readAgain(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return;
-  const m = novel.memory || {};
   const going = rebuildingNow(novel);
-  /* the helper's cards go, to be written afresh; his own stay as he left them
-   * (the reading moves only where they are now and how they stand) */
-  const cards = [];
-  const keep = {};
-  for (const kind of NOTE_KINDS) {
-    keep[kind] = [];
-    for (const c of (novel.notes && novel.notes[kind]) || []) {
-      if (his(c)) keep[kind].push(clone(c));
-      else cards.push({ kind, id: c.id, before: clone(c), after: null });
-    }
-  }
-  /* what it keeps of the book (Automatic) is written afresh too — never his correction */
-  const kept = {};
-  for (const key of keptByHelper(novel)) if (novel.kept && novel.kept[key]) kept[key] = { before: clone(novel.kept[key]), after: null };
   const at = Date.now();
+  /* the helper's cards go, to be written afresh; his own stay as he left them
+   * (the reading moves only where they are now and how they stand); what it keeps of the book (Automatic) is written
+   * afresh too — never his correction */
+  /* (EACH STEP AS THE COPY IT IS LAID ON HAS IT — 2.12.41, a step laid again over another window's newer copy: his cards
+   * as this window had them were set as the whole notes, so a card he wrote or changed meanwhile in another window went,
+   * the notes everyone reads while it rebuilds were this window's older ones, and the check's record was put back to the
+   * one before a check that had just landed there) */
+  const plan = (n) => {
+    const out = { cards: [], keep: {}, kept: {} };
+    for (const kind of NOTE_KINDS) {
+      out.keep[kind] = [];
+      for (const c of (n.notes && n.notes[kind]) || []) {
+        if (his(c)) out.keep[kind].push(clone(c));
+        else out.cards.push({ kind, id: c.id, before: clone(c), after: null });
+      }
+    }
+    for (const key of keptByHelper(n)) if (n.kept && n.kept[key]) out.kept[key] = { before: clone(n.kept[key]), after: null };
+    return out;
+  };
   if (!going) {
-    store.change('novel', novelId, novelSteps.setMemory({
-      undo: { at, label: 'the whole book', keep: true, cards, kept, changed: [], seen: clone(m.seen || {}), readings: clone(m.readings || {}), removed: clone(m.removed || []), aside: clone(m.aside || {}) },
-      rereadFrom: { at, notes: clone(novel.notes || {}), kept: clone(novel.kept || {}) },
-    }), { now: true });
+    store.change('novel', novelId, (n) => {
+      if (rebuildingNow(n)) return false;
+      const mm = n.memory || {};
+      const p = plan(n);
+      novelSteps.setMemory({
+        undo: { at, label: 'the whole book', keep: true, cards: p.cards, kept: p.kept, changed: [], seen: clone(mm.seen || {}), readings: clone(mm.readings || {}), removed: clone(mm.removed || []), aside: clone(mm.aside || {}) },
+        rereadFrom: { at, notes: clone(n.notes || {}), kept: clone(n.kept || {}) },
+      })(n);
+      return true;
+    }, { now: true });
   }
   /* read from the start, the summaries written afresh (each older than now is due again — his stay), the notes' check not due till it is done */
   /* everything read afresh — what was set aside too */
-  store.change('novel', novelId, novelSteps.setMemory({ seen: {}, removed: [], readings: {}, lit: null, reread: at, inParts: null, aside: {}, audit: { ...(m.audit || {}), reads: 0 } }), { now: true });
-  store.change('novel', novelId, novelSteps.setNotes(keep), { now: true });
-  for (const key of keptByHelper(novel)) if (novel.kept && novel.kept[key]) store.change('novel', novelId, novelSteps.setKept(key, null), { now: true });
+  store.change('novel', novelId, (n) => { novelSteps.setMemory({ seen: {}, removed: [], readings: {}, lit: null, reread: at, inParts: null, aside: {}, audit: { ...((n.memory || {}).audit || {}), reads: 0 } })(n); }, { now: true });
+  store.change('novel', novelId, (n) => { novelSteps.setNotes(plan(n).keep)(n); }, { now: true });
+  store.change('novel', novelId, (n) => { for (const key of keptByHelper(n)) if (n.kept && n.kept[key]) novelSteps.setKept(key, null)(n); }, { now: true });
   failures.delete(novelId);
   blocked.delete(novelId);
   narrow.delete(novelId);

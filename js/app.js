@@ -5,7 +5,8 @@
 import * as store from './store.js';
 import * as writer from './novel/writer.js';
 import * as archivist from './novel/archivist.js';
-import { onLearn, onKey, onIdentity } from './model/call.js';
+import { onLearn, onKey, onIdentity, joinLessons } from './model/call.js';
+import { learnKey } from './model/providers.js';
 import { h, $, icon, toast, hintToast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays, setText } from './ui/dom.js';
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
@@ -96,8 +97,12 @@ async function boot() {
     if (A.novelId) archivist.nudge(A.novelId, 3000);
   });
   /* what a model teaches about itself, and a Hermes key that moved, are kept on the connection */
-  onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
-  onKey((id, key) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.key = key; }));
+  /* (joined to what the connection learned as the copy has it — only while it is still that model at that address: a
+   * lesson learned meanwhile in another window stays, 2.12.41, call.js joinLessons) */
+  onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (!c || (learned && learned.for !== learnKey(c))) return false; c.learned = joinLessons(c.learned, learned); }));
+  /* (only while the connection still has the key it took the place of, at the same address — his key typed meanwhile in
+   * another window is his: 2.12.41, a step laid again over another window's newer copy) */
+  onKey((id, key, was) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (!c || (was && (c.url !== was.url || (c.key || '') !== (was.key || '')))) return false; c.key = key; }));
   /* what the provider said its model is (its room, the weights behind an alias, its thinking levels): kept on the connection */
   onIdentity((id, patch) => store.change('house', 'house', (hs) => {
     const c = (hs.connections || []).find((x) => x.id === id);

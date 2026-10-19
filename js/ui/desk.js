@@ -9,7 +9,7 @@ import * as talk from '../novel/talk.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf, premiseOf } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf, premiseOf, passagePrint } from '../novel/shape.js';
 import { putBackWords } from '../novel/inplace.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
@@ -758,7 +758,10 @@ function removePassage(p) {
   const after = i > 0 ? c.passages[i - 1].id : '^';
   const copy = JSON.parse(JSON.stringify(p));
   archivist.retireIfSeen(S.novelId, S.chapterId, p.id);
-  store.change('chapter', S.chapterId, chapterSteps.removePassage(p.id), { now: true });
+  /* (taken out only while it reads as he saw it — his words typed into it meanwhile in another window keep it, never
+   * taken out with them nor brought back by Undo as the older words: 2.12.41, a step laid again over another window's
+   * newer copy) */
+  store.change('chapter', S.chapterId, chapterSteps.removePassage(p.id, passagePrint(p)), { now: true });
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId, 9000);
   writer.recount(S.novelId);
@@ -794,11 +797,47 @@ async function splitHere(p) {
   store.change('novel', S.novelId, novelSteps.addChapter(fresh.id, c.id), { now: true });
   /* the moved passages were read where they stood: the helper is told nothing new */
   archivist.moveSeen(S.novelId, c.id, fresh.id, moving.map((m) => m.id));
-  store.change('chapter', c.id, chapterSteps.cutFrom(p.id), { now: true });
+  /* (THE PASSAGES MOVED, BY ID, EACH ONLY WHILE IT READS AS IT WAS COPIED — 2.12.41, a step laid again over another
+   * window's newer copy: everything from here on was cut, so a page written or changed meanwhile in another window went
+   * with the old copy into the new chapter, its newer words nowhere) */
+  const moved = new Map(moving.map((m) => [m.id, passagePrint(m)]));
+  store.change('chapter', c.id, (ch) => { const before = (ch.passages || []).length; ch.passages = (ch.passages || []).filter((x) => moved.get(x.id) !== passagePrint(x)); return ch.passages.length !== before; }, { now: true });
   store.change('chapter', c.id, chapterSteps.pruneChecks(), { now: true });
   if (fresh.retired.length) store.change('chapter', c.id, chapterSteps.clearRetired(fresh.retired.map((r) => r.key)), { now: true });
   archivist.nudge(S.novelId);
   hooks.goChapter(fresh.id);
+  await carryStrays(S.novelId, c.id, fresh.id, c.passages.slice(0, i).map((x) => x.id), moved);
+}
+/* …and once the cut has landed: what still stands in the chapter after the passages kept there — a moved passage
+ * changed meanwhile in another window, a page written there since — goes on into the new chapter, with its words as
+ * they are now (the app puts right what it can tell). A page still being written stays where its writer writes it,
+ * and the older copy of it taken to the new chapter goes: never one passage in two chapters. */
+async function carryStrays(novelId, fromId, toId, keepIds, moved) {
+  try { await store.flush('chapter', fromId); } catch (_) { return; }
+  const now = store.peek('chapter', fromId);
+  if (!now || !store.peek('chapter', toId)) return;
+  const keep = new Set(keepIds);
+  const list = now.passages || [];
+  let last = -1;
+  list.forEach((x, k) => { if (keep.has(x.id)) last = k; });
+  const writing = (x) => (x.versions || []).some((v) => v && v.streaming);
+  const strays = JSON.parse(JSON.stringify(list.slice(last + 1).filter((x) => !keep.has(x.id))));
+  if (!strays.length) return;
+  const carried = store.change('chapter', toId, (fc) => {
+    const out = [];
+    for (const q of strays) {
+      const at = (fc.passages || []).findIndex((x) => x.id === q.id);
+      const asMoved = at >= 0 && passagePrint(fc.passages[at]) === moved.get(q.id);
+      if (writing(q)) { if (asMoved) fc.passages.splice(at, 1); continue; }
+      if (at >= 0) { if (asMoved) { fc.passages[at] = JSON.parse(JSON.stringify(q)); out.push(q); } }
+      else { fc.passages.push(JSON.parse(JSON.stringify(q))); out.push(q); }
+    }
+    return out;
+  }, { now: true }) || [];
+  for (const q of carried) store.change('chapter', fromId, chapterSteps.removePassage(q.id, passagePrint(q)), { now: true });
+  if (!carried.length) return;
+  archivist.moveSeen(novelId, fromId, toId, carried.map((q) => q.id));
+  archivist.nudge(novelId);
 }
 
 /* ----------------------------------------------------- the end of the page */
