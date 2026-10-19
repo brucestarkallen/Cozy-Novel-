@@ -22,7 +22,7 @@ import {
   KNOB_FIELDS, knobRefused, hasLateSystem, hasLateVoice, lateVoiceFitted, hermesLike, prefillGap, contextFrom, inputFrom, replyLimitFrom, contextOf,
   modelsUrl, headersFor, reportedIdentity, spokenAs, describePrefill, prefillProfile, deepseekBetaBase, structuredPlanFor, prefillPlan,
 } from './providers.js';
-import { estimateTokens } from '../util.js';
+import { estimateTokens, numberWords } from '../util.js';
 import { makeStructuredDecoder, STRUCTURED_REFUSAL, unwrapStructured, readTemplate } from './structured.js';
 
 /* ------------------------------------------------------------- lessons */
@@ -1190,13 +1190,26 @@ export async function measureSpeed(conn, { now = () => (typeof performance !== '
   return { firstMs: first === null ? null : Math.round(first), totalMs: Math.round(totalMs), tokens, estimated: counted === null, tps };
 }
 
+/* A MODEL ONLY SLOW IS NEVER "NOT WORKING" (2.12.41, round 7 — the review of round 5, its F9: Test's ask was not
+ * streamed, so its leash measured the whole answer, and a model that took longer than the leash to answer "ready" was
+ * said to be not working): its ask is streamed, so the leash hears silence — a model thinking before it answers is
+ * heard thinking — and one whose provider sends nothing until the whole answer is done is waited the quiet leash for
+ * it, three minutes at least; past that, it is said to have given no answer in that time, as it is */
+const minutesSaid = (ms) => { const m = Math.max(1, Math.round((Number(ms) || 0) / 60000)); return m === 1 ? 'a minute' : `${numberWords(m).toLowerCase()} minutes`; };
+/* (and how long his page waits, as it does: a word from it for as long as the phone's relay waits on his page — a
+ * minute past the longest a silent provider is waited, unleashedWait — and an answer that only makes no progress until
+ * he presses Stop: his page has no leash but his Stop) */
+function noAnswerWords(out) {
+  if (out.leashed === 'long') return `Its answer made no progress for ${minutesSaid(out.leashMs)} — it may only be slow, or its provider may be stuck. Test waits no longer than that; a page waits for it until you press Stop.`;
+  return `It gave no answer in ${minutesSaid(out.leashMs)} — it may only be slow to answer, or its provider may be down. Test waits no longer than that; a page waits up to ${minutesSaid(unleashedWait() * 1000)} for a word from it, or until you press Stop.`;
+}
 export async function tryConnection(conn, { speed = true } = {}) {
   const level = conn && conn.thinking ? String(conn.thinking) : '';
   /* (on a worker's leash: Test has no Stop — 2.12.41, round 5: a silent provider held it for up to three asks of sixteen
    * minutes each) */
-  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: false, worker: false, noStructured: true, noSearch: true, leash: true });
+  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: true, worker: false, noStructured: true, noSearch: true, leash: true });
   const first = await go(conn);
-  if (!first.ok) return { ok: false, words: `Not working — ${first.error}` };
+  if (!first.ok) return { ok: false, words: first.leashed && first.leashed !== 'gaveway' ? noAnswerWords(first) : `Not working — ${first.error}` };
   const answered = String(first.text || '').trim();
   const said = answered ? ` It answered “${answered.slice(0, 30)}”.` : ` It wrote no answer — ${emptyWhy(first, first.thinking)}.`;
   const at = level ? `Asked at “${level}” (${spokenAs(conn)})` : 'Asked with nothing said about thinking, so the model decided';
@@ -1212,7 +1225,7 @@ export async function tryConnection(conn, { speed = true } = {}) {
     /* none at this level: once more at the top, to tell the level from the address */
     const top = await go({ ...conn, thinking: 'max' });
     const back = top.ok && (String(top.thinking || '').trim() || top.thinkTokens > 0 || top.hiddenThought);
-    verdict = `${at} — the answer came, but NO thinking with it.` + (!top.ok ? ' (The top level was refused, so it could not be compared.)'
+    verdict = `${at} — the answer came, but NO thinking with it.` + (!top.ok ? (top.leashed && top.leashed !== 'gaveway' ? ` (Asked again at “max”, it gave no answer in ${minutesSaid(top.leashMs)}, so the two could not be compared.)` : ' (The top level was refused, so it could not be compared.)')
       : back ? ` Asked again at “max” — ${String(top.thinking || '').trim() ? `${String(top.thinking).trim().length.toLocaleString()} characters came back` : top.thinkTokens > 0 ? `${top.thinkTokens.toLocaleString()} thinking tokens were reported` : 'it thought, kept hidden'}. So it is this LEVEL that gives none here, not the address: choose a higher one.`
         : ' Nor at “max” — this address sends no thinking back at any level, though the model may still think inside it.');
   }

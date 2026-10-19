@@ -709,7 +709,15 @@ function renameSteps(pairs) {
     if (last && last.key === key) last.pairs.push(x); else groups.push({ key, pairs: [x] });
   }
   const names = (g) => new Set(g.pairs.flatMap((p) => [String(p.from).toLowerCase(), String(p.to).toLowerCase()]));
-  const undoes = (g, h) => g.pairs.length === h.pairs.length && g.pairs.every((p) => h.pairs.some((q) => q.from === p.to && q.to === p.from));
+  /* (2.12.41, round 7 — the review of round 5, its F7: any change giving the pairs back the other way round was taken
+   * for an Undo, so a name changed back by hand, where the name it went back from already stood in the book, was never
+   * made — "Emilia bit Jovan. Emmeline watched." read as such after the book said "Emilia watched": the book's own words
+   * decide, and only an Undo puts them back as they were; a change back by hand changes every one. An Undo is known by
+   * its mark, `undoes`, the mark of the change it undoes, changes.js undoChange; pairs kept with no mark — noted before —
+   * by their shape, as before) */
+  const marked = (g) => g.pairs.some((p) => p.id || p.undoes);
+  const reversed = (g, h) => g.pairs.length === h.pairs.length && g.pairs.every((p) => h.pairs.some((q) => q.from === p.to && q.to === p.from));
+  const undoes = (g, h) => reversed(g, h) && (marked(g) || marked(h) ? h.pairs.every((q) => q.undoes && g.pairs.some((p) => p.id === q.undoes)) : true);
   const out = [];
   for (const g of groups) {
     const mine = names(g);

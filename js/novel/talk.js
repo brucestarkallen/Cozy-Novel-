@@ -19,7 +19,8 @@ import { estimateTokens } from '../util.js';
 import { assemble, requiredLength, SAFETY, partnerReply, PARTNER_FLOOR } from './context.js';
 import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount, rewrite as writerRewrite, busy as writerBusy } from './writer.js';
-import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, chapterNumber, passageNumbers, NOTE_KINDS, matchCard } from './shape.js';
+import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, chapterNumber, passageNumbers, NOTE_KINDS, matchCard, renameCount, renamesSince } from './shape.js';
+import { renameIn } from './names.js';
 import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, fence, entryReadWords, CHOICES_OPEN, CHOICES_CLOSE } from './prompts.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup, partBlock, mendSpacing } from './textshape.js';
@@ -412,10 +413,17 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       } catch (e) { console.error(e); picks = []; }
     }
     let out;
+    /* A SCENE'S TELLING ON ITS WAY WHILE A NAME IS CHANGED EVERYWHERE (2.12.41, round 7 — the review of round 5, its F1:
+     * a name changed everywhere changes every telling of a scene but the one being written, and that one landed with the
+     * old name): how many changes of names the book had as its words were taken — the telling takes those made since
+     * when it lands, as a page does (writer.js `job.renames`). The partner's conversation is never renamed: its words
+     * stay as they were said. */
+    let renamesAt = renameCount(store.peek('novel', novelId));
     const askNow = () => ask(conn, {
         build: (c) => {
           if (!ownsReply()) throw new Error('the conversation changed while its reply was on the way');
           const { novel, chapters } = bookNow(novelId);
+          renamesAt = renameCount(novel);
           numbers = numbersOf(novel);
           snapshot = kind === 'talk' ? snapshotForChanges(novelId) : null;
           const rec = store.peek(kind, id);
@@ -533,6 +541,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
     }
     const shaped = kind === 'play' ? shapeTelling(firstWords, { cut: Boolean(out.cut || out.stopped), notes: leakNotes }) : { text: firstWords, tookOff: '' };
     done = shaped.text.replace(/\s+$/, '');
+    if (kind === 'play') { const since = renamesSince(store.peek('novel', novelId), renamesAt); if (since.length) done = renameIn(done, since); }
     const notesOf = (o) => { const all = [...new Set([...((o && o.notes) || []), ...leakNotes])]; return all.length ? all : undefined; };
     /* what its own web search looked at, every round of the answer (Cozy Tavern F9) */
     const looked = [];
