@@ -11088,11 +11088,15 @@ await test('pages filled in after: a source the answer names its own way is stil
   for (let i = 0; i < 6 && archivist.bibDue(c.novelId).length; i++) { archivist.forTests().failures.delete(c.novelId); await archivist.run(c.novelId); }
   const asks = (await requests()).filter((x) => x.body.messages.at(-1).content.includes('bibliography was kept'));
   assert.ok(asks.length <= 4, `asked ${asks.length} times`);
-  /* (a too-long answer is fitted and sent once more by the call itself, as every ask is: the second ask is that one) */
   const sourcesIn = (x) => (x.body.messages.at(-1).content.match(/^Chapter One, passage \d+:$/gm) || []).length;
-  /* (2.12.37: the one left was asked with the other, then alone — its two tries — and passed by. Through 2.12.36 it was
-   * asked a third time in the run that passed it by (its tries were let go before that ask was made): [2, 2, 1, 1]) */
-  assert.deepEqual(asks.map(sourcesIn), [2, 2, 1], 'two together, then the one left a page at a time — twice in all, never a third');
+  /* (2.12.41, round 5 — changed with a comment why: the two refused together are asked a page at a time from the next
+   * run, the one read and the one left tried twice alone, then passed by: [2, 1, 1, 1]. Through 2.12.40 the one-at-a-time
+   * was let go at the end of the very run that refused the two, so the next asked them together again — [2, 2, 1], the
+   * second ask the very request its model had just refused as too long, which only a scripted provider answers; and a
+   * book left alone asked nothing more until his next change. (The second ask was never the call's own: a helper's ask
+   * that cannot be made smaller is not sent again — call.js.) Never a third try alone: 2.12.37 — through 2.12.36 its tries
+   * were let go before the ask of the run that passed it by, and that ask was a third) */
+  assert.deepEqual(asks.map(sourcesIn), [2, 1, 1, 1], 'two together, then a page at a time — the one left twice alone, never a third');
   assert.equal(archivist.bibDue(c.novelId).length, 0, 'and done');
   assert.deepEqual(bib.bibItems(c.novel(), { [c.ids[0]]: c.ch(0) }).map((it) => it.name), ['Kai']);
   await putAway(b);
@@ -16844,9 +16848,14 @@ await test('who does what to whom is part of a turn — “Emilia betrays Jovan.
   const of = (rows) => tlmod.continuityOf(rows, notes, { text });
   assert.deepEqual(tlmod.mergeContinuity(of([ej]), of([je]), text).events.map((e) => e.text), [ej.text, je.text], 'each side read by a reading of its own: both');
   assert.deepEqual(tlmod.mergeContinuity(of([ej]), of([turnRow('Emilia betrays Jovan to the Order.', q)]), text).events.map((e) => e.text), ['Emilia betrays Jovan to the Order.'], 'the same side worded again: once');
-  /* (who does it not told by two names: never folded into another — "She betrays Jovan." names him first, hers the deed) */
-  assert.deepEqual(tlmod.mergeContinuity(of([turnRow('Emilia betrays him.', q)]), of([turnRow('Jovan betrays her.', q)]), text).events.map((e) => e.text), ['Emilia betrays him.', 'Jovan betrays her.'], 'one side each, a name each: both');
-  assert.deepEqual(tlmod.mergeContinuity(of([turnRow('She betrays Jovan.', q)]), of([turnRow('Jovan betrays her.', q)]), text).events.map((e) => e.text), ['She betrays Jovan.', 'Jovan betrays her.'], 'her deed with his name first, and his: both');
+  /* (who does it told by one name and a pronoun: nothing plain, so the rule before decides — the same cards and the same
+   * thing said: one, the newer reading's. Changed in 2.12.41, round 5, with a comment why: round 4 kept a turn that
+   * named fewer than two never the same as another, so these two were two — and so was the same turn told by a pronoun,
+   * a possessive or the passive, shown twice (the review of round 4, its F3: six such pairs). The side is decided only
+   * where both tellings plainly name both, "A … B"; a duplicate is the worse fault, and a telling with one name cannot
+   * say whose deed it is — "Jovan falls to her betrayal." opens with the one it is done to) */
+  assert.deepEqual(tlmod.mergeContinuity(of([turnRow('Emilia betrays him.', q)]), of([turnRow('Jovan betrays her.', q)]), text).events.map((e) => e.text), ['Jovan betrays her.'], 'one side each, a name each: nothing plain — one, as before round 4');
+  assert.deepEqual(tlmod.mergeContinuity(of([turnRow('She betrays Jovan.', q)]), of([turnRow('Jovan betrays her.', q)]), text).events.map((e) => e.text), ['Jovan betrays her.'], 'a pronoun first, and a name with a pronoun after: one');
   const hit = { kind: 'character', cards: [{ kind: 'people', name: 'Jovan Wessex' }], text: 'Jovan is hit.', evidence: ['Jovan was hit, and Jovan was cut'], stance: 'fact' };
   assert.deepEqual(tlmod.mergeContinuity(of([hit]), of([{ ...hit, text: 'Jovan is cut.' }]), text).events.map((e) => e.text), ['Jovan is hit.', 'Jovan is cut.'], 'saying nothing but his name: two');
   /* the same turn word for word, read again by another reading: once — however little it says, whoever it names */
@@ -17223,6 +17232,32 @@ await test('a summary its model will not check, and a stretch its model will not
   await quietAll();
   await setHouse();
   await putAway(c);
+});
+
+await test('pages their model will not read together are asked a page at a time by themselves the next run — the Timeline’s and the bibliography’s — never asked together again, never left for his next change', async () => {
+  for (const what of ['turns', 'bib']) {
+    await setHouse({ context: 64000, learned: null });
+    const b = await makeBook([[EMILIA, 'Rain fell on the river.']], { manual: true });
+    peopleIn(b);
+    markAllSeen(b, what === 'turns' ? { turns: false } : { facts: false });
+    if (what === 'bib') store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+    const isAsk = what === 'turns' ? isTurnsAsk : isBibAsk;
+    const due = () => (what === 'turns' ? archivist.timelineDue(b.novelId) : archivist.bibDue(b.novelId)).length;
+    const asked = async () => (await everyRequest()).filter(isAsk).map(lastAsk);
+    await reset();
+    /* the two together refused as these words (its model answers a harmless ask); alone, each read */
+    await script([{ [what]: true, status: 403, message: 'content flagged by moderation' }]);
+    await archivist.run(b.novelId);
+    assert.deepEqual([(await asked()).length, due()], [1, 2], `${what}: asked together, refused`);
+    assert.notEqual(archivist.lightOf(b.novelId).words, 'The notes are up to date.', `${what}: never up to date while they are owed`);
+    assert.ok(await untilSo(async () => due() === 0 && !archivist.forTests().running.size, 8000), `${what}: read a page at a time by itself`);
+    assert.deepEqual((await asked()).map((m) => [m.includes('Emilia bit Jovan'), m.includes('Rain fell on the river.')]), [[true, true], [true, false], [false, true]], `${what}: together once, then each alone`);
+    await sleep(2500);
+    assert.deepEqual([(await asked()).length, archivist.lightOf(b.novelId).words], [3, 'The notes are up to date.'], `${what}: nothing more asked`);
+    await quietAll();
+    await putAway(b);
+  }
+  await setHouse();
 });
 
 await test('a check of the notes owed next — the next group of a round — is said so by the light, never that the notes are up to date, and comes by itself', async () => {
