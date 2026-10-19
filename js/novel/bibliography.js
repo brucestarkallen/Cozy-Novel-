@@ -101,10 +101,39 @@ export function entryNamed(entries, name) {
   return { entry: null, ambiguous: byAka.length > 1 };
 }
 
-/* another entry already called this, or going by it (renaming or adding one never makes two that answer to one name) */
+/* THE ENTRY A NAME MEANS, AS THE PAGE FINDS IT (2.12.41, the review of Quick add: "Iron Covenant" and "The Iron Covenant"
+ * went in as two entries for one group, though the page finds both as one): by its name or one it goes by first
+ * (entryNamed); else the same without the article a name starts with ("The Iron Covenant" is "Iron Covenant", bareName —
+ * never "the girl", a description in small letters); else, for a person, by the same person's name (names.js
+ * samePersonName: "Emilia" for Emilia Vermaine, a rank set aside — never Mei Lin for Mei Ling, never two people). One
+ * entry, or none and whether more than one answered — {entry, ambiguous} */
+export function entryFor(entries, name) {
+  const first = entryNamed(entries, name);
+  if (first.entry || first.ambiguous) return first;
+  const list = entries || [];
+  const one = (hits) => (hits.length === 1 ? { entry: hits[0], ambiguous: false } : { entry: null, ambiguous: hits.length > 1 });
+  const k = nameKey(bareName(name));
+  if (k) {
+    const bare = list.filter((e) => [e.name, ...(e.aka || [])].some((n) => nameKey(bareName(n)) === k));
+    if (bare.length) return one(bare);
+  }
+  const person = list.filter((e) => kindOf(e.kind) === 'people' && [e.name, ...(e.aka || [])].some((n) => samePersonName(n, name)));
+  return one(person);
+}
+
+/* the keys a name answers to: as written, and without the article it starts with — for many names held against many at
+ * once (a lorebook brought in) */
+export function nameKeys(name) {
+  return [...new Set([nameKey(name), nameKey(bareName(name))])].filter(Boolean);
+}
+/* another entry already called this, or going by it (renaming or adding one never makes two that answer to one name) —
+ * with the article a name starts with or without it, as the page finds them (2.12.41: "Iron Covenant" beside "The Iron
+ * Covenant" is one name on the page) */
 export function nameTaken(entries, name, butId = '') {
   const k = nameKey(name);
-  return Boolean(k) && entries.some((e) => e.id !== butId && (nameKey(e.name) === k || (e.aka || []).some((a) => nameKey(a) === k)));
+  const b = nameKey(bareName(name));
+  const is = (n) => nameKey(n) === k || (Boolean(b) && nameKey(bareName(n)) === b);
+  return Boolean(k) && entries.some((e) => e.id !== butId && [e.name, ...(e.aka || [])].some(is));
 }
 
 /* ------------------------------------------------------------ finding names */

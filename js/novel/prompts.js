@@ -1855,7 +1855,11 @@ export function quickAddRequest({ words, earlier = [], premises = [], premisesLe
     /* (what was held back, so asking again asks with it — 2.12.40, the review) */
     const held = [...(r.refused || []).filter((x) => x && x.held).map((x) => x.name), ...(r.held || [])];
     if (held.length) said.push(`Held back, as resting on what a page says otherwise: ${held.join(', ')}.`);
-    if ((r.conflicts || []).length) said.push(`Against the pages: ${r.conflicts.map((c) => `“${c.mine}” — ${c.label} says “${c.against}”`).join('; ')}.`);
+    /* (the pages he said his word stands over, said as that — 2.12.41, the review) */
+    const against = (r.conflicts || []).filter((c) => !c.overruled);
+    const over = (r.conflicts || []).filter((c) => c.overruled);
+    if (against.length) said.push(`Against the pages: ${against.map((c) => `“${c.mine}” — ${c.label} says “${c.against}”`).join('; ')}.`);
+    if (over.length) said.push(`My word stands over the pages: ${over.map((c) => `“${c.mine}” — ${c.label} says “${c.against}”`).join('; ')}.`);
     if ((r.cannot || []).length) said.push(`Could not be: ${r.cannot.map((c) => `“${c.mine}” — ${c.why || c.rule}`).join('; ')}.`);
     if ((r.questions || []).length) said.push(`You asked: ${r.questions.join(' ')}`);
     return `- ${said.join(' ')}`;
@@ -1871,14 +1875,14 @@ export function quickAddRequest({ words, earlier = [], premises = [], premisesLe
   }
   parts.push(`${QUICK_ASK}, my premises, my bibliography, the notes and what the book is about, the way an editor checks a series bible — before anything of it goes in:
 - "conflicts": where my words say the opposite of what a page of the book says — my words that clash ("mine"), the page’s words they contradict, copied exactly ("against"), where they stand ("where", as "Chapter One, Passage 3"), and why, in a line.
-- "changes": where my words change what my own earlier words say — a premise, an entry, a card of the notes, what the book is about — and no page says otherwise: that is my newer word, and it goes in. Say each, with my earlier words copied exactly ("was") and where they stand; where they stand in what the book is about, how it reads or where it’s headed, also those words written again to say what my newer word says ("now"), to go in their place.
+- "changes": where my words change what my own earlier words say — a premise, an entry, a card of the notes, what the book is about — and no page says otherwise: that is my newer word, and it goes in. Say each, with my earlier words copied exactly ("was") and where they stand; where they stand in an entry of mine, or in what the book is about, how it reads or where it’s headed, also those words written again to say what my newer word says ("now"), to go in their place — the rest of my words around them stays as it is.
 - "cannot": where my words cannot be, by the rules of the world as the book, my premises or my entries set them — a power and its limits, a count, how rare something is, who is where and when: my words ("mine"), the rule’s words copied exactly ("rule"), where they stand, and why.
 - "questions": what my words leave open that the world needs me to decide — a line each, three at most.
-- "entries": for all of mine that holds, each name it gives meaning to — a person, a place, a thing, a group, a piece of lore (a rule of the world, a power and what it costs, a word of the world) — its own entry, whole, written the way a good series bible writes it: my meaning exactly, in clear, finished sentences, the grammar, spelling and wording put right, and a name the book or my bibliography already has spelled as it spells it — never my words pasted as I typed them. An entry already in my bibliography is given whole again — every sentence of it that my words do not change kept as it stands — with what my words add or change, as one entry; a new one is written whole. Only what I said and what plainly follows from it — nothing invented beyond it, nothing from "conflicts" or "cannot". Where I said earlier in Quick add that my words stand over the pages, they go in, and the pages that disagree are still named in "conflicts".
+- "entries": for all of mine that holds, each name it gives meaning to — a person, a place, a thing, a group, a piece of lore (a rule of the world, a power and what it costs, a word of the world) — its own entry, written the way a good series bible writes it: my meaning exactly, in clear, finished sentences, the grammar, spelling and wording put right, and a name the book or my bibliography already has spelled as it spells it — never my words pasted as I typed them. A new one is written whole ("text"). For an entry already in my bibliography, give only what my words add to it ("add": finished sentences, each saying something it does not say yet — never one of its sentences again, in any words), with what my words change in it said under "changes" — every sentence of it stands as I wrote it, so never give it whole again. Only what I said and what plainly follows from it — nothing invented beyond it, nothing from "conflicts" or "cannot". Where I said earlier in Quick add that my words stand over a page, they go in: that page is still named in "conflicts", marked "overruled": true.
 - "verdict": a few plain sentences for me — what goes in, and what waits for my word and why.
 
 Answer with one JSON object and nothing else:
-{"verdict": "…", "conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}], "changes": [{"mine": "…", "was": "…", "now": "…", "where": "…", "why": "…"}], "cannot": [{"mine": "…", "rule": "…", "where": "…", "why": "…"}], "questions": ["…"], "entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "the entry, whole"}]}`);
+{"verdict": "…", "conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}], "changes": [{"mine": "…", "was": "…", "now": "…", "where": "…", "why": "…"}], "cannot": [{"mine": "…", "rule": "…", "where": "…", "why": "…"}], "questions": ["…"], "entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "a new entry, whole", "add": "for an entry already mine: only what my words add to it"}]}`);
   return parts.join('\n\n');
 }
 
@@ -1891,18 +1895,21 @@ Answer with one JSON object and nothing else:
  * and went back to his partner as its own; 2.12.40, the review) */
 const hisLabel = (label) => String(label || '').replace(/^your\b/, 'my');
 const quoted = (rows, side) => rows.map((c) => `- “${c.mine}” — ${hisLabel(c.label)} says “${c[side]}”`).join('\n');
-export function quickAgainRequest({ conflicts = [], changes = [], aside = [], about = [] }) {
+/* (`rewrite`: his own words a newer word of his changes with no words given for it — what the book is about, how it
+ * reads or where it's headed, and an entry of his whose change nothing written carries: asked for those words written
+ * again, "now" — 2.12.41, the review: an entry's change with none was left saying what his newer word changes) */
+export function quickAgainRequest({ conflicts = [], changes = [], aside = [], rewrite = [] }) {
   const parts = ['I looked up the words you quoted, and some of it stands otherwise than you put it.'];
   if (conflicts.length) parts.push(`These stand on a page of the book, so they wait for my word — nothing of them goes in yet:\n${quoted(conflicts, 'against')}`);
   if (changes.length) parts.push(`These stand only in my own earlier words, and no page says otherwise — they are my newer word, and they go in:\n${quoted(changes, 'was')}`);
   if (aside.length) parts.push(`The words you quoted for these stand nowhere in the book or in my own words, so they hold mine back no longer — unless a page does say otherwise; then copy that page’s words exactly into "conflicts":\n${aside.map((c) => `- “${c.mine}” — you quoted “${c.quote}”`).join('\n')}`);
-  if (about.length) parts.push(`These change what the book is about, how it reads or where it’s headed — write those earlier words again to say what my newer word says ("now"), to go in their place:\n${quoted(about, 'was')}`);
+  if (rewrite.length) parts.push(`These change words of mine that you gave no new words for — write those earlier words again to say what my newer word says ("now"), to go in their place, the rest of my words around them as they stand:\n${quoted(rewrite, 'was')}`);
   const shape = [
-    '"entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "the entry, whole"}]',
+    '"entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "a new entry, whole", "add": "for an entry already mine: only what my words add to it"}]',
     ...(aside.length ? ['"conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}]'] : []),
-    ...(about.length ? ['"changes": [{"was": "…", "now": "…"}]'] : []),
+    ...(rewrite.length ? ['"changes": [{"was": "…", "now": "…"}]'] : []),
   ];
-  parts.push(`Write the entries again for all of mine that holds now, as before — each whole, the way a good series bible writes it, never my words pasted; an entry already in my bibliography with every sentence of it that my words do not change kept as it stands. Answer with one JSON object and nothing else:\n{${shape.join(', ')}}`);
+  parts.push(`Write the entries again for all of mine that holds now, as before — a new one whole, the way a good series bible writes it, never my words pasted; for an entry already in my bibliography only what my words add to it ("add"), every sentence of it standing as I wrote it. Answer with one JSON object and nothing else:\n{${shape.join(', ')}}`);
   return parts.join('\n\n');
 }
 
