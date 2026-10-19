@@ -161,10 +161,14 @@
 .summary-sheet .summary-stretch > p:not(.hint) { color: var(--chrome-ink); font-size: 14px; margin: 0 0 10px; }
 
 /* the bibliography: names in the page that open their card (Tap names), the card, Notes → Bibliography */
-.prose .nm, .tprose .nm { cursor: pointer; text-decoration-line: underline; text-decoration-style: dotted; text-decoration-thickness: 1px; text-underline-offset: .22em;
-  text-decoration-color: color-mix(in srgb, var(--accent-on-paper, var(--accent)) 55%, transparent); border-radius: 3px; }
-.prose .nm:hover, .tprose .nm:hover { text-decoration-color: var(--accent-on-paper, var(--accent)); }
-.prose .nm:active, .tprose .nm:active { background: color-mix(in srgb, var(--accent-on-paper, var(--accent)) 14%, transparent); }
+/* a name the notes know, marked in the page and in a scene: a wash of the room's colour, and the dotted line kept so a tap still reads as a tap */
+.prose .nm, .tprose .nm { cursor: pointer; text-decoration-line: underline; text-decoration-style: dotted; text-decoration-thickness: 1.5px; text-underline-offset: .28em;
+  text-decoration-color: color-mix(in srgb, var(--accent-on-paper, var(--accent)) 72%, transparent);
+  background-image: linear-gradient(180deg, transparent 0 54%, color-mix(in srgb, var(--accent) 34%, transparent) 54% 92%, transparent 92%);
+  border-radius: .12em; padding: 0 .06em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.prose .nm:hover, .tprose .nm:hover { text-decoration-color: var(--accent-on-paper, var(--accent));
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, transparent) 0 54%, color-mix(in srgb, var(--accent) 46%, transparent) 54% 100%); }
+.prose .nm:active, .tprose .nm:active { background-color: color-mix(in srgb, var(--accent) 24%, transparent); background-image: none; }
 @media (hover: none) { .prose .nm, .tprose .nm { -webkit-tap-highlight-color: transparent; } }
 .notes-views button { padding: 0 8px; white-space: nowrap; }
 .namesheet .namecard + .namecard { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
@@ -183,32 +187,59 @@
 .bibview .bibintro .toggle { padding: 6px 0 0; }
 .bibview .bibintro .toggle span { font-size: 13.5px; color: var(--chrome-ink); }
 .bibview .bibdue { margin: 8px 2px 0; }
-.bibview .bibfilter { width: 100%; margin: 14px 0 4px; min-height: 40px; }
+.bibview .bibfind { display: flex; align-items: center; gap: 10px; width: 100%; margin: 16px 0 8px; min-height: 48px; padding: 0 14px 0 12px; border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 62%), color-mix(in srgb, var(--chrome-ink) 4%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--chrome-ink) 10%, transparent); }
+.bibview .bibfind:focus-within { border-color: color-mix(in srgb, var(--accent) 72%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.bibview .bibfind > span { color: var(--accent); flex: none; display: inline-grid; }
+.bibview .bibfilter { flex: 1; width: 100%; min-width: 0; margin: 0; min-height: 46px; padding: 0; border: 0; background: transparent; color: var(--chrome-ink);
+  font: 500 16px/1.3 var(--display); letter-spacing: -.01em; appearance: none; -webkit-appearance: none; }
+.bibview .bibfilter::placeholder { color: var(--chrome-soft); font-weight: 400; font-style: italic; font-family: var(--serif); opacity: 1; }
 .bibview .biblist { margin-top: 10px; }
 .bibview .bibitem .ab { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .bibview .bibactions { margin-top: 16px; flex-wrap: wrap; gap: 8px; }
 /* Quick add (2.12.37): a few lines of talk at the top of the bibliography — his words, what came of them, his box */
-.bibview .quickadd { margin: 14px 0 0; }
+.pane .bibview .quickadd { position: relative; margin: 4px 0 18px; padding: 16px 14px 14px; border-radius: 18px; font-size: 13.5px; line-height: 1.55;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 46%),
+    color-mix(in srgb, var(--chrome-ink) 3.5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  box-shadow: 0 16px 36px -28px color-mix(in srgb, var(--accent) 80%, transparent); }
 .bibview .quickhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
-.bibview .quickhead h3 { margin: 0; font: 600 15px/1.3 var(--display); color: var(--chrome-ink); }
-.bibview .quickadd > .notekey { margin: 4px 0 10px; }
-.bibview .quicklog { display: flex; flex-direction: column; gap: 14px; margin: 4px 0 12px; }
-.bibview .quickrow { display: flex; flex-direction: column; gap: 7px; }
+.bibview .quickhead h3 { margin: 0; font: 600 20px/1.15 var(--display); letter-spacing: -.02em; color: var(--chrome-ink); }
+.bibview .quickhead h3::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; vertical-align: 1px;
+  background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+.bibview .quickadd > .notekey { margin: 6px 0 12px; }
+.bibview .quicklog { display: flex; flex-direction: column; gap: 14px; margin: 2px 0 14px; }
+.bibview .quickrow { display: flex; flex-direction: column; gap: 8px; }
 .bibview .quickrow .btnrow { margin: 0; flex-wrap: wrap; gap: 8px; }
-.bibview .quick-mine { align-self: flex-end; max-width: 88%; margin: 0; padding: 8px 12px; border-radius: 14px 14px 4px 14px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--chrome-ink); font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.bibview .quick-verdict { margin: 0; color: var(--chrome-ink); font-size: 14px; line-height: 1.55; }
+.bibview .quick-mine { align-self: flex-end; max-width: 92%; margin: 0; padding: 10px 14px; border-radius: 16px 16px 5px 16px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  color: var(--chrome-ink); font: 15.5px/1.55 var(--serif); white-space: pre-wrap; overflow-wrap: anywhere;
+  box-shadow: 0 10px 22px -18px color-mix(in srgb, var(--accent) 90%, black); }
+.bibview .quick-verdict { margin: 0; padding: 10px 12px; border-radius: 12px; color: var(--chrome-ink); font: italic 15px/1.55 var(--serif);
+  background: color-mix(in srgb, var(--chrome-ink) 4%, transparent); border: 1px solid var(--line); }
 .bibview .quick-wait { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; color: var(--chrome-soft); }
 .bibview .quick-wait .ring { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 1s linear infinite; }
-.bibview .quick-sec { padding-left: 10px; border-left: 2px solid var(--line); }
-.bibview .quick-sec.wait { border-left-color: color-mix(in srgb, var(--accent) 70%, var(--line)); }
-.bibview .quick-sec h4 { margin: 2px 0 4px; font: 600 12.5px/1.3 var(--ui); color: var(--chrome-soft); }
+.bibview .quick-sec { padding: 8px 10px 4px 12px; border-radius: 12px; border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--chrome-ink) 3%, transparent); }
+.bibview .quick-sec.wait { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.bibview .quick-sec h4 { margin: 2px 0 6px; font: 600 12px/1.3 var(--ui); letter-spacing: .04em; color: var(--chrome-soft); }
 .bibview .quick-sec ul { margin: 0; padding-left: 16px; }
-.bibview .quick-sec li { margin: 0 0 5px; font-size: 13.5px; line-height: 1.5; color: var(--chrome-ink); overflow-wrap: anywhere; }
+.bibview .quick-sec li { margin: 0 0 6px; font-size: 13.5px; line-height: 1.5; color: var(--chrome-ink); overflow-wrap: anywhere; }
 .bibview .quick-sec li.undone, .bibview .quick-sec li.undone .link { color: var(--chrome-soft); }
 .bibview .quick-sec .quick-why { color: var(--chrome-soft); }
 .bibview .quick-sec .link { font: inherit; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; padding: 2px 0; min-height: 24px; }
-.bibview .quickbox { display: block; width: 100%; min-height: 76px; resize: vertical; }
-.bibview .quickactions { margin-top: 8px; justify-content: flex-end; }
+.bibview .quickbox { display: block; width: 100%; min-height: 96px; resize: vertical; border-radius: 16px; padding: 14px 14px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: color-mix(in srgb, var(--chrome-solid) 86%, var(--accent));
+  color: var(--chrome-ink); font: 16.5px/1.55 var(--serif); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--chrome-ink) 8%, transparent); }
+.bibview .quickbox::placeholder { color: var(--chrome-soft); font-style: italic; opacity: .9; }
+.bibview .quickbox:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+[data-theme="day"] .bibview .quickbox, [data-mode="light"] .bibview .quickbox { background: color-mix(in srgb, var(--chrome-solid) 92%, var(--accent)); }
+.bibview .quickactions { margin-top: 10px; justify-content: flex-end; }
+.bibview .quickactions .btn.primary { min-height: 40px; padding: 0 18px; border-radius: 14px; }
 /* a card's sheet: where else it stands (its name in the bibliography, its turns on the Timeline) */
 .sheet .cardlinks { margin: 2px 0 12px; flex-wrap: wrap; gap: 8px; }
 /* a scene's swipe bar (‹ 1/2 ›): the count between its arrows */

@@ -386,7 +386,7 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
   if (items.length > 8 || q) {
     const input = h('input.bibfilter', { type: 'search', placeholder: 'Find a name…', 'aria-label': 'Find a name', value: q });
     input.addEventListener('input', () => { filters.set(novelId, input.value); drawList(); });
-    root.append(input);
+    root.append(h('label.bibfind', icon('search', 18), input));
   }
   const listBox = h('div.biblist');
   root.append(listBox);

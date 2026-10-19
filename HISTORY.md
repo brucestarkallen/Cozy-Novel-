@@ -1165,3 +1165,12 @@ Browser: 26 walks passed with the same counts as 2.12.41 — bibliography 44, br
 The helper's reading request is unchanged (md5 8c1953420ccbe468b7053cd5f8cfae81).
 
 Not run: a real model, a phone's own browser, profile_performance (a profiler, with nothing to pass or fail).
+
+## 2.12.43, Quick add, Find a name, and a marked name
+
+**Quick add** is a writing card: the box is set in the book's type, with a quiet edge of the room's colour, and what he typed sits as his own line.
+
+**Find a name** is a search well, with the glass beside the words.
+
+**A name the notes know**, marked in the page or in a scene, is no longer only a dotted line. A wash of the room's colour sits under the word. The dotted line stays, so it still reads as something to tap.
+
