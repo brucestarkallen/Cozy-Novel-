@@ -46,16 +46,39 @@ function tellingOf(e) {
   const names = new Set([...(Array.isArray(e.refs) ? e.refs : []), e.whose].filter((r) => r && typeof r === 'object').flatMap((r) => tellingWords(r.name)));
   return new Set(tellingWords(e.text).filter((w) => !names.has(w)));
 }
+/* (a turn that says nothing of its own beyond its cards' names — "Jovan is hit." — is never the same as another: what it
+ * says cannot be told apart, 2.12.40, the review) */
 function saysSame(a, b) {
   const A = tellingOf(a), B = tellingOf(b);
-  if (!A.size || !B.size) return A.size === B.size;
+  if (!A.size || !B.size) return false;
   let shared = 0;
   for (const w of A) if (B.has(w)) shared++;
   return shared * 2 > A.size || shared * 2 > B.size;
 }
+/* WHO DOES IT (2.12.40, the review: the cards are compared as a set and their names left out of what is said, so
+ * "Emilia betrays Jovan." and "Jovan betrays Emilia." on one sentence were one turn, and a reading giving one side took
+ * the other away): a turn between people is told from the side named first — the card whose name stands first in what
+ * it says, of two of its cards named in it. With fewer named it cannot be told ("She betrays Jovan." is his name
+ * first, and hers the deed; "Emilia betrays him.", "Jovan betrays her."): never the same as another then — only the
+ * same turn word for word is (its mark). Two turns are the same only told from the same side. */
+/* (a name's own words — never a particle it shares with every sentence: "Mara of the Gate" is found by Mara and Gate) */
+const PARTICLES = new Set(['the', 'of', 'and', 'de', 'la', 'le', 'du', 'van', 'von', 'der', 'den', 'da', 'di', 'del', 'dos', 'das', 'el', 'al', 'bin', 'ibn']);
+const nameWords = (n) => String(n || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2 && !PARTICLES.has(w));
+const escRe = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function subjectOf(e) {
+  const t = String(e.text || '').toLowerCase();
+  const at = (Array.isArray(e.refs) ? e.refs : []).map((r) => {
+    const found = nameWords(r && r.name).map((w) => t.search(new RegExp(`(?<![\\p{L}\\p{N}])${escRe(w)}(?![\\p{L}\\p{N}])`, 'u'))).filter((i) => i >= 0);
+    return { id: r && r.id, at: found.length ? Math.min(...found) : -1 };
+  }).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at);
+  return at.length >= 2 && at[0].at < at[1].at ? at[0].id : null;
+}
 export function sameTurn(a, b, text = '') {
   if (!a || !b) return false;
+  /* (word for word the same turn — its kind, cards, words quoted, stance, whose and what it says, its mark: one) */
+  if (a.id && a.id === b.id) return true;
   if (a.kind !== b.kind || cardsKey(a) !== cardsKey(b) || voiceOf(a) !== voiceOf(b) || !saysSame(a, b)) return false;
+  if (a.kind === 'relationship') { const s = subjectOf(a); if (!s || s !== subjectOf(b)) return false; }
   const qa = Array.isArray(a.evidence) ? a.evidence : [], qb = Array.isArray(b.evidence) ? b.evidence : [];
   const t = String(text || '');
   const sa = t ? qa.map((q) => quoteAt(t, q)).filter(Boolean) : [], sb = t ? qb.map((q) => quoteAt(t, q)).filter(Boolean) : [];
@@ -69,10 +92,12 @@ const turnId = (kind, refs, quotes, stance, whose, text) => 'tl-' + hashText(JSO
 /* Names are resolved against the notes already folded from this answer.
  * A reference can never create a person or a thread. Ambiguous names stay
  * unresolved; a card folded into another can still be found by its alias. */
+/* (a card is found by its name however long he made it — 2.12.40, the review: a name past 120 letters was refused here,
+ * so a thread he named so was never named in a turn but by another name it goes by) */
 function resolve(notes, ref) {
   if (!ref || typeof ref !== 'object' || !NOTE_KINDS.includes(ref.kind)) return null;
   const cards = cardsIn(notes, ref.kind);
-  const card = cards.find(c => ref.id && c.id === ref.id) || matchCard(cards, words(ref.name, 120), [], { kind: ref.kind, near: false }).card;
+  const card = cards.find(c => ref.id && c.id === ref.id) || matchCard(cards, typeof ref.name === 'string' ? ref.name.trim() : '', [], { kind: ref.kind, near: false }).card;
   return card ? { id: card.id, kind: ref.kind, name: card.name } : null;
 }
 
@@ -107,6 +132,10 @@ export function continuityOf(rows, notes, { text = '', whole = text } = {}) {
     if (!quotes.every(quoteKept)) { out.complete = false; continue; }
     const event = { kind, refs, text: statement, why, evidence: quotes, stance, ...(whose ? { whose } : {}) };
     event.id = turnId(kind, refs, quotes, stance, whose?.id, statement);
+    /* ONE RULE FOR A TURN READ AND A TURN KEPT (2.12.40, the review: a thread he named past 120 letters was taken here
+     * and refused as kept, so a reading kept whole was never read for the Timeline, and asked again every run with no
+     * try counted): what is kept is what every kept turn is held to (soundTurn) */
+    if (!soundTurn(event)) { out.complete = false; continue; }
     /* (the same turn given twice in one answer, word for word: once) */
     if (!out.events.some(e => e.id === event.id)) out.events.push(event);
   }
@@ -157,7 +186,7 @@ export function continuityStep(passageId, versionId, continuity) {
  * imported records are held to it too) — its words aside */
 function soundTurn(e) {
   return Boolean(e && Array.isArray(e.evidence) && e.evidence.length && e.evidence.every(quoteKept)
-    && Array.isArray(e.refs) && e.refs.length && !e.refs.some((r) => !r || typeof r.id !== 'string' || !words(r.name, 120) || !NOTE_KINDS.includes(r.kind))
+    && Array.isArray(e.refs) && e.refs.length && !e.refs.some((r) => !r || typeof r.id !== 'string' || typeof r.name !== 'string' || !r.name.trim() || !NOTE_KINDS.includes(r.kind))
     && new Set(e.refs.map((r) => r.id)).size === e.refs.length && words(e.id, 100)
     && TIMELINE_KINDS.includes(e.kind) && STANCES.includes(e.stance) && words(e.text, 900)
     && !(e.kind === 'relationship' && e.refs.filter((r) => r.kind === 'people').length < 2)
@@ -202,16 +231,19 @@ const ownOnly = ({ upTo: _u, gap: _g, passed: _p, ...rest }) => rest;
 /* (2.12.40, the audit: given only the turns of the words being replaced — continuityNow, as the facts are codexNow;
  * a quote read as the bibliography reads one, and kept as the new words have it: a run of spaces mended to one kept
  * every turn on it) */
-export function carriedContinuity(c, text, swap = (x) => x) {
+/* (partly: every turn that can be carried is, and with one that cannot the reading is no longer whole — read again for
+ * the rest: a reading that landed after a name was changed everywhere, archivist.js readChanges, 2.12.40) */
+export function carriedContinuity(c, text, swap = (x) => x, { partly = false } = {}) {
   if (!c || c.schema !== TIMELINE_SCHEMA || !Array.isArray(c.events)) return null;
   const t = String(text || '');
   const events = [];
+  let all = true;
   for (const e of c.events) {
     const carried = carriedTurn(e, t, swap);
-    if (!carried) return null;
+    if (!carried) { if (!partly) return null; all = false; continue; }
     events.push(carried);
   }
-  return { ...ownOnly(c), fp: hashText(t), events };
+  return { ...ownOnly(c), fp: hashText(t), events, ...(all ? {} : { complete: false }) };
 }
 /* WHAT A READING OF A CHANGE GIVES, WITH THE TURNS THE WORDS BEFORE IT HAD THAT ITS NEW WORDS STILL GIVE (2.12.40, the
  * audit: the reading is asked for what the change adds — a fix adds nothing — and its answer was the passage's whole

@@ -164,6 +164,25 @@ export function nameForms(entries, cards = {}) {
   }
   return [...map.values()];
 }
+/* NAMES OF ONE: two names are one when they are the same name, or the book finds one of its entries or cards by both —
+ * its name, a name it also goes by, a person's own name alone (nameForms: as a name is found in the page) — so a fact
+ * given again under "Emilia Vermaine" or "Em" is hers as under "Emilia" (withCarriedFacts, factsLost: 2.12.40, the
+ * review). (cards: the notes' cards by kind, as nameForms takes them) */
+export function sameNameOf(entries, cards = {}) {
+  /* (the book's names gathered only when two names are not the same name already: a fact given again word for word under
+   * another name is rare, and a book may hold thousands of entries) */
+  let refs = null;
+  const refsOf = (n) => {
+    if (!refs) refs = new Map(nameForms(entries, cards).map((f) => [formKey(f.form), f.refs]));
+    const c = cleanName(n);
+    return [...new Set([c, bareName(n), c.replace(/^(?:the|a|an)\s+/i, '')].flatMap((x) => refs.get(formKey(x.normalize('NFC'))) || []))];
+  };
+  return (a, b) => {
+    if (nameKey(a) === nameKey(b)) return true;
+    const ra = refsOf(a);
+    return ra.length > 0 && refsOf(b).some((r) => ra.includes(r));
+  };
+}
 
 /* A finder for a set of forms: find(text) -> [{start, end, key}] in order,
  * never overlapping — the longest name wins where two start together. */
@@ -450,34 +469,43 @@ export function mergeCodex(before, next) {
  * fact's words still stand in the new words and its name with them; else
  * none, and the passage is read for them again (bibDue) — never a fact kept
  * whose words are gone. */
-export function carriedCodex(codex, text, swap = (x) => x) {
+/* (partly: every fact that can be carried is, and with one that cannot the passage is read for its facts again from its
+ * start, `upTo` 0, what was carried kept — a reading that landed after a name was changed everywhere, archivist.js
+ * readChanges, 2.12.40) */
+export function carriedCodex(codex, text, swap = (x) => x, { partly = false } = {}) {
   if (!codex || codex.schema !== CODEX_SCHEMA || !Array.isArray(codex.facts)) return null;
   const folded = foldedText(text);
   const facts = [];
+  let all = true;
   for (const f of codex.facts) {
-    if (!f || typeof f.fact !== 'string' || typeof f.name !== 'string') return null;
+    if (!f || typeof f.fact !== 'string' || typeof f.name !== 'string') { if (!partly) return null; all = false; continue; }
     const name = swap(f.name);
     const fact = swap(f.fact);
     const evidence = (Array.isArray(f.evidence) ? f.evidence : []).map((q) => swap(String(q)));
-    if (!evidence.length || !evidence.every((q) => quoteIn(text, q)) || !nameInText(folded, name)) return null;
+    if (!evidence.length || !evidence.every((q) => quoteIn(text, q)) || !nameInText(folded, name)) { if (!partly) return null; all = false; continue; }
     facts.push({ ...f, id: 'cx-' + hashText(JSON.stringify([nameKey(name), fact, evidence])), name, fact, evidence });
   }
   /* (one being read in parts, archivist.js bibBackfill: how far was of the words before — the new words read in parts again from their start, what was found kept) */
   const { upTo, gap: _g, ...rest } = codex;
-  return { ...rest, ...(Number.isInteger(upTo) ? { upTo: 0 } : {}), fp: hashText(text), facts };
+  return { ...rest, ...(Number.isInteger(upTo) || !all ? { upTo: 0 } : {}), ...(all ? {} : { complete: false }), fp: hashText(text), facts };
 }
 
 /* What a reading of a changed passage gives, with what the version before it
  * established that its new words still say (each fact whose words and name
  * still stand in them) — an answer that tells only what the change adds never
  * takes the rest away. */
-export function withCarriedFacts(codex, before, text) {
+/* ONE FACT GIVEN AGAIN (2.12.40, the review: a fact given again under her full name, another name she goes by or a
+ * nickname was counted lost, and the page read again for it — paid for nothing): the same fact, or the same words of
+ * it of a name that is the same name — `same`, the book's own (sameNameOf); the name's own key without it */
+const sameKey = (a, b) => nameKey(a) === nameKey(b);
+const factAgain = (x, f, same) => x.id === f.id || (x.fact === f.fact && same(x.name, f.name));
+export function withCarriedFacts(codex, before, text, { same = sameKey } = {}) {
   if (!codex || !before || !Array.isArray(before.facts)) return codex;
   const folded = foldedText(text);
   const facts = [...codex.facts];
   for (const f of before.facts) {
     if (!f || typeof f.fact !== 'string' || typeof f.name !== 'string' || facts.length >= FACTS_PER_SOURCE * 3) continue;
-    if (facts.some((x) => x.id === f.id || (x.fact === f.fact && nameKey(x.name) === nameKey(f.name)))) continue;
+    if (facts.some((x) => factAgain(x, f, same))) continue;
     const evidence = Array.isArray(f.evidence) ? f.evidence : [];
     if (evidence.length && evidence.every((q) => quoteIn(text, q)) && nameInText(folded, f.name)) facts.push(f);
   }
@@ -486,13 +514,13 @@ export function withCarriedFacts(codex, before, text) {
 /* the facts of words before a change that a reading of it neither carries to the new words (withCarriedFacts: their
  * words and name standing in them) nor gives again — a name changed everywhere since, the words put another way or
  * taken out (archivist.js factsUnvouched: read whole again, 2.12.40) */
-export function factsLost(codex, before, text) {
+export function factsLost(codex, before, text, { same = sameKey } = {}) {
   if (!before || !Array.isArray(before.facts)) return [];
   const folded = foldedText(text);
   const have = (codex && Array.isArray(codex.facts)) ? codex.facts : [];
   return before.facts.filter((f) => f && typeof f.fact === 'string' && typeof f.name === 'string'
     && !(Array.isArray(f.evidence) && f.evidence.length && f.evidence.every((q) => quoteIn(text, q)) && nameInText(folded, f.name))
-    && !have.some((x) => x.id === f.id || (x.fact === f.fact && nameKey(x.name) === nameKey(f.name))));
+    && !have.some((x) => factAgain(x, f, same)));
 }
 
 /* a source as an answer may say it — "Chapter Three, passage 4", "Chapter 3,

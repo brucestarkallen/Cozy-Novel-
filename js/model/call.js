@@ -483,6 +483,14 @@ export const LEASH_ALL_MS = 15 * 60 * 1000;
  * longer next time; one on it, all the time it will ever be given */
 const QUIET_MOST_MS = 15 * 60 * 1000;
 const leashOf = (ms, name) => (Number(globalThis[name]) > 0 ? Number(globalThis[name]) : ms);
+/* THE PHONE'S RELAY NEVER GIVES UP ON A SILENT PROVIDER BEFORE THE APP DOES (2.12.40, the review): it waited ten
+ * minutes for a word when told nothing, so the leashes of twelve minutes and of a quarter of an hour never let a call
+ * go — the relay dropped the line first, as a passing fault, waited out and asked again, the longest leash never
+ * reached and a model that stays silent asked for ever, every run stopping before the notes' check. Every call now
+ * tells the relay how long to wait, in seconds: a minute past its own leash — or, his page and his Test, which have
+ * no leash but his Stop, a minute past the longest any silent provider is waited. */
+const relayWait = (ms) => Math.ceil(ms / 1000) + 60;
+const unleashedWait = () => relayWait(leashOf(QUIET_MOST_MS, '__cozyLeashQuietMostMs'));
 /* A WORKER GIVES WAY TO HIS PAGE (Cozy Tavern M530). A provider that takes
  * one request at a time on a connection refuses a page sent while the
  * helper or the checker is asking on the same one ("slow down", "busy") —
@@ -660,7 +668,7 @@ export async function ask(conn, opts = {}) {
       const res = await fetch('/api/call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream }),
+        body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream, timeout: leash ? relayWait(quietMs) : relayWait(quietMost) }),
         signal: lineSignal,
       });
       heardAt = Date.now();
@@ -1211,7 +1219,7 @@ export async function tryConnection(conn, { speed = true } = {}) {
  * fresh yes lifts an old refusal (clearDown). Returns {ok, words, clearDown}. */
 async function rawCall(req) {
   try {
-    const res = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream: false }) });
+    const res = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream: false, timeout: unleashedWait() }) });
     if (!res.ok) return { ok: false, status: 0, detail: `the phone’s server answered ${res.status}` };
     let data = null;
     try { data = await res.json(); } catch (_) { return { ok: false, status: 0, detail: 'the answer could not be read' }; }
