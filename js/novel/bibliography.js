@@ -68,6 +68,12 @@ export function entriesOf(novel) {
   return list.filter((e) => e && typeof e === 'object' && cleanName(e.name));
 }
 
+/* HIS ENTRIES AS THE HELPER READS THEM (2.12.40, the audit) — every one but those set to Never ("Never — it’s only for
+ * me"): the writer, the narrator and the checker never read those (usableFor), and through 2.12.39 the helper did —
+ * a reading put a Never entry's words on a card, and the card rode to the writer. Nor do they count as the book's
+ * word. (A lorebook's switched-off entries come in as Never.) */
+export function entriesForNotes(novel) { return entriesOf(novel).filter((e) => ridesOf(e.rides) !== 'never'); }
+
 /* an entry made tidy for keeping: a name, other names once each (never its own name), a kind, when it rides */
 export function tidyEntry(e) {
   const name = cleanName(e.name);
@@ -209,6 +215,28 @@ export function makeFinder(forms) {
     return got;
   };
   return { sig, find, refsOf, marksOf, size: list.length };
+}
+
+/* THE ENTRIES SOME WORDS NAME, found as the page finds them (nameForms → makeFinder: a name with capitals only as it
+ * is written, or shouted; a person by a name of theirs alone — never a title or a joining word; one in small letters
+ * however written). 2.12.40, the audit: through 2.12.39 the notes' reading, the notes' check and Quick add took any
+ * word of three letters of a name, in small letters, anywhere — "she will go to the market at night" named Will
+ * Turner and the Night Market. The finder is kept for the same entries' names. */
+const namedFinders = new Map();
+export function entriesNamed(entries, text) {
+  const list = (entries || []).filter((e) => e && cleanName(e.name));
+  const t = String(text || '');
+  if (!list.length || !t.trim()) return [];
+  const key = JSON.stringify(list.map((e) => [e.id, e.name, e.aka || [], e.kind]));
+  let finder = namedFinders.get(key);
+  if (!finder) {
+    finder = makeFinder(nameForms(list));
+    if (namedFinders.size > 16) namedFinders.clear();
+    namedFinders.set(key, finder);
+  }
+  const ids = new Set();
+  for (const hit of finder.find(t)) for (const ref of finder.refsOf(hit.key)) if (ref.startsWith('e:')) ids.add(ref.slice(2));
+  return list.filter((e) => ids.has(e.id));
 }
 
 /* ------------------------------------------------------------ what rides */

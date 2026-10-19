@@ -25,7 +25,7 @@ import { quickAddRequest, premisesPart, entriesPart, JSON_AGAIN, JSON_CUT } from
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { findIn } from './search.js';
 import { namesAndFigures, foldedText, nameInText } from './names.js';
-import { entriesOf, entryNamed, entryWords, kindSaid } from './bibliography.js';
+import { entriesOf, entriesNamed, entryNamed, entryWords, kindSaid } from './bibliography.js';
 import { makeChange, undoChange } from './changes.js';
 import * as archivist from './archivist.js';
 import { newId, estimateTokens } from '../util.js';
@@ -210,8 +210,10 @@ function requestFor(novelId, words, c) {
   const premAll = premisesOf(novel, chapters);
   const pn = fitList(premAll, premisesPart, Math.floor(room / 4));
   const names = namesIn(words, novel, chapters);
-  const folded = foldedText(words);
-  const named = entriesOf(novel).filter((e) => names.some((n) => entryNamed([e], n).entry) || [e.name, ...(e.aka || [])].some((x) => x && nameInText(folded, x)));
+  /* (his entries his words name, found as the page finds a name — 2.12.40, the audit: any word of a name in small
+   * letters counted; the partner reads every entry, Never ones too) */
+  const byWords = new Set(entriesNamed(entriesOf(novel), words).map((e) => e.id));
+  const named = entriesOf(novel).filter((e) => byWords.has(e.id) || names.some((n) => entryNamed([e], n).entry));
   const en = fitList(named, entriesPart, Math.floor(room / 4));
   const pas = passagesNaming(novel, chapters, names, Math.floor(room / 2));
   /* what was said before in Quick add, the newest few (never the one being asked) */

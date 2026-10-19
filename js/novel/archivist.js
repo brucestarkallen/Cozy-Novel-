@@ -32,7 +32,7 @@ import { autoOn, helperFrame, premisesPart, entriesPart, timelinePart, timelineR
 import { fitBook, bibAutoOn } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep, timelineOf, carriedContinuity, continuityDone } from './timeline.js';
-import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey, entriesOf, entryWords, cardForEntry } from './bibliography.js';
+import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey, entriesOf, entriesForNotes, entriesNamed, entryWords, cardForEntry } from './bibliography.js';
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
 import { setHelperHooks } from './inplace.js';
 import { applyCheck, checkSig, checkedNow } from './summarycheck.js';
@@ -1294,14 +1294,16 @@ export function wordsToJudge(novel, chapters) {
     const text = String(((chapters[id] || {}).plan) || '').trim();
     if (text) add({ key: `plan:${id}`, what: 'plan', name: String(i + 1), chapterId: id, label: `Chapter ${numberWords(i + 1)}’s plan`, text });
   });
-  const entries = Array.isArray(novel.bibliography) ? novel.bibliography : [];
+  /* (never one set to Never — the writer never reads it as true; and named by the book as the page finds a name,
+   * 2.12.40, the audit: any word of a name in small letters anywhere counted) */
+  const entries = entriesForNotes(novel);
   if (entries.length) {
-    const book = bookFolded(novel);
+    const named = new Set(entriesNamed(entries, [...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...premisesOf(novel, chapters).map((x) => x.text)].join('\n\n')).map((e) => e.id));
     let room = 9000;
     let n = 0;
     for (const e of entries) {
       if (!e || !String(e.text || '').trim() || n >= 12 || room <= 0) continue;
-      if (![e.name, ...(e.aka || [])].some((x) => x && nameInText(book, x))) continue;
+      if (!named.has(e.id)) continue;
       const before = out.length;
       add({ key: `entry:${e.id}`, what: 'entry', name: e.name, id: e.id, label: `${e.name} (bibliography)`, text: String(e.text).trim() });
       if (out.length > before) { n++; room -= String(e.text).length; }
@@ -1437,24 +1439,25 @@ const claimsContradiction = (o) => [...NOTE_KINDS, 'gone'].some((k) => Array.isA
 export function groundsOf(novel) {
   const chapters = chaptersOf(novel);
   const kept = Object.values((novel && novel.kept) || {}).map((k) => (k && typeof k === 'object' ? k.text : '')).filter(Boolean);
-  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), novel.brief || '', novel.style || '', ...kept, ...premisesOf(novel, chapters).map((x) => x.text), ...entriesOf(novel).map(entryWords)].join('\n\n'));
+  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), novel.brief || '', novel.style || '', ...kept, ...premisesOf(novel, chapters).map((x) => x.text), ...entriesForNotes(novel).map(entryWords)].join('\n\n'));
 }
 /* What a card's name may stand in for "gone" to be refused (foldNotes' `stands`): the book and his premises
  * (bookFolded), and his bibliography's entries (2.12.37: a card for a name his entry gives is never "gone" for no page
  * naming it) */
 export function standsFolded(novel) {
   const chapters = chaptersOf(novel);
-  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...premisesOf(novel, chapters).map((x) => x.text), ...entriesOf(novel).map(entryWords)].join('\n\n'), { cased: true });
+  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...premisesOf(novel, chapters).map((x) => x.text), ...entriesForNotes(novel).map(entryWords)].join('\n\n'), { cased: true });
 }
-/* HIS ENTRIES BESIDE THE NOTES (2.12.37): those whose name, or a name they go by, the words read give (`folded`) */
-export function entriesNamedIn(novel, folded) {
-  if (!folded) return [];
-  return entriesOf(novel).filter((e) => [e.name, ...(e.aka || [])].some((x) => x && nameInText(folded, x)));
+/* HIS ENTRIES BESIDE THE NOTES (2.12.37): those the words read name (`text`), found as the page finds them — never one
+ * set to Never (2.12.40, the audit: bibliography.js entriesForNotes, entriesNamed) */
+export function entriesNamedIn(novel, text) {
+  if (!String(text || '').trim()) return [];
+  return entriesNamed(entriesForNotes(novel), text);
 }
 /* his entries for some cards (`cards`: {kind: [card]}) — an entry and a card for one name, as the bibliography joins
- * them (bibliography.js cardForEntry) */
+ * them (bibliography.js cardForEntry); never one set to Never */
 export function entriesForCards(novel, cards) {
-  return entriesOf(novel).filter((e) => Boolean(cardForEntry(e, cards)));
+  return entriesForNotes(novel).filter((e) => Boolean(cardForEntry(e, cards)));
 }
 /* the entries, fitted to `room` tokens: the first ones whole, how many more were left out */
 function entriesFitted(list, room) {
@@ -1486,7 +1489,7 @@ function turnsFitted(novel, chapters, ids, room) {
 const printsKept = new Map();   /* novelId -> {key, print}: the same entries and card names, the same answer */
 export function entriesPrint(novel) {
   const notes = (novel && novel.notes) || {};
-  const entries = entriesOf(novel);
+  const entries = entriesForNotes(novel);
   if (!entries.length || !NOTE_KINDS.some((k) => (notes[k] || []).length)) return '';
   const key = JSON.stringify([entries.map((e) => [e.id, e.name, e.aka, e.kind, e.at, (e.line || '').length, (e.text || '').length]), NOTE_KINDS.map((k) => (notes[k] || []).map((c) => [c.id, c.name, c.aka]))]);
   const was = novel && novel.id ? printsKept.get(novel.id) : null;
@@ -2122,9 +2125,10 @@ async function readChanges(novelId, conn) {
       /* whether this reading asks for the bibliography (and a short portrait): what comes back is read as what was asked, whatever the switch says by then */
       const askedCodex = bibReading(now, conn);
       /* the words read, with his premise for each (names the premise gives are someone's own) */
-      const readFold = B.items.length ? foldedText(B.items.map((c) => `${c.text}${c.premise ? `\n\n${c.premise}` : ''}`).join('\n\n')) : null;
+      const readText = B.items.map((c) => `${c.text}${c.premise ? `\n\n${c.premise}` : ''}`).join('\n\n');
+      const readFold = B.items.length ? foldedText(readText) : null;
       /* his entries for the names these words give, beside the notes — at most a twelfth of its room (2.12.37) */
-      const entered = entriesFitted(entriesNamedIn(now, readFold), Math.floor(room / 12));
+      const entered = entriesFitted(B.items.length ? entriesNamedIn(now, readText) : [], Math.floor(room / 12));
       const request = notesRequest({
         novel: namedBook(now, house),
         chapterLabel: label,

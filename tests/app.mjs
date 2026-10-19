@@ -13855,6 +13855,53 @@ await test('the Timeline heals by itself: turns left with the words before carri
   await putAway(c);
 });
 
+heading('the audit of 2.12.36–2.12.39 (2.12.40)');
+const notesAsk = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Update the notes'));
+
+/* (2.12.40, the audit: an entry set to Never reached the helper, and through a card the writer; and any word of a name
+ * in small letters anywhere named an entry — "she will go to the market at night" named Will Turner and the Night
+ * Market) */
+await test('the notes read only the entries the words name, found as the page finds a name — never “will” for Will Turner nor “night” for the Night Market — and never one set to Never: not in a reading, not among the book’s words, not in what is judged', async () => {
+  await setHouse();
+  const b = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Will Turner', kind: 'people', line: 'A smith.', text: 'Will Turner forges blades for the harbour guard.' },
+    { name: 'Night Market', kind: 'places', line: 'A market.', text: 'The Night Market opens at the second bell.' },
+    { name: 'Kaelen', kind: 'people', line: 'A knight.', rides: 'never', text: 'Kaelen is secretly the Shadow King.' }]);
+  /* named by no word as a name: none rides */
+  await script([{ text: 'She will go to the market at night, and Kaelen knelt by the gate.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  await reset();
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  let [sent] = await notesAsk();
+  assert.ok(sent && !sent.includes('My bibliography’s entries') && !sent.includes('Will Turner forges') && !sent.includes('second bell'), 'no word named them as names');
+  assert.ok(!sent.includes('Shadow King'), 'Kaelen is named, but his entry is set to Never: only for him');
+  /* named as names: they ride */
+  await script([{ text: 'Will Turner sold knives at the Night Market.' }]);
+  await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: '', length: 'scene' });
+  await reset();
+  await script([{ text: JSON.stringify({ people: [] }) }]);
+  await archivist.run(b.novelId);
+  [sent] = await notesAsk();
+  assert.ok(sent && sent.includes('Will Turner forges blades') && sent.includes('opens at the second bell'), 'named, they ride');
+  assert.ok(!sent.includes('Shadow King'));
+  /* never among the book's words, nor judged as words the writer reads as true */
+  const n = b.novel();
+  assert.equal(archivist.groundsOf(n).loose.includes(' shadow king '), false, 'a Never entry is no ground for a card');
+  assert.equal(archivist.groundsOf(n).loose.includes(' second bell '), true);
+  const chapters = Object.fromEntries(n.order.map((id) => [id, store.peek('chapter', id)]));
+  const judged = archivist.wordsToJudge(n, chapters).filter((w) => w.what === 'entry').map((w) => w.name).sort();
+  assert.deepEqual(judged, ['Night Market', 'Will Turner'], 'judged: the entries the book names as names — never the Never one');
+  await putAway(b);
+  /* a book that says “will” and “night” only as words: no entry is judged for it */
+  const c = await makeBook([['She will go to the market at night.']], { manual: true });
+  putEntries(c, [{ name: 'Will Turner', kind: 'people', text: 'A smith.' }, { name: 'Night Market', kind: 'places', text: 'A market.' }]);
+  const cn = c.novel();
+  assert.deepEqual(archivist.wordsToJudge(cn, Object.fromEntries(cn.order.map((id) => [id, store.peek('chapter', id)]))).filter((w) => w.what === 'entry'), []);
+  await putAway(c);
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

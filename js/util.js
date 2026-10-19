@@ -67,6 +67,22 @@ export const estimateTokens = counted((s) => {
   return Math.ceil((bytes - cjk * 3) / 3.5 + cjk * 1.1);
 });
 
+/* ROWS FITTED TO A ROOM, IN ONE PASS (2.12.40, the audit): in the order given — the caller's order is what goes first —
+ * each row kept while it fits and one that does not passed over, never holding back the rows after it; `overhead`, what
+ * the part costs besides its rows (its heading, the line saying how many were left out). {kept, left}: the rows kept,
+ * in the order given, and how many were left out. (Through 2.12.39 the fits rebuilt the whole part for every row they
+ * let go — a thousand premises, a thousand times — and one long row first left none.) */
+export function fitRows(rows, room, sizeOf = (r) => estimateTokens(String(r == null ? '' : r)), overhead = 0) {
+  const kept = [];
+  let used = overhead;
+  let left = 0;
+  for (const r of rows || []) {
+    const n = sizeOf(r);
+    if (used + n <= room) { kept.push(r); used += n; } else left++;
+  }
+  return { kept, left };
+}
+
 const ONES = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve',
   'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
 const TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
