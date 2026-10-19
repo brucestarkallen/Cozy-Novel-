@@ -181,7 +181,7 @@ const tookBy = (b, after, local = null) => (Array.isArray(b && b.took) ? b.took 
 /* the names a passage's own premise gives its page (names.js premiseLocal), with the book's names when they are known —
  * for a change kept before 2.12.41, read from its words, never with them (as its page's words are read: tookBy), so it
  * reads the same while it is kept (laterWords) and as it is let go (goneWith) */
-const localOf = (passage, known = null) => (passage ? premiseLocal(premiseOf(passage), known) : null);
+const localOf = (passage, known = null, book = null) => (passage ? premiseLocal(premiseOf(passage), known, book) : null);
 const localOnce = (passage) => { let had; return () => (had === undefined ? (had = localOf(passage)) : had); };
 /* a change that is no one's hand on the page: a name changed everywhere (`rename`), the writer's own words put back where
  * they stood (`back`, Put back what was taken off — 2.12.41, the review of 2.12.41: it was his hand) */
@@ -386,6 +386,14 @@ function runsTrimmed(w, n) {
   return over > 0 ? null : handsFrom(runs.filter((r) => r[1] > 0));
 }
 function whoseOf(v, passage = null, depth = 0) {
+  const work = whoseWork(v, passage, depth);
+  let r = work.next();
+  while (!r.done) r = work.next();
+  return r.value;
+}
+/* (worked out a change at a time, giving way after each — mend.js keepWhose lets the page have its turn between them:
+ * round 5, the review of round 4) */
+function* whoseWork(v, passage = null, depth = 0) {
   const text = String((v && v.text) || '');
   const fp = hashText(text);
   if (v && runsFit(v.whose, text, fp)) return handsFrom(v.whose.runs);
@@ -408,14 +416,16 @@ function whoseOf(v, passage = null, depth = 0) {
      * with the hands of the words they came from) */
     const edit = v.how === 'edit';
     cur = edit ? writtenOf(from) : String(from.text || '');
-    const fromHands = edit || depth >= 4 ? wordsOf(cur).map(() => baseHand(from)) : whoseOf(from, passage, depth + 1);
+    const fromHands = edit || depth >= 4 ? wordsOf(cur).map(() => baseHand(from)) : yield* whoseWork(from, passage, depth + 1);
     hands = handsAfter(fromHands, cur, writtenOf(v), edit ? 'you' : 'w');
+    yield;
     cur = writtenOf(v);
-    if (cur !== first) { hands = handsAfter(hands, cur, first, 'w'); cur = first; }
+    if (cur !== first) { hands = handsAfter(hands, cur, first, 'w'); cur = first; yield; }
   } else { cur = first; hands = wordsOf(cur).map(() => baseHand(v)); }
-  before.forEach((b, i) => {
+  for (let i = 0; i < before.length; i++) {
+    const b = before[i];
     const after = String(i + 1 < before.length ? before[i + 1].text || '' : text);
-    if (cur !== String(b.text || '')) { hands = handsAfter(hands, cur, String(b.text || ''), 'w'); cur = String(b.text || ''); }
+    if (cur !== String(b.text || '')) { hands = handsAfter(hands, cur, String(b.text || ''), 'w'); cur = String(b.text || ''); yield; }
     const gone = i === 0 && v && v.gone && typeof v.gone === 'object' ? Object.entries(v.gone).filter(([, g]) => g && Number(g.moved) > 0) : [];
     if (gone.length && !noHand(b)) {
       /* the changes let go between: what this step put in, shared by what each hand put in */
@@ -428,7 +438,8 @@ function whoseOf(v, passage = null, depth = 0) {
       hands = put.map((h) => { if (h !== '\u0000') return h; let s = 0; for (const [hh, q] of quota) { s += q; if (at < s) { at++; return hh; } } at++; return b.by; });
     } else hands = handsAfter(hands, cur, after, b.by, { rename: Boolean(b.rename), back: Boolean(b.back) });
     cur = after;
-  });
+    yield;
+  }
   if (cur !== text) hands = handsAfter(hands, cur, text, 'w');
   if (WHOSE_KEPT.size >= 2000) WHOSE_KEPT.clear();
   WHOSE_KEPT.set(key, hands);
@@ -436,9 +447,23 @@ function whoseOf(v, passage = null, depth = 0) {
 }
 const whoseKept = (text, hands) => ({ fp: hashText(String(text || '')), runs: runsOf(hands) });
 /* (whether a version keeps who put in each of its words as they read now; and that worked out, to keep on it once —
- * mend.js keepWhose: a version kept before 2.12.41 worked out again every time the book opened) */
+ * mend.js keepWhose: a version kept before 2.12.41 worked out again every time the book opened — a change at a time,
+ * whoseNowWork, so the page has its turn between them) */
 export const whoseFits = (v) => Boolean(v) && runsFit(v.whose, v.text);
 export const whoseNow = (v, passage = null) => whoseKept(String((v && v.text) || ''), whoseOf(v, passage));
+/* (worked out on the version and its page as they read when the work began — each version's words before and what was
+ * let go copied: the store lays a change made while the page has its turn on these very records, and it must never mix
+ * into what is worked out; kept with the print of the words it was worked out for, so keepWhose lays it only where they
+ * still read so) */
+const asItWas = (x) => (x && typeof x === 'object'
+  ? { ...x, before: Array.isArray(x.before) ? x.before.map((b) => (b && typeof b === 'object' ? { ...b } : b)) : x.before, gone: x.gone && typeof x.gone === 'object' ? JSON.parse(JSON.stringify(x.gone)) : x.gone }
+  : x);
+export function* whoseNowWork(v, passage = null) {
+  const page = passage && typeof passage === 'object' ? { ...passage, versions: (passage.versions || []).map(asItWas) } : null;
+  const was = (page && v && page.versions.find((x) => x && x.id === v.id)) || asItWas(v);
+  const hands = yield* whoseWork(was, page);
+  return whoseKept(String((was && was.text) || ''), hands);
+}
 /* (the words a Go on put in, the writer's — and where it joins on in the middle of a word cut short, "the do" and "or.",
  * that word keeps the hand of the word it carries on: writer.js joinOn) */
 const handsPutOn = (text, more) => {
@@ -458,7 +483,7 @@ export function whoseGrownBefore(b, more) {
   const text = String(b.text || '');
   return whoseKept(text + more, [...handsFrom(b.whose.runs), ...handsPutOn(text, more)]);
 }
-export function inPlaceFields(v, next, by, { at = Date.now(), check = null, codex = null, continuity = null, keepEnd = true, tail = false, extra = {}, names = null, passage = null } = {}) {
+export function inPlaceFields(v, next, by, { at = Date.now(), check = null, codex = null, continuity = null, keepEnd = true, tail = false, extra = {}, names = null, book = null, passage = null } = {}) {
   const was = String((v && v.text) || '');
   const end = Object.fromEntries(END_KEYS.filter((k) => v && v[k] !== undefined).map((k) => [k, v[k]]));
   /* WHAT THE CHANGE DID, DECIDED AS IT IS MADE (2.12.41, the review — through 2.12.40 whether his edit had taken a name
@@ -473,11 +498,11 @@ export function inPlaceFields(v, next, by, { at = Date.now(), check = null, code
   /* (with the names the page's own premise gives it, a person's — names.js premiseLocal: 2.12.41, the review of 2.12.41,
    * his edit right after the page was written, before any card was made, took "Will" out of "Will stood at the gate … he
    * will stay" and nothing was told) */
-  const local = localOf(passage, names);
+  const local = localOf(passage, names, book);
   /* (and the Timeline's turns of them, as their facts — only the turns of these very words, timeline.js continuityNow:
    * 2.12.40, the audit — Undo and Put back the words before brought the facts back and lost the turns) */
   const entry = { text: was, by, at,
-    ...(rename || back ? {} : { took: nameWordsGone(was, next, { known: names, local }), moved: wordsPutIn(was, next) }),
+    ...(rename || back ? {} : { took: nameWordsGone(was, next, { known: names, local, book }), moved: wordsPutIn(was, next) }),
     ...(Object.keys(end).length ? { end } : {}),
     ...(check ? { check: JSON.parse(JSON.stringify(check)) } : {}),
     ...(codex ? { codex: JSON.parse(JSON.stringify(codex)) } : {}),
@@ -873,23 +898,34 @@ export function entrySentences(e) {
   return out;
 }
 export const sentenceKey = (s) => hashText(foldName(s));
-/* THE SAME WORDS IN THE SAME ORDER, APART FROM GRAMMAR (2.12.41, the review of 2.12.41: a sentence kept its time when its
- * words were the same in any order — "Mara hates Tom" turned round to "Tom hates Mara", "He loves her" to "She loves
- * him" — or one word was a near word of another meaning, "bitten" for "bitter"). A sentence's words, folded, a plural's
- * or a verb's s off, in their order: the little words of grammar left out (an article, "is", "has", "and"…); a word of
- * the entry's own names the same as any word for a person ("Mara rules" is "She rules"), and those words themselves
- * each only the same as itself ("he" is never "she"). Its words may be those of a few of the sentences before it, in
- * their order, joined — the one it opens with not said again ("She is tall. She is strong." is "She is tall and
- * strong.") — and a few of its sentences side by side may say one before them, the other way about; a word may be a
- * slip of the pen mended — a letter put in, left out, or two side by side swapped, in a word of five letters or more,
- * never a letter changed for another — where what it was is no word his book uses elsewhere ("lighthuose" made
- * "lighthouse" is a slip mended; "sliver" made "silver" is one too, but not where his notes say "a sliver of glass"). */
-const GRAMMAR = new Set(['a', 'an', 'the', 'and', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'am', 'has', 'have', 'had', 'do', 'does', 'did', 'this', 'that', 'these', 'those', 'who', 'whom', 'which', 'what', 'there', 'here', 'so', 'then', 'than', 'also', 'very', 'just']);
-const PERSON_WORDS = new Set(['he', 'she', 'it', 'they', 'them', 'him', 'her', 'his', 'hers', 'its', 'their', 'theirs', 'himself', 'herself', 'itself', 'themselves']);
+/* THE SAME TELLING WORDS IN THE SAME ORDER (2.12.41, round 5 — the review of round 4: "loves" made "loved", "is" made
+ * "was", "a son" made "sons", "diary" made "dairy", her name made "he", all kept their old time). A sentence's words,
+ * folded, in their order, the articles alone left out (a, an, the — never is, was, has, had, than, then, not, never,
+ * no), none cut to its stem; the entry's own names the same as the words for a person of its gender, as the entry's
+ * own words give it (where her entry says "she" or "her", "Mara rules" is "She rules"; with no such word in it, no
+ * word stands for her name), and each of those words only the same as itself ("he" is never "she"). Its words may be
+ * those of a few of the sentences before it, in their order — what a later one opens with as the first does (its
+ * name, "she is") said once, an "and" between ("She is tall. She is strong." is "She is tall and strong.") — and a
+ * few of its sentences side by side may say one before them, the other way about; a word may be a slip of the pen
+ * mended — a letter put in, left out, or two side by side swapped, in a word of five letters or more, never a letter
+ * changed for another — only where what it was is no word anywhere in the book, its pages too, and what it is now is
+ * one the book uses ("lighthuose" made "lighthouse" in a book of a lighthouse; "diary" made "dairy", "trial" "trail",
+ * "lightning" "lighting" are newer words). */
+const ARTICLES = new Set(['a', 'an', 'the']);
+const PERSON_GENDERS = [['she', 'her', 'hers', 'herself'], ['he', 'him', 'his', 'himself'], ['they', 'them', 'their', 'theirs', 'themselves']].map((l) => new Set(l));
+const THING_GENDERS = [['it', 'its', 'itself'], ['they', 'them', 'their', 'theirs', 'themselves']].map((l) => new Set(l));
 const OWN_WORD = '\u0001';
-const stemOf = (w) => (w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w);
 /* a sentence's words as they are told (above), in their order */
-const toldOf = (s, own) => foldName(s).split(' ').filter(Boolean).map(stemOf).filter((w) => !GRAMMAR.has(w)).map((w) => (own.has(w) ? OWN_WORD : w));
+const toldOf = (s, own) => foldName(s).split(' ').filter((w) => w && !ARTICLES.has(w)).map((w) => (own.has(w) ? OWN_WORD : w));
+/* the words for a person of the entry's gender, as its own words give it: the most of them of one kind, or none */
+function genderOf(e) {
+  if (!e) return null;
+  const words = foldName(`${e.line || ''} ${e.text || ''}`).split(' ');
+  const kinds = e.kind && e.kind !== 'people' ? THING_GENDERS : PERSON_GENDERS;
+  const counts = kinds.map((g) => words.filter((w) => g.has(w)).length);
+  const most = Math.max(0, ...counts);
+  return most && counts.filter((n) => n === most).length === 1 ? kinds[counts.indexOf(most)] : null;
+}
 /* a slip of the pen mended: one letter put in or left out, or two side by side swapped — never one changed for another */
 function slipOf(was, now) {
   if (was === now || Math.max(was.length, now.length) < 5 || Math.abs(was.length - now.length) > 1) return false;
@@ -903,31 +939,72 @@ function slipOf(was, now) {
   while (i < s.length && s[i] === l[i]) i++;
   return s.slice(i) === l.slice(i + 1);
 }
-/* the same told words, in order (`elsewhere`: the words his book uses elsewhere — a Set, or a function for it) */
-function toldSame(was, now, elsewhere) {
-  if (was.length !== now.length) return false;
-  let words;
-  for (let i = 0; i < was.length; i++) {
-    const x = was[i];
-    const y = now[i];
-    if (x === y) continue;
-    if ((x === OWN_WORD && PERSON_WORDS.has(y)) || (y === OWN_WORD && PERSON_WORDS.has(x))) continue;
-    if (x === OWN_WORD || y === OWN_WORD || !slipOf(x, y)) return false;
-    if (words === undefined) words = typeof elsewhere === 'function' ? elsewhere() : elsewhere || null;
-    if (words && words.has(x)) return false;
-  }
-  return true;
-}
-/* the words a book uses outside one entry — his other entries, the notes, his own words for the book — folded, each
- * with a plural's s off (withStamps' `elsewhere`, made only when a slip is asked about) */
+/* (the pages a book's words are read from — the novel's record alone cannot give them: set by inplace.js, which has the
+ * chapters — round 5) */
+let chapterWordsOf = () => [];
+export function setChapterWords(fn) { chapterWordsOf = typeof fn === 'function' ? fn : () => []; }
+const escWord = (w) => String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/* THE WORDS A BOOK USES OUTSIDE ONE ENTRY (withStamps' `elsewhere`, asked only when a slip is): his other entries, the
+ * notes, his own words for the book, folded — and its pages, his premises and the chapters' plans, each word looked for
+ * when it is asked (2.12.41, round 5: the pages were never read). `has(word)` */
 export function wordsElsewhere(novel, entryId = '') {
   const out = new Set();
-  const add = (t) => { for (const w of foldName(String(t || '')).split(' ')) if (w) { out.add(w); out.add(stemOf(w)); } };
-  if (!novel) return out;
-  for (const e of Array.isArray(novel.bibliography) ? novel.bibliography : []) if (e && e.id !== entryId) { add(e.name); for (const a of e.aka || []) add(a); add(e.line); add(e.text); }
-  for (const list of Object.values(novel.notes || {})) for (const c of Array.isArray(list) ? list : []) if (c && typeof c === 'object') for (const k of ['name', 'about', 'ties', 'now', 'since', 'title', 'text']) if (typeof c[k] === 'string') add(c[k]);
-  for (const k of ['brief', 'style', 'plans', 'ending']) add(novel[k]);
-  return out;
+  const add = (t) => { for (const w of foldName(String(t || '')).split(' ')) if (w) out.add(w); };
+  if (novel) {
+    for (const e of Array.isArray(novel.bibliography) ? novel.bibliography : []) if (e && e.id !== entryId) { add(e.name); for (const a of e.aka || []) add(a); add(e.line); add(e.text); }
+    for (const list of Object.values(novel.notes || {})) for (const c of Array.isArray(list) ? list : []) if (c && typeof c === 'object') for (const k of ['name', 'about', 'ties', 'now', 'since', 'title', 'text']) if (typeof c[k] === 'string') add(c[k]);
+    for (const k of ['brief', 'style', 'plans', 'ending']) add(novel[k]);
+  }
+  let pages = null;
+  const onPages = new Map();
+  return {
+    size: out.size,
+    [Symbol.iterator]: () => out[Symbol.iterator](),
+    has: (w) => {
+      if (out.has(w)) return true;
+      if (!novel || !w) return false;
+      if (!onPages.has(w)) {
+        if (pages === null) pages = (chapterWordsOf(novel) || []).filter((t) => typeof t === 'string' && t);
+        const re = new RegExp(`(?<![\\p{L}\\p{N}])${escWord(w)}(?![\\p{L}\\p{N}])`, 'iu');
+        onPages.set(w, pages.some((t) => re.test(t)));
+      }
+      return onPages.get(w);
+    },
+  };
+}
+/* the same words, one by one: the same, her name and a word for a person of her gender, or a slip of the pen mended
+ * (`words`: what the book uses — what it was is none of them, what it is now one) — `was` the word before, `now` after */
+function sameWord(was, now, gender, words) {
+  if (was === now) return true;
+  if (gender && ((was === OWN_WORD && gender.has(now)) || (now === OWN_WORD && gender.has(was)))) return true;
+  if (was === OWN_WORD || now === OWN_WORD || !slipOf(was, now)) return false;
+  const w = words();
+  return Boolean(w) && !w.has(was) && w.has(now);
+}
+/* whether `words` say the sentences `parts` say, in their order (a few joined: what a later one opens with as the first
+ * does said once, an "and" between) — `same(part's word, words' word)`, `alike` for what they open with */
+function saysParts(parts, words, same, alike) {
+  if (!parts.length) return false;
+  const first = parts[0];
+  const forms = parts.map((p, k) => {
+    if (!k) return [p];
+    let n = 0;
+    while (n < p.length - 1 && n < first.length && alike(first[n], p[n])) n++;
+    return n ? [p, p.slice(n)] : [p];
+  });
+  const from = (k, i) => {
+    if (k === forms.length) return i === words.length;
+    for (const part of forms[k]) {
+      for (const j of k && words[i] === 'and' ? [i, i + 1] : [i]) {
+        if (j + part.length > words.length) continue;
+        let ok = true;
+        for (let t = 0; ok && t < part.length; t++) ok = same(part[t], words[j + t]);
+        if (ok && from(k + 1, j + part.length)) return true;
+      }
+    }
+    return false;
+  };
+  return from(0, 0);
 }
 /* when each sentence of an entry was written: sentenceKey → when (0: not known) */
 export function stampsOf(e) {
@@ -952,20 +1029,21 @@ export function withStamps(prev, next, { elsewhere = null } = {}) {
   const at = Number(next.at) || 0;
   const was = stampsOf(prev);
   const given = next.saidAt && typeof next.saidAt === 'object' ? next.saidAt : {};
-  const own = new Set([next.name, ...(Array.isArray(next.aka) ? next.aka : []), ...(prev ? [prev.name, ...(prev.aka || [])] : [])].flatMap((n) => foldName(n).split(' ').map(stemOf)).filter(Boolean));
+  const own = new Set([next.name, ...(Array.isArray(next.aka) ? next.aka : []), ...(prev ? [prev.name, ...(prev.aka || [])] : [])].flatMap((n) => foldName(n).split(' ')).filter(Boolean));
+  const gender = genderOf(prev);
+  let bookWords;
+  const words = () => (bookWords === undefined ? (bookWords = (typeof elsewhere === 'function' ? elsewhere() : elsewhere) || null) : bookWords);
+  const alike = (x, y) => x === y || Boolean(gender && ((x === OWN_WORD && gender.has(y)) || (y === OWN_WORD && gender.has(x))));
   const told = prev ? entrySentences(prev).map((s) => ({ words: toldOf(s, own), at: was.get(sentenceKey(s)) || 0 })).filter((x) => x.words.length) : [];
-  /* (a few of them in their order, joined: each after the first without the word it opens with, where it is the first's) */
-  const runs = [];
-  for (let i = 0; i < told.length; i++) {
-    let words = told[i].words.slice();
-    let newest = told[i].at;
-    runs.push({ words, at: newest });
-    for (let j = i + 1; j < told.length && j - i < JOINED_MOST; j++) {
-      words = joinedOn(words, told[j].words);
-      newest = Math.max(newest, told[j].at);
-      runs.push({ words, at: newest });
+  /* (said before: one of them, or a few of them side by side, joined — the newest of their times) */
+  const saidBefore = (said) => {
+    for (let i = 0; i < told.length; i++) {
+      for (let j = i; j < told.length && j - i < JOINED_MOST; j++) {
+        if (saysParts(told.slice(i, j + 1).map((x) => x.words), said, (a, b) => sameWord(a, b, gender, words), alike)) return Math.max(...told.slice(i, j + 1).map((x) => x.at));
+      }
     }
-  }
+    return null;
+  };
   const saidAt = {};
   /* (each of its sentences once, in their order — `open`: one left with the save's time) */
   const order = [];
@@ -974,19 +1052,18 @@ export function withStamps(prev, next, { elsewhere = null } = {}) {
     if (Object.hasOwn(saidAt, k)) continue;
     if (was.has(k)) { saidAt[k] = was.get(k); order.push({ k }); continue; }
     if (Number.isFinite(given[k])) { saidAt[k] = given[k]; order.push({ k }); continue; }
-    const words = toldOf(s, own);
-    const hit = words.length ? runs.find((r) => toldSame(r.words, words, elsewhere)) : null;
-    saidAt[k] = hit ? hit.at : at;
-    order.push({ k, words, open: !hit && words.length > 0 });
+    const said = toldOf(s, own);
+    const hit = said.length ? saidBefore(said) : null;
+    saidAt[k] = hit === null ? at : hit;
+    order.push({ k, said, open: hit === null && said.length > 0 });
   }
-  /* (and what he said before said again as a few sentences side by side, in their order — "She is tall and strong." made
+  /* (and one he said before said again as a few sentences side by side, in their order — "She is tall and strong." made
    * "She is tall. She is strong.", as the other way about: each keeps its time) */
   for (let i = 0; i < order.length; i++) {
     if (!order[i].open) continue;
-    let words = order[i].words;
     for (let j = i + 1; j < order.length && j - i < JOINED_MOST && order[j].open; j++) {
-      words = joinedOn(words, order[j].words);
-      const hit = runs.find((r) => toldSame(r.words, words, elsewhere));
+      const parts = order.slice(i, j + 1).map((x) => x.said);
+      const hit = told.find((t) => saysParts(parts, t.words, (b, a) => sameWord(a, b, gender, words), alike));
       if (!hit) continue;
       for (let x = i; x <= j; x++) { saidAt[order[x].k] = hit.at; order[x].open = false; }
       i = j;
@@ -994,12 +1071,6 @@ export function withStamps(prev, next, { elsewhere = null } = {}) {
     }
   }
   return { ...next, saidAt };
-}
-/* a sentence's told words joined on to those before it: without the word it opens with, where it is the word they open
- * with (the entry's own name and a word for a person alike: "Mara rules. She fears the sea.") */
-const opensAlike = (x, y) => x === y || (x === OWN_WORD && PERSON_WORDS.has(y)) || (y === OWN_WORD && PERSON_WORDS.has(x));
-function joinedOn(words, more) {
-  return [...words, ...(more.length && words.length && opensAlike(more[0], words[0]) ? more.slice(1) : more)];
 }
 
 /* ------------------------------------------------------- steps (novel) */
@@ -1316,6 +1387,10 @@ export const chapterSteps = {
     if (!p || p.versions.length < 2) return;
     const shown = picked(p);
     const gone = findVersion(p, vid);
+    /* WHO PUT IN THE WORDS OF A VERSION MADE FROM IT STAYS KNOWN (round 5, the review of round 4: a few words of his own
+     * page written again, then the version they came from taken out — every word was the writer's): worked out while
+     * the version it came from is still there, and kept on it */
+    for (const x of p.versions) if (x && x.id !== vid && (x.how === 'selection' || x.how === 'edit') && (x.from || x.base) === vid && !x.streaming && !whoseFits(x)) x.whose = whoseNow(x, p);
     p.versions = p.versions.filter((v) => v.id !== vid);
     const back = gone && gone.was ? p.versions.findIndex((v) => v.id === gone.was) : -1;
     const keep = shown && shown.id !== vid ? p.versions.findIndex((v) => v.id === shown.id) : back >= 0 ? back : p.versions.length - 1;
@@ -1689,6 +1764,8 @@ function mayHoldHis(v, passage, depth = 0) {
   if (!v) return false;
   const before = Array.isArray(v.before) ? v.before : [];
   if (v.how === 'mine' || v.how === 'edit' || handsOf(v).includes('you') || before.some((b) => b && b.by === 'you' && !noHand(b)) || (v.gone && v.gone.you)) return true;
+  /* (who put in its words kept on it, his among them: the version it came from may be taken out since — removeVersion) */
+  if (runsFit(v.whose, v.text) && v.whose.runs.some((r) => r && r[0] === 'you')) return true;
   if (v.how !== 'selection' || !passage || depth >= 4) return false;
   return mayHoldHis((passage.versions || []).find((x) => x && x.id === (v.from || v.base) && x.id !== v.id), passage, depth + 1);
 }

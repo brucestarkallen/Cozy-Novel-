@@ -24,11 +24,11 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd, goneWith, whoseGrown, whoseGrownBefore, NOTE_KINDS } from './shape.js';
+import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd, goneWith, whoseGrown, whoseGrownBefore, NOTE_KINDS, setChapterWords } from './shape.js';
 import { hashText, countWords } from '../util.js';
 import { codexNow, carriedCodex, entriesForNotes } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
-import { nameWordsOf } from './names.js';
+import { nameWordsOf, bookEvidence } from './names.js';
 
 /* THE BOOK'S NAMES AS THEY ARE NOW, BY THEIR WORDS (names.js nameWordsOf): his entries' and the notes' cards' — a person's
  * apart from a place's, a thing's or lore's, never a thread's title (a telling, not a name) — what a change took out of
@@ -48,6 +48,53 @@ export function bookNameWords(novel) {
   return namesKept.words;
 }
 const namesOfBook = (novelId) => bookNameWords(novelId ? store.peek('novel', novelId) : null);
+/* THE BOOK'S WORDS, FOR WHAT IT WRITES OF A WORD (names.js bookEvidence — 2.12.41, round 5: a word is a name only by
+ * evidence, the whole book's, never the page's in hand alone): its pages as they read, what the cards say, and his
+ * own words — his premises and notes on every version, the chapters' plans, his entries, his words for the book — each
+ * given as his ({text, his: true}: one he typed in small letters says nothing by them); their sentences, never a name
+ * or a title, whose every word has its capital ("The Long Night" makes no "Night" a name) */
+export function bookTexts(novel, chapters) {
+  if (!novel) return [];
+  const out = new Map();
+  const add = (t, his) => { if (typeof t === 'string' && t.trim()) out.set(t, his && (out.get(t) ?? true)); };
+  for (const c of chapters || []) {
+    if (!c) continue;
+    add(c.plan, true);
+    for (const p of c.passages || []) {
+      if (!p || p.by === 'break') continue;
+      add((picked(p) || {}).text, false);
+      for (const v of p.versions || []) if (v && v.ask && typeof v.ask === 'object') for (const f of ['direction', 'premise', 'note']) add(v.ask[f], true);
+    }
+  }
+  for (const kind of NOTE_KINDS) for (const card of ((novel.notes || {})[kind]) || []) if (card && typeof card === 'object') for (const k of ['about', 'ties', 'now', 'since', 'text']) add(card[k], false);
+  for (const e of Array.isArray(novel.bibliography) ? novel.bibliography : []) if (e) { add(e.line, true); add(e.text, true); }
+  for (const k of ['brief', 'style', 'plans', 'ending']) add(novel[k], true);
+  return [...out].map(([text, his]) => ({ text, his }));
+}
+/* (the chapters' words, for what a slip of the pen of his entry was: the pages as they read, his premises and notes on
+ * every version, the chapters' plans) */
+export function chapterTexts(chapters) {
+  const out = new Set();
+  const add = (t) => { if (typeof t === 'string' && t.trim()) out.add(t); };
+  for (const c of chapters || []) {
+    if (!c) continue;
+    add(c.plan);
+    for (const p of c.passages || []) {
+      if (!p || p.by === 'break') continue;
+      add((picked(p) || {}).text);
+      for (const v of p.versions || []) if (v && v.ask && typeof v.ask === 'object') for (const f of ['direction', 'premise', 'note']) add(v.ask[f]);
+    }
+  }
+  return [...out];
+}
+/* (the words of a book's pages for what his entry's slip of the pen was — shape.js wordsElsewhere, whose steps have the
+ * book's record only) */
+setChapterWords((novel) => chapterTexts(((novel && novel.order) || []).map((id) => store.peek('chapter', id))));
+/* (what the book writes of a word, as it stands in this window — asked only where a page cannot tell) */
+const bookOf = (novelId) => bookEvidence(() => {
+  const novel = novelId ? store.peek('novel', novelId) : null;
+  return novel ? bookTexts(novel, (novel.order || []).map((id) => store.peek('chapter', id))) : [];
+});
 
 /* FACTS AND TURNS OF OTHER WORDS STAY AS THEY STAND (2.12.40, the audit): a version's facts or turns that are not of its
  * words as they stand are of the words the helper read before them — a Go on leaves them with the words it grew from,
@@ -86,7 +133,7 @@ export function changeInPlace({ novelId, chapterId, passageId, versionId, next, 
   const facts = codexNow(v);
   const turns = continuityNow(v);
   if (retire && novelId) retireIfSeen(novelId, chapterId, passageId, v.id);
-  const fields = inPlaceFields(v, after, by, { check: found, codex: facts, continuity: turns, keepEnd, tail, extra, names: namesOfBook(novelId), passage: p });
+  const fields = inPlaceFields(v, after, by, { check: found, codex: facts, continuity: turns, keepEnd, tail, extra, names: namesOfBook(novelId), book: bookOf(novelId), passage: p });
   fields.codex = (facts && carriedCodex(facts, after)) || otherWords(v.codex, facts);
   fields.continuity = (turns && carriedContinuity(turns, after)) || otherWords(v.continuity, turns);
   /* a page fixed by the app is no longer one he put back as it was */
@@ -152,7 +199,7 @@ export function foldVersion({ novelId, chapterId, passageId, childId, targetId, 
   const found = e && e.sig === hashText(was) ? e : null;
   const facts = codexNow(target);
   const turns = continuityNow(target);
-  const patch = next === was ? {} : inPlaceFields(target, next, by, { check: found, codex: facts, continuity: turns, at: child.done || child.at || Date.now(), extra: child.spanAuto ? { auto: true } : {}, names: namesOfBook(novelId), passage: p });
+  const patch = next === was ? {} : inPlaceFields(target, next, by, { check: found, codex: facts, continuity: turns, at: child.done || child.at || Date.now(), extra: child.spanAuto ? { auto: true } : {}, names: namesOfBook(novelId), book: bookOf(novelId), passage: p });
   /* the words' own end and what was taken off them come with them */
   for (const k of END_KEYS) patch[k] = child[k];
   patch.tookOff = child.tookOff;

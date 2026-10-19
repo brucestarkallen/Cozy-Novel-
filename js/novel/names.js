@@ -564,14 +564,62 @@ const ANY_WORD = /(?<![\p{L}\p{M}\p{N}'’-])\p{L}[\p{L}\p{M}'’-]*/gu;
 const wordKey = (w) => String(w || '').replace(/['’](?:s|ll|d|re|ve|m)$/i, '').replace(/['’-]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 export const nameWordKey = wordKey;
 const NOT_CONTRACTED = /['’]t$/i;
-/* a text's words by their keys: those it writes with a capital (the first form of each) — and those of them it writes so
- * inside a sentence (`mid`) — and those it writes in small letters */
+/* a possessive or a contraction on a word ("Mara's", "Time'll", "Might've") */
+const SUFFIXED = /['’](?:s|ll|d|re|ve|m)$/i;
+/* EVERYDAY WORDS THAT ARE ALSO GIVEN NAMES (2.12.41, round 5 — the review of round 4: "as the sun rose" made "as the sun
+ * lily", "the rose of the north" "the lily of the north"): their small letters are never only the name — a name changed
+ * everywhere never changes them in his words (smallRenameRule), and a premise in small letters never gives the name by
+ * them (premiseNames) */
+export const EVERYDAY_NAMES = new Set(['rose', 'will', 'mark', 'grace', 'hope', 'faith', 'joy', 'may', 'june', 'april', 'august', 'march',
+  'summer', 'autumn', 'winter', 'spring', 'dawn', 'eve', 'sky', 'river', 'brook', 'lake', 'ocean', 'storm', 'rain', 'snow', 'frost', 'gale',
+  'holly', 'ivy', 'lily', 'iris', 'violet', 'daisy', 'poppy', 'heather', 'jasmine', 'laurel', 'myrtle', 'willow', 'aspen', 'cedar', 'rowan',
+  'juniper', 'clover', 'primrose', 'blossom', 'briar', 'fern', 'sage', 'basil', 'rosemary', 'lavender', 'flora', 'saffron', 'pepper', 'ginger',
+  'olive', 'hazel', 'cherry', 'ruby', 'pearl', 'amber', 'jade', 'opal', 'coral', 'crystal', 'garnet', 'beryl', 'jewel', 'emerald', 'sapphire',
+  'diamond', 'gold', 'silver', 'sterling', 'wren', 'robin', 'raven', 'jay', 'lark', 'finch', 'dove', 'swan', 'hawk', 'falcon', 'crow', 'fox',
+  'wolf', 'bear', 'drake', 'colt', 'fawn', 'kitty', 'bunny', 'hunter', 'mason', 'chase', 'archer', 'cooper', 'porter', 'turner', 'walker',
+  'weaver', 'miller', 'smith', 'tanner', 'piper', 'page', 'butler', 'knight', 'squire', 'bishop', 'marshal', 'shepherd', 'baker', 'grant',
+  'frank', 'earnest', 'jack', 'bill', 'bob', 'pat', 'sue', 'rob', 'art', 'ray', 'rod', 'rich', 'guy', 'max', 'miles', 'lance', 'gene', 'drew',
+  'kit', 'sandy', 'rusty', 'dusty', 'misty', 'sunny', 'cash', 'penny', 'buck', 'chip', 'dash', 'ward', 'wade', 'dean', 'don', 'nick', 'norm',
+  'herb', 'bud', 'cliff', 'dale', 'glen', 'heath', 'moss', 'rock', 'stone', 'flint', 'ash', 'blaze', 'ember', 'forest', 'bay', 'king',
+  'prince', 'duke', 'earl', 'baron', 'major', 'noble', 'royal', 'angel', 'saint', 'christian', 'destiny', 'harmony', 'melody', 'mercy',
+  'patience', 'prudence', 'charity', 'honor', 'honour', 'justice', 'liberty', 'felicity', 'serenity', 'trinity', 'unity', 'clemency',
+  'temperance', 'chastity', 'bliss', 'glory', 'love', 'star', 'aurora', 'nova', 'echo', 'haven', 'journey', 'lyric', 'marina', 'meadow',
+  'honey', 'candy', 'sugar', 'merry', 'pip', 'sonny', 'buddy', 'chance', 'black', 'white', 'brown', 'green', 'gray', 'grey', 'red', 'scarlet']);
+/* the words a modal or an auxiliary spells — a name that is one of them opens a sentence as the name only where it is no
+ * modal there ("Will you stay?" is no Will) — and of them the ones that are given names */
+const MODALS = new Set(['will', 'may', 'can', 'could', 'would', 'should', 'shall', 'must', 'might', 'do', 'does', 'did', 'have', 'has', 'had',
+  'is', 'are', 'was', 'were', 'be', 'am']);
+const MODAL_NAMES = new Set(['will', 'may']);
+/* (a modal is followed by its subject — "Will you", "May I", "Did the" — or opens a question; never with a comma right
+ * after it: "Will, are you there?" calls Will) */
+const SUBJECTS = new Set(['you', 'he', 'she', 'it', 'we', 'they', 'i', 'the', 'a', 'an', 'this', 'that', 'there']);
+const NEXT_WORD = /\p{L}[\p{L}\p{M}'’-]*/uy;
+const SENTENCE_STOP = /[.!?…\n]/g;
+function modalHere(t, end) {
+  if (t[end] === ',') return false;
+  let j = end;
+  while (j < t.length && (t[j] === ' ' || t[j] === '\t')) j++;
+  if (j > end) {
+    NEXT_WORD.lastIndex = j;
+    const next = NEXT_WORD.exec(t);
+    if (next && SUBJECTS.has(next[0].toLowerCase())) return true;
+  }
+  SENTENCE_STOP.lastIndex = end;
+  const stop = SENTENCE_STOP.exec(t);
+  return Boolean(stop) && stop[0] === '?';
+}
+/* a text's words by their keys: those it writes with a capital (the first form of each) — those of them it writes so
+ * inside a sentence (`mid`), those it writes so opening a sentence as the word itself, never only as its possessive or a
+ * contraction (`openBare`), and of those the ones it writes there as no modal (`openAsName`) — and those it writes in
+ * small letters */
 const SENTENCE_START = /[.!?…"“”‘’'(\[—–*_\n]/;
 function wordsScanned(text) {
   const t = String(text || '');
   const small = new Set();
   const caps = new Map();
   const mid = new Set();
+  const openBare = new Set();
+  const openAsName = new Set();
   for (const m of t.matchAll(ANY_WORD)) {
     const w = m[0];
     const k = wordKey(w);
@@ -580,76 +628,146 @@ function wordsScanned(text) {
     if (!caps.has(k)) caps.set(k, w);
     let i = m.index - 1;
     while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
-    if (i >= 0 && !SENTENCE_START.test(t[i])) mid.add(k);
+    if (i >= 0 && !SENTENCE_START.test(t[i])) { mid.add(k); continue; }
+    if (SUFFIXED.test(w)) continue;
+    openBare.add(k);
+    if (!modalHere(t, m.index + w.length)) openAsName.add(k);
   }
-  return { small, caps, mid };
+  return { small, caps, mid, openBare, openAsName };
 }
-/* WHICH WORDS A TEXT WRITES AS NAMES (2.12.41, the review of 2.12.41). known: the book's own names by their words —
- * names.js nameWordsOf, a Map of each word to 'person' or 'thing'; local: the names the passage's own premise gives
- * (premiseLocal), each a person's for the page it was typed for.
- *  - A word written with a capital inside a sentence is a name: one of the book's, or one the text never writes small
- *    and that is no little word ("the Order" inside a sentence is the Order).
- *  - A word only opening a sentence: never a word of a place's, a thing's or lore's name ("Order was the word", "Magic
- *    flared" — the review of 2.12.41: they counted, against what this said); a person's name — the book's or the
- *    premise's — where the text never writes it small, and where it does ("Will stood at the gate … he will stay") only
- *    for the page whose own premise gives it (the review of 2.12.41: with no card yet for Will, his edit right after
- *    the page was written took nothing out of it; with a card for Will, "Will you stay?" taken out of a page that says
- *    "he will go" took Will out); any other word only where the text never writes it small and it is no little word
- *    ("Tom came home.", the book's first page of him). */
-function namesScanned(s, known, local = null) {
+const kindIn = (known, k) => (known ? (known instanceof Map ? known.get(k) || '' : known.has(k) ? 'person' : '') : '');
+/* WHICH WORDS A TEXT WRITES AS NAMES (2.12.41, round 5 — a word is a name only by evidence). known: the book's own names
+ * by their words — nameWordsOf, a Map of each word to 'person' or 'thing' (his cards and his entries not set to Never);
+ * local: the names the passage's own premise gives its page (premiseLocal), each a person's there; book: what the book
+ * writes of a word (bookEvidence — its pages, cards, entries and his own words), asked only where the text cannot tell.
+ *  - Written with a capital inside a sentence: a name — the book's, or any word but a little one ("the Order").
+ *  - Only opening sentences: never a word of a place's, a thing's or lore's name ("Order was the word of the day.");
+ *    only as a possessive or a contraction, the word looked up, never taken for a name by its capital ("Mara'll" is
+ *    Mara, "Time'll" and "Might've" no names — the review of round 4); a person's name of the book's or the premise's
+ *    the name, but where it is the modal or auxiliary it also spells ("Will you stay?" is no Will; "Will waits at the
+ *    gate." is Will — the review of round 4: Will and Rose taken out of a page that also said "he will", "the sun rose",
+ *    took nothing out); any other word only with no evidence either way — never written small in the text nor anywhere
+ *    in the book, no modal there, and no little word or opener ("Tom came home.", the book's first page of him). */
+function namesScanned(s, known, local = null, book = null) {
   const out = new Set();
   for (const [k, w] of s.caps) {
     if (k.length < 2 || /^I['’]/.test(w) || NOT_CONTRACTED.test(w)) continue;
-    let kind = known ? (known instanceof Map ? known.get(k) || '' : known.has(k) ? 'person' : '') : '';
-    const given = Boolean(local && local.has(k));
-    if (!kind && given) kind = 'person';
-    if (s.mid.has(k)) {
-      if (kind || (!s.small.has(k) && !OPENERS.has(k))) out.add(k);
-      continue;
-    }
+    let kind = kindIn(known, k);
+    if (!kind && local && local.has(k)) kind = 'person';
+    if (s.mid.has(k)) { if (kind || !OPENERS.has(k)) out.add(k); continue; }
     if (kind === 'thing') continue;
-    if (kind === 'person') { if (!s.small.has(k) || given) out.add(k); continue; }
-    if (!s.small.has(k) && !OPENERS.has(k)) out.add(k);
+    if (!s.openBare.has(k)) { if (kind === 'person' || (book && book.mid(k))) out.add(k); continue; }
+    if (kind === 'person') { if (!MODALS.has(k) || s.openAsName.has(k)) out.add(k); continue; }
+    if (s.small.has(k) || OPENERS.has(k) || (MODALS.has(k) && !s.openAsName.has(k))) continue;
+    if (book && !book.mid(k) && book.small(k)) continue;
+    out.add(k);
   }
   return out;
 }
-export function nameWordsIn(text, { known = null, local = null } = {}) {
-  return namesScanned(wordsScanned(text), known, local);
+export function nameWordsIn(text, { known = null, local = null, book = null } = {}) {
+  return namesScanned(wordsScanned(text), known, local, book);
 }
-/* THE NAMES A PREMISE GIVES (2.12.41, the review of 2.12.41 — every word of a premise in any letters was "given", so a
- * premise saying "he will go" or "as the sun rose" stopped being the book when Will or Rose the person was taken out of
- * its page): the words it writes as names (namesScanned, with the book's names), a hyphened name's parts with it; a
- * premise typed all in small letters (no capital letter in it) gives every word of it. Keys, a Set. */
+/* a word that is a name by the book's evidence alone (mend.js markRenames, for the name an old change put in): the book's
+ * names; else the book writes it with a capital inside a sentence, or never in small letters and it is no little word */
+export function nameByEvidence(k, { known = null, book = null } = {}) {
+  if (!k || k.length < 2 || OPENERS.has(k)) return false;
+  if (kindIn(known, k)) return true;
+  if (!book) return false;
+  return book.mid(k) || !book.small(k);
+}
+/* WHAT THE BOOK WRITES OF A WORD (2.12.41, round 5): whether it writes it with a capital inside a sentence (`mid`),
+ * opening one as the word itself (`open`), or in small letters (`small`), anywhere — its pages as they read, the cards,
+ * his entries, his own words (`texts`: their words, an array or a function giving one, asked for only when a word is;
+ * a text of his own given as {text, his: true} — one he typed in small letters, no capital inside a sentence in it,
+ * says nothing by its small letters: "tom, mara’s brother" makes no "tom" a word). Each word by one pass over the
+ * texts, kept while this is asked (a key's own letters, a possessive or a contraction after them), the texts' accents
+ * off as the keys' are ("Zoë" is "zoe" — round 5: a name with an accent stood nowhere). */
+const accentsOff = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '');
+const typedSmallKept = new Map();
+const typedSmall = (t) => {
+  let got = typedSmallKept.get(t);
+  if (got === undefined) {
+    got = true;
+    for (const m of t.matchAll(/\p{Lu}/gu)) {
+      let i = m.index - 1;
+      while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
+      if (i >= 0 && !SENTENCE_START.test(t[i]) && /\p{L}/u.test(t[m.index + 1] || '')) { got = false; break; }
+    }
+    if (typedSmallKept.size >= 2000) typedSmallKept.clear();
+    typedSmallKept.set(t, got);
+  }
+  return got;
+};
+export function bookEvidence(texts) {
+  let list = null;
+  const seen = new Map();
+  const look = (k) => {
+    let got = seen.get(k);
+    if (got) return got;
+    got = { any: false, mid: false, open: false, small: false };
+    seen.set(k, got);
+    if (!k) return got;
+    if (list === null) list = ((typeof texts === 'function' ? texts() : texts) || []).map((x) => (typeof x === 'string' ? { text: x, his: false } : x)).filter((x) => x && typeof x.text === 'string' && x.text).map((x) => ({ text: accentsOff(x.text), his: Boolean(x.his) }));
+    const re = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}'’-])${escRe(k)}(?:['’](?:s|ll|d|re|ve|m))?(?![\\p{L}\\p{M}\\p{N}'’-])`, 'giu');
+    for (const { text: t, his } of list) {
+      re.lastIndex = 0;
+      for (let m = re.exec(t); m; m = re.exec(t)) {
+        got.any = true;
+        if (!/^\p{Lu}/u.test(m[0])) { if (!his || !typedSmall(t)) got.small = true; } else {
+          let i = m.index - 1;
+          while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
+          if (i >= 0 && !SENTENCE_START.test(t[i])) got.mid = true;
+          else if (!SUFFIXED.test(m[0])) got.open = true;
+        }
+      }
+    }
+    return got;
+  };
+  /* (`any`: written in any letters anywhere in them) */
+  return { mid: (k) => look(k).mid, open: (k) => look(k).open, small: (k) => look(k).small, any: (k) => look(k).any };
+}
+/* THE NAMES A PREMISE GIVES (2.12.41, round 5 — the review of round 4): the names it holds by that same evidence, in
+ * whatever letters he typed them, a hyphened name's parts with it. Its capitals as namesScanned reads them, and a
+ * given name that is also a modal opening one of its sentences as no modal, where the premise never writes it small
+ * ("Will, Mara’s brother, waits at the gate." gives Will before any card; "Will waits at the gate. He will not leave."
+ * gives him only with a card); its small words only where they can only be the book's names — a person's of the book
+ * ("Tom, mara’s brother, comes home." gives Mara: a phone keyboard's capital opening the premise is no sign he writes
+ * names with capitals in it), and in a premise with no capital inside a sentence a thing's of the book, or a word the
+ * book writes as a name (with a capital inside a sentence, or opening one and never in small letters: "tom, mara’s
+ * brother" typed small before any card, beside "Tom came home.") — never an everyday word that is also a given name
+ * ("Mara will confront her father", "as the sun rose" give no Will nor Rose), never every word ("mara runs out of
+ * time." gives Mara, never "time"); a thing's name typed small in a premise that writes names with capitals inside its
+ * sentences is the word ("in order to"). Keys, a Set. */
 const withParts = (set) => { for (const k of [...set]) if (k.includes('-')) for (const part of k.split('-')) if (part) set.add(part); return set; };
-export function premiseNames(text, { known = null } = {}) {
-  const t = String(text || '');
-  if (/\p{Lu}/u.test(t)) return withParts(namesScanned(wordsScanned(t), known));
-  const out = new Set();
-  for (const m of t.matchAll(ANY_WORD)) { const k = wordKey(m[0]); if (k) out.add(k); }
+export function premiseNames(text, { known = null, book = null } = {}) {
+  const s = wordsScanned(String(text || ''));
+  const out = namesScanned(s, known, null, book);
+  for (const k of MODAL_NAMES) if (!out.has(k) && !kindIn(known, k) && s.openAsName.has(k) && !s.small.has(k)) out.add(k);
+  const small = ![...s.mid].some((k) => k.length >= 2);
+  for (const k of s.small) {
+    if (out.has(k) || k.length < 2 || EVERYDAY_NAMES.has(k) || OPENERS.has(k)) continue;
+    const kind = kindIn(known, k);
+    if (kind === 'person' || (small && (kind === 'thing' || (book && (book.mid(k) || (book.open(k) && !book.small(k))))))) out.add(k);
+  }
   return withParts(out);
 }
-/* the names a passage's own premise gives its page (namesScanned `local`): as the premise gives them (premiseNames) —
- * of a premise typed all in small letters, only its words the book holds for a person's name — or null */
-export function premiseLocal(text, known = null) {
+/* the names a passage's own premise gives its page (namesScanned `local`): as the premise gives them — or null */
+export function premiseLocal(text, known = null, book = null) {
   const t = String(text || '');
   if (!t.trim()) return null;
-  if (/\p{Lu}/u.test(t)) { const out = premiseNames(t, { known }); return out.size ? out : null; }
-  const out = new Set();
-  for (const m of t.matchAll(ANY_WORD)) {
-    const k = wordKey(m[0]);
-    if (k && known && (known instanceof Map ? known.get(k) === 'person' : known.has(k))) out.add(k);
-  }
+  const out = premiseNames(t, { known, book });
   return out.size ? out : null;
 }
 /* THE NAMES A CHANGE TOOK OUT OF A PAGE (2.12.41): the names (nameWordsIn) the words before give that the words after do
  * not — sorted. A name stands in the words after in any letters ("TOM!", "tom"), but a name the words before also write
  * as a word ("Will" and "he will") only as a name, with a capital; a name joined with a hyphen stands while its parts do
  * ("Mary-Jane" written "Mary Jane", and the other way about: 2.12.41, the review of 2.12.41 — the hyphen alone taken out
- * took the name out). known: the book's names at the moment of the change (nameWordsOf), and local: the names the page's
- * own premise gives (premiseLocal) — kept with it as it is made. */
-export function nameWordsGone(before, after, { known = null, local = null } = {}) {
+ * took the name out). known: the book's names at the moment of the change (nameWordsOf), local: the names the page's
+ * own premise gives (premiseLocal), and book: what the book writes of a word (bookEvidence) — kept with it as it is
+ * made. */
+export function nameWordsGone(before, after, { known = null, local = null, book = null } = {}) {
   const b = wordsScanned(before);
-  const was = namesScanned(b, known, local);
+  const was = namesScanned(b, known, local, book);
   if (!was.size) return [];
   const a = wordsScanned(after);
   const any = new Set([...a.caps.keys(), ...a.small]);
@@ -699,6 +817,11 @@ export function nameRe(name) {
   const n = String(name || '');
   const forms = [...new Set([n, n.toUpperCase()])].map(escRe).join('|');
   return new RegExp(`${EDGE_BEFORE}(?:${forms})${EDGE_AFTER}`, 'gu');
+}
+/* whether a text writes a name with its capital — as written or in capitals (there the name's small letters are a word of
+ * his: "Rose waits on the quay as the sun rose") */
+export function nameWritten(text, name) {
+  return new RegExp(nameRe(name).source, 'u').test(String(text || ''));
 }
 /* Several changes of one text made in one pass over it as it stood — each
  * place changed once, by the longest change that finds it there, and never
@@ -770,13 +893,16 @@ function renameSteps(pairs) {
 }
 /* and the name as he types it in small letters, in his own words — his premise, his notes, his entries, About this
  * book — changed to the new one in small letters ("tom, mara's brother" becomes "thomas, mara's brother": 2.12.41, the
- * review of 2.12.41 — his premise in small letters still named Tom). Only for a name the book never writes in small
- * letters as a word of its own (changes.js renameOf refuses a rename of one its pages do; renameEverywhere keeps this
- * rule off for one that his words or the cards with capitals in them do). null for a name already in small letters. */
+ * review of 2.12.41 — his premise in small letters still named Tom). Only where its small letters can only be the name:
+ * never a name of one word whose small letters are an everyday word that is also a given name (EVERYDAY_NAMES — round
+ * 5, the review of round 4: "as the sun rose" became "as the sun lily"); changes.js renameEverywhere keeps it off where
+ * the book's own words write those small letters as a word, and in a text that writes the name with its capital (and
+ * renameOf refuses a rename of one the pages write small). null for a name already in small letters. */
 export function smallRenameRule(from, to) {
   const f = String(from || '').toLowerCase();
   const t = String(to || '').toLowerCase();
   if (!f || f === String(from || '') || f === t) return null;
+  if (!/\s/u.test(f) && EVERYDAY_NAMES.has(wordKey(f))) return null;
   const re = (w) => new RegExp(`${EDGE_BEFORE}${escRe(w)}${EDGE_AFTER}`, 'gu');
   return { re: re(f), skip: (x) => [...String(x || '').matchAll(re(t))].map((m) => [m.index, m.index + m[0].length]), to: () => t };
 }

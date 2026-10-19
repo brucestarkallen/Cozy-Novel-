@@ -27,14 +27,14 @@ import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writ
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows, plural } from '../util.js';
 import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps, renameCount, renamesSince, wordsElsewhere } from './shape.js';
-import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures, premiseNames } from './names.js';
+import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures, premiseNames, bookEvidence } from './names.js';
 import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, entryOverWords, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook, BESIDE_FLOOR } from './prompts.js';
 import { fitBook, bibAutoOn, shortOf } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep, timelineOf, continuityNow, carriedContinuity, turnsOfPrint, withCarriedTurns, sameTurn, turnStands, turnsOwed, setAsideNow, turnsLost } from './timeline.js';
 import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, factsLost, sameNameOf, sourceKey, entriesOf, entriesForNotes, entriesNamed, entriesNamer, entryWords, CODEX_SCHEMA, entryJoins, nameForms, makeFinder, personGoesBy, kindOf } from './bibliography.js';
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
-import { setHelperHooks, bookNameWords } from './inplace.js';
+import { setHelperHooks, bookNameWords, bookTexts } from './inplace.js';
 import { applyCheck, checkSig, checkedNow } from './summarycheck.js';
 import { readHouseWith } from './auto.js';
 
@@ -1550,20 +1550,31 @@ export function groundsOf(novel) {
  * standing: it never takes his world out of the book. What a change took out is decided from the change, as it was made
  * (shape.js inPlaceFields `took`, names.js nameWordsGone) — 2.12.41, the review: read from the notes as they stood, the
  * answer turned over once a reading took the name's card away, and the premise was the book again. The premise gives a
- * name the change took out where it writes it as a name (names.js premiseNames, with the book's names — 2.12.41, the
- * review of 2.12.41: held against every word of it in any letters, "he will go" and "as the sun rose" gave Will and
- * Rose), or anywhere in a premise typed all in small letters ("tom, mara's brother": the review of 2.12.41 before) —
- * `took` holds what the page wrote as a name. */
+ * name the change took out where it holds it as a name, in whatever letters he typed it (names.js premiseNames, by the
+ * book's evidence — its names, and what the book writes of a word: 2.12.41, round 5 — the review of round 4: "Tom,
+ * mara’s brother" gave no Mara, a premise in small letters every word of it, "time" too) — `took` holds what the page
+ * wrote as a name, and is evidence of it: a name by the change's own evidence, as it was made, a person's where the
+ * book's names say no other (his edit that took the page's last "Tom" out left the book no evidence that "tom" is a name,
+ * and his premise "tom, mara’s brother…" stood — round 5). */
 const INSTRUCTS = new Set(['rewrite', 'selection', 'anew']);
+const withTook = (known, later) => {
+  const took = later.flatMap((w) => w.took || []).filter(Boolean);
+  if (!took.length) return known;
+  const out = new Map(known instanceof Map ? known : [...(known || [])].map((k) => [k, 'person']));
+  for (const k of took) if (!out.has(k)) out.set(k, 'person');
+  return out;
+};
 export function standingPremises(novel, chapters) {
   let known;
+  let book;
   return premisesOf(novel, chapters).filter((x) => {
     const later = x.later || [];
     if (!later.length) return true;
     if (later.some((w) => INSTRUCTS.has(w.how))) return false;
     if (!later.some((w) => (w.took || []).length)) return true;
     if (known === undefined) known = bookNameWords(novel);
-    const gives = premiseNames(x.text, { known });
+    if (book === undefined) book = bookEvidence(() => bookTexts(novel, ((novel && novel.order) || []).map((id) => chapters && chapters[id])));
+    const gives = premiseNames(x.text, { known: withTook(known, later), book });
     return !later.some((w) => (w.took || []).some((k) => gives.has(k)));
   });
 }

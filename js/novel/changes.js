@@ -15,7 +15,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey, wordsElsewhere } from './shape.js';
+import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey, wordsElsewhere, hisCard } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords, linesOf, sameLines } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
@@ -23,7 +23,7 @@ import { superOn } from './auto.js';
 import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, hasMarkup as hasMarkupText } from './textshape.js';
-import { replaceMany, renameRule, smallRenameRule } from './names.js';
+import { replaceMany, renameRule, smallRenameRule, nameWritten } from './names.js';
 import { entriesOf, entryFor, nameTaken, newEntry, tidyEntry, kindSaid, kindOf, KIND_ONE, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
 import { changeInPlace, putBackWords } from './inplace.js';
@@ -622,21 +622,21 @@ export function groupsOf(ops) {
   return out;
 }
 
-/* the book's words but its pages, as typed: his own (each chapter's plan, what he asked of each version — his premise,
- * his notes — his entries, his words for the book) and the cards' */
-function wordsTyped(novel) {
-  const out = [];
-  for (const id of novel.order || []) {
-    const c = store.peek('chapter', id);
-    if (!c) continue;
-    out.push(c.plan);
-    for (const p of c.passages || []) for (const v of p.versions || []) if (v && v.ask && typeof v.ask === 'object') for (const f of ['direction', 'premise', 'note']) out.push(v.ask[f]);
+/* WHETHER THE BOOK'S OWN WORDS SAY A NAME'S SMALL LETTERS AS A WORD OF THEIRS (2.12.41, round 5 — what keeps the name's
+ * small letters from being changed in his words): a card of the helper's, or what it keeps of the book (What it's
+ * about, How it reads), saying them in small letters — the helper writes names as the book does — or a card or an entry
+ * of his saying them beside the name with its capital (there they are a word, never the name; "tom, mara's brother"
+ * typed small is the name) */
+function smallIsAWord(novel, name, rule) {
+  const word = new RegExp(rule.re.source, 'u');
+  const says = (t) => typeof t === 'string' && word.test(t);
+  for (const kind of NOTE_KINDS) for (const card of (novel.notes && novel.notes[kind]) || []) {
+    if (!card || typeof card !== 'object') continue;
+    for (const t of [card.name, ...(card.aka || []), card.about, card.ties, card.now, card.since, card.title, card.text]) if (says(t) && (!hisCard(card) || nameWritten(t, name))) return true;
   }
-  for (const e of entriesOf(novel)) out.push(e.name, ...(e.aka || []), e.line, e.text);
-  for (const k of ['brief', 'style', 'plans', 'ending']) out.push(novel[k]);
-  for (const k of ['title', 'subtitle']) out.push((novel.meta || {})[k]);
-  for (const kind of NOTE_KINDS) for (const card of (novel.notes && novel.notes[kind]) || []) if (card) out.push(card.name, ...(card.aka || []), card.about, card.ties, card.now, card.since, card.title, card.text);
-  return out.filter((t) => typeof t === 'string' && t.trim());
+  for (const e of entriesOf(novel)) for (const t of [e.name, ...(e.aka || []), e.line, e.text]) if (says(t) && nameWritten(t, name)) return true;
+  for (const k of ['about', 'style']) { const kept = novel.kept && novel.kept[k]; if (kept && says(kept.text)) return true; }
+  return false;
 }
 /* names changed everywhere: every passage on the page, chapter names, the
  * notes, the book's own words, what the helper keeps of it, and the scenes
@@ -650,21 +650,25 @@ function renameEverywhere(novelId, novel, rules, put, why, pairs = []) {
   /* the same rules over what was read, checked and summed up — never counted as places changed */
   const quiet = (t) => replaceMany(t, rules).text;
   /* HIS OWN WORDS, AS HE TYPES THEM: the name in small letters too (names.js smallRenameRule — 2.12.41, the review of
-   * 2.12.41: his premise "tom, mara's brother" stayed the book beside a page that says Thomas) — only for a name whose
-   * small letters no words of the book with capitals in them write as a word of their own (his words, the cards; a page
-   * that does refuses the rename itself, renameOf): "Rose waits on the quay as the sun rose" keeps its "rose", and so
-   * does every word of his in small letters, the name the same as a word there */
-  const capitalled = wordsTyped(novel).filter((t) => /\p{Lu}/u.test(t));
+   * 2.12.41: his premise "tom, mara's brother" stayed the book beside a page that says Thomas) — only where its small
+   * letters can only be the name (round 5, the review of round 4): never a name whose small letters are an everyday word
+   * that is also a given name (smallRenameRule: "as the sun rose", "the rose of the north" keep their rose), nor one the
+   * book's own words say in small letters as a word (smallIsAWord — a page that does refuses the rename itself,
+   * renameOf), and never in a text that writes the name with its capital (there its small letters are his word) —
+   * decided on the words each step is laid on, as they stand, so over another window's newer words too; a capital that
+   * opens a sentence is no sign he writes names with capitals ("Tom, mara’s brother" becomes "Tom, marla’s brother") */
   const smallRules = (pairs || []).map((p) => {
     const r = p ? smallRenameRule(p.from, p.to) : null;
-    if (!r) return null;
-    const word = new RegExp(r.re.source, 'u');
-    return capitalled.some((t) => word.test(t)) ? null : r;
+    return r && !smallIsAWord(novel, p.from, r) ? r : null;
   });
-  const hisRules = [...rules, ...smallRules.filter(Boolean)];
-  const hisIndex = [...rules.map((_, k) => k), ...smallRules.map((r, k) => (r ? k : -1)).filter((k) => k >= 0)];
-  const swapHis = (t) => { const r = replaceMany(t, hisRules); r.counts.forEach((c, i) => { counts[hisIndex[i]] += c; }); return r.text; };
-  const quietHis = (t) => replaceMany(t, hisRules).text;
+  const hisFor = (t) => {
+    const list = [...rules];
+    const index = rules.map((_, k) => k);
+    smallRules.forEach((r, k) => { if (r && !nameWritten(t, pairs[k].from)) { list.push(r); index.push(k); } });
+    return { list, index };
+  };
+  const swapHis = (t) => { const { list, index } = hisFor(t); const r = replaceMany(t, list); r.counts.forEach((c, i) => { counts[index[i]] += c; }); return r.text; };
+  const quietHis = (t) => replaceMany(t, hisFor(t).list).text;
   const printsBefore = new Map((novel.order || []).map((id) => [id, chapterPrint(store.peek('chapter', id) || { passages: [] })]));
   const restamp = [];
   /* (the pages the name never stood in: what was kept of them follows it all the same — keptFollows) */
