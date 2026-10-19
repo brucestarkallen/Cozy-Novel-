@@ -15,7 +15,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith } from './shape.js';
+import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
@@ -532,6 +532,15 @@ function newVersionOn(put, novelId, x, next, why, { retire = true, rename = fals
   changeInPlace({ novelId, chapterId: x.chapterId, passageId: x.passage.id, versionId: x.version.id, next, by: 'partner', retire, extra: { ...(why ? { why } : {}), ...(rename ? { rename: true } : {}) } });
   return row;
 }
+/* a word of what he asked for on a version — his premise, his note for writing it again — set to the words given, only
+ * where it reads as it did (a name changed everywhere, and its Undo) */
+const askStep = (pid, vid, field, from, to) => (c) => {
+  const p = (c.passages || []).find((x) => x.id === pid);
+  const v = p && (p.versions || []).find((x) => x.id === vid);
+  if (!v || !v.ask || v.ask[field] !== from) return false;
+  v.ask = { ...v.ask, [field]: to };
+  return true;
+};
 /* what a version's words fixed in place keep of it: what was asked, and
  * whether it was cut short or stopped (its Go on stays) */
 export function carried(v) {
@@ -603,7 +612,8 @@ export function groupsOf(ops) {
  * (who he plays, where it starts, every telling and move — Cozy Tavern's
  * M607-8) — each text once, every rule over it as it stood */
 function renameEverywhere(novelId, novel, rules, put, why) {
-  const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [], plays: [], seen: [], aside: [], summaries: [] };
+  const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [], plays: [], seen: [], aside: [], summaries: [], entries: [], asks: [], plans: [] };
+  const entriesSeen = archivist.entriesPrint(novel);
   const counts = rules.map(() => 0);
   const swap = (t) => { const r = replaceMany(t, rules); r.counts.forEach((c, k) => { counts[k] += c; }); return r.text; };
   /* the same rules over what was read, checked and summed up — never counted as places changed */
@@ -634,6 +644,47 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     undo.chapters.push({ chapterId: id, before: { name: c.name, nameBy: c.nameBy || '' }, after: next });
     put('chapter', id, chapterSteps.setName(next, c.nameBy || 'you'), { now: true });
   }
+  /* HIS OWN WORDS ON THE BOOK FOLLOW THE NAME (2.12.41, the review of 2.12.41 — a name changed everywhere is his word
+   * for everywhere: after Tom became Thomas, his premise "Tom, Mara's brother…" still stood as the book, and the notes'
+   * check made a card "Tom" beside Thomas's): each premise he typed — on every version that carries it, with his notes
+   * for writing a passage again — each chapter's plan, and his bibliography's entries, their names, other names, line
+   * and words (each sentence keeping when it was written: a name changed is no newer word — shape.js withStamps), all
+   * with the rename's Undo. (Changed where they stand, not read through the rename: the writer, the helper, the check,
+   * the Premise button and another take all read the one place his words are kept.) */
+  for (const id of novel.order || []) {
+    const c = store.peek('chapter', id);
+    if (!c) continue;
+    if (typeof c.plan === 'string' && c.plan.trim()) {
+      const next = swap(c.plan);
+      if (next !== c.plan) { undo.plans.push({ chapterId: id, before: c.plan, after: next.replace(/\s+$/, '') }); put('chapter', id, chapterSteps.setPlan(next), { now: true }); }
+    }
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      for (const v of p.versions || []) {
+        if (!v || !v.ask || typeof v.ask !== 'object') continue;
+        for (const field of ['direction', 'premise', 'note']) {
+          const was = v.ask[field];
+          if (typeof was !== 'string' || !was.trim()) continue;
+          const next = swap(was);
+          if (next === was) continue;
+          undo.asks.push({ chapterId: id, passageId: p.id, versionId: v.id, field, before: was, after: next });
+          put('chapter', id, askStep(p.id, v.id, field, was, next), { now: true });
+        }
+      }
+    }
+  }
+  for (const e of entriesOf(novel)) {
+    const before = clone(e);
+    const next = tidyEntry({ ...clone(e), name: swap(e.name), aka: (e.aka || []).map((a) => swap(a)), line: swap(e.line || ''), text: swap(e.text || '') });
+    if (JSON.stringify(next) === JSON.stringify(tidyEntry(clone(e)))) continue;
+    /* (when each sentence was written, carried to its words with the name changed; when it was saved stays) */
+    const stamps = stampsOf(e);
+    next.saidAt = Object.fromEntries(entrySentences(e).map((s) => [sentenceKey(quiet(s)), stamps.get(sentenceKey(s)) || 0]).filter(([, t]) => t));
+    next.at = e.at;
+    const after = withStamps(e, next);
+    undo.entries.push({ id: e.id, before, after: clone(after) });
+    put('novel', novelId, novelSteps.putEntry(after), { now: true });
+  }
   for (const kind of NOTE_KINDS) {
     for (const card of (novel.notes && novel.notes[kind]) || []) {
       const next = clone(card);
@@ -644,7 +695,7 @@ function renameEverywhere(novelId, novel, rules, put, why) {
       put('novel', novelId, novelSteps.putNote(kind, next), { now: true });
     }
   }
-  for (const [field, meta] of [['brief', false], ['style', false], ['plans', false], ['title', true], ['subtitle', true]]) {
+  for (const [field, meta] of [['brief', false], ['style', false], ['plans', false], ['ending', false], ['title', true], ['subtitle', true]]) {
     const old = String((meta ? novel.meta[field] : novel[field]) || '');
     const next = swap(old);
     if (next === old) continue;
@@ -687,7 +738,20 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     }, { now: true });
     undo.plays.push(row);
   }
+  /* (the notes' check saw his entries as they read: it has seen them with the name changed — the cards changed with them —
+   * so no check is owed for a name changed, as nothing is read again for it; and its Undo the same way back) */
+  if (!put.dry && undo.entries.length) undo.entriesPrint = entriesCheckFollows(novelId, entriesSeen);
   return { undo, counts };
+}
+/* the notes' check's print of his entries moved to the entries as they are now, when it was the print of `was` — the
+ * print now, or '' when nothing moved */
+function entriesCheckFollows(novelId, was) {
+  const live = store.peek('novel', novelId);
+  const a = live && live.memory && live.memory.audit;
+  if (!a || a.entries !== was) return '';
+  const now = archivist.entriesPrint(live);
+  store.change('novel', novelId, novelSteps.setMemory({ audit: { ...a, entries: now } }), { now: true });
+  return now;
 }
 function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore) {
   const mem = novel.memory || {};
@@ -819,9 +883,12 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
   if (!counts.some((n) => n > 0)) return bases.map((b, i) => ({ ...b, status: 'refused', said: missing(i) }));
   put('novel', novelId, novelSteps.touchWritten(at));
   const lead = counts.findIndex((n) => n > 0);
+  const premises = new Set((undo.asks || []).map((x) => x.passageId)).size;
   const reach = names
     ? [undo.passages.length ? plural(undo.passages.length, 'passage') : '', undo.chapters.length ? plural(undo.chapters.length, 'chapter name') : '',
-      undo.cards.length ? `${plural(undo.cards.length, 'card')} in the notes` : '', undo.book.length + undo.kept.length ? 'the book’s own words' : '',
+      undo.cards.length ? `${plural(undo.cards.length, 'card')} in the notes` : '', (undo.entries || []).length ? `${plural(undo.entries.length, 'entry', 'entries')} in the bibliography` : '',
+      premises ? `the premises of ${plural(premises, 'passage')}` : '', (undo.plans || []).length ? plural(undo.plans.length, 'chapter plan') : '',
+      undo.book.length + undo.kept.length ? 'the book’s own words' : '',
       undo.plays.length ? plural(undo.plays.length, 'scene') : ''].filter(Boolean).join(', ')
     : `${plural(counts.reduce((a, b) => a + b, 0), 'place')} in ${plural(undo.passages.length, 'passage')}`;
   /* two cards now called the same (the name it became was a card's already): the notes' check folds them into one (Cozy Tavern's M730) */
@@ -834,7 +901,14 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
     if (i >= 0) { twice = list[i].name; break; }
   }
   if (twice) archivist.askAudit(novelId);
-  const said = (names ? `changed in ${reach}` : reach) + (twice ? `; two cards are now called ${twice} — the notes’ check folds them into one` : '');
+  /* (and two entries now called the same: said, for him to put together — an entry is his, never folded by the app) */
+  let twiceEntry = '';
+  if (after && names && (undo.entries || []).length) {
+    const list = entriesOf(after);
+    const hit = list.find((e) => undo.entries.some((x) => x.id === e.id) && nameTaken(list, e.name, e.id));
+    if (hit) twiceEntry = hit.name;
+  }
+  const said = (names ? `changed in ${reach}` : reach) + (twice ? `; two cards are now called ${twice} — the notes’ check folds them into one` : '') + (twiceEntry ? `; two entries of your bibliography now go by ${twiceEntry} — put them together there` : '');
   return bases.map((b, i) => {
     const what = names ? { before: items[i].from, after: items[i].to } : { before: items[i].find, after: items[i].words };
     if (!counts[i]) return { ...b, status: 'refused', said: missing(i) };
@@ -918,7 +992,9 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner
   /* whose it is: an entry he wrote stays his when the partner changes it (2.12.35: it was tagged "your partner's"); one
    * changed by his own words — Quick add's — is his from then on (2.12.40, the audit: it stayed "your partner's") */
   const by = cur ? (newBy === 'you' ? 'you' : cur.by === 'partner' ? 'partner' : cur.by) : newBy;
-  const after = { ...tidy, at, ...(by ? { by } : {}) };
+  /* (with when each of its words was written, as the entry's one write keeps it — a sentence kept keeps its time, only
+   * one new or changed takes now: shape.js withStamps, 2.12.41 — so its Undo finds it as it was left) */
+  const after = withStamps(cur, { ...tidy, at, ...(by ? { by } : {}) });
   put('novel', novelId, novelSteps.putEntry(after), { now: true });
   return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(after) }, before: cur ? (cur.text || cur.line || '') : '', after: after.text || after.line || '' };
 }
@@ -1388,6 +1464,22 @@ export function undoChange(novelId, change) {
       }, { now: true });
       if (any) back++; else kept++;
     }
+    /* his premises and his notes, the chapters' plans and his entries as they were (2.12.41) — each only where it still
+     * reads as the change left it */
+    for (const x of u.asks || []) {
+      if (!store.peek('chapter', x.chapterId)) { kept++; continue; }
+      if (store.change('chapter', x.chapterId, askStep(x.passageId, x.versionId, x.field, x.after, x.before), { now: true }) === false) kept++; else back++;
+    }
+    for (const x of u.plans || []) {
+      const c = store.peek('chapter', x.chapterId);
+      if (!c || String(c.plan || '') !== x.after) { kept++; continue; }
+      store.change('chapter', x.chapterId, chapterSteps.setPlan(x.before), { now: true });
+      back++;
+    }
+    for (const x of u.entries || []) {
+      if (store.change('novel', novelId, novelSteps.entryBack(x.id, x.before, x.after), { now: true }) === false) kept++; else back++;
+    }
+    if (u.entriesPrint) entriesCheckFollows(novelId, u.entriesPrint);
     if (!back) return { ok: false, said: 'everything it changed has been changed again since' };
     return { ok: true, said: kept ? `${back} put back; ${kept} changed since, kept as they are` : '' };
   }

@@ -25,7 +25,7 @@
  */
 
 import { newId, countWords, hashText, numberWords, nameKey } from '../util.js';
-import { samePersonName, plainName, sameThingName, isDescriptorName, nameInText, nearName, nameWordsGone } from './names.js';
+import { samePersonName, plainName, sameThingName, isDescriptorName, nameInText, nearName, nameWordsGone, foldName } from './names.js';
 
 export const COVERS = ['ember', 'moss', 'dusk', 'rose', 'ink', 'sea', 'wine', 'gold'];
 /* how much a Write writes. A size is asked as a range (around x to y words):
@@ -131,11 +131,17 @@ export function keptTail(v) {
  *    and what had been taken off it; and what the change did, decided as it
  *    is made (2.12.41): the names it took out of the page (`took`) and how
  *    many words it put in (`moved`) — a name changed everywhere marked
- *    `rename`, words of his put back where they stood `back`;
- *  - `gone`: what the changes let go past BEFORE_KEEP did, by hand —
- *    {you: {took, moved, at}, …} — so what they took out is never forgotten;
+ *    `rename`, the writer's own words put back where they stood (Put back
+ *    what was taken off) `back`;
+ *  - `gone`: what the changes let go did, by hand — past BEFORE_KEEP, or by
+ *    a Go on that left them behind (inplace.js grownFields) — {you: {took,
+ *    moved, at}, …}, so what they took out is never forgotten;
  *  - `hands`: who changed its words — 'checker', 'partner', 'you' (a name
- *    changed everywhere is no one's hand on the page);
+ *    changed everywhere, or the writer's words put back, is no one's hand);
+ *  - `whose`: who put in each word on it now (`runs` over its words, kept
+ *    by the print of its words, `fp`) — the writer's 'w', 'you', 'partner',
+ *    'checker' — each change's words its own, a name changed everywhere the
+ *    hand of the word it replaced (2.12.41, the review of 2.12.41: ownWords);
  *  - `written`: its words as they were before the first change — for a
  *    writer's page, the writer's own words: what is measured of the writer
  *    (its stock wording, head to head) is measured on these.
@@ -166,17 +172,25 @@ export function wordsPutIn(before, after) {
   return n;
 }
 /* what a change kept with the words before it took out of the page (`took`): as kept when it was made — or, kept before
- * 2.12.41, his own hand's read from those words and the words now (`now`); his partner's then are never counted, as a
- * name changed everywhere was not told from his other changes */
-const tookBy = (b, now) => (Array.isArray(b && b.took) ? b.took : b && b.by === 'you' ? nameWordsGone(b.text, now) : []);
-/* what the changes let go past BEFORE_KEEP did, kept on the version by hand (`gone`): what they took out and how many
- * words they put in — each read from its own words and the words after it, there in the list */
-function goneWith(gone, list, dropped) {
+ * 2.12.41, his own hand's read from those words and the words right after that change (`after`: the next words kept,
+ * else the version's words — 2.12.41, the review of 2.12.41: read against the words now, a later name changed
+ * everywhere or a fix of the checker's was blamed on his old edit); his partner's then are never counted, as a name
+ * changed everywhere was not told from his other changes */
+const tookBy = (b, after) => (Array.isArray(b && b.took) ? b.took : b && b.by === 'you' ? nameWordsGone(b.text, after) : []);
+/* a change that is no one's hand on the page: a name changed everywhere (`rename`), the writer's own words put back where
+ * they stood (`back`, Put back what was taken off — 2.12.41, the review of 2.12.41: it was his hand) */
+export const noHand = (b) => Boolean(b && (b.rename || b.back));
+/* WHAT THE CHANGES LET GO DID, KEPT ON THE VERSION BY HAND (`gone`): what they took out and how many words they put in —
+ * each read from its own words and the words after it: the next in the list, else `now` (the version's words as they
+ * were when they went). The one step for every change let go: past BEFORE_KEEP (inPlaceFields), and a Go on that
+ * leaves behind the words before a change that ended otherwise (inplace.js grownFields — 2.12.41, the review of
+ * 2.12.41: what his edit took out was forgotten, and his premise was the book again). */
+export function goneWith(gone, list, dropped, now = '') {
   const out = JSON.parse(JSON.stringify(gone || {}));
   for (const i of dropped) {
     const b = list[i];
-    if (!b || b.rename || b.back || !b.by) continue;
-    const after = String((list[i + 1] && list[i + 1].text) || '');
+    if (!b || noHand(b) || !b.by) continue;
+    const after = String(i + 1 < list.length ? (list[i + 1] && list[i + 1].text) || '' : now);
     const g = out[b.by] || (out[b.by] = { took: [], moved: 0, at: 0 });
     g.took = [...new Set([...g.took, ...tookBy(b, after)])].sort();
     g.moved += Number.isFinite(b.moved) ? b.moved : wordsPutIn(b.text, after);
@@ -184,32 +198,161 @@ function goneWith(gone, list, dropped) {
   }
   return Object.keys(out).length ? out : undefined;
 }
-export function inPlaceFields(v, next, by, { at = Date.now(), check = null, codex = null, continuity = null, keepEnd = true, tail = false, extra = {} } = {}) {
+/* WHO PUT IN EACH WORD ON A PAGE (2.12.41, the review of 2.12.41: ownWords multiplied shares of every word ever put in,
+ * never asking whose words stand on the page now — his edit then his partner's change over all of it was still "his
+ * own words", and his own rewrite of every word over his partner's was not). Each word of a version's words with the
+ * hand that put it in: the writer's 'w' (his own for his own words, his partner's for a passage his partner wrote),
+ * then each change's words its own — found word for word against the words before it (the words both have in the same
+ * order keep their hand: wordsMatched) — a name changed everywhere the hand of the word it replaced, the writer's words
+ * put back the writer's. Kept on the version by the print of its words (`whose`: {fp, runs: [[hand, n], …]}); one kept
+ * before is worked out from the words before kept on it (whoseOf). */
+const WORD_HAND_MOST = 600;
+const wordsOf = (t) => { const out = []; for (const m of String(t || '').matchAll(A_WORD)) out.push(m[0].toLowerCase()); return out; };
+const baseHand = (v) => (v && v.how === 'mine' ? 'you' : v && v.how === 'partner' ? 'partner' : 'w');
+const runsOf = (hands) => { const out = []; for (const h of hands) { const last = out[out.length - 1]; if (last && last[0] === h) last[1]++; else out.push([h, 1]); } return out; };
+const handsFrom = (runs) => { const out = []; for (const [h, n] of runs || []) for (let i = 0; i < n; i++) out.push(h); return out; };
+/* the words of b that stand in a, in the same order (the most of them: a common start and end, then the fewest changes
+ * between — Myers, at most WORD_HAND_MOST of them; past that, nothing between is the same): for each word of b, its
+ * index in a, or -1 for a word put in */
+export function wordsMatched(a, b) {
+  const out = new Int32Array(b.length).fill(-1);
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) { out[p] = p; p++; }
+  let s = 0;
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) { out[b.length - 1 - s] = a.length - 1 - s; s++; }
+  const a0 = p; const n = a.length - s - p;
+  const b0 = p; const m = b.length - s - p;
+  if (!n || !m) return out;
+  const most = Math.min(n + m, WORD_HAND_MOST);
+  const off = most + 1;
+  const v = new Int32Array(2 * most + 3);
+  const trace = [];
+  let found = -1;
+  for (let d = 0; d <= most && found < 0; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[a0 + x] === b[b0 + y]) { x++; y++; }
+      v[off + k] = x;
+      if (x >= n && y >= m) { found = d; break; }
+    }
+  }
+  if (found < 0) return out;
+  let x = n;
+  let y = m;
+  for (let d = found; d >= 0; d--) {
+    const t = trace[d];
+    const k = x - y;
+    const pk = k === -d || (k !== d && t[off + k - 1] < t[off + k + 1]) ? k + 1 : k - 1;
+    const px = d === 0 ? 0 : t[off + pk];
+    const py = d === 0 ? 0 : px - pk;
+    while (x > px && y > py) { x--; y--; out[b0 + y] = a0 + x; }
+    x = px; y = py;
+  }
+  return out;
+}
+/* the hand of each word of `next`, from the hand of each word of `was` and the change made by `by` (rename: the hand of
+ * the word it replaced; back: the writer's) */
+function handsAfter(handsWas, was, next, by, { rename = false, back = false } = {}) {
+  const a = wordsOf(was);
+  const b = wordsOf(next);
+  const ha = handsWas.length === a.length ? handsWas : a.map(() => 'w');
+  const map = wordsMatched(a, b);
+  const out = new Array(b.length);
+  let lastA = -1;
+  for (let j = 0; j < b.length; j++) {
+    if (map[j] >= 0) { out[j] = ha[map[j]]; lastA = map[j]; continue; }
+    let k = j;
+    while (k < b.length && map[k] < 0) k++;
+    const nextA = k < b.length ? map[k] : a.length;
+    const replaced = ha.slice(lastA + 1, nextA);
+    const near = lastA >= 0 ? ha[lastA] : nextA < a.length ? ha[nextA] : 'w';
+    for (let t = j; t < k; t++) out[t] = back ? 'w' : rename ? (replaced.length ? replaced[Math.min(replaced.length - 1, Math.floor(((t - j) * replaced.length) / (k - j)))] : near) : by;
+    j = k - 1;
+  }
+  return out;
+}
+/* the hand of each word of a version's words: as kept (`whose`, while its print is the words'), else worked out from the
+ * words before kept on it, each change by its own hand — the changes let go between the first words and the next kept
+ * (`gone`) sharing what that step put in by what each put in (`moved`); kept by the version and its words */
+const WHOSE_KEPT = new Map();
+function whoseOf(v, passage = null) {
+  const text = String((v && v.text) || '');
+  if (v && v.whose && v.whose.fp === hashText(text) && Array.isArray(v.whose.runs)) return handsFrom(v.whose.runs);
+  const before = Array.isArray(v && v.before) ? v.before : [];
+  const key = `${v && v.id}\u0001${hashText(text)}\u0001${before.length}\u0001${before.length ? before[before.length - 1].at : ''}\u0001${JSON.stringify((v && v.gone) || null)}\u0001${v && v.how}`;
+  const had = WHOSE_KEPT.get(key);
+  if (had) return had;
+  let hands;
+  let cur;
+  /* (his edit kept as a version of its own, before 2.12.2: its words his where they are not the version's it was made from) */
+  const from = v && v.how === 'edit' && passage ? (passage.versions || []).find((x) => x.id === (v.from || v.base)) : null;
+  const first = before.length ? String(before[0].text || '') : text;
+  if (from) { cur = writtenOf(from); hands = handsAfter(wordsOf(cur).map(() => 'w'), cur, writtenOf(v), 'you'); cur = writtenOf(v); if (cur !== first) { hands = handsAfter(hands, cur, first, 'w'); cur = first; } }
+  else { cur = first; hands = wordsOf(cur).map(() => baseHand(v)); }
+  before.forEach((b, i) => {
+    const after = String(i + 1 < before.length ? before[i + 1].text || '' : text);
+    if (cur !== String(b.text || '')) { hands = handsAfter(hands, cur, String(b.text || ''), 'w'); cur = String(b.text || ''); }
+    const gone = i === 0 && v && v.gone && typeof v.gone === 'object' ? Object.entries(v.gone).filter(([, g]) => g && Number(g.moved) > 0) : [];
+    if (gone.length && !noHand(b)) {
+      /* the changes let go between: what this step put in, shared by what each hand put in */
+      const share = [[b.by, Number.isFinite(b.moved) ? b.moved : 0], ...gone.map(([h, g]) => [h, Number(g.moved)])].filter(([, n]) => n > 0);
+      const all = share.reduce((s, [, n]) => s + n, 0) || 1;
+      const put = handsAfter(hands, cur, after, '\u0000');
+      const fresh = put.filter((h) => h === '\u0000').length;
+      let at = 0;
+      const quota = share.map(([h, n]) => [h, Math.round((n / all) * fresh)]);
+      hands = put.map((h) => { if (h !== '\u0000') return h; let s = 0; for (const [hh, q] of quota) { s += q; if (at < s) { at++; return hh; } } at++; return b.by; });
+    } else hands = handsAfter(hands, cur, after, b.by, { rename: Boolean(b.rename), back: Boolean(b.back) });
+    cur = after;
+  });
+  if (cur !== text) hands = handsAfter(hands, cur, text, 'w');
+  if (WHOSE_KEPT.size >= 2000) WHOSE_KEPT.clear();
+  WHOSE_KEPT.set(key, hands);
+  return hands;
+}
+const whoseKept = (text, hands) => ({ fp: hashText(String(text || '')), runs: runsOf(hands) });
+/* (the words of a version grown by a Go on: the words it put in the writer's — inplace.js grownFields) */
+export function whoseGrown(v, more) {
+  const text = String((v && v.text) || '');
+  return whoseKept(text + more, [...whoseOf(v), ...wordsOf(more).map(() => 'w')]);
+}
+/* (and the words before a change, grown by a Go on with it: its own runs, the words put in the writer's) */
+export function whoseGrownBefore(b, more) {
+  if (!b || !b.whose || b.whose.fp !== hashText(String(b.text || ''))) return undefined;
+  return whoseKept(String(b.text || '') + more, [...handsFrom(b.whose.runs), ...wordsOf(more).map(() => 'w')]);
+}
+export function inPlaceFields(v, next, by, { at = Date.now(), check = null, codex = null, continuity = null, keepEnd = true, tail = false, extra = {}, names = null, passage = null } = {}) {
   const was = String((v && v.text) || '');
   const end = Object.fromEntries(END_KEYS.filter((k) => v && v[k] !== undefined).map((k) => [k, v[k]]));
   /* WHAT THE CHANGE DID, DECIDED AS IT IS MADE (2.12.41, the review — through 2.12.40 whether his edit had taken a name
    * of his premise out of the page was read from the notes as they stood, and the answer turned over when a reading took
-   * the name's card away): the names it took out (names.js nameWordsGone) and how many words it put in (wordsPutIn), kept
-   * with the words before it. A name changed everywhere (`rename`) takes no name out of his world, puts in none of his
-   * words, and is no one's hand on the page. */
+   * the name's card away): the names it took out (names.js nameWordsGone — with the book's names as they are now,
+   * `names`: inplace.js bookNameWords) and how many words it put in (wordsPutIn), kept with the words before it. A name
+   * changed everywhere (`rename`) takes no name out of his world, puts in none of his words, and is no one's hand on the
+   * page; nor are the writer's own words put back (`back`). */
   const rename = Boolean(extra && extra.rename);
+  const back = Boolean(extra && extra.back);
+  const handsWas = whoseOf(v, passage);
   /* (and the Timeline's turns of them, as their facts — only the turns of these very words, timeline.js continuityNow:
    * 2.12.40, the audit — Undo and Put back the words before brought the facts back and lost the turns) */
   const entry = { text: was, by, at,
-    ...(rename ? {} : { took: nameWordsGone(was, next), moved: wordsPutIn(was, next) }),
+    ...(rename || back ? {} : { took: nameWordsGone(was, next, { known: names }), moved: wordsPutIn(was, next) }),
     ...(Object.keys(end).length ? { end } : {}),
     ...(check ? { check: JSON.parse(JSON.stringify(check)) } : {}),
     ...(codex ? { codex: JSON.parse(JSON.stringify(codex)) } : {}),
     ...(continuity ? { continuity: JSON.parse(JSON.stringify(continuity)) } : {}),
     ...(tail ? { tail: keptTail(v) } : {}),
-    ...extra };
+    ...extra,
+    whose: whoseKept(was, handsWas) };
   /* the facts and the turns of the words, kept on the newest words before only (they can be many); what the checker found in them on each */
   const older = (Array.isArray(v && v.before) ? v.before : []).map(({ codex: _x, continuity: _t, ...rest }) => rest);
-  const hands = rename || handsOf(v).includes(by) ? handsOf(v).slice() : [...handsOf(v), by];
+  const hands = rename || back || handsOf(v).includes(by) ? handsOf(v).slice() : [...handsOf(v), by];
   const list = [...older, entry];
-  const out = { text: next, words: countWords(next), before: keptBefore(list), hands };
+  const out = { text: next, words: countWords(next), before: keptBefore(list), hands, whose: whoseKept(next, handsAfter(handsWas, was, next, by, { rename, back })) };
   /* (what the changes let go past BEFORE_KEEP did stays on the version, by hand) */
-  if (list.length > BEFORE_KEEP) out.gone = goneWith(v && v.gone, list, list.slice(1, list.length - (BEFORE_KEEP - 1)).map((_, k) => k + 1));
+  if (list.length > BEFORE_KEEP) out.gone = goneWith(v && v.gone, list, list.slice(1, list.length - (BEFORE_KEEP - 1)).map((_, k) => k + 1), next);
   /* the words before the fixes put in by themselves since the last other change, kept on the version itself (autoBaseOf):
    * a change by itself keeps them, or takes them from what it changed; any other change lets them go */
   out.autoBase = extra && extra.auto ? autoBaseOf(v) : undefined;
@@ -244,6 +387,15 @@ export function putBackFields(v) {
   const out = { text: last.text, words: countWords(last.text), before: rest.length ? rest : undefined, autoBase: rest.length && rest[rest.length - 1] && rest[rest.length - 1].auto ? v.autoBase : undefined };
   for (const k of END_KEYS) out[k] = last.end ? last.end[k] : undefined;
   if (last.tail) { out.tookOff = last.tail.tookOff; out.tookOffTop = last.tail.tookOffTop; }
+  /* who put in each of the words put back: as kept with them (else worked out again — whoseOf) */
+  out.whose = last.whose && last.whose.fp === hashText(String(last.text)) ? last.whose : undefined;
+  /* THE HAND OF THE CHANGE PUT BACK GOES WITH IT (2.12.41, the review of 2.12.41: his edit put back, or his partner's
+   * change undone, and the page was still his, or his partner's — held against his cards as his own words, out of the
+   * writer's row): once no other change of that hand is left on it — none kept, none let go (none past BEFORE_KEEP, the
+   * first words still first, nothing of it in `gone`) */
+  const h = last.by;
+  if (h && !noHand(last) && handsOf(v).includes(h) && rest.length && list.length < BEFORE_KEEP && String(rest[0].text || '') === writtenOf(v)
+    && !rest.some((b) => b && b.by === h && !noHand(b)) && !(v.gone && v.gone[h])) out.hands = handsOf(v).filter((x) => x !== h);
   /* back to its first words: no longer changed by anyone (nor anything kept of changes let go past BEFORE_KEEP) */
   if (!rest.length && last.text === writtenOf(v)) { out.hands = undefined; out.written = undefined; out.gone = undefined; }
   return { patch: out, check: last.check || null, codex: last.codex || null, continuity: last.continuity || null, by: last.by, at: last.at };
@@ -371,9 +523,9 @@ export function laterWords(passage) {
   const out = [];
   const seen = new Set();
   let v = picked(passage);
-  const now = String((v && v.text) || '');
   while (v && !seen.has(v.id)) {
     seen.add(v.id);
+    const now = String(v.text || '');
     const note = String((v.ask && v.ask.note) || '').trim();
     if (v.how === 'rewrite' && !v.lift && note) out.push({ how: 'rewrite', note, at: Number(v.at) || 0 });
     else if (v.how === 'selection' && !v.spanAuto && note) out.push({ how: 'selection', note, at: Number(v.at) || 0 });
@@ -384,7 +536,10 @@ export function laterWords(passage) {
       out.push({ how: 'edit', note: '', at: Number(v.at) || 0, took: from ? nameWordsGone(writtenOf(from), writtenOf(v)) : [] });
     }
     const before = Array.isArray(v.before) ? v.before : [];
-    for (const b of before) if (b && (b.by === 'you' || b.by === 'partner') && !b.back && !b.rename) out.push({ how: b.by === 'you' ? 'edit' : 'partner', note: '', at: Number(b.at) || 0, took: tookBy(b, now) });
+    /* (each with what it took out — one kept before 2.12.41 read against the words right after it, never the words now) */
+    before.forEach((b, i) => {
+      if (b && (b.by === 'you' || b.by === 'partner') && !noHand(b)) out.push({ how: b.by === 'you' ? 'edit' : 'partner', note: '', at: Number(b.at) || 0, took: tookBy(b, i + 1 < before.length ? String(before[i + 1].text || '') : now) });
+    });
     const gone = (v.gone && typeof v.gone === 'object') ? v.gone : {};
     for (const by of ['you', 'partner']) {
       if (gone[by]) out.push({ how: by === 'you' ? 'edit' : 'partner', note: '', at: Number(gone[by].at) || Number(v.done || v.at) || 0, took: Array.isArray(gone[by].took) ? gone[by].took : [] });
@@ -542,6 +697,71 @@ export function chapterPrint(chapter) {
   return hashText(chapterText(chapter));
 }
 
+/* ------------------------------------------ when his entries' words were written */
+
+/* WHEN EACH OF HIS ENTRY'S WORDS WAS WRITTEN (2.12.41, the review of 2.12.41, and Quick add's: an entry kept one time,
+ * `at`, moved by every save — a Quick add that only added a sentence, or his partner only setting it to ride always,
+ * made the whole entry newer than his premises, and his older "silver hair" stood over his newer "dyed her hair black").
+ * Each sentence of his words — its line, and each sentence of the entry — with when its words were written (`saidAt`:
+ * the sentence's print by its folded words → when), kept in the one write every entry goes through (novelSteps.putEntry:
+ * his sheet, his partner's change, Quick add, the notes' check, a lorebook brought in). A sentence whose words stand as
+ * they were keeps its time; one that only carries whole sentences of his before — a slip mended, the grammar put right,
+ * "she" for his entry's own name, two sentences joined — and adds no telling word of its own, the newest of their times;
+ * any other new or changed sentence (a word added or taken out, a "not", words of two sentences made a new one) takes
+ * the time of the save. When it rides, its kind and its names change no time. An entry kept before has its `at` for
+ * each. */
+const SENTENCE_GAP = /(?<=[.!?…]["”’)\]]*)\s+|\s*\n+\s*/u;
+export function entrySentences(e) {
+  const out = [];
+  const line = String((e && e.line) || '').replace(/\s+/g, ' ').trim();
+  if (line) out.push(line);
+  for (const s of String((e && e.text) || '').split(SENTENCE_GAP)) if (s && s.trim()) out.push(s.trim());
+  return out;
+}
+export const sentenceKey = (s) => hashText(foldName(s));
+const TELL_STOP = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'into', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'has', 'have', 'had', 'do', 'does', 'did', 'he', 'she', 'it', 'they', 'them', 'him', 'her', 'his', 'hers', 'its', 'their', 'theirs', 'this', 'that', 'these', 'those', 'who', 'whom', 'which', 'what', 'there', 'here', 'so', 'then', 'than', 'also', 'very', 'just']);
+const stemOf = (w) => (w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w);
+/* a sentence's telling words: folded, a plural's s off, never a little word nor a word of the entry's own names (`own`) */
+const tellingOf = (s, own) => new Set(foldName(s).split(' ').map(stemOf).filter((w) => w && !TELL_STOP.has(w) && !own.has(w)));
+/* every word of `small` in `big`, or a slip of the pen of one there (names.js nearName: only in a long word) */
+const carries = (big, small) => [...small].every((w) => big.has(w) || [...big].some((x) => nearName(x, w)));
+/* when each sentence of an entry was written: sentenceKey → when (0: not known) */
+export function stampsOf(e) {
+  const out = new Map();
+  if (!e) return out;
+  const kept = e.saidAt && typeof e.saidAt === 'object' ? e.saidAt : null;
+  const at = Number(e.at) || 0;
+  for (const s of entrySentences(e)) {
+    const k = sentenceKey(s);
+    if (!out.has(k)) out.set(k, kept && Number.isFinite(kept[k]) ? kept[k] : at);
+  }
+  return out;
+}
+/* the entry about to be kept (`next`, its `at` the time of the save), with when each of its sentences was written — from
+ * the entry as it stands (`prev`), then from what it carries itself (a name changed everywhere carries its times over),
+ * then the save's own time. The same entry given again comes out the same. */
+export function withStamps(prev, next) {
+  if (!next || typeof next !== 'object') return next;
+  const at = Number(next.at) || 0;
+  const was = stampsOf(prev);
+  const given = next.saidAt && typeof next.saidAt === 'object' ? next.saidAt : {};
+  const own = new Set([next.name, ...(Array.isArray(next.aka) ? next.aka : []), ...(prev ? [prev.name, ...(prev.aka || [])] : [])].flatMap((n) => foldName(n).split(' ').map(stemOf)).filter(Boolean));
+  const told = prev ? entrySentences(prev).map((s) => ({ tell: tellingOf(s, own), at: was.get(sentenceKey(s)) || 0 })).filter((x) => x.tell.size) : [];
+  const saidAt = {};
+  for (const s of entrySentences(next)) {
+    const k = sentenceKey(s);
+    if (Object.hasOwn(saidAt, k)) continue;
+    if (was.has(k)) { saidAt[k] = was.get(k); continue; }
+    if (Number.isFinite(given[k])) { saidAt[k] = given[k]; continue; }
+    /* (the sentences of his before it carries whole; nothing of its own beside them) */
+    const tell = tellingOf(s, own);
+    const whole = told.filter((x) => carries(tell, x.tell));
+    const had = new Set(whole.flatMap((x) => [...x.tell]));
+    saidAt[k] = tell.size && whole.length && carries(had, tell) ? Math.max(...whole.map((x) => x.at)) : at;
+  }
+  return { ...next, saidAt };
+}
+
 /* ------------------------------------------------------- steps (novel) */
 
 export const novelSteps = {
@@ -615,11 +835,13 @@ export const novelSteps = {
   },
   setNotes: (notes) => (n) => { n.notes = notes; },
   /* THE BIBLIOGRAPHY (bibliography.js): an entry set whole, by id — laid
-   * again over a newer copy it writes only that entry; taken out by id */
+   * again over a newer copy it writes only that entry; taken out by id —
+   * with when each of its words was written (withStamps, 2.12.41): an
+   * entry given as withStamps made it is kept exactly as given */
   putEntry: (entry) => (n) => {
-    const e = JSON.parse(JSON.stringify(entry));
     const list = Array.isArray(n.bibliography) ? n.bibliography : (n.bibliography = []);
-    const i = list.findIndex((x) => x && x.id === e.id);
+    const i = list.findIndex((x) => x && x.id === (entry && entry.id));
+    const e = withStamps(i >= 0 ? list[i] : null, JSON.parse(JSON.stringify(entry)));
     if (i >= 0) list[i] = e; else list.push(e);
   },
   dropEntry: (id) => (n) => {
@@ -1190,34 +1412,22 @@ export function letGoStamp(updated, field, chapterId, at) {
 export const hisChange = (v) => Boolean(v) && ((v.how === 'rewrite' && !v.lift) || (v.how === 'selection' && !v.spanAuto) || v.how === 'partner' || v.how === 'mine' || mixedHands(v));
 /* HIS OWN WORDS ON A PAGE (2.12.41, the review — a writer's page his hand or his partner barely touched, a name changed
  * everywhere or a word mended, was told to the helper as "my own words" over his entries): a page he wrote himself, or
- * one whose words his own hand changed for the most part. Of the words on it now that the writer did not write, his
- * share is what his changes put in among everyone's (`moved`, kept as each change was made — read from the words before
- * and after it for one kept before 2.12.41); more than half the page, it is his. Never a name changed everywhere, nor
- * words he only put back. */
+ * one most of whose words now are his own hand's — who put in each word standing on it now (`whose`, whoseOf: 2.12.41,
+ * the review of 2.12.41 — shares of every word ever put in were counted, so his words written over by his partner were
+ * still his, and his own rewrite of his partner's words was not). Never a name changed everywhere (it keeps the hand of
+ * the word it replaced), nor the writer's words he only put back. A page he wrote himself is counted the same: his
+ * words, each his until another hand writes over it (his partner's change over all of it is his partner's words). */
 export function ownWords(passage) {
   const v = picked(passage);
   if (!v || v.streaming) return false;
-  if (v.how === 'mine') return true;
-  const now = String(v.text || '');
-  const total = countWords(now);
-  if (!total) return false;
   const before = Array.isArray(v.before) ? v.before : [];
   /* (no hand of his on it: nothing to count) */
-  if (v.how !== 'edit' && !before.some((b) => b && b.by === 'you' && !b.rename && !b.back) && !(v.gone && v.gone.you)) return false;
-  const put = { you: 0 };
-  let all = 0;
-  const add = (by, n) => { put[by] = (put[by] || 0) + n; all += n; };
-  /* his edit kept as a version of its own (before 2.12.2): the edit itself is his, from the version it was made from */
-  const from = v.how === 'edit' ? (passage.versions || []).find((x) => x.id === (v.from || v.base)) : null;
-  const base = from ? writtenOf(from) : writtenOf(v);
-  if (from) add('you', wordsPutIn(base, writtenOf(v)));
-  before.forEach((b, i) => {
-    if (!b || b.rename || b.back || !b.by) return;
-    add(b.by, Number.isFinite(b.moved) ? b.moved : wordsPutIn(b.text, i + 1 < before.length ? before[i + 1].text : now));
-  });
-  for (const [by, g] of Object.entries((v.gone && typeof v.gone === 'object') ? v.gone : {})) if (g && Number.isFinite(g.moved)) add(by, g.moved);
-  if (!put.you || !all) return false;
-  return wordsPutIn(base, now) * (put.you / all) > total / 2;
+  if (v.how !== 'mine' && v.how !== 'edit' && !handsOf(v).includes('you') && !before.some((b) => b && b.by === 'you' && !noHand(b)) && !(v.gone && v.gone.you)) return false;
+  const hands = whoseOf(v, passage);
+  if (!hands.length) return false;
+  let his = 0;
+  for (const h of hands) if (h === 'you') his++;
+  return his > hands.length / 2;
 }
 /* the mark a card keeps when the helper writes what is not his */
 export function keptStamp(card, chapterId, at) {

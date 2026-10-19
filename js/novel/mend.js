@@ -19,8 +19,8 @@
  * cut short keeps its unfinished end as it is (Go on finishes it). */
 
 import * as store from '../store.js';
-import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked } from './shape.js';
-import { foldVersion } from './inplace.js';
+import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked, writtenOf, noHand, wordsMatched, BEFORE_KEEP } from './shape.js';
+import { foldVersion, bookNameWords } from './inplace.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, dropMarkup, partBlock, mendSpacing, unglueSounds } from './textshape.js';
 import { shapeTelling } from './talk.js';
 import { resign } from './archivist.js';
@@ -29,6 +29,7 @@ import { liftOfFaults, wholeSig } from './checker.js';
 import { hashText, countWords } from '../util.js';
 import { carriedCodex } from './bibliography.js';
 import { carriedContinuity } from './timeline.js';
+import { nameWordsIn, renameIn } from './names.js';
 
 /* 2: a plan or a draft above the page, and its check of its own work after it, come off too; a lift echoed from an old example is said again
  * 3: a web page's or code's markup left in a page (“…paid for.</code>”, his report 2.12.2) comes off; and a fix made as a
@@ -235,4 +236,122 @@ export function foldOld(novelId, chapterIds) {
     }
   }
   return folded;
+}
+
+/* NAMES CHANGED EVERYWHERE BEFORE 2.12.41, MARKED ONCE (2.12.41, the review of 2.12.41 — the app repairs what it can
+ * detect). Through 2.12.40 a name changed everywhere was kept as one more change of his partner's on each page it
+ * touched: a writer's page touched only by "Mara" becoming "Marla" was "changed by your partner" — his partner's words
+ * for his cards to be held against (shape.js hisChange), out of the writer's row in the judge's grades, "my partner
+ * changed its words for me" beside his premise, and someone else's words on a page of his own. When the book opens, once
+ * (`memory.renamesMarked`), each such change is marked `rename`, as a name changed everywhere is marked since:
+ *  - exactly, while his partner's conversation keeps the change — its words before and after for this very passage (a
+ *    name the words alone cannot tell is a name, "Sir" becoming "Galahad", is told so);
+ *  - else by the words: the words after are the words before with whole names swapped, the same way everywhere, and
+ *    nothing else (renameSwaps — a colour changed is no name; a name his partner swapped on one page alone is no one's
+ *    hand either — so whether his partner's conversation is still kept never changes what such a swap is).
+ * Then a hand no change left on the page accounts for comes off `hands` — his partner's once its renames are marked,
+ * and his own where only the writer's words put back (Put back what was taken off: before 2.12.41 it added his hand) or
+ * a change of his put back is left — only where none of it can have been let go: fewer than BEFORE_KEEP changes kept,
+ * the first words still first, nothing of it in `gone`. */
+export const RENAMES_V = 1;
+const CASED_WORD = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
+const keyOfWord = (w) => String(w || '').replace(/['’]s$/i, '').replace(/['’-]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+/* the whole names swapped from some words to others, and nothing else changed — [{from, to}] as written, or null */
+export function renameSwaps(before, after, known = null) {
+  const a = [...String(before || '').matchAll(CASED_WORD)].map((m) => m[0]);
+  const b = [...String(after || '').matchAll(CASED_WORD)].map((m) => m[0]);
+  const map = wordsMatched(a, b);
+  const names = nameWordsIn(before, { known });
+  const pairs = new Map();
+  let lastA = -1;
+  for (let j = 0; j < b.length; j++) {
+    if (map[j] >= 0) { lastA = map[j]; continue; }
+    let k = j;
+    while (k < b.length && map[k] < 0) k++;
+    const nextA = k < b.length ? map[k] : a.length;
+    const from = a.slice(lastA + 1, nextA);
+    if (!from.length || !from.every((w) => names.has(keyOfWord(w)))) return null;
+    const f = from.join(' ');
+    const t = b.slice(j, k).join(' ');
+    if (pairs.has(f) && pairs.get(f) !== t) return null;
+    pairs.set(f, t);
+    j = k - 1;
+  }
+  if (!pairs.size) return null;
+  /* (the swap made again gives the words after exactly — never a name taken out, nor any other word changed with it) */
+  const list = [...pairs].map(([from, to]) => ({ from, to }));
+  return renameIn(before, list) === String(after || '') ? list : null;
+}
+/* the partner's kept changes that changed a name everywhere: "pid:vid" → [{before, after}] for each passage */
+function keptRenames(talk) {
+  const out = new Map();
+  const turns = [...((talk && talk.turns) || []), ...((talk && talk.convs) || []).flatMap((c) => (c && c.turns) || [])];
+  for (const t of turns) {
+    for (const v of (t && t.versions) || []) {
+      for (const c of (v && v.changes) || []) {
+        if (!c || c.status !== 'made' || !c.op || !c.op.rename || !c.undo || !Array.isArray(c.undo.passages)) continue;
+        for (const row of c.undo.passages) {
+          if (!row || !row.inPlace) continue;
+          const k = `${row.passageId}:${row.versionId}`;
+          if (!out.has(k)) out.set(k, []);
+          out.get(k).push({ before: String(row.before || ''), after: String(row.after || '') });
+        }
+      }
+    }
+  }
+  return out;
+}
+/* a version's hands without his or his partner's where no change left on it accounts for it, and none of it can have
+ * been let go */
+function handsLeft(v) {
+  const before = Array.isArray(v && v.before) ? v.before : [];
+  const hands = handsOf(v);
+  if (!before.length || before.length >= BEFORE_KEEP || String(before[0].text || '') !== writtenOf(v)) return hands;
+  return hands.filter((h) => !['you', 'partner'].includes(h) || before.some((b) => b && b.by === h && !noHand(b)) || Boolean(v.gone && v.gone[h]));
+}
+const markStep = (pid, vid, marks) => (c) => {
+  const p = (c.passages || []).find((x) => x.id === pid);
+  const v = p && (p.versions || []).find((x) => x.id === vid);
+  if (!v || !Array.isArray(v.before)) return false;
+  for (const { i, text } of marks) {
+    const b = v.before[i];
+    if (b && b.by === 'partner' && !Array.isArray(b.took) && !b.rename && String(b.text || '') === text) b.rename = true;
+  }
+  const left = handsLeft(v);
+  if (left.length !== handsOf(v).length) v.hands = left;
+  return true;
+};
+export async function markRenames(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel || ((novel.memory || {}).renamesMarked || 0) >= RENAMES_V) return 0;
+  const chapters = (novel.order || []).map((id) => store.peek('chapter', id));
+  if (chapters.some((c) => !c)) return 0;
+  const talk = store.peek('talk', novelId) ?? (await store.open('talk', novelId).catch(() => undefined));
+  /* (his partner's conversation not to be had just now: tried again the next time the book opens) */
+  if (talk === undefined) return 0;
+  const kept = keptRenames(talk);
+  const known = bookNameWords(novel);
+  let marked = 0;
+  for (const c of chapters) {
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      for (const v of p.versions || []) {
+        if (!v || v.streaming) continue;
+        const before = Array.isArray(v.before) ? v.before : [];
+        const rows = kept.get(`${p.id}:${v.id}`) || [];
+        const marks = [];
+        before.forEach((b, i) => {
+          if (!b || b.by !== 'partner' || Array.isArray(b.took) || b.rename) return;
+          const after = String(i + 1 < before.length ? before[i + 1].text || '' : v.text || '');
+          const text = String(b.text || '');
+          if (rows.some((r) => r.before === text && r.after === after) || renameSwaps(text, after, known)) marks.push({ i, text });
+        });
+        if (!marks.length && handsLeft(v).length === handsOf(v).length) continue;
+        store.change('chapter', c.id, markStep(p.id, v.id, marks), { checkpoint: true });
+        marked += marks.length;
+      }
+    }
+  }
+  store.change('novel', novelId, novelSteps.setMemory({ renamesMarked: RENAMES_V }), { checkpoint: true });
+  return marked;
 }

@@ -1329,11 +1329,32 @@ const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs
 const entryOverOf = (x) => (Array.isArray(x && x.entryOver) ? x.entryOver.filter(Boolean) : []);
 /* (an entry beside a premise of his typed after it that names it: `premiseOver`, the premises' passages) */
 const premiseOverOf = (e) => (Array.isArray(e && e.premiseOver) ? e.premiseOver.filter(Boolean) : []);
+/* SOME OF AN ENTRY'S WORDS WRITTEN AFTER A PREMISE, THE REST BEFORE IT (2.12.41, the review of 2.12.41 — archivist.js
+ * premisesWeighed, entriesWeighed: an entry is weighed by when each of its sentences was written): beside the premise,
+ * the entries written after it in part (`entryPart`: [{name, words}]); beside the entry, the premises typed after all
+ * but some of its words (`premisePart`: [{label, words}]) — said by those words, quoted */
+const entryPartOf = (x) => (Array.isArray(x && x.entryPart) ? x.entryPart.filter((p) => p && p.name && (p.words || []).length) : []);
+const premisePartOf = (e) => (Array.isArray(e && e.premisePart) ? e.premisePart.filter((p) => p && p.label && (p.words || []).length) : []);
+const wordsQuoted = (words) => `“${cutWords((words || []).join(' ').replace(/\s+/g, ' ').trim(), 400)}”`;
 /* the words that say so beside an entry, in the list after his entries (entriesPart) — '' for none */
 export function entryOverWords(e) {
   const over = premiseOverOf(e);
-  return over.length ? `${e.name}: my premise for ${andList(over)}` : '';
+  const part = premisePartOf(e);
+  const said = [
+    ...(over.length ? [`my premise for ${andList(over)}`] : []),
+    ...part.map((p) => `my premise for ${p.label}, over all of it but ${wordsQuoted(p.words)}, which I wrote after that premise`),
+  ];
+  return said.length ? `${e.name}: ${said.join('; ')}` : '';
 }
+/* the words beside a premise for his entries written after it in part — in a list of premises (flat) or beside its page */
+function entryPartWords(x, { beside = false } = {}) {
+  return entryPartOf(x).map((p) => (beside
+    ? `Of my bibliography’s entry for ${p.name}, I wrote ${wordsQuoted(p.words)} after this premise: where they differ, those words stand; the rest of that entry is older, and the premise stands over it.`
+    : ` — of my bibliography’s entry for ${p.name}, I wrote ${wordsQuoted(p.words)} after it: those words stand over it where they differ, and it stands over the rest of that entry`));
+}
+/* whether a premise or an entry is said to have come after the other (NEWER is told once with them) */
+const weighedOf = (x) => entryOverOf(x).length > 0 || entryPartOf(x).length > 0;
+const weighedEntry = (e) => premiseOverOf(e).length > 0 || premisePartOf(e).length > 0;
 export const PREMISE_ROOM = 6000;
 /* a long one by its opening, said so — beside its page (notesRequest) as in the list (premisesPart): 2.12.40, the audit:
  * beside its page it went whole, and a page of 2,200 words with its premise was refused as too long, its notes never kept */
@@ -1348,7 +1369,7 @@ const premiseCut = (text, { flat = false } = {}) => {
 export function premiseRow(x) {
   const later = laterTold(x.later);
   const newer = entryOverOf(x);
-  return `[${x.label}] ${premiseCut(x.text, { flat: true })}${later ? ` — since then ${later}, which stands over it where they differ` : ''}${newer.length ? ` — my bibliography’s ${newer.length === 1 ? 'entry' : 'entries'} for ${andList(newer)}, written after it, ${newer.length === 1 ? 'stands' : 'stand'} over it where they differ` : ''}`;
+  return `[${x.label}] ${premiseCut(x.text, { flat: true })}${later ? ` — since then ${later}, which stands over it where they differ` : ''}${newer.length ? ` — my bibliography’s ${newer.length === 1 ? 'entry' : 'entries'} for ${andList(newer)}, written after it, ${newer.length === 1 ? 'stands' : 'stand'} over it where they differ` : ''}${entryPartWords(x).join('')}`;
 }
 export function premisesHead(over = false) {
   return `My premises — what I asked the writer for, as I typed it, each by the passage it was typed for. They are my word on the book and count as the book: ${PREMISE_HOLDS} — stands, even where no passage says it, and a later premise of mine stands over an earlier one;${over ? ' what I say I did to a passage since its premise stands over the premise, which counts only where they agree;' : ''} what one asks to happen is only what I asked for, and what happened is what the passages say:`;
@@ -1474,7 +1495,7 @@ export function readingFocus(c) {
  * long ones made a small helper's reading too big for it): `c.besideRoom` words for the premise and his notes since
  * together — the oldest of his words cut first: the premise to its opening (its first PREMISE_LEAST words stay), then
  * his earlier notes, the newest last of all, by its opening; what is left out said. And an entry of his written after
- * the premise for a name it gives, said beside it (`entryOver`). */
+ * the premise for a name it gives, said beside it (`entryOver`), or some of its words (`entryPart`). */
 const PREMISE_LEAST = 40;
 const NOTE_LEAST = 12;
 const REST_LEFT = ' (the rest of it is left out here to save room)';
@@ -1489,37 +1510,74 @@ function openingOf(text, n) {
   }
   return t;
 }
-function besideText(premise, later, left, newer) {
+function besideText(premise, later, left, newer, part = [], premiseLeft = false, hadLater = false) {
   const told = laterTold(later, PREMISE_ROOM);
   /* (with none of them left to tell, what he did to it since is said left out) */
   const gone = !left ? '' : !told ? '(What I did to it since is left out here to save room.)\n' : `(${left === 1 ? 'One earlier change of mine to it is' : `${numberWords(left)} earlier changes of mine to it are`} left out here to save room.)\n`;
+  /* (the premise itself left out — his newer word on the passage kept where it fits) */
+  if (premiseLeft) {
+    if (!told) return hadLater ? '(My premise for it, and what I did to it since, are left out here to save room.)\n' : '(My premise for it is left out here to save room.)\n';
+    return `(My premise for it is left out here to save room.)\nSince then ${told} — my newer word on this passage: where it and my premise differ, it stands.\n${gone}`;
+  }
   const after = newer.length ? `My bibliography’s ${newer.length === 1 ? 'entry' : 'entries'} for ${andList(newer)} ${newer.length === 1 ? 'was' : 'were'} written after this premise: where they differ, ${newer.length === 1 ? 'the entry stands' : 'the entries stand'}.\n` : '';
-  return `My premise for it, as I typed it:\n${fence(premise)}\n${told ? `Since then ${told} — my newer word on this passage: where it and the premise differ, it stands.\n` : ''}${gone}${after}`;
+  return `My premise for it, as I typed it:\n${fence(premise)}\n${told ? `Since then ${told} — my newer word on this passage: where it and the premise differ, it stands.\n` : ''}${gone}${after}${part.map((p) => `${p}\n`).join('')}`;
 }
+/* the most of n in [lo, hi] for which ok(n) holds — what ok asks only grows with n — or null when none does */
+function mostThat(lo, hi, ok) {
+  if (hi < lo || !ok(lo)) return null;
+  let a = lo;
+  let b = hi;
+  while (a < b) { const m = Math.ceil((a + b) / 2); if (ok(m)) a = m; else b = m - 1; }
+  return a;
+}
+/* FITTED BY MEASURING, NEVER OVER ITS ROOM (2.12.41, the review of 2.12.41: one cut with a fixed allowance dropped his
+ * newest note whole with room left, and under some seventy words the text went over its room): the premise to the most
+ * of its opening that fits (PREMISE_LEAST words at least), his earlier notes the oldest first, then his newest note to the
+ * most of its opening that fits (NOTE_LEAST at least) — and where only one of the premise and his newest note can ride,
+ * the note, his newer word, with the premise said left out; where neither can, both said left out, or nothing at all. */
+/* (the fewest words his newest word on the passage rides in by its opening, the premise said left out: BESIDE_FLOOR) */
+export const BESIDE_FLOOR = 80;
 export function premiseBeside(c) {
   if (!premiseOn(c)) return '';
   const newer = entryOverOf(c);
-  let premise = premiseCut(c.premise);
+  const part = entryPartWords(c, { beside: true });
+  const room = Number.isFinite(c.besideRoom) ? Math.max(0, c.besideRoom) : Infinity;
+  const fits = (t) => countWords(t) <= room;
+  const whole = premiseCut(c.premise);
+  const pw = countWords(c.premise);
+  const premiseTo = (n) => (n >= pw ? whole : `${openingOf(c.premise, n)}${REST_LEFT}`);
+  const noteTo = (w, n) => (n >= countWords(w.note) ? w : { ...w, note: openingOf(w.note, n), cut: true });
   let later = (c.later || []).slice();
   let left = 0;
-  const room = Number.isFinite(c.besideRoom) ? Math.max(0, c.besideRoom) : Infinity;
-  const make = () => besideText(premise, later, left, newer);
-  let text = make();
-  const over = () => countWords(text) - room;
-  if (over() <= 0) return text;
-  /* the premise first, to its opening */
-  const pw = countWords(premise);
-  if (pw > PREMISE_LEAST) { premise = `${openingOf(c.premise, Math.max(PREMISE_LEAST, pw - over() - 12))}${REST_LEFT}`; text = make(); }
-  /* then his earlier notes, the oldest first — the newest stays */
-  while (over() > 0 && later.length > 1) { later = later.slice(1); left++; text = make(); }
-  /* then the newest, by its opening — or, past that, it too */
-  if (over() > 0 && later.length === 1) {
-    const w = later[0];
-    const nw = countWords(w.note);
-    if (w.note && nw - over() - 12 >= NOTE_LEAST) { later = [{ ...w, note: openingOf(w.note, nw - over() - 12), cut: true }]; text = make(); }
-    if (over() > 0) { later = []; left++; text = make(); }
+  const make = (premise, list = later, gone = left) => besideText(premise, list, gone, newer, part);
+  if (fits(make(whole))) return make(whole);
+  /* the premise, to the most of its opening that fits */
+  const most = (lo, list = later, gone = left) => mostThat(lo, Math.max(lo, pw - 1), (n) => fits(make(premiseTo(n), list, gone)));
+  if (pw > PREMISE_LEAST) { const n = most(PREMISE_LEAST); if (n !== null) return make(premiseTo(n)); }
+  const least = premiseTo(PREMISE_LEAST);
+  /* then his earlier notes, the oldest first — the newest stays — and the premise given back what that leaves */
+  while (later.length > 1 && !fits(make(least))) { later = later.slice(1); left++; }
+  if (fits(make(whole))) return make(whole);
+  if (fits(make(least))) { const n = most(PREMISE_LEAST); return make(premiseTo(n === null ? PREMISE_LEAST : n)); }
+  const newest = later[0];
+  if (newest) {
+    const nw = newest.note ? countWords(newest.note) : 0;
+    /* then the newest note, to the most of its opening that fits */
+    if (nw) {
+      const n = mostThat(NOTE_LEAST, nw, (k) => fits(make(least, [noteTo(newest, k)])));
+      if (n !== null) return make(least, [noteTo(newest, n)]);
+    }
+    /* only one of them can ride: his newest word on the passage, the premise said left out */
+    const alone = (k) => besideText('', [nw ? noteTo(newest, k) : newest], left, [], [], true, true);
+    const k = nw ? mostThat(NOTE_LEAST, nw, (x) => fits(alone(x))) : fits(alone(0)) ? 0 : null;
+    if (k !== null) return alone(k);
+  } else {
+    /* no later word of his: the premise by less of its opening */
+    const n = mostThat(NOTE_LEAST, Math.max(NOTE_LEAST, Math.min(PREMISE_LEAST, pw) - 1), (k) => fits(make(premiseTo(k))));
+    if (n !== null) return make(premiseTo(n));
   }
-  return text;
+  const none = besideText('', [], 0, [], [], true, (c.later || []).length > 0);
+  return fits(none) ? none : '';
 }
 export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null, plain = false, notesShown = undefined, codex = false, entries = [], entriesLeft = 0 }) {
   const parts = [];
@@ -1544,7 +1602,7 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   /* his own words among those read, said so — beside his entries only, where it decides which stands (2.12.40) */
   const owned = entries.length > 0 && changes.some((c) => c.his && !c.oldOnly);
   /* which of a premise and an entry came after the other, where it is said beside them (2.12.41): told once */
-  const newer = changes.some((c) => premiseOn(c) && entryOverOf(c).length > 0) || entries.some((e) => premiseOverOf(e).length > 0);
+  const newer = changes.some((c) => premiseOn(c) && weighedOf(c)) || entries.some(weighedEntry);
   for (const c of changes) {
     const mine = premiseBeside(c);
     const own = owned && c.his ? OWN_WORDS : '';
@@ -1593,7 +1651,7 @@ export const AUDIT_ASK = 'Check every card against the book as it stands';
 export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [], premises = [], premisesLeft = 0, entries = [], entriesLeft = 0, turns = [], turnsLeft = 0, own = [] }) {
   const parts = [];
   /* (which of a premise and an entry came after the other, where it is said beside them; his own passages, where his entries ride) */
-  const newer = premises.some((x) => entryOverOf(x).length > 0) || entries.some((e) => premiseOverOf(e).length > 0);
+  const newer = premises.some(weighedOf) || entries.some(weighedEntry);
   const owns = entries.length > 0 && own.length > 0;
   parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
   if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);

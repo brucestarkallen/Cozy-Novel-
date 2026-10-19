@@ -24,10 +24,28 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd } from './shape.js';
+import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd, goneWith, whoseGrown, whoseGrownBefore, NOTE_KINDS } from './shape.js';
 import { hashText, countWords } from '../util.js';
-import { codexNow, carriedCodex } from './bibliography.js';
+import { codexNow, carriedCodex, entriesOf } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
+import { nameWordsOf } from './names.js';
+
+/* THE BOOK'S NAMES AS THEY ARE NOW, BY THEIR WORDS (names.js nameWordsOf): his entries' and the notes' cards' — a person's
+ * apart from a place's, a thing's or lore's, never a thread's title (a telling, not a name) — what a change took out of
+ * a page is decided with, as it is made (shape.js inPlaceFields `took` — 2.12.41, the review of 2.12.41: "Will" taken
+ * out of a page that also says "he will" was no name taken out). Kept while the names are the same. */
+let namesKept = { sig: '', words: null };
+export function bookNameWords(novel) {
+  if (!novel) return null;
+  const people = [];
+  const things = [];
+  for (const e of entriesOf(novel)) (e.kind === 'people' ? people : things).push(e.name, ...(e.aka || []));
+  for (const kind of NOTE_KINDS) if (kind !== 'threads') for (const c of ((novel.notes || {})[kind]) || []) if (c) (kind === 'people' ? people : things).push(c.name, ...(c.aka || []));
+  const sig = hashText(`${people.join('\u0001')}\u0002${things.join('\u0001')}`);
+  if (namesKept.sig !== sig) namesKept = { sig, words: nameWordsOf(people, things) };
+  return namesKept.words;
+}
+const namesOfBook = (novelId) => bookNameWords(novelId ? store.peek('novel', novelId) : null);
 
 /* FACTS AND TURNS OF OTHER WORDS STAY AS THEY STAND (2.12.40, the audit): a version's facts or turns that are not of its
  * words as they stand are of the words the helper read before them — a Go on leaves them with the words it grew from,
@@ -56,7 +74,7 @@ function find(chapterId, passageId, versionId) {
  * moves what the helper read itself (a name changed everywhere).
  * {before, after} or null when nothing changed. */
 export function changeInPlace({ novelId, chapterId, passageId, versionId, next, by, check = null, keepEnd = true, tail = false, retire = true, extra = {} }) {
-  const { ch, v } = find(chapterId, passageId, versionId);
+  const { ch, p, v } = find(chapterId, passageId, versionId);
   if (!v || v.streaming) return null;
   const was = String(v.text || '');
   const after = String(next == null ? '' : next);
@@ -66,7 +84,7 @@ export function changeInPlace({ novelId, chapterId, passageId, versionId, next, 
   const facts = codexNow(v);
   const turns = continuityNow(v);
   if (retire && novelId) retireIfSeen(novelId, chapterId, passageId, v.id);
-  const fields = inPlaceFields(v, after, by, { check: found, codex: facts, continuity: turns, keepEnd, tail, extra });
+  const fields = inPlaceFields(v, after, by, { check: found, codex: facts, continuity: turns, keepEnd, tail, extra, names: namesOfBook(novelId), passage: p });
   fields.codex = (facts && carriedCodex(facts, after)) || otherWords(v.codex, facts);
   fields.continuity = (turns && carriedContinuity(turns, after)) || otherWords(v.continuity, turns);
   /* a page fixed by the app is no longer one he put back as it was */
@@ -132,7 +150,7 @@ export function foldVersion({ novelId, chapterId, passageId, childId, targetId, 
   const found = e && e.sig === hashText(was) ? e : null;
   const facts = codexNow(target);
   const turns = continuityNow(target);
-  const patch = next === was ? {} : inPlaceFields(target, next, by, { check: found, codex: facts, continuity: turns, at: child.done || child.at || Date.now(), extra: child.spanAuto ? { auto: true } : {} });
+  const patch = next === was ? {} : inPlaceFields(target, next, by, { check: found, codex: facts, continuity: turns, at: child.done || child.at || Date.now(), extra: child.spanAuto ? { auto: true } : {}, names: namesOfBook(novelId), passage: p });
   /* the words' own end and what was taken off them come with them */
   for (const k of END_KEYS) patch[k] = child[k];
   patch.tookOff = child.tookOff;
@@ -164,10 +182,19 @@ export function grownFields(v, more) {
   /* (the base of the fixes put in by itself grows with the words: what is added was never changed by itself) */
   if (v && typeof v.autoBase === 'string') out.autoBase = sameEnd(v.autoBase, was) ? v.autoBase + more : undefined;
   if (v && Array.isArray(v.before) && v.before.length) {
+    const list = v.before;
+    const grows = list.map((b) => Boolean(b) && sameEnd(b.text, was));
     /* (what was found in them, their facts and their turns are of the words before they grew: not kept with them) */
-    const kept = v.before.filter((b) => b && sameEnd(b.text, was)).map((b) => ({ ...b, text: b.text + more, check: undefined, codex: undefined, continuity: undefined }));
+    const kept = list.filter((_, i) => grows[i]).map((b) => ({ ...b, text: b.text + more, check: undefined, codex: undefined, continuity: undefined, whose: whoseGrownBefore(b, more) }));
     out.before = kept.length ? kept.map((b) => JSON.parse(JSON.stringify(b))) : undefined;
+    /* WHAT A CHANGE LEFT BEHIND DID IS KEPT (2.12.41, the review of 2.12.41: a change that touched the page's last words
+     * cannot grow with it, and went — with it what his edit took out of the page, so his premise was the book again,
+     * and what his hand put in): into `gone`, by the same step as the changes let go past BEFORE_KEEP (shape.js goneWith) */
+    const left = list.map((_, i) => i).filter((i) => !grows[i]);
+    if (left.length) out.gone = goneWith(v.gone, list, left, was);
   }
+  /* (who put in each word: the words added the writer's — shape.js whose) */
+  if (v) out.whose = whoseGrown(v, more);
   return out;
 }
 
