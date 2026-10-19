@@ -15672,6 +15672,11 @@ await test('a page its model is only slow on is read once its leash, learned as 
         for (let run = 0; run < 5; run++) {
           store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
           const leash = (((store.peek('house', 'house').connections || [])[0] || {}).learned || {}).quietMs || 300;
+          /* (2.12.41: a stall counted on the longest leash is asked again once as long has passed, never at once — the
+           * run booked for it is the one quietAll let go, so this run is made once that time has come) */
+          const next = Number(((picked(b.ch().passages[0]).tries || {})[what === 'turns' ? 'turns' : 'facts'] || {}).next) || 0;
+          /* (and a second more, as the run is booked: the phone's clock is heard to the second) */
+          if (next > store.phoneNow()) await sleep(next - store.phoneNow() + 1100);
           await reset();
           /* (and the notes' check, answered: any probe asked is the stall's) */
           await script([{ [what]: true, pause: silent, text: answer }, { text: JSON.stringify({ clear: true, verdict: 'These hold.' }) }]);
@@ -16051,6 +16056,11 @@ await test('a model silent past every leash is let go by the app, never by the p
     for (let run = 0; run < 6; run++) {
       store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
       const leash = (((store.peek('house', 'house').connections || [])[0] || {}).learned || {}).quietMs || 300;
+      /* (2.12.41: the stall counted on the longest leash is asked again once as long has passed — the run booked for it
+       * is the one quietAll let go, so this run is made once that time has come) */
+      const next = Number(((picked(b.ch().passages[0]).tries || {}).turns || {}).next) || 0;
+      /* (and a second more, as the run is booked: the phone's clock is heard to the second) */
+      if (next > store.phoneNow()) await sleep(next - store.phoneNow() + 1100);
       asked.length = 0;
       archivist.forTests().failures.delete(b.novelId);
       await archivist.run(b.novelId);
@@ -16356,6 +16366,168 @@ await test('a fact given again under another name of the same one — her full n
   await setHouse();
   await putAway(b);
   await putAway(c);
+});
+
+/* (2.12.41, round 5 of the Timeline's fixes — his rule, if the app can detect a problem, the app repairs it: a try counted
+ * on a model too slow to answer, or on one that would not, booked nothing. The light said "The notes are up to date."
+ * while a passage was owed, and its second try waited for his next change — a Super automatic book left alone never had
+ * it.) Each check here waits for the helper to come back by itself: nothing of his is changed, and no run of his made. */
+const untilSo = async (cond, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(50); } return Boolean(await cond()); };
+/* how long the helper's next run was booked for when it was booked (Node's own record of a timer's wait), 0 for none —
+ * the newest chapter's summary keeps one of its own, ten minutes on, until the chapter has been quiet a while */
+const bookedIn = (id) => { const t = archivist.forTests().timers.get(id); return t ? Number(t._idleTimeout) || 0 : 0; };
+const QUIET = 10 * 60 * 1000;
+await test('a page its model was too slow to answer for is asked again by itself once its wait is over — no change of his, no run of his — the light saying what waits and when, never that the notes are up to date; tried twice, it is passed by, and nothing more is asked', async () => {
+  /* its leash at its longest from the first silence (a quarter of an hour, scaled to 1.5 s) */
+  globalThis.__cozyLeashQuietMs = 1500;
+  globalThis.__cozyLeashQuietMostMs = 1500;
+  try {
+    for (const what of ['turns', 'bib']) {
+      const key = what === 'turns' ? 'turns' : 'facts';
+      const isAsk = what === 'turns' ? isTurnsAsk : isBibAsk;
+      const answer = what === 'turns'
+        ? JSON.stringify({ timeline: [{ source: 'Chapter One, passage 1', events: [turnRow('Emilia turns Jovan.', 'Emilia bit Jovan')] }] })
+        : JSON.stringify({ bibliography: [{ source: 'Chapter One, passage 1', facts: [{ name: 'Emilia', kind: 'people', fact: 'Emilia bites.', evidence: 'Emilia bit Jovan' }] }] });
+      /* its second try answered — or silent as the first */
+      for (const second of ['answered', 'silent']) {
+        const tag = `${what}, its second try ${second}`;
+        await setHouse({ context: 64000, learned: null });
+        const b = await makeBook([[EMILIA]], { manual: true });
+        peopleIn(b);
+        markAllSeen(b, what === 'turns' ? { turns: false } : { facts: false });
+        if (what === 'bib') store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+        await reset();
+        const silent = { [what]: true, pause: 2.5, text: answer };
+        await script([silent, second === 'answered' ? { [what]: true, text: answer } : silent]);
+        const asks = async () => (await everyRequest()).filter(isAsk).length;
+        /* the run as the book opens: its model silent for as long as it is ever waited — counted, its next try booked */
+        await archivist.run(b.novelId);
+        const t1 = (picked(b.ch().passages[0]).tries || {})[key] || {};
+        const booked = bookedIn(b.novelId);
+        assert.deepEqual([await asks(), t1.n, Number(t1.next) > store.phoneNow(), booked >= 1500 && booked <= 3500], [1, 1, true, true], `${tag}: counted once, asked again as long after — the run booked for it (${booked} ms)`);
+        /* what waits, and when: never "up to date" */
+        assert.deepEqual(archivist.lightOf(b.novelId), { state: 'waiting', words: what === 'turns'
+          ? 'The helper reads 1 passage for the Timeline again in a moment — its model was too slow to answer for it.'
+          : 'The helper reads 1 page for the bibliography again in a moment — its model was too slow to answer for it.' }, tag);
+        if (what === 'bib') assert.equal(archivist.bibOwedLine(b.novelId), '1 page is not read for the bibliography yet — the helper’s model was too slow to answer for it, so the helper reads it again by itself in a moment.', tag);
+        else assert.equal(archivist.readsByItself(coverOf(b).owed, archivist.readAgainLater(b.novelId, 'turns', coverOf(b).owedOf)), 'the helper’s model was too slow to answer for it, so the helper reads it again by itself in a moment', tag);
+        /* a run meanwhile — another page's, say — asks it nothing: never at once of a model that just kept silent so long */
+        if (second === 'silent') {
+          await archivist.run(b.novelId);
+          assert.deepEqual([await asks(), bookedIn(b.novelId) <= 3500], [1, true], `${tag}: not asked again before its time, still booked for it`);
+        }
+        /* asked again by itself, then read — or, silent again, passed by — and let go */
+        assert.ok(await untilSo(async () => (await asks()) >= 2, 6000), `${tag}: asked again by itself`);
+        const done = () => (what === 'turns' ? archivist.timelineDue(b.novelId) : archivist.bibDue(b.novelId)).length === 0 && !archivist.forTests().running.size;
+        assert.ok(await untilSo(done, 8000), `${tag}: read or passed by, by itself`);
+        const v = picked(b.ch().passages[0]);
+        if (what === 'turns') assert.deepEqual([tlmod.continuityDone(v), coverOf(b).passed], second === 'answered' ? [true, 0] : [false, 1], tag);
+        else assert.deepEqual([bib.codexNow(v).complete, bib.codexNow(v).facts.map((f) => f.fact)], second === 'answered' ? [true, ['Emilia bites.']] : [false, []], tag);
+        /* nothing more asked, nothing booked but the chapter's own summary, the notes up to date */
+        await sleep(2500);
+        assert.deepEqual([await asks(), ((picked(b.ch().passages[0]).tries || {})[key]), bookedIn(b.novelId) > QUIET - 60000, archivist.lightOf(b.novelId).words], [2, undefined, true, 'The notes are up to date.'], tag);
+        await quietAll();
+        await putAway(b);
+      }
+    }
+  } finally {
+    delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashQuietMostMs;
+    await setHouse();
+  }
+});
+
+await test('what waits its time is said with when — by the light, and the same way by the Timeline and the bibliography — and the run books itself for it, never later than a summary already booked; a page tried once on a model too slow to answer is not asked again before then, the others read meanwhile', async () => {
+  await setHouse({ context: 64000 });
+  const b = await makeBook([[EMILIA, 'Rain fell on the river.']], { manual: true });
+  peopleIn(b);
+  store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+  markAllSeen(b, { turns: false, facts: false });
+  /* its first page tried once on a model silent for a quarter of an hour — as the backfills count it (tryOnce) */
+  const quarter = 15 * 60 * 1000;
+  store.change('chapter', b.ids[0], (c) => { const v = picked(c.passages[0]); const fp = util.hashText(v.text); v.tries = { turns: { fp, n: 1, next: store.phoneNow() + quarter }, facts: { fp, n: 1, next: store.phoneNow() + quarter } }; }, { now: true });
+  const both = { state: 'waiting', words: 'The helper reads 1 passage for the Timeline and 1 page for the bibliography again, the first in fifteen minutes — its model was too slow to answer for them.' };
+  const timelineLine = () => { const cov = coverOf(b); return archivist.readsByItself(cov.owed, archivist.readAgainLater(b.novelId, 'turns', cov.owedOf)); };
+  assert.deepEqual([archivist.lightOf(b.novelId), timelineLine(), archivist.bibOwedLine(b.novelId)], [both,
+    'the helper reads them by itself, a few at a time (the one its model was too slow to answer for, again in fifteen minutes)',
+    '2 pages are not read for the bibliography yet — the helper reads them by itself, a few at a time (the one its model was too slow to answer for, again in fifteen minutes).']);
+  /* a run: the other page read, the one that waits not asked — and its look, a quarter of an hour on, never puts off the
+   * one already booked sooner (the newest chapter's summary, ten minutes on, once it has been quiet a while) */
+  await reset();
+  await archivist.run(b.novelId);
+  const r = await everyRequest();
+  const asked = [...r.filter(isTurnsAsk), ...r.filter(isBibAsk)].map(lastAsk);
+  assert.deepEqual([asked.length, asked.filter((m) => m.includes('Rain fell on the river.') && !m.includes('Emilia bit Jovan')).length], [2, 2], 'the other read meanwhile; the one that waits not asked');
+  assert.ok(bookedIn(b.novelId) > QUIET - 60000 && bookedIn(b.novelId) <= QUIET + 1000, `the summary's look, sooner, stands: ${bookedIn(b.novelId)}`);
+  assert.deepEqual([archivist.lightOf(b.novelId), timelineLine(), archivist.bibOwedLine(b.novelId)], [both,
+    'the helper’s model was too slow to answer for it, so the helper reads it again by itself in fifteen minutes',
+    '1 page is not read for the bibliography yet — the helper’s model was too slow to answer for it, so the helper reads it again by itself in fifteen minutes.']);
+  /* its wait shorter than the summary's: the run booked for it, as long on */
+  const five = 5 * 60 * 1000;
+  store.change('chapter', b.ids[0], (c) => { const v = picked(c.passages[0]); for (const k of ['turns', 'facts']) v.tries[k] = { ...v.tries[k], next: store.phoneNow() + five }; }, { now: true });
+  await quietAll();
+  await reset();
+  await archivist.run(b.novelId);
+  assert.deepEqual([(await everyRequest()).filter((x) => isTurnsAsk(x) || isBibAsk(x)).length, bookedIn(b.novelId) > five - 30000 && bookedIn(b.novelId) <= five + 2500, archivist.lightOf(b.novelId).words],
+    [0, true, 'The helper reads 1 passage for the Timeline and 1 page for the bibliography again, the first in five minutes — its model was too slow to answer for them.'], `booked for its time: ${bookedIn(b.novelId)}`);
+  await quietAll();
+  await putAway(b);
+  await setHouse();
+});
+
+await test('a summary its model will not check, and a stretch its model will not sum up, are asked again by themselves the next run — then passed by, the summary with its mark — never left for his next change', async () => {
+  /* a summary of the helper's, not checked yet: its model will not check it */
+  const b = await makeBook([['Mara kept the light.', 'Tom came.']], { manual: true });
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], (c) => { c.summary = { text: 'Mara keeps the light, and Tom comes.', by: 'helper', fp: shape.chapterPrint(c), at: Date.now() }; }, { now: true });
+  await reset();
+  await script(Array.from({ length: 8 }, () => ({ text: 'I would rather not.' })));
+  const checks = async () => (await requests()).filter(isCheckAsk).length;
+  await archivist.run(b.novelId);
+  assert.equal(await checks(), 2, 'its first try (asked, and asked once more told what went wrong)');
+  assert.ok(await untilSo(async () => (await checks()) >= 4, 6000), `asked again by itself: ${await checks()}`);
+  assert.ok(await untilSo(() => Boolean(((b.ch().summary || {}).checked || {}).unread) && !archivist.forTests().running.size, 8000), 'passed by with its mark, by itself');
+  await sleep(2500);
+  assert.deepEqual([await checks(), archivist.forTests().timers.has(b.novelId), archivist.lightOf(b.novelId).words], [4, false, 'The notes are up to date.']);
+  await putAway(b);
+  /* a stretch: the writer's model small, so the chapter is kept in stretches; its helper will not sum them up */
+  const words = (n, tag) => Array.from({ length: n }, (_, i) => `${tag}${i % 50}`).join(' ') + '.';
+  const c = await makeBook([Array.from({ length: 4 }, (_, i) => words(1000, `q${i}x`))], { manual: true });
+  markAllSeen(c);
+  await setHouse({ context: 12000 }, { connections: [{ ...CONN, context: 12000 }, { ...CONN, id: 'c-h', context: 32000 }], roles: { writer: 'c-w', helper: 'c-h' } });
+  const stretchAsks = async () => (await requests()).filter((x) => x.body.messages.some((m) => typeof m.content === 'string' && m.content.startsWith("Here's a stretch of"))).length;
+  await reset();
+  await script(Array.from({ length: 40 }, () => ({ text: 'I would rather not.' })));
+  await archivist.run(c.novelId);
+  const first = await stretchAsks();
+  assert.ok(first > 0, 'asked once');
+  assert.ok(await untilSo(async () => (await stretchAsks()) >= first * 2, 6000), `asked again by itself: ${first} then ${await stretchAsks()}`);
+  assert.ok(await untilSo(() => !archivist.forTests().running.size, 8000));
+  await sleep(2500);
+  assert.deepEqual([await stretchAsks(), bookedIn(c.novelId) > QUIET - 60000], [first * 2, true], `tried twice, then passed by: nothing more asked, nothing booked but the chapter's own summary (${bookedIn(c.novelId)})`);
+  await quietAll();
+  await setHouse();
+  await putAway(c);
+});
+
+await test('a check of the notes owed next — the next group of a round — is said so by the light, never that the notes are up to date, and comes by itself', async () => {
+  const b = await makeBook([['Mara kept the light. Tom mended the nets.']], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => {
+    n.notes.people.push({ id: 'pe-m', name: 'Mara', about: 'The keeper.', updated: { at: 1 } }, { id: 'pe-t', name: 'Tom', about: 'A fisherman.', updated: { at: 1 } });
+    n.memory = { ...(n.memory || {}), audit: { at: 1, reads: 0, v: archivist.AUDIT_V, groupMax: 1 }, auditAsked: true };
+  }, { now: true });
+  await reset();
+  const held = { text: JSON.stringify({ clear: true, verdict: 'These hold.' }) };
+  await script([held, held]);
+  const audits = async () => (await requests()).filter(isAuditAsk).length;
+  await archivist.run(b.novelId);
+  const light = archivist.lightOf(b.novelId);
+  assert.deepEqual([await audits(), light.state, light.words], [1, 'waiting', archivist.AUDIT_NEXT], 'one group checked, the next owed: said so');
+  assert.ok(await untilSo(async () => (await audits()) >= 2 && !archivist.forTests().running.size, 6000), 'the next group checked by itself');
+  assert.equal(archivist.lightOf(b.novelId).words, 'The notes are up to date.');
+  await quietAll();
+  await putAway(b);
 });
 
 heading('the audit of 2.12.36–2.12.39 (2.12.40)');

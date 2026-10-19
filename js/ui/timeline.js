@@ -8,7 +8,7 @@ import { picked, passageNumbers } from '../novel/shape.js';
 import { h, icon, setText } from './dom.js';
 import { plural } from '../util.js';
 /* (said in the bibliography's words too: archivist.js helperState, bibOwedLine — 2.12.40, the review) */
-import { HELPER_STOPPED } from '../novel/archivist.js';
+import { HELPER_STOPPED, readsByItself } from '../novel/archivist.js';
 
 const KINDS = { relationship: 'Relationships', character: 'People', thread: 'Threads' };
 const STANCES = { belief: 'Belief', claim: 'Claim', intention: 'Intention' };
@@ -41,8 +41,9 @@ function currentPassage(chapter) {
 }
 
 /* helper: who reads what the Timeline lacks — 'on' (a helper reads it by itself), 'none' (no helper chosen), 'stopped'
- * (its connection was turned away: nothing is read until it is put right, or he presses Try again now) */
-export function makeTimeline({ novelId, chapterId: openedChapter, current, openCard, jumpSource, readAgain, helper = () => 'on' }) {
+ * (its connection was turned away: nothing is read until it is put right, or he presses Try again now); later(owedOf):
+ * of the passages not read yet, those whose next try waits its time, and how long (archivist.js readAgainLater) */
+export function makeTimeline({ novelId, chapterId: openedChapter, current, openCard, jumpSource, readAgain, helper = () => 'on', later = () => null }) {
   let chapterId = openedChapter, destroyed = false, frame = 0, lastResult = '', shown = PAGE_SIZE, onPage = null;
   let dirty = true, revision = 0, novelInput = '', projection = null;
   /* a card asked for from elsewhere (its card in the notes, its name in the bibliography): followed once its option is there (2.12.37) */
@@ -194,12 +195,15 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
      * own names (Try again now and Read it again, under Cards) */
     /* (owed: counted by the helper's own tests for what it reads by itself — timeline.js turnsOwed — never what is left
      * of the count, 2.12.40, the review: a passage it held read was said to be read by itself) */
-    const { passed = 0, aside = 0, passedFound = 0, owed = 0 } = result.coverage;
+    const { passed = 0, aside = 0, passedFound = 0, owed = 0, owedOf = [] } = result.coverage;
     const who = helper();
     const one = (n, a, b) => (n === 1 ? a : b);
     const stopped = HELPER_STOPPED;
+    /* (those whose next try waits its time said with when, as the bibliography's line says them — 2.12.41: it said they
+     * were read by itself, a few at a time, while nothing was booked) */
+    const waits = owed && who === 'on' ? later(owedOf) : null;
     setText(gapCopy, unavailable ? `${plural(unavailable, 'chapter')} could not be opened. These turns show only the chapters available here.`
-      : [owed ? `${plural(owed, 'passage')} ${one(owed, 'is', 'are')} not read for the Timeline yet${who === 'on' ? ` — the helper reads ${one(owed, 'it', 'them')} by itself, a few at a time, and ${one(owed, 'its', 'their')} turns show here as they are read.` : who === 'stopped' ? `. ${stopped}, and it reads ${one(owed, 'it', 'them')} by itself.` : ` — choose a helper in Settings → Connections and it reads ${one(owed, 'it', 'them')} by itself.`}` : '',
+      : [owed ? `${plural(owed, 'passage')} ${one(owed, 'is', 'are')} not read for the Timeline yet${who === 'on' ? ` — ${readsByItself(owed, waits)}, and ${one(owed, 'its', 'their')} turns show here as they are read.` : who === 'stopped' ? `. ${stopped}, and it reads ${one(owed, 'it', 'them')} by itself.` : ` — choose a helper in Settings → Connections and it reads ${one(owed, 'it', 'them')} by itself.`}` : '',
         aside ? `${plural(aside, 'passage')} ${one(aside, 'was', 'were')} set aside — the helper’s model would not read ${one(aside, 'it', 'them')} for the notes, so ${one(aside, 'it has', 'they have')} no turns here. ${one(aside, 'Read it again', 'Read them all again')}, under Cards, has ${one(aside, 'it', 'them')} read afresh.` : '',
         passed ? `${plural(passed, 'passage')} ${one(passed, 'was', 'were')} tried twice for the Timeline and passed by — the helper’s model would not give all of ${one(passed, 'its', 'their')} turns from ${one(passed, 'its', 'their')} own words.${passedFound ? ' What it did find is shown.' : ''} ${one(passed, 'It is', 'They are')} read again if ${one(passed, 'its', 'their')} words change.` : ''].filter(Boolean).join(' '));
     /* Rows, quotes, buttons and scroll remain still on routine saves. */

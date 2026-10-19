@@ -682,7 +682,8 @@ export async function ask(conn, opts = {}) {
       if (leashed && !(opts.signal && opts.signal.aborted)) {
         /* let go on its leash: a passing fault, its words (if any) kept as cut */
         const mins = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m === 1 ? 'a minute' : `${m} minutes`; };
-        out = { finish: 'error', error: leashed === 'gaveway' ? GAVE_WAY : leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer made no progress for ${mins(allMs)}`, status: 0, transport: true, leashed, ...(leashed === 'quiet' && quietMs >= quietMost ? { longest: true } : {}), midStream: Boolean(text), text, thinking };
+        /* (and how long it was waited, `leashMs`: a worker that counts it a try waits as long before it asks again — archivist.js, 2.12.41) */
+        out = { finish: 'error', error: leashed === 'gaveway' ? GAVE_WAY : leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer made no progress for ${mins(allMs)}`, status: 0, transport: true, leashed, ...(leashed === 'quiet' && quietMs >= quietMost ? { longest: true } : {}), ...(leashed === 'quiet' ? { leashMs: quietMs } : leashed === 'long' ? { leashMs: allMs } : {}), midStream: Boolean(text), text, thinking };
         if (leashed === 'quiet') learn(conn, { quietMs: Math.min(quietMs * 2, quietMost) });
       } else if ((e && e.name === 'AbortError') || (opts.signal && opts.signal.aborted)) {
         sent.ms = Date.now() - sent.at;
@@ -897,7 +898,7 @@ export async function ask(conn, opts = {}) {
       }
       if (opts.onSent) opts.onSent(sent);
       return { ok: false, text: '', thinking, notes, error: plainError(lastError, lastStatus, { transport: out.transport, phone: out.phone }), status: lastStatus, sent,
-        permanent: !transient && lastStatus !== 0, ...(asked > 0 ? { retryAfterMs: asked } : {}), ...(out.leashed ? { leashed: out.leashed } : {}), ...(out.longest ? { longest: true } : {}) };
+        permanent: !transient && lastStatus !== 0, ...(asked > 0 ? { retryAfterMs: asked } : {}), ...(out.leashed ? { leashed: out.leashed } : {}), ...(out.longest ? { longest: true } : {}), ...(out.leashMs ? { leashMs: out.leashMs } : {}) };
     }
     if (opts.onSent) opts.onSent(sent);
     noteUsage(conn, out.usage, sent, text + thinking);
@@ -959,7 +960,7 @@ export async function ask(conn, opts = {}) {
     }
     if (out.finish === 'error') {
       /* broken off partway: what arrived is kept, and said to be cut */
-      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra, ...(out.leashed ? { leashed: out.leashed } : {}), ...(out.longest ? { longest: true } : {}) };
+      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra, ...(out.leashed ? { leashed: out.leashed } : {}), ...(out.longest ? { longest: true } : {}), ...(out.leashMs ? { leashMs: out.leashMs } : {}) };
     }
     const reason = out.reason || '';
     const blocked = BLOCKED.test(reason);

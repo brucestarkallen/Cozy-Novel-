@@ -78,6 +78,8 @@ export function keepingNotes(novelId) { return Boolean(connFor(store.peek('house
  * helper chosen; 'stopped', its connection turned away (Try again now, under Cards); 'on' */
 export function helperState(novelId) { return !connFor(store.peek('house', 'house') || {}, 'helper') ? 'none' : blocked.has(novelId) ? 'stopped' : 'on'; }
 export const HELPER_STOPPED = 'The helper is stopped: its connection was turned away. Put it right in Settings → Connections, or press Try again now under Cards';
+/* the light while the notes' check is owed and booked next (a round of groups going on, a card carried to the next) */
+export const AUDIT_NEXT = 'The helper checks the notes against the book in a moment.';
 /* the bibliography's line for the pages it fills by itself and has not yet (ui/bibliography.js), as the helper stands —
  * '' when there are none, or no helper chosen with the room to fill it (that is said apart) */
 export function bibOwedLine(novelId) {
@@ -88,7 +90,8 @@ export function bibOwedLine(novelId) {
   if (!due) return '';
   const it = due === 1 ? 'it' : 'them';
   const head = `${plural(due, 'page')} ${due === 1 ? 'is' : 'are'} not read for the bibliography yet`;
-  return helperState(novelId) === 'stopped' ? `${head}. ${HELPER_STOPPED}, and it reads ${it} by itself.` : `${head} — the helper reads ${it} by itself, a few at a time.`;
+  /* (and those whose next try waits its time, said with when — the Timeline's line says it the same way: 2.12.41) */
+  return helperState(novelId) === 'stopped' ? `${head}. ${HELPER_STOPPED}, and it reads ${it} by itself.` : `${head} — ${readsByItself(due, readAgainLater(novelId, 'facts'))}.`;
 }
 export function lightOf(novelId) {
   /* no helper chosen is said whatever was last seen */
@@ -99,6 +102,10 @@ export function lightOf(novelId) {
   /* green only when nothing is left unread */
   const novel = store.peek('novel', novelId);
   if (pendingWork(novelId)) return { state: 'waiting', words: rebuildingNow(novel) ? 'Reading the whole book again — until it is done, the writer and the rest go on with the notes as they were.' : 'The helper reads the newest words in a moment.' };
+  /* nor while a passage is owed that waits its time — what waits and when, said as it stands now (2.12.41: it said "The
+   * notes are up to date.") */
+  const waits = whatWaits(novelId);
+  if (waits) return { state: 'waiting', words: waits.words };
   const aside = novel ? asideNow(novel).length : 0;
   if (aside) return { state: 'idle', words: `The notes are up to date — but for ${aside === 1 ? 'one part' : `${aside} parts`} its model would not read (in the notes, with Read it again).` };
   return { state: 'idle', words: 'The notes are up to date.' };
@@ -143,14 +150,23 @@ export function onNudge(fn) { nudgeFns.add(fn); return () => nudgeFns.delete(fn)
 
 /* A change to the book asks the helper to read it — but never sooner than a
  * reading that just failed said to wait. */
+const dueAt = new Map();   /* novelId -> when the run booked last comes (this page's clock) */
 export function nudge(novelId, ms = 4000) {
   for (const fn of nudgeFns) { try { fn(novelId, ms); } catch (e) { console.error(e); } }
   const f = failures.get(novelId);
   const wait = f && f.until > Date.now() ? f.until - Date.now() : 0;
   clearTimeout(timers.get(novelId));
-  timers.set(novelId, setTimeout(() => { timers.delete(novelId); run(novelId); }, Math.max(ms, wait)));
+  dueAt.set(novelId, Date.now() + Math.max(ms, wait));
+  timers.set(novelId, setTimeout(() => { timers.delete(novelId); dueAt.delete(novelId); run(novelId); }, Math.max(ms, wait)));
   /* the light turns amber the moment there is something new to read */
   tellLight(novelId);
+}
+/* a run booked for what waits its time — never later than one already coming (2.12.41: the chapter's summary booked for
+ * when it has been quiet a while is never put off by a page asked again in a quarter of an hour) */
+function bookBy(novelId, ms) {
+  const due = timers.has(novelId) ? dueAt.get(novelId) || 0 : 0;
+  if (due && due <= Date.now() + ms) return;
+  nudge(novelId, ms);
 }
 
 /* WAITING, OR STOPPED: TRIED AGAIN NOW BY HIS HAND (Cozy Tavern M752-010,
@@ -1733,28 +1749,30 @@ export const notesShape = (o) => Boolean(o) && typeof o === 'object' && !Array.i
 });
 const hasGone = (o) => Boolean(o && Array.isArray(o.gone) && o.gone.length);
 
+/* (a call let go on its leash: on its longest one, and how long it was waited — call.js `leashMs`, 2.12.41) */
+const leashKept = (r) => ({ ...(r.longest ? { longest: true } : {}), ...(r.leashMs ? { leashMs: r.leashMs } : {}) });
 export async function askJson(conn, system, request, { want, beforeAsk } = {}) {
   const room = helperRoom(conn);
   if (beforeAsk) await beforeAsk();
   const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: room }), stream: true, worker: true, patient: true });
-  if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed, ...(first.longest ? { longest: true } : {}) };
+  if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed, ...leashKept(first) };
   /* an answer cut off counts only when its object closed: one cut inside it holds pieces, never the answer (Cozy Tavern's M685, M737) */
   let obj = !first.cut || closesWhole(first.text) ? parseFirstObject(first.text, want) : null;
   /* a model that wrote its answer in its thinking and nothing after it: the last whole answer there is the answer (Cozy Tavern's M590) */
   if (!obj && !String(first.text || '').trim() && first.thinking && (!first.cut || closesWhole(first.thinking))) obj = parseLastObject(first.thinking, want);
   if (obj) return { ok: true, obj };
   /* let go on its leash partway: not out of room — asked again it would stall the same way */
-  if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed, ...(first.longest ? { longest: true } : {}) };
+  if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed, ...leashKept(first) };
   /* once more, told what went wrong — given more room when it ran out of it; never more than that */
   const cut = Boolean(first.cut);
   const more = cut ? Math.min(room * 2, Math.floor(contextOf(conn) * 0.6)) : room;
   if (beforeAsk) await beforeAsk();
   const second = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
-  if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed, ...(second.longest ? { longest: true } : {}) };
+  if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed, ...leashKept(second) };
   obj = !second.cut || closesWhole(second.text) ? parseFirstObject(second.text, want) : null;
   if (!obj && !String(second.text || '').trim() && second.thinking && (!second.cut || closesWhole(second.thinking))) obj = parseLastObject(second.thinking, want);
   if (obj) return { ok: true, obj };
-  if (second.leashed) return { ok: false, error: second.error, status: 0, leashed: second.leashed, ...(second.longest ? { longest: true } : {}) };
+  if (second.leashed) return { ok: false, error: second.error, status: 0, leashed: second.leashed, ...leashKept(second) };
   return { ok: false, error: unreadWhy(second), unreadable: true, ...(second.cut ? { cut: true } : {}) };
 }
 /* why an answer could not be used, in plain words: the provider's reason for
@@ -1889,9 +1907,11 @@ export async function run(novelId) {
       /* parts one connection would not read are tried again once the helper's connection is another (S08-G11) */
       const print = connPrint(conn);
       for (const x of asideNow(store.peek('novel', novelId))) if (x.conn && x.conn !== print && !x.out) unsetAside(novelId, x.key);
+      looksDue(novelId);
       await readChanges(novelId, conn);
-      await stretchUp(novelId, conn);
-      await sceneStretchUp(novelId, conn);
+      /* (each returns whether something it counted is owed the next run — asked again by itself: 2.12.41) */
+      const stretchLeft = await stretchUp(novelId, conn);
+      const sceneLeft = await sceneStretchUp(novelId, conn);
       await summarise(novelId, conn);
       /* each summary held once against its own words, a few a run — the rest next time (summarycheck.js) */
       const checksLeft = await checkSummaries(novelId, conn);
@@ -1904,13 +1924,25 @@ export async function run(novelId) {
       await keepTheBook(novelId, conn);
       await auditNotes(novelId, conn);
       failures.delete(novelId);
-      const left = pendingWork(novelId) || checksLeft || bibLeft || turnsLeft;
+      const left = pendingWork(novelId) || stretchLeft || sceneLeft || checksLeft || bibLeft || turnsLeft;
       if (left) nudge(novelId, 2000);
       else {
         finishReread(novelId);
-        setLight(novelId, 'idle', 'The notes are up to date.');
-        /* a check owed now (after reading the whole book again, or a row kept on a card of its own) runs next */
-        if (auditDue(store.peek('novel', novelId))) nudge(novelId, 1500);
+        /* a check owed now (after reading the whole book again, or a row kept on a card of its own) runs next — said so,
+         * never "up to date" while it is owed (2.12.41) */
+        if (auditDue(store.peek('novel', novelId))) {
+          setLight(novelId, 'waiting', AUDIT_NEXT);
+          nudge(novelId, 1500);
+        } else {
+          /* WHAT WAITS ITS TIME IS BOOKED (2.12.41): a passage tried once on a model too slow to answer, asked again by
+           * itself once its wait is over — the run books itself for the soonest, and the light says what waits and when
+           * until then (lightOf, whatWaits); with nothing waiting, the notes are up to date */
+          setLight(novelId, 'idle', 'The notes are up to date.');
+          const waits = whatWaits(novelId);
+          /* (a second after its time: the phone's clock is heard to the second — store.phoneNow — and one booked a moment
+           * too soon is only booked again) */
+          if (waits) bookBy(novelId, waits.ms + 1000);
+        }
       }
     } catch (e) {
       const why = (e && e.message) || String(e);
@@ -2734,9 +2766,15 @@ function wantsStretches(house, tokens, words = 0) {
   return tokens > Math.max(3500, Math.floor(room / 3)) || words > ONE_SUMMARY_WORDS;
 }
 const stretchTried = new Map();   /* chapter:fingerprint -> refused runs */
+/* WHAT IS COUNTED IS ASKED AGAIN BY ITSELF (2.12.41 — through 2.12.40 a stretch, a scene's stretch or a summary's check
+ * its model would not answer was counted and nothing was booked: its second try, and a check's mark that it was passed
+ * by, waited for his next change, while the light said the notes were up to date). A refusal is asked again the next
+ * run, booked at once (each of these returns whether one is owed so); an answer that made no progress for as long as one
+ * is ever let run, once as long again has passed (lookIn). Returns whether a stretch is owed the next run. */
 async function stretchUp(novelId, conn) {
   const novel = store.peek('novel', novelId);
-  if (!novel) return;
+  if (!novel) return false;
+  let owed = false;
   const house = store.peek('house', 'house') || {};
   const order = [...(novel.order || [])];
   for (let i = 0; i < order.length; i++) {
@@ -2761,6 +2799,8 @@ async function stretchUp(novelId, conn) {
       if (st.text) continue;
       const key = `${c.id}:${st.fp}`;
       if ((stretchTried.get(key) || 0) >= 2) continue;
+      /* (its second try waits its time: lookIn) */
+      if (lookWaits(novelId, 'stretch:' + key)) continue;
       const a = list.findIndex((p) => p.id === st.from), b = list.findIndex((p) => p.id === st.to);
       if (a < 0 || b < a) continue;
       const text = chapterText({ passages: list.slice(a, b + 1) });
@@ -2781,6 +2821,7 @@ async function stretchUp(novelId, conn) {
       const parts = countWords(text) > partWords ? partsOf(text, partWords) : [text];
       let summary = '';
       let refused = false;
+      let slow = 0;
       for (let q = 0; q < parts.length; q++) {
         const got = await helperJson(novelId, conn, frame, stretchRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[q], words: st.words, before: q === 0 ? before : '', known,
           part: parts.length > 1 ? q + 1 : 0, parts: parts.length, soFar: summary }), { want: (o) => Boolean(summaryWords(o.summary)) });
@@ -2790,11 +2831,26 @@ async function stretchUp(novelId, conn) {
           const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
           if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
           refused = true;
+          slow = got.leashed === 'long' ? got.leashMs || 0 : 0;
           break;
         }
         summary = summaryWords(got.obj.summary) || summary;
       }
-      if (refused) { stretchTried.set(key, (stretchTried.get(key) || 0) + 1); continue; }
+      if (refused) {
+        const n = (stretchTried.get(key) || 0) + 1;
+        stretchTried.set(key, n);
+        /* (asked again by itself: a refusal the next run, an answer that made no progress once as long again has passed) */
+        if (n < 2 && slow) {
+          const cid = c.id;
+          lookIn(novelId, 'stretch:' + key, slow, (ms) => `The helper sums up part of ${label} again ${inWhile(ms)} — its model was too slow to answer for it.`, () => {
+            const n2 = store.peek('novel', novelId);
+            const ch = store.peek('chapter', cid);
+            const at = n2 ? (n2.order || []).indexOf(cid) : -1;
+            return Boolean(ch) && at >= 0 && stretchPlan(ch, { closeLast: at < (n2.order || []).length - 1 }).stretches.some((s) => s.fp === st.fp && !s.text);
+          });
+        } else if (n < 2) owed = true;
+        continue;
+      }
       if (!summary) continue;
       const r = await keepHardTokens({ novelId, conn, frame, novel: now, label, text, summary, known: cardNames, stretch: true });
       summary = r.summary || summary;
@@ -2812,6 +2868,7 @@ async function stretchUp(novelId, conn) {
       await store.flush('chapter', c.id);
     }
   }
+  return owed;
 }
 
 /* A chapter's summary is kept current once the writing has moved past it, or
@@ -3039,9 +3096,11 @@ export function sceneWantsStretches(house, tokens) {
   return tokens > Math.max(3500, Math.floor(room / 8));
 }
 const sceneTried = new Map();   /* scene:fingerprint -> refused runs */
+/* (what is counted is asked again by itself, as a chapter's stretch is — stretchUp: returns whether one is owed the next run) */
 async function sceneStretchUp(novelId, conn) {
   const novel = store.peek('novel', novelId);
-  if (!novel) return;
+  if (!novel) return false;
+  let owed = false;
   const house = store.peek('house', 'house') || {};
   for (const pid of [...(novel.plays || [])]) {
     let p = store.peek('play', pid);
@@ -3064,6 +3123,7 @@ async function sceneStretchUp(novelId, conn) {
       if (st.text) continue;
       const key = `${pid}:${st.fp}`;
       if ((sceneTried.get(key) || 0) >= 2) continue;
+      if (lookWaits(novelId, 'scene:' + key)) continue;
       const a = list.findIndex((x) => x.id === st.from), b = list.findIndex((x) => x.id === st.to);
       if (a < 0 || b < a) continue;
       const text = chapterText({ passages: list.slice(a, b + 1) });
@@ -3080,6 +3140,7 @@ async function sceneStretchUp(novelId, conn) {
       const parts = countWords(text) > partWords ? partsOf(text, partWords) : [text];
       let summary = '';
       let refused = false;
+      let slow = 0;
       for (let q = 0; q < parts.length; q++) {
         const got = await helperJson(novelId, conn, frame, sceneStretchRequest({ novel: namedBook(now, house), chapterLabel: c ? chapterLabel(now, c, { withName: true }) : 'the book', who: p.who, text: parts[q], words: st.words, before: q === 0 ? before : '', known,
           part: parts.length > 1 ? q + 1 : 0, parts: parts.length, soFar: summary }), { want: (o) => Boolean(summaryWords(o.summary)) });
@@ -3089,11 +3150,22 @@ async function sceneStretchUp(novelId, conn) {
           const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
           if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
           refused = true;
+          slow = got.leashed === 'long' ? got.leashMs || 0 : 0;
           break;
         }
         summary = summaryWords(got.obj.summary) || summary;
       }
-      if (refused) { sceneTried.set(key, (sceneTried.get(key) || 0) + 1); continue; }
+      if (refused) {
+        const n = (sceneTried.get(key) || 0) + 1;
+        sceneTried.set(key, n);
+        if (n < 2 && slow) {
+          lookIn(novelId, 'scene:' + key, slow, (ms) => `The helper sums up part of ${label} again ${inWhile(ms)} — its model was too slow to answer for it.`, () => {
+            const d = store.peek('play', pid);
+            return Boolean(d) && stretchPlan(sceneChapter(d)).stretches.some((s) => s.fp === st.fp && !s.text);
+          });
+        } else if (n < 2) owed = true;
+        continue;
+      }
       if (!summary) continue;
       const r = await keepHardTokens({ novelId, conn, frame, novel: now, label, text, summary, known: cardNames, stretch: true });
       summary = r.summary || summary;
@@ -3111,6 +3183,7 @@ async function sceneStretchUp(novelId, conn) {
       await store.flush('play', pid);
     }
   }
+  return owed;
 }
 
 /* ------------------------------------------------------- the summary check */
@@ -3177,16 +3250,23 @@ function layCheck(novelId, item, asked, text, checked, stamp) {
     return true;
   });
 }
+/* what a summary's check is counted by: the summary, as its words read */
+const checkKey = (item) => `${item.kind}:${item.id}:${item.st ? item.st.fp : ''}:${checkSig(String(item.entry.text || '').trim())}`;
+/* (returns whether checks are left for the next run: more than a run checks, or one its model would not answer — asked
+ * again, or passed by with its mark, the next run by itself: 2.12.41, as stretchUp's) */
 async function checkSummaries(novelId, conn) {
   const due = summaryChecksDue(novelId);
   const house = store.peek('house', 'house') || {};
   let done = 0;
+  let owed = false;
   for (const item of due) {
     if (done >= CHECKS_PER_RUN) return true;
     const now = store.peek('novel', novelId);
     if (!now) return false;
     const asked = String(item.entry.text || '').trim();
-    const key = `${item.kind}:${item.id}:${item.st ? item.st.fp : ''}:${checkSig(asked)}`;
+    const key = checkKey(item);
+    /* (its second try waits its time: lookIn) */
+    if (lookWaits(novelId, 'check:' + key)) continue;
     const c = item.kind === 'scene' ? store.peek('chapter', (store.peek('play', item.id) || {}).chapterId) : store.peek('chapter', item.id);
     const label = c ? chapterLabel(now, c, { withName: true }) : 'the book';
     const p = item.kind === 'scene' ? store.peek('play', item.id) : null;
@@ -3209,6 +3289,7 @@ async function checkSummaries(novelId, conn) {
     const fixed = [];
     const added = [];
     let refused = false;
+    let slow = 0;
     for (let q = 0; q < parts.length; q++) {
       const got = await helperJson(novelId, conn, frame, summaryCheckRequest({ novel: book, what, source: parts[q], summary: text, part: parts.length > 1 ? q + 1 : 0, parts: parts.length, scene: item.kind === 'scene' }),
         { want: (o) => Array.isArray(o.wrong) || Array.isArray(o.missing) });
@@ -3218,6 +3299,7 @@ async function checkSummaries(novelId, conn) {
         const fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got);
         if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
         refused = true;
+        slow = got.leashed === 'long' ? got.leashMs || 0 : 0;
         break;
       }
       /* what it says is taken only where the words of this part prove it */
@@ -3226,7 +3308,16 @@ async function checkSummaries(novelId, conn) {
       fixed.push(...r.fixed);
       added.push(...r.added);
     }
-    if (refused) { checkTried.set(key, (checkTried.get(key) || 0) + 1); done++; continue; }
+    if (refused) {
+      const n = (checkTried.get(key) || 0) + 1;
+      checkTried.set(key, n);
+      done++;
+      /* (asked again by itself — a refusal the next run, an answer that made no progress once as long again has passed;
+       * tried twice, passed by with its mark the next run) */
+      if (n < 2 && slow) lookIn(novelId, 'check:' + key, slow, (ms) => `The helper checks the summary of ${what} again ${inWhile(ms)} — its model was too slow to answer for it.`, () => summaryChecksDue(novelId).some((x) => checkKey(x) === key));
+      else owed = true;
+      continue;
+    }
     await mustHold('helper', novelId);
     const checked = { sig: checkSig(text), at: Date.now(), ...(fixed.length ? { fixed } : {}), ...(added.length ? { added } : {}) };
     layCheck(novelId, item, asked, text, checked, stamp);
@@ -3234,7 +3325,7 @@ async function checkSummaries(novelId, conn) {
     await store.flush(item.kind === 'scene' ? 'play' : 'chapter', item.id);
     done++;
   }
-  return false;
+  return owed;
 }
 
 /* ---------------------------------------- the bibliography, filled in */
@@ -3375,24 +3466,124 @@ function triesOf(v, what, at = 0) {
   const t = v && v.tries && v.tries[what];
   return t && t.fp === hashText(String(v.text || '')) && (t.at || 0) === at ? Number(t.n) || 0 : 0;
 }
-/* one more try (n), or none (n 0), for the version as it was asked — never on words changed since */
-function triedStep(passageId, versionId, what, fp, n, at = 0) {
+/* one more try (n), or none (n 0), for the version as it was asked — never on words changed since; `next`, the phone's
+ * time before which it is not asked again (a model too slow to answer: waited as long again — 2.12.41) */
+function triedStep(passageId, versionId, what, fp, n, at = 0, next = 0) {
   return (chapter) => {
     const p = (chapter.passages || []).find((x) => x.id === passageId);
     const v = p && (p.versions || []).find((x) => x.id === versionId);
     if (!v || v.streaming || hashText(String(v.text || '')) !== fp) return false;
     const tries = { ...(v.tries || {}) };
-    if (n > 0) tries[what] = { fp, n, ...(at ? { at } : {}) };
+    if (n > 0) tries[what] = { fp, n, ...(at ? { at } : {}), ...(next ? { next } : {}) };
     else delete tries[what];
     if (Object.keys(tries).length) v.tries = tries; else delete v.tries;
   };
 }
 /* (counted on the take it read, on show or not — as its answer is laid there: 2.12.40, the review — so a reading of a take
  * he flipped away from that gave no sound reading is counted too, never asked for ever) */
-const tryOnce = (x, what, at = 0) => {
+/* (`wait`: how long before it is asked again — the leash a model too slow to answer for it was given, 2.12.41; returns
+ * how many tries it has now) */
+const tryOnce = (x, what, at = 0, wait = 0) => {
   const v = askedVersion(x);
-  if (v) store.change('chapter', x.chapterId, triedStep(x.pid, x.vid, what, hashText(x.text), triesOf(v, what, at) + 1, at));
+  if (!v) return 0;
+  const n = triesOf(v, what, at) + 1;
+  store.change('chapter', x.chapterId, triedStep(x.pid, x.vid, what, hashText(x.text), n, at, wait > 0 && n < 2 ? store.phoneNow() + wait : 0));
+  return n;
 };
+/* when a passage tried once on a model too slow to answer is asked again, in the phone's time — 0 for none booked so
+ * (never tried, a refusal — asked again the next run — or tried twice: the next look only passes it by) */
+function triesNext(v, what, at = 0) {
+  const t = v && v.tries && v.tries[what];
+  if (!t || t.fp !== hashText(String(v.text || '')) || (t.at || 0) !== at || (Number(t.n) || 0) >= 2) return 0;
+  return Number(t.next) > 0 ? Number(t.next) : 0;
+}
+/* (and whether that time is still to come: not asked before then) */
+const triesWait = (v, what, at = 0) => { const next = triesNext(v, what, at); return next > store.phoneNow() ? next : 0; };
+/* the part of a passage its next ask is of — how far a reading in parts has come (`upTo`), its start else: one rule for
+ * the backfills' asks and for what waits */
+const turnsFrom = (v, text) => { const k = continuityNow(v); return k && Number.isInteger(k.upTo) && k.upTo > 0 && k.upTo < text.length ? k.upTo : 0; };
+const factsFrom = (v, text) => { const k = codexNow(v); return k && Number.isInteger(k.upTo) && k.upTo > 0 && k.upTo < text.length ? k.upTo : 0; };
+/* WHAT ELSE WAITS ITS TIME (2.12.41), by book: a stretch, a scene's stretch or a summary's check whose answer made no
+ * progress for as long as an answer is ever let run (call.js LEASH_ALL_MS) — counted as a try, as ever, and its second
+ * try asked once as long again has passed, never at once of a model that just made no progress for so long. {key: {at
+ * (the phone's time), say(ms) (in his words, for the light), still() (it is still owed as it was asked)}} — kept in the
+ * page's memory, as their tries are (stretchTried, sceneTried, checkTried); the run books itself for the soonest
+ * (whatWaits), and the light says it until then */
+const looks = new Map();
+function lookIn(novelId, key, ms, say, still) {
+  const m = looks.get(novelId) || new Map();
+  m.set(key, { at: store.phoneNow() + Math.max(0, ms), say, still });
+  looks.set(novelId, m);
+}
+/* (one that is no longer owed as it was asked — its words changed, or it was summed up — waits for nothing) */
+const lookLive = (l, now) => Boolean(l) && l.at > now && (!l.still || l.still());
+const lookWaits = (novelId, key) => lookLive((looks.get(novelId) || new Map()).get(key), store.phoneNow());
+/* (at the start of a run: what no longer waits is let go) */
+function looksDue(novelId) {
+  const m = looks.get(novelId);
+  if (!m) return;
+  const now = store.phoneNow();
+  for (const [k, l] of m) if (!lookLive(l, now)) m.delete(k);
+  if (!m.size) looks.delete(novelId);
+}
+/* WHAT WAITS (2.12.41 — his rule: if the app can detect a problem, the app repairs it. Through 2.12.40 a try counted on a
+ * model too slow to answer, or one that would not, booked nothing: the light said "The notes are up to date." while a
+ * passage was owed, and its second try waited for his next change — a Super automatic book left alone never had it). A
+ * passage tried once on a model too slow to answer is asked again by itself once as long as it was waited has passed —
+ * never at once of a model that kept silent for as long as it is ever waited — and tried twice, it is passed by. The
+ * passages owed for the Timeline ('turns') or the bibliography ('facts') — those of `refs` ([{pid, vid}]) when given —
+ * asked again by themselves once their wait is over: {n, ms} — how many, and how long until the first (0: its time has
+ * just come, the run booked for it on its way) — or null. (One whose time came longer ago than a minute is the next
+ * run's like any page owed — a book opened again after its wait was over — never a run booked every second for it.) */
+const JUST_NOW_MS = 60000;
+export function readAgainLater(novelId, what, refs = null) {
+  const only = refs ? new Set(refs.map((r) => `${r.pid}:${r.vid}`)) : null;
+  const now = store.phoneNow();
+  /* (a quick look first — a try booked so — and the due tests only for those: said on every paint) */
+  const pick = (p, v) => { const t = v.tries && v.tries[what]; return Boolean(t && Number(t.next) > now - JUST_NOW_MS && (Number(t.n) || 0) < 2) && (!only || only.has(`${p.id}:${v.id}`)); };
+  const due = what === 'turns' ? timelineDue(novelId, pick) : bibDue(novelId, pick);
+  let n = 0;
+  let at = Infinity;
+  for (const x of due) {
+    const v = liveVersion(x);
+    const next = v ? triesNext(v, what, what === 'turns' ? turnsFrom(v, x.text) : factsFrom(v, x.text)) : 0;
+    if (!next || next <= now - JUST_NOW_MS) continue;
+    n++;
+    at = Math.min(at, next);
+  }
+  return n ? { n, ms: Math.max(0, at - now) } : null;
+}
+const inWhile = (ms) => (ms <= 15000 ? 'in a moment' : `in ${waitWords(ms)}`);
+/* (when the first of `n` is asked again) */
+const firstIn = (n, ms) => (n === 1 ? inWhile(ms) : `, the first ${inWhile(ms)}`);
+/* HOW THE PAGES NOT READ YET ARE READ, in his words — by itself, a few at a time, or again by itself once their wait is
+ * over: one telling for the Timeline's line and the bibliography's (`n` of them not read yet, `later` what
+ * readAgainLater says of them) */
+export function readsByItself(n, later) {
+  const it = n === 1 ? 'it' : 'them';
+  if (!later) return `the helper reads ${it} by itself, a few at a time`;
+  if (later.n >= n) return `the helper’s model was too slow to answer for ${it}, so the helper reads ${it} again by itself${n === 1 ? ' ' : ''}${firstIn(n, later.ms)}`;
+  return `the helper reads ${it} by itself, a few at a time (${later.n === 1 ? `the one its model was too slow to answer for, again ${inWhile(later.ms)}` : `the ${later.n} its model was too slow to answer for again${firstIn(later.n, later.ms)}`})`;
+}
+/* WHAT WAITS ITS TIME, for the light and for the run to book itself: {ms (until the soonest), words} — the Timeline's
+ * and the bibliography's passages asked again once their wait is over, and the other looks booked (lookIn) — or null */
+function whatWaits(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return null;
+  const conn = connFor(store.peek('house', 'house') || {}, 'helper');
+  const turns = readAgainLater(novelId, 'turns');
+  const facts = conn && bibReading(novel, conn) ? readAgainLater(novelId, 'facts') : null;
+  const now = store.phoneNow();
+  const other = [...(looks.get(novelId) || new Map()).values()].filter((l) => lookLive(l, now)).sort((a, b) => a.at - b.at);
+  if (!turns && !facts && !other.length) return null;
+  const said = [];
+  const n = (turns ? turns.n : 0) + (facts ? facts.n : 0);
+  const soon = Math.min(turns ? turns.ms : Infinity, facts ? facts.ms : Infinity);
+  const what = [turns ? `${plural(turns.n, 'passage')} for the Timeline` : '', facts ? `${plural(facts.n, 'page')} for the bibliography` : ''].filter(Boolean).join(' and ');
+  if (what) said.push(`The helper reads ${what} again${n === 1 ? ' ' : ''}${firstIn(n, soon)} — its model was too slow to answer for ${n === 1 ? 'it' : 'them'}.`);
+  for (const l of other) said.push(l.say(l.at - now));
+  return { ms: Math.max(0, Math.min(soon, other.length ? other[0].at - now : Infinity)), words: said.join(' ') };
+}
 const triesDone = (x, what) => store.change('chapter', x.chapterId, triedStep(x.pid, x.vid, what, hashText(x.text), 0));
 /* the passage a backfill asked about, where it stood */
 const askedPassage = (x) => ((store.peek('chapter', x.chapterId) || {}).passages || []).find((y) => y.id === x.pid);
@@ -3426,7 +3617,8 @@ function factsOwed(novel, p, v) {
  * asked. An answer that made no progress at all on its words (M748's other leash) is counted, as the notes' reading
  * counts it. */
 const stallEnds = (got) => got.leashed === 'quiet' && !got.longest;
-export function bibDue(novelId) {
+/* (`pick(p, v)`: only those it lets through — a quick look first, before the tests that read the words: readAgainLater) */
+export function bibDue(novelId, pick = null) {
   const novel = store.peek('novel', novelId);
   if (!novel || !bibAutoOn(novel)) return [];
   const seen = (novel.memory || {}).seen || {};
@@ -3438,6 +3630,7 @@ export function bibDue(novelId) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       const v = picked(p);
+      if (pick && (!v || !pick(p, v))) continue;
       /* (factsOwed: a passage its model would not read is not asked for again here either — as its words stand,
        * timeline.js setAsideNow, the Timeline's own test: 2.12.40, the review; one read in parts and not to its end
        * yet stays due: 2.12.40) */
@@ -3472,7 +3665,9 @@ async function bibBackfill(novelId, conn) {
       const k = codexNow(v);
       /* (owed still, by bibDue's own test) */
       if (!v || !factsOwed(now, askedPassage(x), v)) return null;
-      const at = k && k.upTo > 0 && k.upTo < x.text.length ? k.upTo : 0;
+      const at = factsFrom(v, x.text);
+      /* (tried once on a model too slow to answer: asked again once as long has passed, never at once — 2.12.41) */
+      if (triesWait(v, 'facts', at)) return null;
       if (!at && countWords(x.text) <= words) return { ...x, at: 0, shown: x.text, whole: true, last: true, gap: false };
       const part = nextPart(x.text, words, at);
       if (!part) return null;
@@ -3514,8 +3709,17 @@ async function bibBackfill(novelId, conn) {
       const fault = got.leashed ? 'words' : await helperFault(novelId, conn, got);
       if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
       /* its model will not read them: one at a time from here, each tried twice at most */
-      if (asking.length > 1) bibNarrow.add(novelId);
-      else tryOnce(asking[0], 'facts', asking[0].at);
+      /* (ASKED AGAIN BY ITSELF — 2.12.41: through 2.12.40 nothing was booked here — of several, the narrowing was let go
+       * at the end of the run and they waited for his next change, to be asked together again; alone, its try counted and
+       * its second try waited for his next change, while the light said the notes were up to date. Now: of several, one
+       * at a time the next run; alone, a refusal asked again the next run, and a model too slow to answer once as long as
+       * it was waited has passed (its time kept with its try, triesWait; the run booked for it, whatWaits); tried twice,
+       * passed by the next run) */
+      if (asking.length > 1) { bibNarrow.add(novelId); again = true; }
+      else {
+        const wait = got.leashed ? got.leashMs || 0 : 0;
+        if (tryOnce(asking[0], 'facts', asking[0].at, wait) >= 2 || !wait) again = true;
+      }
       if (asking.length === 1 && !asking[0].whole) i++;
       batches++;
       continue;
@@ -3556,7 +3760,8 @@ async function bibBackfill(novelId, conn) {
     await store.flush();
     batches++;
   }
-  if (!again) bibNarrow.delete(novelId);
+  /* (one at a time still for those asked again once their wait is over: 2.12.41) */
+  if (!again && !readAgainLater(novelId, 'facts')) bibNarrow.delete(novelId);
   return again;
 }
 
@@ -3573,7 +3778,8 @@ async function bibBackfill(novelId, conn) {
  * inplace.js, mend.js, changes.js.) */
 export const TIMELINE_BATCHES_PER_RUN = 2;
 const tlNarrow = new Set();
-export function timelineDue(novelId) {
+/* (`pick(p, v)`: only those it lets through, as bibDue's) */
+export function timelineDue(novelId, pick = null) {
   const novel = store.peek('novel', novelId);
   if (!novel) return [];
   const seen = (novel.memory || {}).seen || {};
@@ -3585,6 +3791,7 @@ export function timelineDue(novelId) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
       const v = picked(p);
+      if (pick && (!v || !pick(p, v))) continue;
       if (!v || v.streaming || !String(v.text || '').trim()) continue;
       /* read for its turns, passed by (tried twice for these very words) or set aside as its words stand: not read
        * here — the Timeline's own tests, so what it counts owed is what is read (timeline.js turnsOwed, 2.12.40) */
@@ -3682,7 +3889,9 @@ async function timelineBackfill(novelId, conn) {
       const k = continuityNow(v);
       /* (owed still, by the Timeline's own test — a reading kept whole whose turn no longer holds is read again: 2.12.40) */
       if (!v || !turnsOwed(now, askedPassage(x), v)) return null;
-      const at = k && Number.isInteger(k.upTo) && k.upTo > 0 && k.upTo < x.text.length ? k.upTo : 0;
+      const at = turnsFrom(v, x.text);
+      /* (tried once on a model too slow to answer: asked again once as long has passed, never at once — 2.12.41) */
+      if (triesWait(v, 'turns', at)) return null;
       if (!at && countWords(x.text) <= words) return { ...x, at: 0, shown: x.text, whole: true, last: true, gap: false };
       const part = nextPart(x.text, words, at);
       if (!part) return null;
@@ -3723,8 +3932,13 @@ async function timelineBackfill(novelId, conn) {
       if (stallEnds(got)) return true;
       const fault = got.leashed ? 'words' : await helperFault(novelId, conn, got);
       if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
-      if (asking.length > 1) tlNarrow.add(novelId);
-      else tryOnce(asking[0], 'turns', asking[0].at);
+      /* (asked again by itself, as the bibliography's: of several, one at a time the next run; alone, its try counted —
+       * a refusal asked again the next run, a model too slow to answer once its wait is over — 2.12.41) */
+      if (asking.length > 1) { tlNarrow.add(novelId); again = true; }
+      else {
+        const wait = got.leashed ? got.leashMs || 0 : 0;
+        if (tryOnce(asking[0], 'turns', asking[0].at, wait) >= 2 || !wait) again = true;
+      }
       /* (a part it would not read: asked again another run — the passages after it are read meanwhile) */
       if (asking.length === 1 && !asking[0].whole) i++;
       batches++;
@@ -3770,7 +3984,8 @@ async function timelineBackfill(novelId, conn) {
     await store.flush();
     batches++;
   }
-  if (!again) tlNarrow.delete(novelId);
+  /* (one at a time still for those asked again once their wait is over: 2.12.41) */
+  if (!again && !readAgainLater(novelId, 'turns')) tlNarrow.delete(novelId);
   return again;
 }
 

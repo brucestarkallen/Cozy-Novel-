@@ -316,9 +316,11 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
   /* passed: read for its turns and passed by — its model would not give them from its words (archivist.js timelineBackfill);
    * passedFound: the turns those passages gave, shown; aside: set aside by the notes' reading as its words stand — its model
    * would not read it, never read for its turns until he has it read again (2.12.40: said apart, never "read by itself");
-   * owed: the rest not read, which the helper reads by itself (turnsOwed: each counted by the helper's own tests) */
+   * owed: the rest not read, which the helper reads by itself (turnsOwed: each counted by the helper's own tests) — and
+   * owedOf, which they are ([{chapterId, pid, vid}]: what waits its time among them is said by them, 2.12.41) */
   const coverage = { total: 0, read: 0, missing: 0, passed: 0, complete: false };
   let aside = 0, passedFound = 0, owed = 0;
+  const owedOf = [];
   const order = novel?.order || [];
   const end = chapterId ? order.indexOf(chapterId) : order.length - 1;
   const limit = chapterId && through && through !== '^' ? (chapters?.[chapterId]?.passages || []).findIndex(p => p.id === through) : null;
@@ -343,7 +345,7 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
       if (read) coverage.read++;
       else if (passed) coverage.passed++;
       else if (setAsideNow(novel, p, v)) aside++;
-      else owed++;
+      else { owed++; owedOf.push({ chapterId: cid, pid: p.id, vid: v.id }); }
       if (!s) continue;
       const rows = [];
       /* every turn kept is shown — two of one reading are two, however alike (sameTurn: 2.12.40, the review) */
@@ -370,6 +372,6 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
   if (missingChapter) coverage.unavailable = true;
   if (aside) coverage.aside = aside;
   if (passedFound) coverage.passedFound = passedFound;
-  if (owed) coverage.owed = owed;
+  if (owed) { coverage.owed = owed; coverage.owedOf = owedOf; }
   return { events, coverage, cards };
 }

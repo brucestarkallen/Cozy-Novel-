@@ -359,6 +359,21 @@ async def helper_states(browser):
     await close_and_reopen(pg)
     line = await pg.locator('.bibview > .bibdue').all_inner_texts()
     check('the helper reading again: the page read by itself, a few at a time', any('1 page is not read for the bibliography yet — the helper reads it by itself, a few at a time.' in x for x in line), line)
+    # (2.12.41) its page tried once on a model too slow to answer: said with when the helper reads it again by itself —
+    # drawn again as its try is counted, the bibliography left open
+    await pg.evaluate("""async (nid) => {
+      const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const { hashText } = await import('/js/util.js');
+      const cid = s.peek('novel', nid).order[0];
+      s.change('chapter', cid, (c) => { const v = sh.picked(c.passages[0]); v.tries = { facts: { fp: hashText(v.text), n: 1, next: s.phoneNow() + 15 * 60 * 1000 } }; });
+      await s.flush();
+    }""", ids['nid'])
+    try:
+        await pg.wait_for_function("[...document.querySelectorAll('.bibview > .bibdue')].some((x) => x.textContent.includes('too slow to answer'))", timeout=5000)
+    except Exception:
+        pass
+    line = await pg.locator('.bibview > .bibdue').all_inner_texts()
+    check('its page tried once on a model too slow to answer: said with when the helper reads it again by itself, as it is counted',
+          any('1 page is not read for the bibliography yet — the helper’s model was too slow to answer for it, so the helper reads it again by itself in fifteen minutes.' in x for x in line), line)
     check('the bibliography’s states have no page exceptions', not [x for x in logs if x.startswith('PAGEERROR')], [x for x in logs if x.startswith('PAGEERROR')])
     await pg.context.close()
 
