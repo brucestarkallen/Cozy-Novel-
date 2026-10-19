@@ -834,13 +834,18 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
 /* (and as the screen says it: "When there's room", "Page by page", "Never — it's only for me", 2.12.35) */
 const RIDES_SAID = { always: 'always', named: 'named', 'when named': 'named', 'when its name comes up': 'named', 'when there’s room': 'named', "when there's room": 'named', 'page by page': 'named', never: 'never', 'only for me': 'never', 'never — it’s only for me': 'never', "never — it's only for me": 'never', 'never - only for me': 'never' };
 const entryRides = (v) => RIDES_SAID[String(v || '').trim().toLowerCase().replace(/[.!]+$/, '')] || '';
-function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner' }) {
+function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner', entriesSeen = null }) {
   const entries = entriesOf(novel);
   const name = archivist.cleanName(op.entry);
   if (!name) return refuse(text(op.entry) ? `“${clipped(text(op.entry))}” is no name — name the entry as the bibliography does` : 'the entry needs a name');
   const m = entryNamed(entries, name);
   if (m.ambiguous) return refuse(`more than one entry goes by ${name} — name it by its full name`);
   const cur = m.entry ? clone(m.entry) : null;
+  /* HIS ENTRY WRITTEN WHOLE ONLY BY AN ANSWER THAT READ IT WHOLE (2.12.40, the audit — the twin of a passage it had only
+   * in short, and of a card it had by its first line): an entry its answer saw only by its name and line in the list is
+   * never written over from that — read first (`entriesSeen`: the ids of the entries it had whole); a paragraph added to
+   * it takes nothing away */
+  if (cur && entriesSeen && !entriesSeen.has(cur.id) && String(cur.text || '').trim() && op.text !== undefined && archivist.cleanText(op.text, 20000)) return refuse(`it had ${cur.name}’s entry only in short, by its name and line — read it whole first with “entry: ${cur.name}”, or add a paragraph to it`);
   if (truthOf(op.remove) === true) {
     if (!cur) return refuse(`there is no ${name} in the bibliography`);
     put('novel', novelId, novelSteps.dropEntry(cur.id), { now: true });
@@ -891,14 +896,15 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner
   if (!ENTRY_KINDS.includes(tidy.kind) || !RIDES.includes(tidy.rides)) return refuse('the entry could not be read');
   if (cur && JSON.stringify(tidy) === JSON.stringify(tidyEntry(cur))) return refuse(twice ? 'those words are there already' : 'the entry already says that');
   if (!cur && !tidy.line && !tidy.text) return refuse('it gave nothing to write in a new entry');
-  /* whose it is: an entry he wrote stays his when the partner changes it (2.12.35: it was tagged "your partner's") */
-  const by = cur ? (cur.by === 'partner' ? 'partner' : cur.by) : newBy;
+  /* whose it is: an entry he wrote stays his when the partner changes it (2.12.35: it was tagged "your partner's"); one
+   * changed by his own words — Quick add's — is his from then on (2.12.40, the audit: it stayed "your partner's") */
+  const by = cur ? (newBy === 'you' ? 'you' : cur.by === 'partner' ? 'partner' : cur.by) : newBy;
   const after = { ...tidy, at, ...(by ? { by } : {}) };
   put('novel', novelId, novelSteps.putEntry(after), { now: true });
   return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(after) }, before: cur ? (cur.text || cur.line || '') : '', after: after.text || after.line || '' };
 }
 
-export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null, short = null, entryBy = '' } = {}) {
+export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null, short = null, entryBy = '', entriesSeen = null } = {}) {
   /* dry: everything looked at as it would be, nothing written — whether it would land (whyNot) */
   const put = dry ? () => {} : (...a) => store.change(...a);
   if (op && op.unreadable) return { id, op: clone(op), label: 'A changes block', why: '', status: 'refused', said: `its changes block could not be read (it began: ${op.head || '…'})` };
@@ -1159,7 +1165,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
 
   /* an entry in his bibliography (bibliography.js): his, made at his asking */
   /* (Quick add's entries are his own words for his world: a new one is his — quickadd.js `entryBy`) */
-  if (op.entry !== undefined) return makeEntry(novelId, novel, op, { base, refuse, put, at, newBy: entryBy === 'you' ? 'you' : 'partner' });
+  if (op.entry !== undefined) return makeEntry(novelId, novel, op, { base, refuse, put, at, newBy: entryBy === 'you' ? 'you' : 'partner', entriesSeen });
   if (op.note !== undefined && archivist.rereading(novelId)) return refuse(REREADING);
   if (op.note !== undefined) {
     const kind = op.note;
@@ -1356,7 +1362,9 @@ export function undoChange(novelId, change) {
   }
   if (u.what === 'entry') {
     const done = store.change('novel', novelId, novelSteps.entryBack(u.id, u.before, u.after), { now: true });
-    if (done === false) return { ok: false, said: u.after ? 'the entry has been changed since' : 'the entry is back in the bibliography already' };
+    /* (one he took out since is said so — 2.12.40, the audit: it was "changed since") */
+    const there = entriesOf(store.peek('novel', novelId)).some((e) => e.id === u.id);
+    if (done === false) return { ok: false, said: !u.after ? 'the entry is back in the bibliography already' : there ? 'the entry has been changed since' : 'the entry has been taken out since' };
     return { ok: true };
   }
   if (u.what === 'module') {

@@ -41,15 +41,21 @@ def answer_for(body):
     if "Read these passages for the Timeline alone" in last_user:
         # the Timeline read for itself (2.12.37): an honest reading of every passage shown, with no turns in it
         return json.dumps({"timeline": [{"source": x, "events": []} for x in re.findall(r"^(Chapter [^\n]+?, passage \d+):$", last_user, re.M)]})
-    if "Hold my words against the book as it stands" in last_user:
-        # Quick add (2.12.37): each "X is ..." sentence of his words an entry; black hair where a page gives silver, a
-        # conflict quoting the page's own sentence
-        said = last_user.split('to go into my bibliography now:\n"""\n', 1)[-1].split('\n"""', 1)[0]
+    if "Hold my words against the book as it stands" in last_user or "I looked up the words you quoted" in last_user:
+        # Quick add (2.12.37): each "X is ..." sentence of his words an entry — written up in its own words, the way a
+        # series bible writes it, never his sentence pasted (2.12.40: so a walk can tell a pasted entry from a written
+        # one); black hair where a page gives silver, a conflict quoting the page's own sentence. Asked again with the
+        # rows as they stand: the entries again.
+        asked = next((m.get("content") for m in msgs if m.get("role") == "user" and isinstance(m.get("content"), str) and "Hold my words against the book as it stands" in m.get("content")), last_user)
+        said = asked.split('to go into my bibliography now:\n"""\n', 1)[-1].split('\n"""', 1)[0]
         entries, conflicts = [], []
         for sentence in re.split(r"(?<=[.!?])\s+", said):
             m = re.match(r"^(?:The )?([A-Z][\w’' -]+?) is (.+?)[.!?]?$", sentence.strip())
             if m:
-                entries.append({"name": m.group(1).strip(), "kind": "groups" if "council" in m.group(2) else "lore", "line": sentence.strip(), "text": sentence.strip()})
+                name, what = m.group(1).strip(), m.group(2).strip()
+                entries.append({"name": name, "kind": "groups" if "council" in what else "lore", "line": what[:1].upper() + what[1:], "text": f"{name}: {what}."})
+        if "I looked up the words you quoted" in last_user:
+            return json.dumps({"entries": entries})
         if "black hair" in said:
             page = re.search(r"[^.\n\"]*silver hair[^.\n\"]*", last_user.split("The passages of the book that name", 1)[-1])
             if page:

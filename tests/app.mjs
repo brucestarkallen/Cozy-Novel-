@@ -13626,7 +13626,11 @@ await test('Quick add: his words held against the book first — a page that say
     cannot: [{ mine: 'Jovan turns three hunters', rule: 'Only an elder can turn a hunter', where: 'your premise', why: 'he is no elder' }],
     questions: ['How many houses sit on the Sanguelis?'],
     entries: [{ name: 'Sanguelis', kind: 'groups', line: 'The council of the elder houses.', text: 'The ruling council of the elder vampire houses.' },
-      { name: 'Emilia Vermaine', text: 'Emilia rules with her brother.' }] }) }]);
+      { name: 'Emilia Vermaine', text: 'Emilia rules with her brother.' }] }) },
+  /* (2.12.40) a quote that stands nowhere no longer holds his words back unsaid: it is asked once more, with the rows as
+   * they stand, for its entries again */
+  { text: JSON.stringify({ entries: [{ name: 'Sanguelis', kind: 'groups', line: 'The council of the elder houses.', text: 'The ruling council of the elder vampire houses.' },
+    { name: 'Emilia Vermaine', text: 'Emilia rules with her brother.' }] }) }]);
   const words = 'Emilia has black hair and rules with her brother. Jovan turns three hunters. The Sanguelis is the council of the elder houses.';
   const out = await quickadd.quickAdd({ novelId: b.novelId, words });
   assert.equal(out.ok, true, out.error);
@@ -13639,7 +13643,10 @@ await test('Quick add: his words held against the book first — a page that say
   assert.ok(sent.includes('the grammar, spelling and wording put right') && sent.includes('never my words pasted as I typed them'), 'told to write the entries well, never paste his words');
   const row = out.row;
   assert.deepEqual(row.conflicts.map((c) => [c.label, c.passageId === b.ch().passages[0].id, c.against]), [['Chapter One, Passage 1', true, 'Emilia Vermaine had silver hair']], 'the page that says otherwise, with where');
-  assert.equal(row.aside, 1, 'words quoted that stand nowhere: set aside');
+  /* (2.12.40: the old expectation was a bare count, `aside: 1` — the audit's finding: his words, and what was said
+   * against them, were shown nowhere. Now each is kept to be said, and it was asked again without them) */
+  assert.deepEqual(row.aside.map((x) => [x.mine, x.quote]), [['her eyes are green', 'her eyes were always grey']], 'words quoted that stand nowhere: set aside, each said');
+  assert.equal(row.again, 'answered', 'asked once more with the rows as they stand');
   assert.deepEqual(row.changes.map((c) => c.label), ['your entry Emilia Vermaine'], 'his own earlier words: a change, his newer word');
   assert.deepEqual(row.cannot.map((c) => c.label), ['your premise for Chapter One, Passage 2']);
   assert.deepEqual(row.questions, ['How many houses sit on the Sanguelis?']);
@@ -13684,6 +13691,407 @@ await test('Quick add: what he said before rides with what he says next, so “k
   await script([{ text: JSON.stringify({ verdict: 'Fine.', entries: [] }) }]);
   await quickadd.quickAdd({ novelId: b.novelId, words: 'Nothing new.' });
   assert.ok(!(await quickSent()).at(-1).includes('The Hollow Gate is a ruin.'));
+  await putAway(b);
+});
+
+/* ------------------------------------------- the audit of Quick add (2.12.40) */
+/* every request of a Quick add (the first ask, its JSON asked again, the ask with the rows as they stand) */
+const quickBodies = async () => (await everyRequest()).filter((x) => (x.body.messages || []).some((m) => String(m.content || '').includes(prompts.QUICK_ASK)));
+const askedAgain = async () => (await quickBodies()).map((x) => String(x.body.messages.at(-1).content || '')).filter((m) => m.startsWith('I looked up the words you quoted'));
+const SANG_HIS = 'The Sanguelis is the council of the nine elder houses. It meets in the drowned chapel under the old city. Each house sends its eldest; the Vermaine seat has stood empty since the Burning. A vote needs seven of nine. Its law forbids turning a child, and the penalty is the sun. Its seal is a black rose on bone. The Iron Covenant has hunted its envoys for three hundred years.';
+
+await test('Quick add: his own entry is never thinned nor written blind — given whole again it stands in place of his only when it went whole and keeps what it said; else only what is new is added, his line and kind kept, and the row says why (2.12.40)', async () => {
+  await setHouse();
+  /* given whole again, thinner: every word of his kept, its new sentences added */
+  const b = await makeBook([['The Sanguelis met in the drowned chapel.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Sanguelis', kind: 'groups', line: 'The council of the elder houses.', text: SANG_HIS, by: 'you' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'It goes in.', entries: [{ name: 'Sanguelis', kind: 'lore', line: 'A council.', text: 'The Sanguelis is the council of the elder vampire houses. It meets once a century.' }] }) }]);
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'The Sanguelis meets once a century.' });
+  assert.equal(out.ok, true, out.error);
+  assert.ok((await quickSent())[0].includes('Its seal is a black rose on bone.'), 'his entry went whole');
+  let e = bib.entriesOf(b.novel()).find((x) => x.name === 'Sanguelis');
+  assert.equal(e.text, `${SANG_HIS}\n\nThe Sanguelis is the council of the elder vampire houses. It meets once a century.`, 'every word of his kept, what is new added');
+  assert.deepEqual([e.line, e.kind], ['The council of the elder houses.', 'groups'], 'his line and his kind stay');
+  const a = out.row.added[0];
+  assert.deepEqual([a.was, a.how], [true, 'added']);
+  assert.ok(a.addedWhy.startsWith('what it wrote would have lost') && a.addedWhy.includes('“Iron Covenant”') && a.addedWhy.includes('“seven”') && a.addedWhy.includes('“three hundred”'), a.addedWhy);
+  /* Undo these puts his entry back as it was */
+  assert.equal(quickadd.undoQuick(b.novelId, out.row.id).back, 1);
+  assert.equal(bib.entriesOf(b.novel()).find((x) => x.name === 'Sanguelis').text, SANG_HIS);
+  /* written blind: an entry the request never gave whole (his words never name it) — only what is new added, his line kept */
+  const c = await makeBook([['Emilia walked the wall at dusk.']], { manual: true });
+  markAllSeen(c);
+  const vermaine = 'HIS OWN: the youngest of the nine elder houses, seated at the drowned chapel since the Burning; its sigil is a silver moth.';
+  putEntries(c, [{ name: 'House Vermaine', kind: 'groups', line: 'The youngest elder house.', text: vermaine, by: 'you' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'House Vermaine', kind: 'groups', line: 'The youngest elder house, led by Emilia.', text: 'The youngest elder house, led by Emilia.' }] }) }]);
+  const blind = await quickadd.quickAdd({ novelId: c.novelId, words: 'Emilia leads the youngest of the elder clans.' });
+  assert.equal(blind.ok, true, blind.error);
+  assert.ok(!JSON.stringify((await quickBodies())[0].body).includes('silver moth'), 'its words were never sent');
+  e = bib.entriesOf(c.novel())[0];
+  assert.deepEqual([e.text, e.line], [`${vermaine}\n\nThe youngest elder house, led by Emilia.`, 'The youngest elder house.']);
+  assert.equal(blind.row.added[0].addedWhy, 'it had not read your entry whole');
+  /* went whole and keeps what it said — a figure his newer word changes, looked up where it stands in it, may go: it
+   * stands in place of his, and nothing overruled, its own verdict is shown */
+  const d = await makeBook([['The Sanguelis met in the drowned chapel.']], { manual: true });
+  markAllSeen(d);
+  putEntries(d, [{ name: 'Sanguelis', kind: 'groups', line: 'The council.', text: 'The Sanguelis is the council of the elder houses. A vote needs seven of nine.', by: 'you' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Your newer word goes in.', changes: [{ mine: 'a vote needs five of nine', was: 'A vote needs seven of nine', where: 'your entry Sanguelis', why: 'your newer word' }],
+    entries: [{ name: 'Sanguelis', kind: 'groups', line: 'The council.', text: 'The Sanguelis is the council of the elder houses. A vote needs five of nine.' }] }) }]);
+  const whole = await quickadd.quickAdd({ novelId: d.novelId, words: 'In the Sanguelis a vote needs five of nine.' });
+  assert.equal(whole.ok, true, whole.error);
+  assert.equal(bib.entriesOf(d.novel())[0].text, 'The Sanguelis is the council of the elder houses. A vote needs five of nine.');
+  assert.deepEqual([whole.row.added[0].how, whole.row.verdict, whole.row.verdictBy], ['whole', 'Your newer word goes in.', 'partner']);
+  for (const x of [b, c, d]) await putAway(x);
+});
+
+await test('Quick add: the four newest that put something in keep their Undo — asks that failed never take it, it is kept past the twelve rows kept, and a row whose Undo is let go says so (2.12.40)', async () => {
+  await setHouse();
+  const put = async (bk, name, words) => {
+    await script([{ text: JSON.stringify({ verdict: 'In.', entries: [{ name, kind: 'groups', line: 'A house.', text: `${name}, a house of the old blood.` }] }) }]);
+    return quickadd.quickAdd({ novelId: bk.novelId, words });
+  };
+  const fail = async (bk, n) => { for (let i = 0; i < n; i++) { await script([{ status: 401, message: 'key refused' }]); await quickadd.quickAdd({ novelId: bk.novelId, words: `try ${i}` }); } };
+  const b = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  const first = await put(b, 'Sanguelis', 'The Sanguelis is the council of the elder houses.');
+  await fail(b, 12);
+  const log = quickadd.quickLog(b.novel());
+  assert.equal(log.length, 13, 'the twelve newest, and the older one that still holds its Undo');
+  assert.deepEqual([log[0].id, log[0].added.map((a) => [a.status, Boolean(a.change)])], [first.row.id, [['made', true]]]);
+  assert.equal(quickadd.undoQuick(b.novelId, first.row.id).back, 1, 'twelve asks that failed later: its Undo still puts it back');
+  assert.equal(bib.entriesOf(b.novel()).some((x) => x.name === 'Sanguelis'), false);
+  /* four newer that put something in: its Undo is let go — said, and what went in stays */
+  const c = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(c);
+  await reset();
+  const one = await put(c, 'Sanguelis', 'The Sanguelis is the council of the elder houses.');
+  await fail(c, 4);
+  assert.deepEqual(quickadd.quickLog(c.novel()).find((r) => r.id === one.row.id).added.map((a) => a.status), ['made'], 'four failed asks take nothing');
+  for (const n of ['Ash', 'Bane', 'Cinder', 'Dusk']) await put(c, `House ${n}`, `House ${n} is an elder house.`);
+  const rows = quickadd.quickLog(c.novel());
+  const old = rows.find((r) => r.id === one.row.id);
+  assert.deepEqual(old.added.map((a) => [a.status, Boolean(a.change)]), [['kept', false]], 'past the four newest that put something in: let go, kept as it went in');
+  assert.equal(rows.filter((r) => (r.added || []).some((a) => a.change && a.status === 'made')).length, 4);
+  assert.ok(bib.entriesOf(c.novel()).some((x) => x.name === 'Sanguelis'), 'what went in stays');
+  assert.equal(quickadd.undoQuick(c.novelId, one.row.id).back, 0);
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('Quick add: what goes in rests on where its quotes stand, never on how it sorted them — a change a page says otherwise waits and its entry stays out, a conflict quoting only his own words goes in, words quoted from nowhere are said row by row; asked once more with the rows as they stand, and its verdict shown only where they bear it out (2.12.40)', async () => {
+  await setHouse();
+  /* a "change" whose earlier words stand on a page: the book says otherwise — it waits, and the entry for it stays out */
+  const b = await makeBook([['Emilia Vermaine had silver hair. Emilia rules alone, as she always has.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'Emilia rules alone.' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Your newer word goes in.', changes: [{ mine: 'Emilia rules with her brother', was: 'Emilia rules alone', where: 'your entry Emilia Vermaine', why: 'your newer word' }],
+    entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'Emilia rules with her brother.' }] }) },
+  { text: JSON.stringify({ entries: [] }) }]);
+  const a = await quickadd.quickAdd({ novelId: b.novelId, words: 'Emilia rules with her brother.' });
+  assert.equal(a.ok, true, a.error);
+  assert.deepEqual(a.row.conflicts.map((x) => [x.mine, x.label, x.said]), [['Emilia rules with her brother', 'Chapter One, Passage 1', 'changes']], 'the page says otherwise: it waits');
+  assert.deepEqual(a.row.changes, []);
+  assert.equal(bib.entriesOf(b.novel())[0].text, 'Emilia rules alone.', 'its entry stayed out');
+  let [again] = await askedAgain();
+  assert.ok(again && again.includes('These stand on a page of the book, so they wait for my word') && again.includes('- “Emilia rules with her brother” — Chapter One, Passage 1 says “Emilia rules alone”'), again);
+  assert.deepEqual([a.row.verdictBy, a.row.verdict], ['app', 'Nothing went in. One thing waits for your word.'], 'its verdict overruled: the app’s own account');
+  /* a "conflict" quoting only his own entry: his newer word — asked again, its entry goes in */
+  const c = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(c);
+  putEntries(c, [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'Emilia has silver hair.' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'That waits for your word: the book gives silver.', conflicts: [{ mine: 'Emilia has black hair', against: 'Emilia has silver hair', where: 'Chapter One, Passage 1', why: 'silver' }], entries: [] }) },
+    { text: JSON.stringify({ entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'Emilia has black hair.' }] }) }]);
+  const bb = await quickadd.quickAdd({ novelId: c.novelId, words: 'Emilia has black hair.' });
+  assert.deepEqual(bb.row.changes.map((x) => [x.kind, x.label, x.said]), [['entry', 'your entry Emilia Vermaine', 'conflicts']]);
+  assert.deepEqual(bb.row.conflicts, []);
+  assert.equal(bib.entriesOf(c.novel())[0].text, 'Emilia has black hair.', 'his newer word went in');
+  [again] = await askedAgain();
+  assert.ok(again.includes('These stand only in my own earlier words, and no page says otherwise — they are my newer word, and they go in'), again);
+  /* words quoted from nowhere: said row by row — asked again, they hold his words back no longer; its verdict, saying
+   * the book gives grey, is never shown */
+  const d = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(d);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Green eyes wait for your word — the book gives grey.', conflicts: [{ mine: 'her eyes are green', against: 'her eyes were always grey', where: 'Chapter One, Passage 1', why: 'grey' }],
+    entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'An elder vampire who walks the wall at dusk.' }] }) },
+  { text: JSON.stringify({ entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'An elder vampire with green eyes, who walks the wall at dusk.' }] }) }]);
+  const cc = await quickadd.quickAdd({ novelId: d.novelId, words: 'Emilia Vermaine is an elder vampire; her eyes are green.' });
+  assert.deepEqual(cc.row.aside.map((x) => [x.mine, x.quote, x.where]), [['her eyes are green', 'her eyes were always grey', 'Chapter One, Passage 1']]);
+  assert.equal(bib.entriesOf(d.novel())[0].text, 'An elder vampire with green eyes, who walks the wall at dusk.');
+  assert.ok(cc.row.verdictBy === 'app' && !cc.row.verdict.includes('grey'), cc.row.verdict);
+  [again] = await askedAgain();
+  assert.ok(again.includes('The words you quoted for these stand nowhere in the book or in my own words, so they hold mine back no longer') && again.includes('- “her eyes are green” — you quoted “her eyes were always grey”'), again);
+  /* as it sorted them, borne out by the look-ups: no second ask, its verdict shown */
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Black hair waits: the page gives silver. The Red Mile goes in.', conflicts: [{ mine: 'Emilia has black hair', against: 'Emilia Vermaine had silver hair', where: 'Chapter One, Passage 1', why: 'silver' }],
+    entries: [{ name: 'Red Mile', kind: 'places', line: 'A street.', text: 'The street of the night market.' }] }) }]);
+  const ok = await quickadd.quickAdd({ novelId: b.novelId, words: 'Emilia has black hair. The Red Mile is the night market street.' });
+  assert.deepEqual([ok.row.verdictBy, ok.row.verdict, (await askedAgain()).length], ['partner', 'Black hair waits: the page gives silver. The Red Mile goes in.', 0]);
+  for (const x of [b, c, d]) await putAway(x);
+});
+
+await test('Quick add: asked again and no answer that can be read — what it wrote, which may say what a page says otherwise, is held back and said; only cards he wrote are his earlier words, the helper’s are neither a page nor his (2.12.40)', async () => {
+  await setHouse();
+  const b = await makeBook([['Emilia Vermaine had silver hair. Emilia rules alone, as she always has.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'Emilia rules alone.' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'In.', changes: [{ mine: 'Emilia rules with her brother', was: 'Emilia rules alone', where: 'your entry', why: 'newer' }],
+    entries: [{ name: 'Emilia Vermaine', text: 'Emilia rules with her brother.' }, { name: 'Sanguelis', kind: 'groups', line: 'A council.', text: 'The council of the elder houses.' }] }) },
+  { text: 'Not an answer this time.' }]);
+  const a = await quickadd.quickAdd({ novelId: b.novelId, words: 'Emilia rules with her brother. The Sanguelis is the council.' });
+  assert.equal(a.ok, true, a.error);
+  assert.deepEqual([a.row.again, a.row.held, a.row.added], ['failed', ['Emilia Vermaine', 'Sanguelis'], []]);
+  assert.deepEqual(bib.entriesOf(b.novel()).map((x) => [x.name, x.text]), [['Emilia Vermaine', 'Emilia rules alone.']], 'nothing went in');
+  assert.ok(a.row.verdict.startsWith('Nothing went in. What it wrote waits with what the book says otherwise.'), a.row.verdict);
+  /* the helper's card is neither a page nor his: a quote standing only there is set aside, said where it stands; his own card is his */
+  const c = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(c);
+  store.change('novel', c.novelId, (n) => {
+    n.notes.people.push({ id: 'pe-h', name: 'Kaelen', aka: [], about: 'Kaelen guards the north gate.', updated: { chapterId: c.ids[0], at: 1 } });
+    n.notes.people.push({ id: 'pe-y', name: 'Mara', aka: [], about: 'Mara keeps the lamp.', updated: { chapterId: c.ids[0], at: 1, by: 'you' } });
+  }, { now: true });
+  const chapters = { [c.ids[0]]: c.ch() };
+  assert.deepEqual(quickadd.whereIn(c.novel(), chapters, 'Kaelen guards the north gate'), { kind: 'helper', label: 'the notes’ card Kaelen, which the helper keeps' });
+  const his = quickadd.whereIn(c.novel(), chapters, 'Mara keeps the lamp');
+  assert.deepEqual([his.kind, his.label], ['card', 'your card Mara in the notes']);
+  const read = quickadd.readAnswer(c.novel(), chapters, { changes: [{ mine: 'Kaelen guards the south gate', was: 'Kaelen guards the north gate' }] });
+  assert.deepEqual([read.changes.length, read.aside.map((x) => x.only)], [0, ['the notes’ card Kaelen, which the helper keeps']]);
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('Quick add: its answer has the partner’s room — his Longest reply raised to the floor a block of it needs, none sent where he set none — and cut off at that length both times, the row says so (2.12.40)', async () => {
+  await setHouse({ maxTokens: 1000 });
+  const b = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  const long = JSON.stringify({ verdict: 'All of it holds.', entries: Array.from({ length: 8 }, (_, i) => ({ name: `House ${i + 1}`, kind: 'groups', line: 'A house.', text: 'Words '.repeat(60) })) });
+  await script([{ text: long.slice(0, 900), finish: 'length' }, { text: long.slice(0, 900), finish: 'length' }]);
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'The eight houses of the Sanguelis.' });
+  const conn = store.peek('house', 'house').connections[0];
+  const lengths = (await quickBodies()).map((x) => x.body.max_tokens ?? x.body.max_completion_tokens);
+  assert.deepEqual(lengths, [context.partnerReply(conn, 'scene', false), context.partnerReply(conn, 'scene', false)]);
+  assert.ok(lengths[0] > 1000, `raised to the floor: ${lengths[0]}`);
+  assert.deepEqual([out.ok, out.row.state, out.giveBack], [false, 'failed', 'The eight houses of the Sanguelis.']);
+  assert.match(out.error, /cut off at the reply’s length both times/);
+  assert.match(out.row.error, /cut off at the reply’s length both times/);
+  /* with no Longest reply, on a provider that is not Claude: nothing sent he did not set */
+  await setHouse();
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Fine.', entries: [] }) }]);
+  await quickadd.quickAdd({ novelId: b.novelId, words: 'Nothing new.' });
+  const [plain] = await quickBodies();
+  assert.equal(plain.body.max_tokens ?? plain.body.max_completion_tokens, undefined);
+  await putAway(b);
+});
+
+await test('Quick add: the names his words give are found as the page finds a name — “will” is never Will, “The” no name, a contraction none — so the passage that names Will rides, never the ones that say “the tide will turn” (2.12.40)', async () => {
+  const filler = (i) => `Passage ${i}: the tide will turn by morning, and the keeper will climb the stair again. `.repeat(6);
+  const b = await makeBook([['Will Turner took the oath at the Hollow Gate and kept it for a hundred years.', ...Array.from({ length: 12 }, (_, i) => filler(i + 2))]], { manual: true });
+  const chapters = () => ({ [b.ids[0]]: b.ch() });
+  let names = quickadd.namesIn('Make Will the captain of the gate guard.', b.novel(), chapters());
+  assert.deepEqual(names, ['Will']);
+  const got = quickadd.passagesNaming(b.novel(), chapters(), names, 700);
+  assert.deepEqual([got.passages.map((p) => p.label), got.passagesLeft], [['Chapter One, Passage 1'], 0]);
+  /* his entry named by a name of it: every name it goes by is looked for — and never by "will" in small letters */
+  putEntries(b, [{ name: 'Will Turner', kind: 'people', line: 'A smith.', text: 'Will Turner forges blades.' }]);
+  names = quickadd.namesIn('Make Will the captain of the gate guard.', b.novel(), chapters());
+  assert.deepEqual([...names].sort(), ['Turner', 'Will', 'Will Turner']);
+  assert.deepEqual(quickadd.namesIn('She will turn the tide.', b.novel(), chapters()), [], '“will” in small letters names no one');
+  /* "The" is no name, though a page writes it with a capital mid-sentence */
+  const c = await makeBook([['They rode beyond The Hollow Gate at dawn.', ...Array.from({ length: 5 }, (_, i) => `The rain fell on the roofs, passage ${i + 2}.`)]], { manual: true });
+  const cn = { [c.ids[0]]: c.ch() };
+  names = quickadd.namesIn('The Sanguelis meets once a century.', c.novel(), cn);
+  assert.deepEqual(names, ['Sanguelis']);
+  assert.equal(quickadd.passagesNaming(c.novel(), cn, names, 100000).passages.length, 0, 'no passage names the Sanguelis');
+  assert.deepEqual(quickadd.namesIn('I’d ask Mara.', c.novel(), cn), ['Mara'], 'a contraction is no name');
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('Quick add: a quote is looked up as whole words — “he is no elder” is not in “She is no elder”, “Gate” not in “navigate” — and one shortened with “…” is found by its parts, in order, in one paragraph (2.12.40)', async () => {
+  const b = await makeBook([['She is no elder of the Sanguelis. They tried to navigate the ruins.\n\nRain fell on the river.', { text: 'Jovan woke.', ask: { direction: 'Only an elder can turn a hunter, and only once.', length: 'scene' } }]], { manual: true });
+  const n = b.novel();
+  const ch = { [b.ids[0]]: b.ch() };
+  const at = (q) => { const w = quickadd.whereIn(n, ch, q); return w ? w.kind : null; };
+  assert.deepEqual(['he is no elder', 'Gate', 'elder can turn a hunt', 'avigate the ruins'].map(at), [null, null, null, null], 'never part of another word');
+  assert.deepEqual(['She is no elder of the Sanguelis', 'she is NO elder, of the Sanguelis!'].map(at), ['page', 'page'], 'capitals and punctuation let go');
+  assert.deepEqual(['She is no elder … the Sanguelis', 'no elder … navigate the ruins', 'Only an elder … a hunter'].map(at), ['page', 'page', 'premise'], 'shortened with “…”: by its parts');
+  assert.deepEqual(['She is no elder … the Covenant', 'the ruins … Rain fell', 'the Sanguelis … no elder'].map(at), [null, null, null], 'every part, in order, in one paragraph');
+  await putAway(b);
+});
+
+await test('the checker holds a fix to the book only by whole words — “he left the brass key on the kitchen table” is not held by “She left the brass key on the kitchen table” (2.12.40, Quick add’s look-up, the same pattern)', async () => {
+  await setHouse({}, { checksFrom: 0, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  const b = await makeBook([['She left the brass key on the kitchen table and sat down by the fire.', 'He stood at the window, the brass key in his pocket.']]);
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [
+    { passage: '1.2', kind: 'continuity', find: 'the brass key in his pocket', replace: 'the brass key on the table', why: 'he left it on the table', says: 'he left the brass key on the kitchen table' },
+    { passage: '1.2', kind: 'continuity', find: 'He stood at the window', replace: 'He sat by the fire', why: 'they sat by the fire', says: 'sat down by the fire' },
+  ] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.equal(picked(b.ch().passages[1]).text, 'He sat by the fire, the brass key in his pocket.', 'the fix whose words stand whole went in by itself; the other waits');
+  const key = checker.suggestions(b.novelId).find((x) => x.item.replace === 'the brass key on the table');
+  assert.ok(key && key.item.unheld === 'he left the brass key on the kitchen table' && !key.item.held, JSON.stringify(key && key.item));
+  await setHouse();
+  await putAway(b);
+});
+
+await test('Quick add: entries past the thirty one answer puts in are named under Not put in, never let go without a word — and its verdict gives way to what came of it (2.12.40)', async () => {
+  await setHouse();
+  const b = await makeBook([['The houses met in the drowned chapel.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  const names = ['Ash', 'Bane', 'Cinder', 'Dusk', 'Ember', 'Frost', 'Gloam', 'Hollow', 'Iron', 'Jade', 'Keel', 'Lumen', 'Marrow', 'Night', 'Onyx', 'Pale', 'Quill', 'Rook', 'Sable', 'Thorn', 'Umber', 'Vane', 'Wraith', 'Yew', 'Zeal', 'Amber', 'Brine', 'Coal', 'Dawn', 'Echo', 'Fen', 'Gale', 'Haze', 'Isle'];
+  const entries = names.map((x, i) => ({ name: `House ${x}`, kind: 'groups', line: 'An elder house.', text: `An elder house of the Sanguelis, number ${i + 1}.` }));
+  await script([{ text: JSON.stringify({ verdict: 'All thirty-four houses go in.', entries }) }]);
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'The thirty-four elder houses of the Sanguelis.' });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.row.added.length, 30);
+  assert.deepEqual(out.row.refused.map((x) => x.name), ['House Fen', 'House Gale', 'House Haze', 'House Isle']);
+  assert.ok(out.row.refused.every((x) => x.why === 'only thirty go in from one answer — send it in a Quick add of its own'), JSON.stringify(out.row.refused[0]));
+  assert.deepEqual([out.row.verdictBy, out.row.verdict.includes('All thirty-four')], ['app', false]);
+  assert.ok(out.row.verdict.endsWith('Four entries were not put in.'), out.row.verdict);
+  await putAway(b);
+});
+
+await test('Quick add: his newer word is put into What it’s about, with Undo these; a premise it changes is never written again — his newer word stands over it, kept as an entry (2.12.40)', async () => {
+  await setHouse();
+  const b = await makeBook([['Jovan woke in the dark.', { text: 'Rain fell on the river.', ask: { direction: 'Only an elder can turn a hunter.', length: 'scene' } }]], { brief: 'A novice hunter is turned by an elder vampire. Emilia rules the Sanguelis alone.', manual: true });
+  markAllSeen(b);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Both are your newer word.', changes: [
+    { mine: 'Emilia rules with her brother', was: 'Emilia rules the Sanguelis alone.', now: 'Emilia rules the Sanguelis with her brother.', where: 'What it’s about', why: 'your newer word' },
+    { mine: 'anyone of the blood can turn a hunter', was: 'Only an elder can turn a hunter', where: 'your premise for Chapter One, Passage 2', why: 'your newer word' }],
+  entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'Emilia rules the Sanguelis with her brother.' }, { name: 'Turning', kind: 'lore', line: 'Who can turn a hunter.', text: 'Anyone of the blood can turn a hunter.' }] }) }]);
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'Emilia rules with her brother, and anyone of the blood can turn a hunter.' });
+  assert.equal(out.ok, true, out.error);
+  assert.ok((await quickSent())[0].includes('also those words written again to say what my newer word says ("now")'), 'asked for the words to put in their place');
+  assert.equal(b.novel().brief, 'A novice hunter is turned by an elder vampire. Emilia rules the Sanguelis with her brother.', 'put in its place, one stop after it');
+  assert.deepEqual(out.row.changes.map((x) => [x.kind, x.label]), [['about', 'What it’s about'], ['premise', 'your premise for Chapter One, Passage 2']]);
+  assert.deepEqual(out.row.book.map((x) => [x.field, x.status, x.now]), [['about', 'made', 'Emilia rules the Sanguelis with her brother']]);
+  assert.equal(shape.premiseOf(b.ch().passages[1]), 'Only an elder can turn a hunter.', 'his premise is his record: never written again');
+  assert.ok(bib.entriesOf(b.novel()).some((e) => e.name === 'Turning' && e.text === 'Anyone of the blood can turn a hunter.'), 'his newer word kept as an entry');
+  assert.equal(out.row.verdictBy, 'partner');
+  /* Undo these: the entries and What it's about, as they were */
+  assert.equal(quickadd.undoQuick(b.novelId, out.row.id).back, 3);
+  assert.equal(b.novel().brief, 'A novice hunter is turned by an elder vampire. Emilia rules the Sanguelis alone.');
+  assert.deepEqual(quickadd.quickLog(b.novel()).at(-1).book.map((x) => x.status), ['undone']);
+  await putAway(b);
+});
+
+await test('Quick add: Clear’s Undo puts its rows back beside a Quick add made since — that one keeps its row and its Undo (2.12.40)', async () => {
+  await setHouse();
+  const b = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Sanguelis', kind: 'groups', line: 'The council.', text: 'The council of the elder houses.' }] }) }]);
+  const first = await quickadd.quickAdd({ novelId: b.novelId, words: 'The Sanguelis is the council of the elder houses.' });
+  const rows = quickadd.clearQuick(b.novelId);
+  assert.deepEqual(quickadd.quickLog(b.novel()), []);
+  await script([{ text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Hollow Gate', kind: 'places', line: 'A ruin.', text: 'A ruined gate north of the city.' }] }) }]);
+  const fresh = await quickadd.quickAdd({ novelId: b.novelId, words: 'The Hollow Gate is a ruin north of the city.' });
+  quickadd.putBackQuick(b.novelId, rows);
+  assert.deepEqual(quickadd.quickLog(b.novel()).map((r) => r.id), [first.row.id, fresh.row.id], 'both, in the order they were said');
+  assert.equal(quickadd.undoQuick(b.novelId, fresh.row.id).back, 1, 'the one made since keeps its Undo');
+  assert.equal(bib.entriesOf(b.novel()).some((e) => e.name === 'Hollow Gate'), false);
+  await putAway(b);
+});
+
+await test('Quick add: a row being asked in another window says so — never “stopped before it answered” — one whose window closed says that; it beats while it is asked, and Clear leaves a row still being asked (2.12.40)', async () => {
+  await setHouse();
+  const b = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => { n.quick = [{ id: 'qa-else', at: Date.now(), said: 'The Hollow Gate is a ruin.', state: 'asking', beat: Date.now(), tab: 'tab-other', browser: 'br-other' }]; }, { now: true });
+  const there = () => quickadd.quickLog(b.novel()).find((r) => r.id === 'qa-else');
+  assert.equal(quickadd.askingWhere(b.novelId, there()), 'elsewhere');
+  assert.equal(quickadd.askingWhere(b.novelId, { ...there(), beat: Date.now() - 3 * 60 * 1000 }), 'gone', 'silent past two minutes: its window closed');
+  assert.equal(quickadd.askingWhere(b.novelId, { ...there(), state: 'done' }), '');
+  /* this page's own, while it asks: here, beating, with this window's name on it */
+  await reset();
+  await script([{ pause: 1.2, text: JSON.stringify({ verdict: 'Fine.', entries: [] }) }]);
+  const asking = quickadd.quickAdd({ novelId: b.novelId, words: 'The Sanguelis is a council.' });
+  await sleep(300);
+  const mine = quickadd.quickLog(b.novel()).find((r) => r.said === 'The Sanguelis is a council.');
+  assert.deepEqual([mine.state, quickadd.askingWhere(b.novelId, mine), mine.tab === store.CLIENT, typeof mine.beat], ['asking', 'here', true, 'number']);
+  quickadd.clearQuick(b.novelId);
+  assert.deepEqual(quickadd.quickLog(b.novel()).map((r) => r.id).sort(), [mine.id, 'qa-else'].sort(), 'Clear leaves the rows still being asked');
+  await asking;
+  const done = quickadd.quickLog(b.novel()).find((r) => r.id === mine.id);
+  assert.deepEqual([done.state, done.beat, done.tab], ['done', undefined, undefined], 'answered: no beat left on it');
+  await putAway(b);
+});
+
+await test('Quick add: Undo these says what stands in its way as it is — an entry taken out since, one changed since — and an entry of his partner’s changed by his own words is his (2.12.40)', async () => {
+  await setHouse();
+  const b = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Saltmarket', kind: 'places', line: 'The harbour market.', text: 'Fish stalls under tarred canvas.', by: 'partner' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Iron Covenant', kind: 'groups', line: 'An order.', text: 'An order of hunters.' }, { name: 'Red Mile', kind: 'places', line: 'A street.', text: 'The street of the night market.' },
+    { name: 'Saltmarket', text: 'Fish stalls under tarred canvas. The salt is weighed at dawn.' }] }) }]);
+  const two = await quickadd.quickAdd({ novelId: b.novelId, words: 'The Iron Covenant is an order of hunters. The Red Mile is the night market street. At the Saltmarket the salt is weighed at dawn.' });
+  assert.equal(two.ok, true, two.error);
+  const es = bib.entriesOf(b.novel());
+  assert.deepEqual([es.find((e) => e.name === 'Saltmarket').by, es.find((e) => e.name === 'Saltmarket').text], ['you', 'Fish stalls under tarred canvas. The salt is weighed at dawn.'], 'changed by his own words: his');
+  store.change('novel', b.novelId, shape.novelSteps.dropEntry(es.find((e) => e.name === 'Iron Covenant').id), { now: true });
+  const red = es.find((e) => e.name === 'Red Mile');
+  store.change('novel', b.novelId, shape.novelSteps.putEntry({ ...red, text: 'HIS OWN EDIT: the street of the night market, and its lanterns.' }), { now: true });
+  const u = quickadd.undoQuick(b.novelId, two.row.id);
+  assert.deepEqual([...u.said].sort(), ['Iron Covenant: the entry has been taken out since', 'Red Mile: the entry has been changed since']);
+  assert.ok(bib.entriesOf(b.novel()).find((e) => e.name === 'Red Mile').text.startsWith('HIS OWN EDIT'), 'his edit kept');
+  assert.deepEqual(quickadd.undoQuick(b.novelId, 'qa-gone'), { ok: false, back: 0, said: ['that Quick add is not kept any more'] });
+  await putAway(b);
+});
+
+await test('Quick add: its quotes looked up on a book of 300,000 words — the book folded once, never again for each quote (2.12.40)', () => {
+  const words = 'the keeper climbed the stair and the tide came up the steps while gulls cried over the broken lamp room glass'.split(' ');
+  let w = 0;
+  const passage = () => { const out = []; for (let i = 0; i < 600; i++) out.push(words[(w++ * 7) % words.length]); return `${out.join(' ')}.`; };
+  const { novel } = shape.newNovel({ title: 'Big', brief: 'x' });
+  novel.order = [];
+  const chapters = {};
+  for (let c = 0; c < 50; c++) {
+    const ch = shape.newChapter(novel.id);
+    for (let p = 0; p < 10; p++) ch.passages.push(shape.newPassage('ai', passage(), { how: 'write', ask: { direction: '', length: 'scene' } }));
+    novel.order.push(ch.id);
+    chapters[ch.id] = ch;
+  }
+  const last = chapters[novel.order[49]];
+  picked(last.passages[9]).text += ' Emilia Vermaine had silver hair.';
+  const quotes = Array.from({ length: 5 }, (_, i) => `her eyes were always grey ${i}`).concat(['Emilia Vermaine had silver hair']);
+  const time = () => { const t = performance.now(); const got = quotes.map((q) => quickadd.whereIn(novel, chapters, q)); return { ms: performance.now() - t, got }; };
+  const first = time();
+  const again = time();
+  assert.deepEqual(again.got.map((x) => x && x.label), [null, null, null, null, null, 'Chapter Fifty, Passage 10']);
+  assert.ok(again.ms < 150, `six quotes again on 300,000 words: ${Math.round(again.ms)} ms (the first: ${Math.round(first.ms)} ms)`);
+});
+
+await test('his partner writes an entry of his whole only from the entry read whole — one it had by its name and line alone is read first with “entry:”, never written over from the line (2.12.40, Quick add’s blind write, the same pattern)', async () => {
+  await setHouse();
+  const b = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(b);
+  const his = 'HIS OWN: seated at the drowned chapel since the Burning; its sigil is a silver moth.';
+  putEntries(b, [{ name: 'House Vermaine', kind: 'groups', line: 'The youngest elder house.', text: his }]);
+  await reset();
+  await script([
+    { text: 'Done.\n<changes>[{"entry": "House Vermaine", "text": "The youngest elder house, led by Emilia.", "why": "led by Emilia"}]</changes>' },
+    { text: '<read>["entry: House Vermaine"]</read>' },
+    { text: `<changes>[{"entry": "House Vermaine", "text": "${his} Emilia leads it.", "why": "led by Emilia"}]</changes>\nNow with the entry read whole.` },
+  ]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Emilia leads the youngest of the elder clans.' });
+  const v = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.deepEqual(v.changes.map((c) => c.status), ['refused', 'made'], JSON.stringify(v.changes.map((c) => c.said || '')));
+  assert.equal(v.changes[0].said, 'it had House Vermaine’s entry only in short, by its name and line — read it whole first with “entry: House Vermaine”, or add a paragraph to it');
+  assert.equal(bib.entriesOf(b.novel())[0].text, `${his} Emilia leads it.`);
   await putAway(b);
 });
 

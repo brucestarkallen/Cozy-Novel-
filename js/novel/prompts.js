@@ -1302,7 +1302,8 @@ export function premisesPart(list, left = 0) {
     return `[${x.label}] ${t.length > PREMISE_ROOM ? `${cutWords(t, PREMISE_ROOM)} (the rest of it is left out here to save room)` : t}`;
   });
   if (!rows.length) return '';
-  const gone = left ? `\n(${left === 1 ? 'One later premise is' : `${numberWords(left)} later premises are`} left out here to save room.)` : '';
+  /* ("more", never "later": Quick add keeps the newest when they cannot all go — 2.12.40, the audit) */
+  const gone = left ? `\n(${left === 1 ? 'One more premise is' : `${numberWords(left)} more premises are`} left out here to save room.)` : '';
   return `My premises — what I asked the writer for, as I typed it, each by the passage it was typed for. They are my word on the book and count as the book: ${PREMISE_HOLDS} — stands, even where no passage says it, and a later premise of mine stands over an earlier one; what one asks to happen is only what I asked for, and what happened is what the passages say:\n${rows.join('\n')}${gone}`;
 }
 
@@ -1691,7 +1692,8 @@ export function quickAddRequest({ words, earlier = [], premises = [], premisesLe
   const parts = [`Quick add — what I want in our world, to go into my bibliography now:\n${fence(words)}`];
   const before = (earlier || []).map((r) => {
     const said = [`I said: “${String(r.said || '').replace(/\s+/g, ' ').trim()}”`];
-    if (r.verdict) said.push(`You found: ${String(r.verdict).replace(/\s+/g, ' ').trim()}`);
+    /* (its own verdict, or — where the look-ups parted from it — the app's account of what came of it, 2.12.40) */
+    if (r.verdict) said.push(`${r.verdictBy === 'app' ? 'What came of it' : 'You found'}: ${String(r.verdict).replace(/\s+/g, ' ').trim()}`);
     if ((r.added || []).length) said.push(`Into the bibliography: ${r.added.map((a) => a.name).join(', ')}${r.added.some((a) => a.status === 'undone') ? ' (I took some back out)' : ''}.`);
     if ((r.conflicts || []).length) said.push(`Against the pages: ${r.conflicts.map((c) => `“${c.mine}” — ${c.label} says “${c.against}”`).join('; ')}.`);
     if ((r.cannot || []).length) said.push(`Could not be: ${r.cannot.map((c) => `“${c.mine}” — ${c.why || c.rule}`).join('; ')}.`);
@@ -1709,14 +1711,35 @@ export function quickAddRequest({ words, earlier = [], premises = [], premisesLe
   }
   parts.push(`${QUICK_ASK}, my premises, my bibliography, the notes and what the book is about, the way an editor checks a series bible — before anything of it goes in:
 - "conflicts": where my words say the opposite of what a page of the book says — my words that clash ("mine"), the page’s words they contradict, copied exactly ("against"), where they stand ("where", as "Chapter One, Passage 3"), and why, in a line.
-- "changes": where my words change what my own earlier words say — a premise, an entry, a card of the notes, what the book is about — and no page says otherwise: that is my newer word, and it goes in. Say each, with my earlier words copied exactly ("was") and where they stand.
+- "changes": where my words change what my own earlier words say — a premise, an entry, a card of the notes, what the book is about — and no page says otherwise: that is my newer word, and it goes in. Say each, with my earlier words copied exactly ("was") and where they stand; where they stand in what the book is about, how it reads or where it’s headed, also those words written again to say what my newer word says ("now"), to go in their place.
 - "cannot": where my words cannot be, by the rules of the world as the book, my premises or my entries set them — a power and its limits, a count, how rare something is, who is where and when: my words ("mine"), the rule’s words copied exactly ("rule"), where they stand, and why.
 - "questions": what my words leave open that the world needs me to decide — a line each, three at most.
-- "entries": for all of mine that holds, each name it gives meaning to — a person, a place, a thing, a group, a piece of lore (a rule of the world, a power and what it costs, a word of the world) — its own entry, whole, written the way a good series bible writes it: my meaning exactly, in clear, finished sentences, the grammar, spelling and wording put right, and a name the book or my bibliography already has spelled as it spells it — never my words pasted as I typed them. An entry already in my bibliography is given whole again, with what my words add or change, as one entry; a new one is written whole. Only what I said and what plainly follows from it — nothing invented beyond it, nothing from "conflicts" or "cannot". Where I said earlier in Quick add that my words stand over the pages, they go in, and the pages that disagree are still named in "conflicts".
+- "entries": for all of mine that holds, each name it gives meaning to — a person, a place, a thing, a group, a piece of lore (a rule of the world, a power and what it costs, a word of the world) — its own entry, whole, written the way a good series bible writes it: my meaning exactly, in clear, finished sentences, the grammar, spelling and wording put right, and a name the book or my bibliography already has spelled as it spells it — never my words pasted as I typed them. An entry already in my bibliography is given whole again — every sentence of it that my words do not change kept as it stands — with what my words add or change, as one entry; a new one is written whole. Only what I said and what plainly follows from it — nothing invented beyond it, nothing from "conflicts" or "cannot". Where I said earlier in Quick add that my words stand over the pages, they go in, and the pages that disagree are still named in "conflicts".
 - "verdict": a few plain sentences for me — what goes in, and what waits for my word and why.
 
 Answer with one JSON object and nothing else:
-{"verdict": "…", "conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}], "changes": [{"mine": "…", "was": "…", "where": "…", "why": "…"}], "cannot": [{"mine": "…", "rule": "…", "where": "…", "why": "…"}], "questions": ["…"], "entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "the entry, whole"}]}`);
+{"verdict": "…", "conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}], "changes": [{"mine": "…", "was": "…", "now": "…", "where": "…", "why": "…"}], "cannot": [{"mine": "…", "rule": "…", "where": "…", "why": "…"}], "questions": ["…"], "entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "the entry, whole"}]}`);
+  return parts.join('\n\n');
+}
+
+/* WHERE THE LOOK-UPS PART FROM ITS ANSWER (2.12.40, the audit — quickadd.js toSetRight): what goes in rests on where
+ * the words it quoted stand, never on how it sorted them — so it is asked once more, in the same conversation, with the
+ * rows as they stand, for the entries again: a change a page says otherwise waits; words that stand only in his own
+ * earlier words are his newer word and go in; words quoted from nowhere hold his back no longer, unless it quotes a
+ * page exactly; his What it's about written again where it gave no words for it. */
+const quoted = (rows, side) => rows.map((c) => `- “${c.mine}” — ${c.label} says “${c[side]}”`).join('\n');
+export function quickAgainRequest({ conflicts = [], changes = [], aside = [], about = [] }) {
+  const parts = ['I looked up the words you quoted, and some of it stands otherwise than you put it.'];
+  if (conflicts.length) parts.push(`These stand on a page of the book, so they wait for my word — nothing of them goes in yet:\n${quoted(conflicts, 'against')}`);
+  if (changes.length) parts.push(`These stand only in my own earlier words, and no page says otherwise — they are my newer word, and they go in:\n${quoted(changes, 'was')}`);
+  if (aside.length) parts.push(`The words you quoted for these stand nowhere in the book or in my own words, so they hold mine back no longer — unless a page does say otherwise; then copy that page’s words exactly into "conflicts":\n${aside.map((c) => `- “${c.mine}” — you quoted “${c.quote}”`).join('\n')}`);
+  if (about.length) parts.push(`These change what the book is about, how it reads or where it’s headed — write those earlier words again to say what my newer word says ("now"), to go in their place:\n${quoted(about, 'was')}`);
+  const shape = [
+    '"entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "the entry, whole"}]',
+    ...(aside.length ? ['"conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}]'] : []),
+    ...(about.length ? ['"changes": [{"was": "…", "now": "…"}]'] : []),
+  ];
+  parts.push(`Write the entries again for all of mine that holds now, as before — each whole, the way a good series bible writes it, never my words pasted; an entry already in my bibliography with every sentence of it that my words do not change kept as it stands. Answer with one JSON object and nothing else:\n{${shape.join(', ')}}`);
   return parts.join('\n\n');
 }
 

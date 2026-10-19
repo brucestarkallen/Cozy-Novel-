@@ -832,8 +832,10 @@ function heldBy(novelId, chapterId, pid, says, before = '') {
   const key = (lightFold(want).match(/[\p{L}\p{N}]+/gu) || []).sort((a, b) => b.length - a.length)[0] || '';
   const quick = key.length >= 4;
   const own = String(before || '');
+  /* (whole words: "he is no elder" is never held by "She is no elder" — 2.12.40, the audit of Quick add's look-up, the
+   * same pattern) */
   if (own.trim() && (!quick || lightFold(own).includes(key))) {
-    const [hit] = findIn(own, want, { words: true, max: 1 });
+    const [hit] = findIn(own, want, { words: true, whole: true, max: 1 });
     if (hit) return { held: cutWords(own.slice(hit.start, hit.end), 600), at: { chapterId, passageId: pid } };
   }
   for (let i = at; i >= 0; i--) {
@@ -845,7 +847,7 @@ function heldBy(novelId, chapterId, pid, says, before = '') {
       const v = picked(ps[j]);
       const t = String((v || {}).text || '');
       if (!t || (quick && !lightOf(v).includes(key))) continue;
-      const [hit] = findIn(t, want, { words: true, max: 1 });
+      const [hit] = findIn(t, want, { words: true, whole: true, max: 1 });
       if (hit) return { held: cutWords(t.slice(hit.start, hit.end), 600), at: { chapterId: list[i].id, passageId: ps[j].id } };
     }
   }
@@ -876,7 +878,7 @@ function holdStands(novelId, item) {
   const c = home && store.peek('chapter', home);
   const p = c && (c.passages || []).find((x) => x.id === item.heldAt.passageId);
   const t = String(((p && picked(p)) || {}).text || '');
-  return Boolean(t.trim()) && findIn(t, item.held, { words: true, max: 1 }).length > 0;
+  return Boolean(t.trim()) && findIn(t, item.held, { words: true, whole: true, max: 1 }).length > 0;
 }
 
 /* a passage its model would not check, set aside while its words stand:
