@@ -256,7 +256,10 @@ export async function open(kind, id, { fresh = false } = {}) {
         if (code === 200 && data && data.data) {
           if (!r.pending.length || !r.loaded) {
             r.data = data.data; r.rev = data.rev; r.baseJson = JSON.stringify(data.data);
-          } else if (data.rev > r.rev) {
+          } else if (data.rev > r.rev && !r.saving) {
+            /* (never while a save of this record is on its way: as news is (refresh), it is left to that save — its answer,
+             * or the phone's list of the saves it took, says which steps the newer copy holds already; played here, a save
+             * whose answer never came was played again over the copy that holds it: 2.12.41) */
             rebase(r, data.rev, data.data);
           }
           r.loaded = true; r.deleted = false;
@@ -452,6 +455,9 @@ function saveNow(r, { keepalive = false } = {}) {
           });
         } catch (e) {
           if (epoch !== libraryEpoch) continue;
+          /* (no answer came: the phone may have taken it all the same — its name and how many of the steps waiting it
+           * carried, the first of them, are kept until an answer says which: 2.12.41) */
+          if (ops.length) (r.unheard || (r.unheard = [])).push({ id: r.sent.id, n: ops.length });
           ride = false;
           setOffline(true, e);
           journal(r);
@@ -463,6 +469,7 @@ function saveNow(r, { keepalive = false } = {}) {
          * particular it cannot consume an edit typed into the new copy. */
         if (epoch !== libraryEpoch) continue;
         if (res.status === 200 && res.data && Number.isFinite(res.data.rev)) {
+          r.unheard = [];
           r.rev = res.data.rev;
           r.baseJson = json;
           r.pending.splice(0, ops.length);
@@ -471,8 +478,20 @@ function saveNow(r, { keepalive = false } = {}) {
           continue;
         }
         if (res.status === 409 && res.data && res.data.data) {
+          /* A SAVE WHOSE ANSWER NEVER CAME, TAKEN BY THE PHONE ALL THE SAME (2.12.41, the review of the premises: its
+           * steps were played again over the copy that already held them — a swap of two names made together laid twice,
+           * so his premise, the plan, the chapter's name, the cards, his entry and his words for the book were swapped
+           * back while the pages kept it): the phone's list of the saves it took says so, as the journal reads it
+           * (handOver) — the steps that save carried are on the copy it sends, and come off the steps waiting; only the
+           * ones that never landed are played over it */
+          const took = new Set((Array.isArray(res.data.saves) ? res.data.saves : []).filter(Array.isArray).map((s) => s[0]));
+          const landed = (r.unheard || []).filter((a) => took.has(a.id)).reduce((most, a) => Math.max(most, a.n), 0);
+          r.unheard = [];
+          if (landed) r.pending.splice(0, landed);
           /* the phone holds a newer copy: take it, play the unsaved steps over it */
           rebase(r, res.data.rev, res.data.data);
+          /* (all of them had landed: nothing is left to send, and the phone has answered — the banner says so) */
+          if (!r.pending.length) { unjournal(r); setOffline(false); }
           tell(r, 'remote');
           continue;
         }
