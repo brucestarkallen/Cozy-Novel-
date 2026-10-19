@@ -12102,7 +12102,7 @@ const SUPER = () => ({ superAuto: { on: true, from: Date.now() } });
 /* the page's own request: its last message (his request for the page) */
 const pageAsk = async () => String((await requests()).at(-1).body.messages.at(-1).content);
 
-await test('one switch reads before every book’s own: What it’s about and How it reads Automatic, the bibliography filled, Smart recall on, the checker checking where he said Nobody, the fixes going in from when it was switched on, the partner’s changes landing at once — off again, everything as he set it, nothing of his changed', async () => {
+await test('one switch reads before every book’s own: What it’s about and How it reads Automatic, the bibliography filled, Smart recall on, the checker checking where he said Nobody, the fixes going in from when it was switched on — the partner’s changes as he set them, waiting for Apply if he said so (2.12.39); off again, everything as he set it, nothing of his changed', async () => {
   await setHouse({}, { roles: { writer: 'c-w', checker: 'off' }, partnerApplies: 'wait' });
   const b = await makeBook([['The lamp was cold.']], { manual: true });
   store.change('novel', b.novelId, shape.novelSteps.setPref('bibAuto', 'off'), { now: true });
@@ -12117,7 +12117,7 @@ await test('one switch reads before every book’s own: What it’s about and Ho
   assert.deepEqual(read(), off);
   const from = Date.now();
   store.change('house', 'house', (x) => { x.superAuto = { on: true, from }; }, { now: true });
-  assert.deepEqual(read(), { about: true, style: true, kept: ['about', 'style'], fill: true, recall: true, checker: 'c-w', holds: 'c-w', applies: 'now', fix: from, lift: null });
+  assert.deepEqual(read(), { about: true, style: true, kept: ['about', 'style'], fill: true, recall: true, checker: 'c-w', holds: 'c-w', applies: 'wait', fix: from, lift: null });
   /* his own switches stand as he set them underneath */
   const n = b.novel();
   const hs = store.peek('house', 'house');
@@ -12127,6 +12127,36 @@ await test('one switch reads before every book’s own: What it’s about and Ho
   assert.equal(checker.autoOf(store.peek('house', 'house')).fix, from - 5000);
   store.change('house', 'house', (x) => { x.superAuto = { on: false }; delete x.autoFix; }, { now: true });
   assert.deepEqual(read(), off, 'off: as he set it');
+  await setHouse();
+  await putAway(b);
+});
+
+/* (2.12.39 — his word: "if the setting need manual apply for partner it's still need manual apply". Through 2.12.38
+ * Super automatic landed the partner's changes at once over his When I press Apply) */
+await test('with Super automatic on, the partner’s changes keep to Your partner’s changes land: set to wait, they wait for Apply and the partner is told so; left at its default, they land at once with Undo', async () => {
+  const block = '<changes>[{"book": "about", "find": "finds a letter", "replace": "finds a letter from the dead", "why": "the hook"}, {"chapter": 1, "name": "The Light", "why": "a name"}]</changes>\nDone two things.';
+  await setHouse({}, { partnerApplies: 'wait', ...SUPER() });
+  const b = await makeBook([['The lamp was cold.']], { manual: true });
+  store.change('novel', b.novelId, (n) => { n.brief = 'A lighthouse keeper finds a letter.'; }, { now: true });
+  await reset();
+  await script([{ text: block }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Change these.' });
+  const t = store.peek('talk', b.novelId).turns.at(-1);
+  const v = picked(t);
+  assert.deepEqual(v.changes.map((c) => c.status), ['waiting', 'waiting'], 'set to wait: they wait, Super automatic or not');
+  assert.deepEqual([b.novel().brief, b.ch().name], ['A lighthouse keeper finds a letter.', ''], 'nothing lands before Apply');
+  const told = (await requests()).map((x) => x.body.messages.map((m) => String(m.content)).join('\n')).find((m) => m.includes('Change these.'));
+  assert.ok(told && told.includes('Each change waits until I apply it') && !told.includes('I see every change as it lands'), 'the partner is told its changes wait');
+  assert.equal(talk.applyChange(b.novelId, t.id, v.id, v.changes[1].id).ok, true);
+  assert.equal(b.ch().name, 'The Light', 'Apply makes it');
+  /* left at its default: at once, with Undo */
+  await setHouse({}, SUPER());
+  await reset();
+  await script([{ text: block.replace('The Light', 'The Lamp') }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'And again.' });
+  const v2 = picked(store.peek('talk', b.novelId).turns.at(-1));
+  assert.deepEqual(v2.changes.map((c) => c.status), ['made', 'made']);
+  assert.deepEqual([b.novel().brief, b.ch().name], ['A lighthouse keeper finds a letter from the dead.', 'The Lamp']);
   await setHouse();
   await putAway(b);
 });
@@ -13605,6 +13635,8 @@ await test('Quick add: his words held against the book first — a page that say
   assert.ok(sent.includes('[Chapter One, Passage 1]') && sent.includes('Emilia Vermaine had silver hair and led the youngest house'), 'the page that names what he adds, whole');
   assert.ok(sent.includes('Emilia rules alone.'), 'his entry for the name, whole');
   assert.ok(sent.includes('[Chapter One, Passage 2] Only an elder can turn a hunter, and only once.'), 'his premises');
+  /* (2.12.39) each entry written as a series bible writes it — his meaning, the grammar and wording put right */
+  assert.ok(sent.includes('the grammar, spelling and wording put right') && sent.includes('never my words pasted as I typed them'), 'told to write the entries well, never paste his words');
   const row = out.row;
   assert.deepEqual(row.conflicts.map((c) => [c.label, c.passageId === b.ch().passages[0].id, c.against]), [['Chapter One, Passage 1', true, 'Emilia Vermaine had silver hair']], 'the page that says otherwise, with where');
   assert.equal(row.aside, 1, 'words quoted that stand nowhere: set aside');
@@ -13614,6 +13646,7 @@ await test('Quick add: his words held against the book first — a page that say
   const es = bib.entriesOf(b.novel());
   const sang = es.find((e) => e.name === 'Sanguelis');
   assert.deepEqual([sang.kind, sang.by, sang.line], ['groups', 'you', 'The council of the elder houses.'], 'a new entry, his');
+  assert.equal(sang.text, 'The ruling council of the elder vampire houses.', 'its words the partner’s writing — never his sentence as he typed it');
   assert.equal(es.find((e) => e.name === 'Emilia Vermaine').text, 'Emilia rules with her brother.', 'his entry given whole again');
   assert.deepEqual(row.added.map((a) => [a.name, a.was, a.status]), [['Sanguelis', false, 'made'], ['Emilia Vermaine', true, 'made']]);
   await store.flush();

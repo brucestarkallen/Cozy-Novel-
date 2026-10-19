@@ -9,8 +9,8 @@
  *  - What it's about and How it reads are kept by the helper (Automatic), Fill it from the book by itself and Smart
  *    recall are on, in every book — the three switches read Super automatic (`superActive`) before his own setting,
  *    which is never changed: with the switch off everything is as he set it;
- *  - the checker's fixes go in by themselves (`autoOf`), the checker checks even where he switched it off
- *    (writer.js holderOf, checker.js checkerConn), and the partner's changes land at once (`appliesOf`);
+ *  - the checker's fixes go in by themselves (`autoOf`), and the checker checks even where he switched it off
+ *    (writer.js holderOf, checker.js checkerConn);
  *  - his own cards in the notes are kept as they always are: where they are now and how they stand with the others
  *    are the helper's, what the book adds rides beside his words as "Since then", and where the book says otherwise
  *    (quoted) the notes' check puts the book's account in their place (archivist.js foldNotes, 2.12.10–2.12.18) — his
@@ -18,7 +18,8 @@
  *  - the writer ends a chapter where the story would end one, and the next page goes on in the next chapter
  *    (prompts.js CLOSE_LINE, writer.js, desk.js).
  * Never by itself: a passage under his mark written again (Write a passage under your mark again by itself stays his
- * own switch), and the judge's mark.
+ * own switch), the judge's mark, and his partner's changes when he set them to wait for Apply (Your partner's changes
+ * land stays his own setting, `appliesOf` — 2.12.39).
  */
 
 export function superOn(house) { return Boolean(house && house.superAuto && house.superAuto.on); }
@@ -32,8 +33,10 @@ export function superActive() { try { return superOn(houseNow()); } catch (_) { 
 /* when he switched it on (with Nobody chosen to check, when the helper's connection began to: checker.js checksFromOf) */
 export function superFrom(house) { return superOn(house) && Number.isFinite(house.superAuto.from) ? house.superAuto.from : null; }
 
-/* whether the partner's changes land at once or wait for Apply */
-export function appliesOf(house) { return !superOn(house) && house && house.partnerApplies === 'wait' ? 'wait' : 'now'; }
+/* whether the partner's changes land at once or wait for Apply — his own setting (Settings → Your instructions → Your
+ * partner's changes land), in either mode. Through 2.12.38 Super automatic landed them at once over it; his word,
+ * 19 October 2026: "if the setting need manual apply for partner it's still need manual apply" (2.12.39) */
+export function appliesOf(house) { return house && house.partnerApplies === 'wait' ? 'wait' : 'now'; }
 
 /* WHEN WHAT HAPPENS BY ITSELF WAS SWITCHED ON (null: off) — fix: the checker's fixes, by his own switch or by Super
  * automatic (the earlier of the two when both are on); lift: a passage under his mark written again, his own switch

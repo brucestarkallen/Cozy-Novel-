@@ -622,7 +622,7 @@ function superField(hs) {
   });
   return h('div.field.superauto',
     h('label.toggle', on, h('span', 'Super automatic')),
-    h('em', 'Everything that can happen by itself does — you write the premises and read, and play a scene now and then. In every book the helper keeps What it’s about and How it reads, the bibliography fills itself from the pages, and Smart recall brings in what a page needs that nothing on it names. The writer ends a chapter where the story would, and your next page goes in the next one. The checker’s fixes go in by themselves on every page it checks — and it checks even with Nobody chosen. Your partner’s changes land at once, with Undo. Your notes are kept as always — your own cards too: what the book adds goes beside your words, and the notes’ check puts right what the book contradicts. Never by itself: a passage under your mark written again (its own switch, below) and your mark. Off: every switch is as you set it; what was written meanwhile stays.'));
+    h('em', 'Everything that can happen by itself does — you write the premises and read, and play a scene now and then. In every book the helper keeps What it’s about and How it reads, the bibliography fills itself from the pages, and Smart recall brings in what a page needs that nothing on it names. The writer ends a chapter where the story would, and your next page goes in the next one. The checker’s fixes go in by themselves on every page it checks — and it checks even with Nobody chosen. Your notes are kept as always — your own cards too: what the book adds goes beside your words, and the notes’ check puts right what the book contradicts. Never by itself: a passage under your mark written again (its own switch, below), your mark, and your partner’s changes when you set them to wait for Apply (Your instructions → Your partner’s changes land). Off: every switch is as you set it; what was written meanwhile stays.'));
 }
 
 /* what happens by itself: the checker's fixes, and a passage under his mark
@@ -844,12 +844,11 @@ function wordsGroup(hs) {
       ['user', 'A user message — your notes'],
       ['assistant', 'An assistant message — a notebook'],
     ], hs.notesAs, 'What the book is about, its chapters and its notes, after your instructions — for the writer, the narrator and the partner alike, as in Cozy Tavern. As your notes they open “Bruce here. Here’s where our book stands…”; as a notebook they are the writer’s own (“My notebook for…”), before what you ask.', 'The book and its notes ride as'),
-    superOn(hs)
-      ? field('Your partner’s changes land', h('p.quiet', 'At once, with Undo — Super automatic is on (Settings → Who does what).'), 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.')
-      : choose('partnerApplies', [
-        ['now', 'At once, with Undo (the default)'],
-        ['wait', 'When I press Apply'],
-      ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo.', 'Your partner’s changes land'));
+    /* his own setting in either mode — Super automatic never lands a change he set to wait (auto.js appliesOf, 2.12.39) */
+    choose('partnerApplies', [
+      ['now', 'At once, with Undo (the default)'],
+      ['wait', 'When I press Apply'],
+    ], hs.partnerApplies, 'When your partner changes a passage, a chapter’s name, the book’s words or a card in the notes: each change shows under its answer, with its Undo. Super automatic keeps to what you choose here.', 'Your partner’s changes land'));
   return g;
 }
 

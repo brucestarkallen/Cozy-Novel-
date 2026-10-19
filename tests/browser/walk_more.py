@@ -2165,7 +2165,9 @@ async def scenario_super(b):
     check('on: kept on the phone, and the checker’s fixes switch shows on, held by it', bool(hs and hs.get('on')) and await fix.is_checked() and await fix.is_disabled() and fixsay.startswith('On with Super automatic.'), (hs, fixsay[:80]))
     await settings_part(pg, 'Your instructions'); await pg.wait_for_timeout(200)
     lands = await pg.locator('.sheet.on .field:has(> span:text-is("Your partner’s changes land"))').inner_text() if await pg.locator('.sheet.on .field:has(> span:text-is("Your partner’s changes land"))').count() else await pg.inner_text('.sheet.on')
-    check('the partner’s changes land at once, said where he chooses it', 'At once, with Undo — Super automatic is on' in lands, lands[-200:])
+    lsel = pg.locator('.sheet.on .field:has(> span:text-is("Your partner’s changes land")) select')
+    check('Super automatic on: Your partner’s changes land is still his to choose, and says Super automatic keeps to it (2.12.39)',
+          await lsel.count() == 1 and await lsel.is_enabled() and await lsel.input_value() == 'now' and 'Super automatic keeps to what you choose here.' in lands, lands[-200:])
     await close_sheet(pg)
     await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("About this book")')
     await pg.wait_for_selector('.sheet.on')
