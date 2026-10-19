@@ -16174,7 +16174,10 @@ await test('Quick add holds what it adds as saying both only where the words lea
   const WINE = 'Emilia drinks wine at dinner. Her brother Dane does not drink wine.';
   const same = await add(WINE, 'Emilia drinks wine.', 'Emilia drinks wine.');
   assert.deepEqual([same.e.text, same.row.refused.map((r) => [Boolean(r.both), Boolean(r.same)])], [WINE, [[false, true]]]);
-  for (const x of [one, two, three, four, five, less, same, ...went]) await putAway(x.b);
+  /* …or where his line says them as it does: "never a vampire" — the entry already says that */
+  const byLine = await quickOn({ line: 'A hunter, never a vampire.', text: 'Emilia hunts vampires.', words: 'Emilia is not a vampire.', answers: [{ verdict: 'In.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'Emilia is not a vampire.' }] }, { entries: [] }] });
+  assert.deepEqual([byLine.e.text, byLine.row.refused.map((r) => [Boolean(r.both), Boolean(r.same)])], ['Emilia hunts vampires.', [[false, true]]]);
+  for (const x of [one, two, three, four, five, less, same, byLine, ...went]) await putAway(x.b);
 });
 
 await test('Quick add: where his newer words say “not” to words of his — “not her brother”, “no longer lives in Venice”, “instead of her steward” — and the answer lists no change for them, it is asked for that change: given, it goes in in their place; still none, nothing of it goes in beside them, said why, with Ask again (2.12.41, the fourth review)', async () => {

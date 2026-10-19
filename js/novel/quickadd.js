@@ -1462,18 +1462,15 @@ function mergeEntry({ had, offered = '', adds = '', changes = [], ctx, seenWhole
   theirs.forEach((o, j) => {
     if (placed.has(j)) return;
     if (changes.some((c) => stands(o.text, c.was))) return;
-    /* (a "not" it says that his newer words say of this one, and his entry says to none of those words, is new as well:
-     * "Corvin is not a vampire" beside his "Corvin hunts vampires" brought nothing, so it was let go) */
-    const notBrought = o.negs.filter((n) => n.words.length && about.some((b) => n.words.every((w) => keptIn(w, b.words) && saysNoTo(b, w)))
-      && !standing.some((s) => n.words.every((w) => keptIn(w, s.words)) && n.words.some((w) => saysNoTo(s, w)))).length;
-    /* (and a word his entry says only the other way — under a "not" where it says none, or the other way round: "Emilia
-     * drinks blood." beside his "Her brother Dane does not drink blood." brought nothing, so it was let go as "the entry
-     * already says that", found in this round's checks; said so of the same one, told the same way, it is held as saying
-     * both — `clash` — whatever it brings) */
+    /* (a word his entry says only the other way is new as well — with a "not" where his says none, or with none where his
+     * says one: "Corvin is not a vampire" beside his "Corvin hunts vampires" brought nothing, so it was let go; "Emilia
+     * drinks blood." beside his "Her brother Dane does not drink blood." brought nothing, so it was said as "the entry
+     * already says that", found in this round's checks. Said so of the same one, told the same way, it is held as saying
+     * both — `clash` — whatever it brings; one his line already says as it does brings nothing) */
     const his1 = [...standing, ...(ctx.line ? [ctx.line] : [])];
     const otherWay = (w) => his1.some((s) => keptIn(w, s.says) && saysNoTo(s, w) !== saysNoTo(o, w)) && !his1.some((s) => keptIn(w, s.says) && saysNoTo(s, w) === saysNoTo(o, w));
     const brings = [...o.says].filter((w) => keptIn(w, ctx.box.says) && (!keptIn(w, nowSays) || otherWay(w))).length
-      + [...o.figures.keys()].filter((v) => ctx.box.figures.has(v) && !nowFigures.has(v)).length + notBrought;
+      + [...o.figures.keys()].filter((v) => ctx.box.figures.has(v) && !nowFigures.has(v)).length;
     /* one that would say both a sentence of his — or his line — and another way of it, with no change listed for it:
      * never in, whatever it brings — a thing of his told another way by his newer words ("green eyes" for his "grey"), or
      * a "not" of his said otherwise as his newer words say it ("drinks blood" for his "does not drink blood"): of the same
