@@ -344,6 +344,10 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   /* the passages of the chapter open its room left out (each named where it stood, with how to read it) — said too */
   let openLeft = [];
   const cardsRead = new Set();
+  /* the entries of his bibliography it has had whole in this answer: the ones its request carried whole, and the ones it
+   * read with "entry:" — an entry it saw only by its name and line is never written over whole (changes.js, 2.12.40) */
+  let entriesWhole = new Set();
+  const entriesRead = new Set();
   /* the thinking of every round, kept whole (Cozy Tavern's M77/M80): what
    * each round thought, and between them what happened next */
   let thoughtBefore = '';
@@ -442,6 +446,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
           /* the chapters it asked for give way to a smaller room, like the book */
           const least = a.stats.least - extra.tokens;
           seen = new Set([...(a.stats.wholeIds || []), ...(a.stats.wholePassages || []), ...(extra.whole || [])]);
+          entriesWhole = new Set((a.stats.entries || []).filter((r) => String(r).startsWith('e:')).map((r) => String(r).slice(2)));
           shortCards = new Set((a.stats.shortCards || []).filter((x) => !cardsRead.has(x)));
           leftOut = a.stats.omitted || 0;
           openLeft = a.stats.openLeft || [];
@@ -497,7 +502,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
         rounds.push({ said: said.trim() || '(I asked to read them.)', rows, ...(notSent.length ? { notSent } : {}), ...(last ? { last: true } : {}) });
         if (last) lastTold = true;
         read.push(...rows.filter((r) => !r.missing).map((r) => r.label));
-        for (const r of rows) if (r.cardId) cardsRead.add(r.cardId);
+        for (const r of rows) { if (r.cardId) cardsRead.add(r.cardId); if (r.entryId) entriesRead.add(r.entryId); }
         keepThought(thinking, `read ${rows.map((r) => r.label).join(', ')}`);
         text = '';
         thinking = '';
@@ -557,7 +562,7 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
       const all = [];
       let askedWhole = false;
       for (let fix = 0; ; fix++) {
-        const changes = settleChanges(novelId, turnId, versionId, segment, store.peek('house', 'house') || house, all, seen, numbers, new Set([...shortCards].filter((x) => !cardsRead.has(x))), snapshot);
+        const changes = settleChanges(novelId, turnId, versionId, segment, store.peek('house', 'house') || house, all, seen, numbers, new Set([...shortCards].filter((x) => !cardsRead.has(x))), snapshot, new Set([...entriesWhole, ...entriesRead]));
         all.push(...changes);
         if (fix >= 2 || out.cut || out.stopped || ctl.signal.aborted) break;
         const missed = changes.filter((c) => c.status === 'refused' && MISSED.test(String(c.said || '')));
@@ -699,7 +704,7 @@ function readRows(novelId, asked) {
       if (!m.entry) return { label: `The entry “${n.entry}”`, text: '(there is no entry by that name in the bibliography)', missing: true };
       const e = m.entry;
       const when = entryReadWords(e.rides, recallOn(novel), superOn(store.peek('house', 'house') || {}));
-      return { label: `The entry “${e.name}”`, text: `${entryWords(e)}\n(${KIND_TITLE[e.kind] || 'Lore'}. ${when})` };
+      return { label: `The entry “${e.name}”`, text: `${entryWords(e)}\n(${KIND_TITLE[e.kind] || 'Lore'}. ${when})`, entryId: e.id };
     }
     /* a module's words, whole */
     if (n && typeof n === 'object' && n.module) {
@@ -716,7 +721,7 @@ function readRows(novelId, asked) {
   });
 }
 
-function settleChanges(novelId, turnId, versionId, text, house, before = [], seen = null, numbers = null, short = null, snapshot = null) {
+function settleChanges(novelId, turnId, versionId, text, house, before = [], seen = null, numbers = null, short = null, snapshot = null, entriesSeen = null) {
   const ops = opsOf(text);
   if (!ops.length) return [];
   const wait = appliesOf(house) === 'wait';
@@ -748,9 +753,9 @@ function settleChanges(novelId, turnId, versionId, text, house, before = [], see
     if (op.unreadable) { out[i] = makeChange(novelId, op); return; }
     const where = whereOf(novel, op, numbers);
     const at = where ? { where } : {};
-    if (!wait) { out[i] = { ...makeChange(novelId, op, { seen, numbers, where, short }), ...at }; return; }
+    if (!wait) { out[i] = { ...makeChange(novelId, op, { seen, numbers, where, short, entriesSeen }), ...at }; return; }
     /* waiting for Apply: looked at as it arrives, so one that cannot land is said now; and what it was made against kept, so a change since is said at Apply (M422) */
-    const dry = makeChange(novelId, op, { dry: true, seen, numbers, where, short });
+    const dry = makeChange(novelId, op, { dry: true, seen, numbers, where, short, entriesSeen });
     const bulk = op.rename || op.replace_all !== undefined;
     out[i] = dry.status === 'refused' ? { ...dry, ...at }
       : { id: dry.id, op: dry.op, label: dry.label, why: dry.why, status: 'waiting', base: baseOf(novelId, op, where), ...at, ...(bulk && dry.said ? { reach: dry.said } : {}) };

@@ -1,8 +1,9 @@
 """Quick add, and the notes, the Timeline and the bibliography as one (2.12.37). Notes → Bibliography → Quick add: his
 words checked by the partner's connection (the stand-in model) — what goes in shows with Undo these, the page that says
-otherwise with where it stands and a tap that goes there, his words kept in the box across a redraw; his entry and the
-notes' card for one name open as one card, with On the Timeline; a card's own sheet leads to its name in the
-bibliography and its turns on the Timeline. Real browser and server, a temporary library, the stand-in model only.
+otherwise with where it stands and a tap that goes there, his words kept in the box across a redraw; the entry written
+up in the partner's words, never his sentence pasted; what he types while it asks kept when it fails, and on Ask again;
+his entry and the notes' card for one name open as one card, with On the Timeline; a card's own sheet leads to its name
+in the bibliography and its turns on the Timeline. Real browser and server, a temporary library, the stand-in model only.
 """
 import asyncio
 import os
@@ -58,12 +59,22 @@ async def scenario(browser, w, hgt, mobile):
     await pg.wait_for_timeout(500)
     await open_bib(pg)
 
-    # his words, kept in the box across a redraw of the bibliography
+    # his words, kept in the box across a redraw of the bibliography: a card of the notes laid in as he types, as the
+    # helper lays one — what the bibliography is drawn from (2.12.40, the audit: the walk changed a field the view never
+    # reads, so nothing was drawn again and the check could not fail)
     box = pg.locator('.bibview .quickbox')
-    await box.fill('Emilia has black hair. The Sanguelis is the council of the elder houses.')
-    await pg.evaluate("(nid) => import('/js/store.js').then((s) => s.change('novel', nid, (x) => { x.prefs = { ...(x.prefs || {}), touchedForRedraw: Date.now() }; }, { now: true }))", nid)
-    await pg.wait_for_timeout(300)
-    check(f'{tag} his words stay in the box while the bibliography is drawn again', await box.input_value() == 'Emilia has black hair. The Sanguelis is the council of the elder houses.', await box.input_value())
+    words = 'Emilia has black hair. The Sanguelis is the council of the elder houses.'
+    await box.fill(words)
+    await pg.evaluate("() => { document.querySelector('.bibview .quickbox').dataset.before = '1'; }")
+    await pg.evaluate("(nid) => import('/js/store.js').then((s) => s.change('novel', nid, (x) => { x.notes.lore.push({ id: 'lo-r', name: 'Red Mile', aka: [], about: 'A street of lanterns.' }); }, { now: true }))", nid)
+    redrawn = False
+    for _ in range(40):
+        if await pg.evaluate("() => { const b = document.querySelector('.bibview .quickbox'); return Boolean(b && !b.dataset.before); }"):
+            redrawn = True
+            break
+        await pg.wait_for_timeout(100)
+    check(f'{tag} the bibliography is drawn again when a card of the notes is laid in', redrawn)
+    check(f'{tag} his words stay in the box while the bibliography is drawn again', await box.input_value() == words, await box.input_value())
 
     await pg.get_by_role('button', name='Check and add').click()
     await pg.wait_for_selector('.bibview .quickrow .quick-verdict', timeout=30000)
@@ -75,6 +86,16 @@ async def scenario(browser, w, hgt, mobile):
     check(f'{tag} the box is empty for his answer', await pg.locator('.bibview .quickbox').input_value() == '')
     listed = await pg.locator('.bibview .biblist .bibitem .nm').all_inner_texts()
     check(f'{tag} Sanguelis is in the bibliography, his', any(t.startswith('Sanguelis') and 'yours' in t.lower() for t in listed), listed)
+
+    # the entry is its partner's writing up of his meaning, never his sentence pasted (2.12.39 — the stand-in writes it
+    # up in words of its own since 2.12.40, so a pasted entry shows here)
+    await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Sanguelis').click()
+    await pg.wait_for_selector('.sheet.on .namecard-text')
+    told = (await pg.locator('.sheet.on .namecard-text').inner_text()).strip()
+    mine = 'The Sanguelis is the council of the elder houses.'
+    check(f'{tag} the entry is written up, never his sentence pasted', told == 'Sanguelis: the council of the elder houses.' and mine not in told, told)
+    await pg.click('.sheet.on .head button[aria-label=Close] >> nth=-1')
+    await pg.wait_for_function("!document.querySelector('.sheet.on')")
 
     # Undo these
     await pg.get_by_role('button', name='Undo these').click()
@@ -120,6 +141,23 @@ async def scenario(browser, w, hgt, mobile):
     await pg.wait_for_timeout(700)
     lit = await pg.evaluate("(pid) => { const p = document.querySelector(`#passages .passage[data-id=\"${pid}\"]`); return Boolean(p && (p.classList.contains('selected') || p.querySelector('mark, .found'))); }", fx['pid'])
     check(f'{tag} the tap goes to the page that says otherwise', lit)
+
+    # what he types while it asks is kept: when the ask fails, his words come back before it, never in its place — and
+    # Ask again the same (2.12.40, the audit)
+    await open_bib(pg)
+    await pg.locator('.bibview .quickbox').fill('SLOWFAIL The Hollow Gate is a ruin.')
+    await pg.get_by_role('button', name='Check and add').click()
+    await pg.wait_for_selector('.bibview .quickrow .quick-wait', timeout=8000)
+    await pg.locator('.bibview .quickbox').fill('More words, typed while it asked.')
+    await pg.wait_for_selector('.bibview .quickrow .notekey.bibdue', timeout=30000)
+    await pg.wait_for_timeout(300)
+    both = 'SLOWFAIL The Hollow Gate is a ruin.\n\nMore words, typed while it asked.'
+    kept = await pg.locator('.bibview .quickbox').input_value()
+    check(f'{tag} what he typed while it asked stays, his words given back before it', kept == both, kept)
+    await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').click()
+    await pg.wait_for_timeout(300)
+    kept = await pg.locator('.bibview .quickbox').input_value()
+    check(f'{tag} Ask again never writes over what the box holds', kept == both, kept)
     errs = [x for x in logs if x.startswith('PAGEERROR')]
     check(f'{tag} no page errors', not errs, errs[:3])
     await pg.context.close()

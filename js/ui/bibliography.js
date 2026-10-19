@@ -21,7 +21,7 @@ import { nowLabelOf } from '../novel/prompts.js';
 import { plural, nameKey, slug } from '../util.js';
 import * as archivist from '../novel/archivist.js';
 import { connFor } from '../novel/writer.js';
-import { quickAdd, quickBusy, stopQuick, quickLog, undoQuick, clearQuick, putBackQuick } from '../novel/quickadd.js';
+import { quickAdd, quickBusy, stopQuick, quickLog, undoQuick, clearQuick, putBackQuick, askingWhere, GONE_MS } from '../novel/quickadd.js';
 
 /* app.js: closeSide (the notes drawer on a phone), showCard (a card of the
  * notes), whenOpen (a passage, its words lit), openSearch (every place),
@@ -342,7 +342,8 @@ export function bibliographyPrint(novelId) {
   if (!novel) return '';
   const chapters = chaptersOf(novel);
   /* (not the words he filters by: the list under the box follows them by itself) */
-  return JSON.stringify([novel.bibliography || [], novel.notes || {}, (novel.prefs || {}).bibAuto || '', (novel.prefs || {}).bibRecall || '', superActive(), lookOf().names || '', namesPrint(novel, chapters), archivist.bibDue ? archivist.bibDue(novelId).length : 0, quickLog(novel), quickBusy(novelId)]);
+  /* (with how each Quick add being asked stands — here, in another window, or its window closed: 2.12.40) */
+  return JSON.stringify([novel.bibliography || [], novel.notes || {}, (novel.prefs || {}).bibAuto || '', (novel.prefs || {}).bibRecall || '', superActive(), lookOf().names || '', namesPrint(novel, chapters), archivist.bibDue ? archivist.bibDue(novelId).length : 0, quickLog(novel), quickLog(novel).map((r) => askingWhere(novelId, r)), quickBusy(novelId)]);
 }
 
 export function bibliographyView(novelId, { redraw = () => {} } = {}) {
@@ -438,12 +439,28 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
  * bibliography at once, with Undo; what a page contradicts, or what cannot be, is said with where it stands and waits
  * for his word — answered in the same box. Asked of his partner's connection. */
 const quickTyped = new Map();   /* novelId -> what he typed and has not sent */
+const quickStale = new Map();   /* novelId -> the timer that draws a row asked elsewhere again once it falls silent */
 const QUICK_SHOWN = 6;
+const quickKey = (novelId) => `${novelId}:quick`;
+/* what the box holds: what he typed in this window, else what was kept with the book's draft */
+function quickBoxNow(novelId) {
+  const kept = quickTyped.has(novelId) ? quickTyped.get(novelId) : (((store.peek('draft', novelId) || {}).entries || {})[quickKey(novelId)] || '');
+  return typeof kept === 'string' ? kept : '';
+}
+/* WORDS PUT BACK IN THE BOX — before what it holds, never in place of it (2.12.40, the audit: what he typed while it
+ * asked was written over by the words given back when the ask failed or was stopped, and by Ask again) */
+function putInBox(novelId, words) {
+  const back = String(words || '').trim();
+  const now = quickBoxNow(novelId).trim();
+  const next = !now || now === back || now.includes(back) ? (now || back) : !back || back.includes(now) ? back : `${back}\n\n${now}`;
+  quickTyped.set(novelId, next);
+  keepEntryDraft(novelId, quickKey(novelId), next.trim() ? next : undefined);
+}
 function quickView(novelId, redraw) {
   const novel = store.peek('novel', novelId);
   const log = quickLog(novel);
   const busy = quickBusy(novelId);
-  const key = `${novelId}:quick`;
+  const key = quickKey(novelId);
   const box = h('section.lightcard.quickadd', { 'aria-label': 'Quick add' });
   const head = h('div.quickhead', h('h3', 'Quick add'));
   if (log.length && !busy) head.append(h('button.btn.quiet.small', { title: 'Lets this Quick add conversation go — what went into the bibliography stays.', onclick: () => {
@@ -454,15 +471,20 @@ function quickView(novelId, redraw) {
   box.append(head, h('p.notekey', 'Tell it what you want in your world — a council, a power and what it costs, a rule, a person. Your partner’s connection holds it against the book, your premises, your bibliography and the notes first: what holds goes into the bibliography at once, with Undo; what a page says otherwise, or what cannot be by your world’s rules, is said with where it stands and waits for your word — answer here.'));
   const helper = connFor(store.peek('house', 'house') || {}, 'partner');
   if (!helper) box.append(h('p.notekey.bibdue', 'No connection is chosen for your partner, so Quick add cannot ask — choose one in Settings → Connections.'));
+  /* a row another window is asking: drawn again the moment it falls silent long enough to say its window closed */
+  clearTimeout(quickStale.get(novelId));
+  const silentIn = log.filter((r) => askingWhere(novelId, r) === 'elsewhere').map((r) => (r.beat || r.at || 0) + GONE_MS - Date.now());
+  if (silentIn.length) quickStale.set(novelId, setTimeout(() => redraw(), Math.max(1000, Math.min(...silentIn) + 500)));
   if (log.length) {
     const list = h('div.quicklog');
-    if (log.length > QUICK_SHOWN) list.append(h('p.notekey', `${plural(log.length - QUICK_SHOWN, 'earlier one')} kept, not shown — Clear lets them go.`));
-    for (const r of log.slice(-QUICK_SHOWN)) list.append(quickRow(novelId, r, busy, redraw));
+    /* the newest, and any older one that still holds its Undo — an Undo kept is never one he cannot reach */
+    const shown = log.filter((r, i) => i >= log.length - QUICK_SHOWN || [...(r.added || []), ...(r.book || [])].some((a) => a && a.status === 'made' && a.change));
+    if (log.length > shown.length) list.append(h('p.notekey', `${plural(log.length - shown.length, 'earlier one')} kept, not shown — Clear lets them go.`));
+    for (const r of shown) list.append(quickRow(novelId, r, redraw));
     box.append(list);
   }
   const ta = h('textarea.quickbox', { rows: 3, 'aria-label': 'What to add to your world', placeholder: log.length ? 'Answer it, or add more to your world…' : 'Sanguelis is the council of the elder vampire families…' });
-  const kept = quickTyped.has(novelId) ? quickTyped.get(novelId) : (((store.peek('draft', novelId) || {}).entries || {})[key] || '');
-  ta.value = typeof kept === 'string' ? kept : '';
+  ta.value = quickBoxNow(novelId);
   ta.addEventListener('input', () => { quickTyped.set(novelId, ta.value); keepEntryDraft(novelId, key, ta.value.trim() ? ta.value : undefined); });
   const send = async () => {
     const words = ta.value.trim();
@@ -472,8 +494,8 @@ function quickView(novelId, redraw) {
     ta.value = '';
     const live = hooks.chapterNow ? hooks.chapterNow() : '';
     const out = await quickAdd({ novelId, chapterId: live, words });
-    /* not checked: his words back in the box, as he typed them */
-    if (!out.ok && out.giveBack) { quickTyped.set(novelId, out.giveBack); keepEntryDraft(novelId, key, out.giveBack); }
+    /* not checked: his words back in the box, as he typed them — before anything he typed while it asked */
+    if (!out.ok && out.giveBack) putInBox(novelId, out.giveBack);
     if (!out.ok && out.error && !out.row) toast(`Quick add could not ask: ${out.error}.`, 6000);
     redraw();
     const made = out.ok ? (out.row.added || []).filter((a) => a.status === 'made') : [];
@@ -486,32 +508,69 @@ function quickView(novelId, redraw) {
   box.append(ta, row);
   return box;
 }
-/* one of his Quick adds and what came of it */
-function quickRow(novelId, r, busy, redraw) {
+/* one of his Quick adds and what came of it — every line of it what happened (2.12.40, the audit) */
+const listed = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+function quickRow(novelId, r, redraw) {
   const row = h('div.quickrow', { 'data-id': r.id });
   row.append(h('p.quick-mine', r.said));
-  const again = () => h('button.btn.small.quiet', { title: 'Puts these words back in the box, to send again.', onclick: () => { quickTyped.set(novelId, r.said); redraw(); requestAnimationFrame(() => document.querySelector('.bibview .quickbox')?.focus()); } }, 'Ask again');
-  if (r.state === 'asking' && busy) { row.append(h('p.quick-wait', h('span.ring', { 'aria-hidden': 'true' }), 'Holding it against the book…')); return row; }
-  if (r.state === 'asking' || r.state === 'stopped') { row.append(h('p.notekey', 'Not checked — it was stopped before it answered. Nothing went in.'), h('div.btnrow', again())); return row; }
+  const again = () => h('button.btn.small.quiet', { title: 'Puts these words back in the box, before anything you have typed there, to send again.', onclick: () => { putInBox(novelId, r.said); redraw(); requestAnimationFrame(() => document.querySelector('.bibview .quickbox')?.focus()); } }, 'Ask again');
+  /* being asked: here, or in another window — never "stopped" while it still asks */
+  const where = askingWhere(novelId, r);
+  if (where === 'here') { row.append(h('p.quick-wait', h('span.ring', { 'aria-hidden': 'true' }), 'Holding it against the book…')); return row; }
+  if (where === 'elsewhere') { row.append(h('p.quick-wait', h('span.ring', { 'aria-hidden': 'true' }), 'Being checked in another window…')); return row; }
+  if (where === 'gone') { row.append(h('p.notekey', 'Not checked — its window closed before it answered. Nothing went in.'), h('div.btnrow', again())); return row; }
+  if (r.state === 'stopped') { row.append(h('p.notekey', 'Not checked — it was stopped before it finished. Nothing went in.'), h('div.btnrow', again())); return row; }
   if (r.state === 'failed') { row.append(h('p.notekey.bibdue', `Not checked — ${r.error || 'no answer came'}. Nothing went in.`), h('div.btnrow', again())); return row; }
   if (r.verdict) row.append(h('p.quick-verdict', r.verdict));
   const go = (x) => (x.chapterId && x.passageId && hooks.whenOpen ? h('button.link', { title: 'Go to the passage, its words lit.', onclick: () => { if (hooks.closeSide) hooks.closeSide(); hooks.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: x.against || x.rule || '' } }); } }, x.label) : h('span', x.label));
   const section = (title, items, cls = '') => h('div.quick-sec' + cls, h('h4', title), h('ul', ...items));
   const added = r.added || [];
+  const book = r.book || [];
   if (added.length) {
     const live = new Set(entriesOf(store.peek('novel', novelId)).map((e) => e.id));
+    const how = (a) => (a.status === 'undone' ? ' — taken back out'
+      : !a.was ? ''
+        : a.how === 'whole' ? ' — your entry, written again with what you said'
+          : a.addedWhy ? ` — your entry, added to: ${a.addedWhy}, so only what is new went in` : ' — your entry, added to');
     row.append(section('Into the bibliography', added.map((a) => h('li' + (a.status === 'undone' ? '.undone' : ''),
       a.status !== 'undone' && live.has(a.entryId) ? h('button.link', { title: `Open ${a.name}.`, onclick: () => showRef(novelId, `e:${a.entryId}`) }, a.name) : h('span', a.name),
-      a.status === 'undone' ? ' — taken back out' : a.was ? ' — your entry, added to' : ''))));
-    if (added.some((a) => a.status === 'made' && a.change)) row.append(h('div.btnrow', h('button.btn.small.quiet', { title: 'Takes what this answer put into the bibliography back out — an entry changed since stays as it is.', onclick: () => { const back = undoQuick(novelId, r.id); if (back.said.length) toast(back.said.join(' · '), 6000); else if (back.back) toast('Taken back out of the bibliography.'); redraw(); } }, 'Undo these')));
+      how(a)))));
   }
+  if ([...added, ...book].some((a) => a.status === 'made' && a.change)) row.append(h('div.btnrow', h('button.btn.small.quiet', { title: 'Takes back out what this answer put in — its entries, and your book’s words as they were — anything changed since stays as it is.', onclick: () => { const back = undoQuick(novelId, r.id); if (back.said.length) toast(back.said.join(' · '), 6000); else if (back.back) toast('Taken back out.'); redraw(); } }, 'Undo these')));
+  /* its Undo let go: said, never just gone (the newest that put something in keep theirs) */
+  if ([...added, ...book].some((a) => a.status === 'kept')) row.append(h('p.notekey', 'Its Undo is let go — the four newest Quick adds that put something in keep theirs. What went in stays; open an entry to change it.'));
+  if ((r.held || []).length) row.append(section('Held back — waiting for your word', [h('li', h('b', listed(r.held)), ' — what it wrote may say what the book says otherwise (below), and asked to write it again without that, it gave no answer that could be read. Send your words again.')], '.wait'));
   if ((r.refused || []).length) row.append(section('Not put in', r.refused.map((x) => h('li', h('b', x.name), ` — ${x.why}`))));
-  if ((r.changes || []).length) row.append(section('It changes your earlier words', r.changes.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', h('span', x.label), ` said “${x.was}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null))));
+  if ((r.changes || []).length) {
+    row.append(section('It changes your earlier words', r.changes.map((x, i) => {
+      const kids = [h('span', `“${x.mine}”`), ' — ', h('span', x.label), ` said “${x.was}”`];
+      /* his premise is his record of what he asked for that passage: never written again — his newer word stands over it */
+      if (x.kind === 'premise') kids.push(' — your newer word stands over it.');
+      if (x.kind === 'about') {
+        const b = book.find((y) => y.at === i);
+        kids.push(!b ? ' — it still says it.'
+          : b.status === 'made' || b.status === 'kept' ? `; it says “${b.now}” now.`
+            : b.status === 'undone' ? ' — put back as it was.'
+              : ` — it still says it: ${b.why}.`);
+      }
+      /* (it held this back as the book saying otherwise, and asked again it gave no answer) */
+      if (x.said !== 'changes' && r.again === 'failed') kids.push(' It held this back, as if a page said otherwise — send it again to put it in.');
+      if (x.why) kids.push(h('span.quick-why', ` ${x.why}`));
+      return h('li', ...kids);
+    })));
+  }
   if ((r.conflicts || []).length) row.append(section('The book says otherwise — waiting for your word', r.conflicts.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), ` says “${x.against}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null)), '.wait'));
   if ((r.cannot || []).length) row.append(section('Cannot be, by your world’s rules — waiting for your word', r.cannot.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), `: “${x.rule}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null)), '.wait'));
   if ((r.questions || []).length) row.append(section('For you to decide', r.questions.map((q) => h('li', q))));
-  if (r.aside) row.append(h('p.notekey', `${plural(r.aside, 'more thing it named', 'more things it named')} quoted words that stand nowhere in the book or your own words — set aside, not counted.`));
-  if (!added.length && !(r.conflicts || []).length && !(r.cannot || []).length && !(r.changes || []).length && !(r.refused || []).length && !(r.questions || []).length) row.append(h('p.notekey', 'Nothing went in — it gave no entries.'));
+  /* what it set against your words with words that stand nowhere — each said, and what came of it */
+  const aside = Array.isArray(r.aside) ? r.aside : [];
+  if (aside.length) {
+    const tail = r.again === 'answered' ? ', so yours were not held back for them.' : r.again === 'failed' ? ' — asked again to put yours in, it gave no answer that could be read; send it again.' : '.';
+    row.append(section('Set aside', aside.map((x) => h('li', h('span', `“${x.mine}”`), ` — it said ${x.where || 'the book'} says “${x.quote}”, but ${x.only ? `those words stand only in ${x.only}, not on a page or in your own words` : 'those words stand nowhere in the book or your own words'}${tail}`))));
+  }
+  /* (a row kept from before 2.12.40 counted them) */
+  if (typeof r.aside === 'number' && r.aside > 0) row.append(h('p.notekey', `${plural(r.aside, 'more thing it named', 'more things it named')} quoted words that stand nowhere in the book or your own words — set aside.`));
+  if (!added.length && !book.length && !(r.held || []).length && !(r.conflicts || []).length && !(r.cannot || []).length && !(r.changes || []).length && !(r.refused || []).length && !(r.questions || []).length && !aside.length) row.append(h('p.notekey', 'Nothing went in — it gave no entries.'));
   return row;
 }
 
