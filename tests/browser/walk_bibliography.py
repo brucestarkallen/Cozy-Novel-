@@ -298,6 +298,69 @@ async def scenario(browser):
     check('a lorebook of 3,000 entries comes in at once (%d ms) — and one whose other name another has comes in without that one' % took, took < 5000 and got == [3000, True, []], [took, got])
     os.unlink(path)
 
+    # (2.12.41, the third review) a name is one entry's with its "The" or without it — never with "A" or "An" let go:
+    # "The Iron Covenant" is left out beside his "Iron Covenant", "An Lushan" (a person) comes in beside the place Lushan
+    await pg.evaluate("""async nid => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const B = await import('/js/novel/bibliography.js');
+      for (const e of [{ name: 'Iron Covenant', kind: 'groups', line: 'The hunters.', text: 'They hunt the envoys.' }, { name: 'Lushan', kind: 'places', line: 'A mountain.', text: 'It rises over the river.' }])
+        s.change('novel', nid, sh.novelSteps.putEntry(B.tidyEntry(B.newEntry({ ...e, by: 'you' }))));
+      await s.flush(); }""", nid)
+    rows = {'0': {'uid': 0, 'key': ['The Iron Covenant'], 'content': 'A LOREBOOK COVENANT.'}, '1': {'uid': 1, 'key': ['An Lushan'], 'content': 'A general of the north.'}}
+    fd, path = tempfile.mkstemp(suffix='.json')
+    with os.fdopen(fd, 'w') as f:
+        json.dump({'entries': rows}, f)
+    async with pg.expect_file_chooser() as fc:
+        await pg.locator('.bibview button', has_text='Bring in a lorebook').click()
+    await (await fc.value).set_files(path)
+    # (every name in it taken: no sheet comes — said by the check below, never a walk cut short)
+    asked = ''
+    try:
+        await pg.wait_for_selector('.sheet.on button:has-text("Bring them in")', timeout=5000)
+        asked = await pg.locator('.sheet.on').inner_text()
+        await pg.click('.sheet.on button:has-text("Bring them in")')
+        await pg.wait_for_function("!document.querySelector('.sheet.on')")
+    except Exception:
+        asked = await pg.locator('#toast').inner_text()
+    got = await pg.evaluate("""async nid => { const s = await import('/js/store.js'); const B = await import('/js/novel/bibliography.js'); await s.flush();
+      const es = B.entriesOf(s.peek('novel', nid)); return [es.filter((e) => /Iron Covenant/.test(e.name)).map((e) => [e.name, e.text]), es.filter((e) => /Lushan/.test(e.name)).map((e) => e.name).sort()]; }""", nid)
+    check('a lorebook’s “The Iron Covenant” is left out beside his “Iron Covenant”; its “An Lushan” comes in beside the place Lushan',
+          got == [[['Iron Covenant', 'They hunt the envoys.']], ['An Lushan', 'Lushan']] and '1 entry whose names are here already is left out' in asked, [got, asked])
+    os.unlink(path)
+
+    # (2.12.41, the third review) his entry sheet holds to the others only the names he sets now: two entries from before
+    # going by "The Order" and "Order" each save with only their words changed; a name he gives that another has is refused
+    await pg.evaluate("""async nid => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const B = await import('/js/novel/bibliography.js');
+      for (const e of [{ name: 'The Order', kind: 'groups', line: 'A secret society.', text: 'It meets at dawn.' }, { name: 'Order', kind: 'lore', line: 'The first law.', text: 'Order is the first law.' }])
+        s.change('novel', nid, sh.novelSteps.putEntry(B.tidyEntry(B.newEntry({ ...e, by: 'you' }))));
+      await s.flush(); }""", nid)
+    await pg.wait_for_timeout(400)
+    saved = []
+    for name, words in [('The Order', 'It meets at dawn in the old mill.'), ('Order', 'Order is the first law, and the last.')]:
+        await pg.evaluate("""async ([nid, name]) => { const B = await import('/js/novel/bibliography.js'); const s = await import('/js/store.js'); const u = await import('/js/ui/bibliography.js');
+          const e = B.entriesOf(s.peek('novel', nid)).find((x) => x.name === name); u.showRef(nid, `e:${e.id}`); }""", [nid, name])
+        await card_text(pg)
+        await pg.locator('.sheet.on button', has_text='Edit your entry').click()
+        await pg.wait_for_selector('.sheet.on textarea')
+        await pg.locator('.sheet.on textarea').fill(words)
+        await pg.locator('.sheet.on button', has_text='Save').click()
+        await pg.wait_for_timeout(500)
+        open_now = await pg.evaluate("Boolean(document.querySelector('.sheet.on textarea'))")
+        if open_now:
+            await close_sheet(pg)
+        saved.append(await pg.evaluate("""async ([nid, name]) => { const s = await import('/js/store.js'); const B = await import('/js/novel/bibliography.js'); await s.flush();
+          return (B.entriesOf(s.peek('novel', nid)).find((x) => x.name === name) || {}).text; }""", [nid, name]))
+    check('two entries from before, “The Order” and “Order”: each saved with only its words changed', saved == ['It meets at dawn in the old mill.', 'Order is the first law, and the last.'], saved)
+    await pg.evaluate("""async nid => { const B = await import('/js/novel/bibliography.js'); const s = await import('/js/store.js'); const u = await import('/js/ui/bibliography.js');
+      const e = B.entriesOf(s.peek('novel', nid)).find((x) => x.name === 'Order'); u.showRef(nid, `e:${e.id}`); }""", nid)
+    await card_text(pg)
+    await pg.locator('.sheet.on button', has_text='Edit your entry').click()
+    await pg.wait_for_selector('.sheet.on textarea')
+    await pg.locator('.sheet.on input[type=text] >> nth=0').fill('Gotei 13')
+    await pg.locator('.sheet.on button', has_text='Save').click()
+    await pg.locator('#toast.on').filter(has_text='Another entry goes by Gotei 13 already').wait_for(timeout=5000)
+    still = await pg.evaluate("""async nid => { const s = await import('/js/store.js'); const B = await import('/js/novel/bibliography.js'); return B.entriesOf(s.peek('novel', nid)).filter((x) => x.name === 'Order').length; }""", nid)
+    check('a name he gives that another entry goes by is refused, said', still == 1 and await pg.evaluate("Boolean(document.querySelector('.sheet.on textarea'))"), still)
+    await close_sheet(pg)
+
     # drawn again while he types in its filter: the box keeps his words and his place in them
     await pg.wait_for_selector('.bibview .bibfilter')
     await pg.locator('.bibview .bibfilter').click()

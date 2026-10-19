@@ -239,6 +239,19 @@ export function samePersonName(a, b) {
   }
   return false;
 }
+/* A FAMILY'S NAME ALONE (2.12.41, the third review of Quick add: "Kuchiki" — the Kuchiki, a noble house — was put into
+ * Rukia Kuchiki's entry, and his partner's change made her a group): a name of one word past its titles that is the last
+ * word of a longer name and not its first ("Kuchiki", "Captain Venn" for Mara Venn). It names a family, or another of it,
+ * as well as anyone — so a bibliography never finds an entry by it alone (bibliography.js entryFor); a given name is
+ * found ("Mara" for Mara Venn). Only for that: who is the same person stays samePersonName's. */
+export function familyNameOnly(a, b) {
+  const A = parseName(a);
+  const B = parseName(b);
+  const [one, more] = A.words.length === 1 && B.words.length > 1 ? [A, B] : B.words.length === 1 && A.words.length > 1 ? [B, A] : [null, null];
+  if (!one) return false;
+  return more.words[more.words.length - 1] === one.words[0] && more.words[0] !== one.words[0];
+}
+
 /* every word of a name as written is a name's — a capital, or a script with
  * no capitals — or one of the little words names carry (da, van, bin) */
 const NAME_PARTICLES = new Set(['da', 'de', 'del', 'della', 'di', 'du', 'van', 'von', 'der', 'den', 'ter', 'le', 'la', 'bin', 'ibn', 'al', 'el', 'no', 'y']);
