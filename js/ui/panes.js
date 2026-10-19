@@ -886,8 +886,9 @@ function drawNotes() {
       /* whether a helper reads what the Timeline lacks by itself (archivist.js timelineBackfill) — none chosen, or one
        * whose connection was turned away, never said to (2.12.40, the audit) */
       helper: () => archivist.helperState(novelId),
-      /* of the passages not read yet, those asked again once their wait is over (archivist.js readAgainLater, 2.12.41) */
-      later: (owedOf) => archivist.readAgainLater(novelId, 'turns', owedOf),
+      /* of the passages not read yet, those asked again once their wait is over (archivist.js readAgainLater, 2.12.41) —
+       * the notes' reading's too, after a stall: their turns come with it (round 6) */
+      later: (owedOf) => archivist.readAgainLater(novelId, 'turns', owedOf, { notes: true }),
       readAgain: () => {
         notesView = 'cards';
         drawSide();
