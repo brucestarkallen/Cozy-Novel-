@@ -391,6 +391,65 @@ await test('a page left "being written" by a closed window is set right', async 
   await putAway(b); await putAway(b2);
 });
 
+/* (2.12.41: another browser's heartbeat was judged against this page's own clock — a laptop whose clock ran more than two
+ * minutes ahead of the phone's took a page or a reply still being written on the phone for one whose window closed) */
+await test('a heartbeat is kept and judged in the phone\'s time: a browser whose clock differs from the phone\'s never takes a page or a reply still being written for one whose window closed, and still sets right one that stopped', async () => {
+  const before = globalThis.fetch;
+  /* the phone's clock five minutes behind this one, as its answers say it */
+  const SKEW = -5 * 60 * 1000;
+  globalThis.fetch = async (url, init) => {
+    const r = await before(url, init);
+    const d = Date.parse(r.headers.get('Date') || '');
+    if (!Number.isFinite(d)) return r;
+    const hd = new Headers(r.headers);
+    hd.set('Date', new Date(d + SKEW).toUTCString());
+    return new Response([101, 204, 205, 304].includes(r.status) ? null : r.body, { status: r.status, statusText: r.statusText, headers: hd });
+  };
+  const settle = async () => { for (let i = 0; i < 10; i++) await store.api('GET', '/api/version'); };
+  try {
+    await settle();
+    assert.ok(Math.abs(store.phoneNow() - (Date.now() + SKEW)) < 3000, `the phone's time, from its answers (${store.phoneNow() - Date.now()} ms)`);
+    const now = store.phoneNow();
+    const b = await makeBook([['The lamp was cold.',
+      { text: 'Still coming', streaming: true, beat: now - 10000, tab: 'far', browser: 'another-browser' },
+      { text: 'It stopped here', streaming: true, beat: now - 3 * 60 * 1000, tab: 'far', browser: 'another-browser' }]]);
+    assert.equal(await writer.repairStale(b.novelId), 1, 'only the page quiet for three minutes of the phone\'s time');
+    const [, alive, stopped] = b.ch().passages.map(picked);
+    assert.deepEqual([alive.streaming, alive.cut], [true, undefined], 'the page still being written is left alone');
+    assert.deepEqual([stopped.streaming, stopped.cut], [undefined, true]);
+    /* a reply in a scene, the same */
+    const playId = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
+    const on = shape.newTurn('ai', 'She lifts the', { streaming: true, beat: now - 10000, browser: 'another-browser', tab: 'far', at: now - 20000 });
+    const off = shape.newTurn('ai', 'He turns to', { streaming: true, beat: now - 3 * 60 * 1000, browser: 'another-browser', tab: 'far', at: now - 4 * 60 * 1000 });
+    store.change('play', playId, shape.turnSteps.addTurn(on), { now: true });
+    store.change('play', playId, shape.turnSteps.addTurn(off), { now: true });
+    assert.equal(await talk.repairStaleTurns('play', playId), 1, 'only the reply quiet for three minutes of the phone\'s time');
+    const turns = store.peek('play', playId).turns;
+    assert.equal(picked(turns.find((t) => t.id === on.id)).streaming, true, 'the reply still coming is left alone');
+    assert.deepEqual([picked(turns.find((t) => t.id === off.id)).streaming, picked(turns.find((t) => t.id === off.id)).cut], [undefined, true]);
+    /* and the heartbeat this page writes is in the phone's time too */
+    await reset();
+    await script([{ text: 'The wind rose over the cliffs.', pause: 0.6 }]);
+    const writing = writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+    let beat = null;
+    for (let k = 0; k < 200 && !beat; k++) { await sleep(10); const v = picked(b.ch().passages.at(-1)); if (v && v.streaming && v.beat) beat = v.beat; }
+    assert.ok(beat && Math.abs(beat - (Date.now() + SKEW)) < 3000, `its own heartbeat in the phone's time (${beat ? beat - Date.now() : 'none'} ms)`);
+    await writing;
+    /* and a reply's (talk.js) */
+    await reset();
+    await script([{ text: 'The narrator opens the scene.', pause: 0.6 }]);
+    const replying = talk.playSay({ playId, text: '' });
+    let said = null;
+    for (let k = 0; k < 200 && !said; k++) { await sleep(10); const t = (store.peek('play', playId).turns || []).find((x) => ![on.id, off.id].includes(x.id) && picked(x) && picked(x).streaming && picked(x).beat); if (t) said = picked(t).beat; }
+    assert.ok(said && Math.abs(said - (Date.now() + SKEW)) < 3000, `a reply's heartbeat in the phone's time (${said ? said - Date.now() : 'none'} ms)`);
+    await replying;
+    await putAway(b);
+  } finally {
+    globalThis.fetch = before;
+    await settle();
+  }
+});
+
 await test('writing from the middle: the request says between, and what follows rides too — trimmed when long', async () => {
   const after = Array.from({ length: 900 }, (_, i) => `Later line ${i}.`).join(' ');
   const b = await makeBook([['THE FIRST PASSAGE.', 'AFTER STARTS HERE. ' + after]]);

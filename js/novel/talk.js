@@ -387,7 +387,8 @@ async function runTurn({ kind, id, novelId, turnId, versionId, role, buildArgs, 
   let done = '';
   let replacing = false;
   const keptNow = () => (replacing ? done : prefix + text);
-  const alive = () => ({ beat: Date.now(), tab: store.CLIENT, browser: store.BROWSER });
+  /* (in the phone's time, as a page's: writer.js, store.phoneNow, 2.12.41) */
+  const alive = () => ({ beat: store.phoneNow(), tab: store.CLIENT, browser: store.BROWSER });
   try { store.change(kind, id, turnSteps.setVersion(turnId, versionId, alive()), { checkpoint: true, delay: 50 }); } catch (_) { /* gone */ }
   /* it beats while the model is silent too, so another window never takes a
    * reply still coming for one whose window closed */
@@ -1594,7 +1595,8 @@ export async function repairStaleTurns(kind, id) {
       if (!v.streaming) continue;
       if (job && job.turnId === t.id && job.versionId === v.id) continue;
       const here = v.browser && v.browser === store.BROWSER && tabs;
-      const gone = here ? !tabs.has(v.tab) : Date.now() - (v.beat || v.at || 0) > 2 * 60 * 1000;
+      /* (another browser's heartbeat judged in the phone's time it was written in: writer.js repairStale, 2.12.41) */
+      const gone = here ? !tabs.has(v.tab) : store.phoneNow() - (v.beat || v.at || 0) > 2 * 60 * 1000;
       if (!gone) continue;
       if (!String(v.text || '').trim() && !String(v.thinking || '').trim()) {
         if (t.versions.length < 2) store.change(kind, id, turnSteps.removeTurn(t.id), { now: true });

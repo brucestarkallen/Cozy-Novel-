@@ -367,8 +367,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   /* carried on: shown once the words it repeats have arrived, so the join never flickers */
   const shown = () => (splice ? (mode === 'append' && text.trim().length < 40 ? splice('').text : splice(text).text) : base + text);
   /* a heartbeat: another window can tell a page being written from one whose
-   * writer closed (repairStale) */
-  const alive = () => ({ beat: Date.now(), tab: store.CLIENT, browser: store.BROWSER });
+   * writer closed (repairStale) — in the phone's time, so another browser
+   * whose clock differs judges it right (store.phoneNow, 2.12.41) */
+  const alive = () => ({ beat: store.phoneNow(), tab: store.CLIENT, browser: store.BROWSER });
   const checkpoint = () => {
     if (!ownsPage()) { job.gone = true; ctl.abort(); return; }
     if (!automaticAllowed()) return;
@@ -692,7 +693,9 @@ export async function repairStale(novelId) {
         if (!v.streaming) continue;
         if (job && job.passageId === p.id && job.versionId === v.id) continue;
         const here = v.browser && v.browser === store.BROWSER && tabs;
-        const gone = here ? !tabs.has(v.tab) : Date.now() - (v.beat || v.done || v.at || 0) > STALE_MS;
+        /* (another browser's heartbeat in the phone's time, as it was written: 2.12.41 — this clock against that one's,
+         * a laptop two minutes ahead of the phone took a page still being written there for one whose window closed) */
+        const gone = here ? !tabs.has(v.tab) : store.phoneNow() - (v.beat || v.done || v.at || 0) > STALE_MS;
         if (!gone) continue;
         /* some words written again, its window closed partway: whole or not at all — the words before stay on show */
         if (v.how === 'selection' && p.versions.length > 1) {

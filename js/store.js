@@ -53,6 +53,24 @@ export function onUpdate(fn) { updateFns.add(fn); return () => updateFns.delete(
  * one does: the banner says so and the work goes into the journal. A big save
  * gets a second more per megabyte to travel. */
 const WAIT = 15000;
+/* THE PHONE'S CLOCK (2.12.41): a heartbeat one browser writes and another judges — a page or a reply being written —
+ * is kept in the phone's time, as its leases are (serve.py take_lease), so a laptop and a phone whose clocks differ by
+ * more than the two minutes a heartbeat may be quiet never take a page still being written for one whose window
+ * closed, nor keep one that did. Each answer from the phone says its time (its Date, to the second); the difference
+ * from this page's clock is the middle of the nine newest it gave — this page's own clock until one did. */
+const heard = [];
+function heardClock(res, sent, back) {
+  const d = Date.parse((res && res.headers && typeof res.headers.get === 'function' && res.headers.get('Date')) || '');
+  if (!Number.isFinite(d)) return;
+  /* (said to the second, rounded down, somewhere between sending and the answer) */
+  heard.push(d + 500 - (sent + back) / 2);
+  if (heard.length > 9) heard.shift();
+}
+export function phoneNow() {
+  if (!heard.length) return Date.now();
+  const s = [...heard].sort((a, b) => a - b);
+  return Date.now() + Math.round(s[Math.floor(s.length / 2)]);
+}
 async function api(method, path, { body, headers = {}, keepalive = false, wait = 0 } = {}) {
   const guarded = generation !== null && /^\/api\/store\//.test(path) && ['PUT', 'DELETE'].includes(method);
   const init = { method, headers: { 'X-Client': CLIENT, ...(guarded ? { 'X-Generation': String(generation) } : {}), ...headers }, keepalive };
@@ -65,7 +83,9 @@ async function api(method, path, { body, headers = {}, keepalive = false, wait =
   if (ctl) init.signal = ctl.signal;
   const timer = ctl ? setTimeout(() => ctl.abort(), ms) : null;
   try {
+    const sent = Date.now();
     const res = await fetch(path, init);
+    heardClock(res, sent, Date.now());
     let data = null;
     try { data = await res.json(); } catch (_) { data = null; }
     if (data && data.reload && Number.isFinite(data.generation)) knowGeneration(data.generation);
