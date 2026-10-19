@@ -351,9 +351,56 @@ export function lorebookOf(entries, title = 'Bibliography') {
 
 export const CODEX_SCHEMA = 1;
 export const FACTS_PER_SOURCE = 12;
-/* words compared as a reader sees them: spacing, curly quotes and the shape of a dash aside */
-const loose = (t) => String(t || '').replace(/[‘’ʼ′]/g, "'").replace(/[“”„″]/g, '"').replace(/[‐-―−]/g, '-').replace(/…/g, '...').replace(/\s+/g, ' ').trim();
-export function quoteIn(hay, quote) { const q = loose(quote); return q.length >= 4 && loose(hay).includes(q); }
+/* WORDS COMPARED AS A READER SEES THEM: spacing, curly quotes and the shape of a dash aside — one rule for the
+ * bibliography's facts and the Timeline's turns (2.12.40, the audit: the Timeline held a quote to the page letter for
+ * letter, so a turn quoted with straight marks, or "..." for "…", was lost where a fact quoted alike was kept, and a
+ * run of spaces mended to one took every turn standing on it). `at`: where each of its letters stands on the page, so
+ * a quote read loosely is kept as the page has it (quoteSpan). A long text's is kept while its words are the same. */
+const SINGLE = new Set(['‘', '’', 'ʼ', '′']);
+const DOUBLE = new Set(['“', '”', '„', '″']);
+const SPACE = /\s/;
+const looseKept = new Map();
+let looseHeld = 0;
+function looseOf(t) {
+  const s = String(t == null ? '' : t);
+  const long = s.length > 200;
+  const had = long ? looseKept.get(s) : null;
+  if (had) return had;
+  const out = [];
+  const at = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (SPACE.test(c)) { if (out[out.length - 1] !== ' ') { out.push(' '); at.push(i); } continue; }
+    if (c === '…') { out.push('.', '.', '.'); at.push(i, i, i); continue; }
+    out.push(SINGLE.has(c) ? "'" : DOUBLE.has(c) ? '"' : (c >= '‐' && c <= '―') || c === '−' ? '-' : c);
+    at.push(i);
+  }
+  if (out[0] === ' ') { out.shift(); at.shift(); }
+  if (out[out.length - 1] === ' ') { out.pop(); at.pop(); }
+  const r = { s: out.join(''), at };
+  if (long) {
+    looseKept.set(s, r);
+    looseHeld += s.length;
+    for (const k of looseKept.keys()) { if (looseHeld <= 2e6 && looseKept.size <= 64) break; looseKept.delete(k); looseHeld -= k.length; }
+  }
+  return r;
+}
+const loose = (t) => looseOf(t).s;
+/* where a quote stands on the page, read loosely ({start, end}), or null — its own words where they stand exactly */
+export function quoteAt(hay, quote) {
+  const h = String(hay == null ? '' : hay);
+  const q = loose(quote);
+  if (q.length < 4) return null;
+  const raw = String(quote == null ? '' : quote).trim();
+  const exact = h.indexOf(raw);
+  if (exact >= 0) return { start: exact, end: exact + raw.length };
+  const L = looseOf(h);
+  const k = L.s.indexOf(q);
+  return k < 0 ? null : { start: L.at[k], end: L.at[k + q.length - 1] + 1 };
+}
+export function quoteIn(hay, quote) { return quoteAt(hay, quote) !== null; }
+/* the words a quote stands for, as the page has them ('' when they are not there) */
+export function quoteSpan(hay, quote) { const at = quoteAt(hay, quote); return at ? String(hay).slice(at.start, at.end) : ''; }
 
 /* the facts one source gives, held to its words: {schema, fp, facts, complete} */
 export function codexOf(rows, { text = '', whole = text } = {}) {
@@ -401,7 +448,9 @@ export function carriedCodex(codex, text, swap = (x) => x) {
     if (!evidence.length || !evidence.every((q) => quoteIn(text, q)) || !nameInText(folded, name)) return null;
     facts.push({ ...f, id: 'cx-' + hashText(JSON.stringify([nameKey(name), fact, evidence])), name, fact, evidence });
   }
-  return { ...codex, fp: hashText(text), facts };
+  /* (one being read in parts, archivist.js bibBackfill: how far was of the words before — the new words read in parts again from their start, what was found kept) */
+  const { upTo, gap: _g, ...rest } = codex;
+  return { ...rest, ...(Number.isInteger(upTo) ? { upTo: 0 } : {}), fp: hashText(text), facts };
 }
 
 /* What a reading of a changed passage gives, with what the version before it
@@ -471,7 +520,17 @@ export function codexStep(passageId, versionId, codex) {
   return (chapter) => {
     const p = (chapter.passages || []).find((x) => x.id === passageId);
     const v = p && picked(p);
-    if (!v || v.id !== versionId || v.streaming || hashText(v.text || '') !== codex.fp) return false;
+    if (!v || v.id !== versionId || v.streaming) return false;
+    if (hashText(v.text || '') !== codex.fp) {
+      /* its words changed on the page itself while they were read (a fix put in meanwhile): the facts of the words read
+       * kept with them, on the newest words before — the change is read against them next, and they stay (2.12.40) */
+      const b = Array.isArray(v.before) ? v.before[v.before.length - 1] : null;
+      if (b && typeof b.text === 'string' && hashText(b.text) === codex.fp) {
+        const had = codexNow({ text: b.text, codex: b.codex });
+        b.codex = JSON.parse(JSON.stringify(!codex.complete && had ? mergeCodex(had, codex) : codex));
+      }
+      return false;
+    }
     const next = !codex.complete && codexNow(v) ? mergeCodex(v.codex, codex) : codex;
     v.codex = JSON.parse(JSON.stringify(next));
     return true;

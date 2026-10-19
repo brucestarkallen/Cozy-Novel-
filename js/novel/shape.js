@@ -126,9 +126,9 @@ export function keptTail(v) {
  *  - `before`: the words before each change, the newest last (the first
  *    words and the newest BEFORE_KEEP - 1 changes: keptBefore) — Put back
  *    the words before brings the newest back, with
- *    what the checker had found in them and the bibliography's facts of them
- *    (on the newest only), whether it stopped short, and what had been taken
- *    off it;
+ *    what the checker had found in them and the bibliography's facts and the
+ *    Timeline's turns of them (on the newest only), whether it stopped short,
+ *    and what had been taken off it;
  *  - `hands`: who changed its words — 'checker', 'partner', 'you';
  *  - `written`: its words as they were before the first change — for a
  *    writer's page, the writer's own words: what is measured of the writer
@@ -146,17 +146,20 @@ export const writtenOf = (v) => (v ? String(typeof v.written === 'string' ? v.wr
 /* changed by him or his partner: no longer the writer's own words, nor only its words with fixes put in */
 export const mixedHands = (v) => handsOf(v).some((x) => x === 'you' || x === 'partner');
 export const END_KEYS = ['cut', 'cutWhy', 'cutBy', 'stopped', 'endCut'];
-export function inPlaceFields(v, next, by, { at = Date.now(), check = null, codex = null, keepEnd = true, tail = false, extra = {} } = {}) {
+export function inPlaceFields(v, next, by, { at = Date.now(), check = null, codex = null, continuity = null, keepEnd = true, tail = false, extra = {} } = {}) {
   const was = String((v && v.text) || '');
   const end = Object.fromEntries(END_KEYS.filter((k) => v && v[k] !== undefined).map((k) => [k, v[k]]));
+  /* (and the Timeline's turns of them, as their facts — only the turns of these very words, timeline.js continuityNow:
+   * 2.12.40, the audit — Undo and Put back the words before brought the facts back and lost the turns) */
   const entry = { text: was, by, at,
     ...(Object.keys(end).length ? { end } : {}),
     ...(check ? { check: JSON.parse(JSON.stringify(check)) } : {}),
     ...(codex ? { codex: JSON.parse(JSON.stringify(codex)) } : {}),
+    ...(continuity ? { continuity: JSON.parse(JSON.stringify(continuity)) } : {}),
     ...(tail ? { tail: keptTail(v) } : {}),
     ...extra };
-  /* the facts of the words, kept on the newest words before only (they can be many); what the checker found in them on each */
-  const older = (Array.isArray(v && v.before) ? v.before : []).map(({ codex: _x, ...rest }) => rest);
+  /* the facts and the turns of the words, kept on the newest words before only (they can be many); what the checker found in them on each */
+  const older = (Array.isArray(v && v.before) ? v.before : []).map(({ codex: _x, continuity: _t, ...rest }) => rest);
   const hands = handsOf(v).includes(by) ? handsOf(v).slice() : [...handsOf(v), by];
   const out = { text: next, words: countWords(next), before: keptBefore([...older, entry]), hands };
   /* the words before the fixes put in by themselves since the last other change, kept on the version itself (autoBaseOf):
@@ -195,7 +198,7 @@ export function putBackFields(v) {
   if (last.tail) { out.tookOff = last.tail.tookOff; out.tookOffTop = last.tail.tookOffTop; }
   /* back to its first words: no longer changed by anyone */
   if (!rest.length && last.text === writtenOf(v)) { out.hands = undefined; out.written = undefined; }
-  return { patch: out, check: last.check || null, codex: last.codex || null, by: last.by, at: last.at };
+  return { patch: out, check: last.check || null, codex: last.codex || null, continuity: last.continuity || null, by: last.by, at: last.at };
 }
 
 /* the two read the same at their end: the last words untouched */

@@ -4,6 +4,9 @@
  * opening this view never asks a model. Pure: no store or screen. */
 import { hashText } from '../util.js';
 import { picked, matchCard, chapterLabel } from './shape.js';
+/* one rule for a quote, the bibliography's (2.12.40, the audit): curly or straight marks, a dash's shape, "..." for "…"
+ * and runs of spaces read as a reader reads them — the turn keeps the words as the page has them */
+import { quoteAt, quoteIn, quoteSpan } from './bibliography.js';
 
 export const TIMELINE_SCHEMA = 1;
 export const TIMELINE_KINDS = ['relationship', 'character', 'thread'];
@@ -12,6 +15,34 @@ const NOTE_KINDS = ['people', 'threads'];
 const words = (s, max) => typeof s === 'string' && s.trim().length <= max ? s.trim() : '';
 const cardsIn = (notes, kind) => Array.isArray(notes?.[kind]) ? notes[kind] : [];
 const allCards = (notes) => NOTE_KINDS.flatMap(kind => cardsIn(notes, kind).map(c => ({ ...c, kind })));
+
+/* turns kept for the words with this print (the words a reading or a change was of) */
+export function turnsOfPrint(c, fp) {
+  return Boolean(c && c.schema === TIMELINE_SCHEMA && Array.isArray(c.events) && fp && c.fp === fp);
+}
+/* a version's turns while they are of its words as they stand — never turns left with words it had before (2.12.40, the
+ * audit: as bibliography.js codexNow is for its facts; a version's raw turns, left with the words before a Go on, were
+ * carried to new words and said read whole, the words added never read for theirs) */
+export function continuityNow(v) {
+  return v && turnsOfPrint(v.continuity, hashText(String(v.text || ''))) ? v.continuity : null;
+}
+
+/* THE SAME TURN (2.12.40, the audit: a part read and then the passage read for the Timeline alone gave "Emilia turns
+ * Jovan." and "Emilia turns Jovan with a bite." as two rows — an id is the hash of the exact quotes, so the same turn
+ * worded or quoted another way was another): the same kind, the same cards, the same stance and whose it is, and
+ * words behind it that overlap on the page. Read in `text`, the words both stand in; with none, the same words quoted. */
+const cardsKey = (e) => (Array.isArray(e.refs) ? e.refs : []).map((r) => (r && r.id) || '').sort().join('\u0001');
+const voiceOf = (e) => `${e.stance || ''}\u0001${e.stance && e.stance !== 'fact' ? ((e.whose && e.whose.id) || '') : ''}`;
+export function sameTurn(a, b, text = '') {
+  if (!a || !b) return false;
+  if (a.id && a.id === b.id) return true;
+  if (a.kind !== b.kind || cardsKey(a) !== cardsKey(b) || voiceOf(a) !== voiceOf(b)) return false;
+  const qa = Array.isArray(a.evidence) ? a.evidence : [], qb = Array.isArray(b.evidence) ? b.evidence : [];
+  const t = String(text || '');
+  const sa = t ? qa.map((q) => quoteAt(t, q)).filter(Boolean) : [], sb = t ? qb.map((q) => quoteAt(t, q)).filter(Boolean) : [];
+  if (sa.length && sb.length) return sa.some((x) => sb.some((y) => x.start < y.end && y.start < x.end));
+  return qa.some((x) => qb.some((y) => quoteIn(x, y) || quoteIn(y, x)));
+}
 
 /* Names are resolved against the notes already folded from this answer.
  * A reference can never create a person or a thread. Ambiguous names stay
@@ -40,13 +71,14 @@ export function continuityOf(rows, notes, { text = '', whole = text } = {}) {
     const people = refs.filter(r => r?.kind === 'people');
     const valid = statement && (!row.why || why) && TIMELINE_KINDS.includes(kind) && STANCES.includes(stance)
       && refs.length && refs.every(Boolean) && new Set(refs.map(r => r.id)).size === refs.length
-      && evidence.length && evidence.every(q => q.length >= 4 && text.includes(q) && whole.includes(q))
+      && evidence.length && evidence.every(q => q.length >= 4 && quoteIn(text, q) && quoteIn(whole, q))
       && (stance === 'fact' || (whose?.kind === 'people' && refs.some(r => r.id === whose.id)))
       && (kind !== 'relationship' || people.length >= 2)
       && (kind !== 'character' || people.length >= 1)
       && (kind !== 'thread' || refs.some(r => r.kind === 'threads'));
     if (!valid) { out.complete = false; continue; }
-    const quotes = [...new Set(evidence)];
+    /* each quote kept as the page has it */
+    const quotes = [...new Set(evidence.map(q => quoteSpan(whole, q)))];
     const event = { kind, refs, text: statement, why, evidence: quotes, stance, ...(whose ? { whose } : {}) };
     event.id = 'tl-' + hashText(JSON.stringify([kind, refs.map(r => r.id).sort(), quotes, stance, whose?.id || '']));
     if (!out.events.some(e => e.id === event.id)) out.events.push(event);
@@ -58,10 +90,11 @@ export function continuityOf(rows, notes, { text = '', whole = text } = {}) {
  * reading with no turning point). A missing or invalid part is not made
  * complete by the final part. No partial result is written before the
  * passage's reading finishes. */
-export function mergeContinuity(before, next) {
+/* (text: the words both are of — the same turn found in them is kept once, sameTurn) */
+export function mergeContinuity(before, next, text = '') {
   if (!before || before.fp !== next.fp) return next;
   const events = [...before.events];
-  for (const e of next.events) if (!events.some(x => x.id === e.id)) events.push(e);
+  for (const e of next.events) if (!events.some(x => sameTurn(x, e, text))) events.push(e);
   return { ...next, complete: before.complete && next.complete, events };
 }
 
@@ -71,11 +104,47 @@ export function continuityStep(passageId, versionId, continuity) {
   return chapter => {
     const p = (chapter.passages || []).find(p => p.id === passageId);
     const v = p && picked(p);
-    if (!v || v.id !== versionId || v.streaming || hashText(v.text || '') !== continuity.fp) return;
-    const next = !continuity.complete && sourceValid(v) ? mergeContinuity(v.continuity, continuity) : continuity;
+    if (!v || v.id !== versionId || v.streaming) return;
+    if (hashText(v.text || '') !== continuity.fp) {
+      /* its words changed on the page itself while they were read (a fix put in meanwhile): the turns of the words read
+       * kept with them, on the newest words before — the change is read against them next, and they stay (2.12.40) */
+      const b = Array.isArray(v.before) ? v.before[v.before.length - 1] : null;
+      if (b && typeof b.text === 'string' && hashText(b.text) === continuity.fp) {
+        const kept = !continuity.complete && turnsOfPrint(b.continuity, continuity.fp) ? mergeContinuity(b.continuity, continuity, b.text) : continuity;
+        b.continuity = JSON.parse(JSON.stringify(kept));
+      }
+      return;
+    }
+    const next = !continuity.complete && sourceValid(v) ? mergeContinuity(v.continuity, continuity, v.text) : continuity;
     v.continuity = JSON.parse(JSON.stringify(next));
   };
 }
+
+/* a turn kept as a reading keeps one: its cards, kind, stance and whose it is as continuityOf made them (restored or
+ * imported records are held to it too) — its words aside */
+function soundTurn(e) {
+  return Boolean(e && Array.isArray(e.evidence) && e.evidence.length && e.evidence.every((q) => typeof q === 'string' && q.length >= 4)
+    && Array.isArray(e.refs) && e.refs.length && !e.refs.some((r) => !r || typeof r.id !== 'string' || !words(r.name, 120) || !NOTE_KINDS.includes(r.kind))
+    && new Set(e.refs.map((r) => r.id)).size === e.refs.length && words(e.id, 100)
+    && TIMELINE_KINDS.includes(e.kind) && STANCES.includes(e.stance) && words(e.text, 900)
+    && !(e.kind === 'relationship' && e.refs.filter((r) => r.kind === 'people').length < 2)
+    && !(e.kind === 'character' && !e.refs.some((r) => r.kind === 'people'))
+    && !(e.kind === 'thread' && !e.refs.some((r) => r.kind === 'threads'))
+    && !(e.stance !== 'fact' && (!e.whose || !e.refs.some((r) => r.id === e.whose.id && r.kind === 'people'))));
+}
+/* ONE TURN CARRIED TO NEW WORDS: every quote still standing in them, kept as they have it (a name changed everywhere:
+ * changed in them too, `swap`) — or null */
+function carriedTurn(e, t, swap) {
+  if (!soundTurn(e)) return null;
+  const evidence = e.evidence.map((q) => quoteSpan(t, swap(String(q))));
+  if (!evidence.length || evidence.some((q) => q.length < 4)) return null;
+  const refs = e.refs.map((r) => ({ ...r, name: swap(String((r && r.name) || '')) }));
+  const whose = e.whose ? { ...e.whose, ...(e.whose.name ? { name: swap(String(e.whose.name)) } : {}) } : null;
+  return { ...e, refs, text: swap(String(e.text || '')), ...(e.why ? { why: swap(String(e.why)) } : {}), evidence: [...new Set(evidence)], ...(whose ? { whose } : {}),
+    id: 'tl-' + hashText(JSON.stringify([e.kind, refs.map((r) => r.id).sort(), [...new Set(evidence)], e.stance, (whose && whose.id) || ''])) };
+}
+/* what is the reading's own, never carried: how far it was read in parts (`upTo`, `gap`) and whether it was passed by */
+const ownOnly = ({ upTo: _u, gap: _g, passed: _p, ...rest }) => rest;
 
 /* A READING CARRIED TO NEW WORDS (2.12.37 — his report: "5 passages have no complete timeline reading yet — Read the
  * whole book again", under Super automatic): words changed on the page itself — the spaces mended on opening, a fix,
@@ -84,20 +153,35 @@ export function continuityStep(passageId, versionId, continuity) {
  * the words, as the facts do — kept whole only when every quote still stands in the new words (a name changed
  * everywhere: changed in them too, `swap`); else none, and the passage is read for them again (archivist.js
  * timelineDue). */
+/* (2.12.40, the audit: given only the turns of the words being replaced — continuityNow, as the facts are codexNow;
+ * a quote read as the bibliography reads one, and kept as the new words have it: a run of spaces mended to one kept
+ * every turn on it) */
 export function carriedContinuity(c, text, swap = (x) => x) {
   if (!c || c.schema !== TIMELINE_SCHEMA || !Array.isArray(c.events)) return null;
   const t = String(text || '');
   const events = [];
   for (const e of c.events) {
-    if (!e || !Array.isArray(e.evidence) || !Array.isArray(e.refs)) return null;
-    const evidence = e.evidence.map((q) => swap(String(q)));
-    if (!evidence.length || !evidence.every((q) => q.length >= 4 && t.includes(q))) return null;
-    const refs = e.refs.map((r) => ({ ...r, name: swap(String(r.name || '')) }));
-    const whose = e.whose ? { ...e.whose, ...(e.whose.name ? { name: swap(String(e.whose.name)) } : {}) } : null;
-    events.push({ ...e, refs, text: swap(String(e.text || '')), ...(e.why ? { why: swap(String(e.why)) } : {}), evidence, ...(whose ? { whose } : {}),
-      id: 'tl-' + hashText(JSON.stringify([e.kind, refs.map((r) => r.id).sort(), evidence, e.stance, (whose && whose.id) || ''])) });
+    const carried = carriedTurn(e, t, swap);
+    if (!carried) return null;
+    events.push(carried);
   }
-  return { ...c, fp: hashText(t), events };
+  return { ...ownOnly(c), fp: hashText(t), events };
+}
+/* WHAT A READING OF A CHANGE GIVES, WITH THE TURNS THE WORDS BEFORE IT HAD THAT ITS NEW WORDS STILL GIVE (2.12.40, the
+ * audit: the reading is asked for what the change adds — a fix adds nothing — and its answer was the passage's whole
+ * history, so a fix, a Go on, his partner's words, his edit or an Undo took away every turn of the words still
+ * standing; the bibliography kept its facts — bibliography.js withCarriedFacts). Judged turn by turn: each earlier turn
+ * whose quotes all still stand in the new words is kept, as they have them — unless the reading gives the same turn
+ * (sameTurn), whose own words stand. */
+export function withCarriedTurns(history, before, text) {
+  if (!history || !before || before.schema !== TIMELINE_SCHEMA || !Array.isArray(before.events)) return history;
+  const t = String(text || '');
+  const events = [...history.events];
+  for (const e of before.events) {
+    const carried = carriedTurn(e, t, (x) => x);
+    if (carried && !events.some((x) => sameTurn(x, carried, t))) events.push(carried);
+  }
+  return { ...history, events };
 }
 /* a passage's Timeline reading stands for its words as they are, read whole */
 export function continuityDone(v) {
@@ -117,8 +201,12 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
   const notes = novel?.notes || {};
   const cards = allCards(notes).map(({ id, name, kind }) => ({ id, name, kind }));
   const events = [];
-  /* passed: read for its turns and passed by — its model would not read it whole (archivist.js timelineBackfill) */
+  /* passed: read for its turns and passed by — its model would not give them from its words (archivist.js timelineBackfill);
+   * passedFound: the turns those passages gave, shown; aside: set aside by the notes' reading as its words stand — its model
+   * would not read it, never read for its turns until he has it read again (2.12.40: said apart, never "read by itself") */
   const coverage = { total: 0, read: 0, missing: 0, passed: 0, complete: false };
+  const asideAll = (novel && novel.memory && novel.memory.aside) || {};
+  let aside = 0, passedFound = 0;
   const order = novel?.order || [];
   const end = chapterId ? order.indexOf(chapterId) : order.length - 1;
   const limit = chapterId && through && through !== '^' ? (chapters?.[chapterId]?.passages || []).findIndex(p => p.id === through) : null;
@@ -136,19 +224,17 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
       passageNumber++;
       if (!v || v.streaming || !String(v.text || '').trim()) continue;
       coverage.total++;
-      if (!sourceValid(v)) continue;
+      const setAside = () => { const a = asideAll[p.id]; return Boolean(a && a.sig === `${v.id}:${hashText(v.text || '')}`); };
+      if (!sourceValid(v)) { if (setAside()) aside++; continue; }
       let valid = true;
       const rows = [];
+      /* the same turn kept twice by a merge made before 2.12.40 is shown, and sent to the notes' check, once (sameTurn) */
+      const shown = [];
       for (const e of v.continuity.events) {
         /* Restored/imported records are held to the same evidence rule. */
-        if (!e || !Array.isArray(e.evidence) || !e.evidence.length || e.evidence.some(q => typeof q !== 'string' || q.length < 4 || !v.text.includes(q))
-          || !Array.isArray(e.refs) || !e.refs.length || e.refs.some(r => !r || typeof r.id !== 'string' || !words(r.name, 120) || !NOTE_KINDS.includes(r.kind))
-          || new Set(e.refs.map(r => r.id)).size !== e.refs.length || !words(e.id, 100)
-          || !TIMELINE_KINDS.includes(e.kind) || !STANCES.includes(e.stance) || !words(e.text, 900)
-          || (e.kind === 'relationship' && e.refs.filter(r => r.kind === 'people').length < 2)
-          || (e.kind === 'character' && !e.refs.some(r => r.kind === 'people'))
-          || (e.kind === 'thread' && !e.refs.some(r => r.kind === 'threads'))
-          || (e.stance !== 'fact' && (!e.whose || !e.refs.some(r => r.id === e.whose.id && r.kind === 'people')))) { valid = false; continue; }
+        if (!soundTurn(e) || e.evidence.some(q => !quoteIn(v.text, q))) { valid = false; continue; }
+        if (shown.some(x => sameTurn(x, e, v.text))) continue;
+        shown.push(e);
         const participants = e.refs.map(ref => resolve(notes, ref) || { ...ref, missing: true });
         const ids = participants.map(r => r.id);
         if ((cardId && !ids.includes(cardId)) || (kind && kind !== 'all' && e.kind !== kind)) continue;
@@ -158,15 +244,18 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
           ...(who ? { whose: who.id, whoseName: who.name } : {}),
           chapterId: cid, passageId: p.id, versionId: v.id, chapterNumber: ci + 1, passageNumber,
           label: `${chapterLabel(novel, chapter)}, passage ${passageNumber}`,
-          offset: Math.min(...e.evidence.map(q => v.text.indexOf(q))) });
+          offset: Math.min(...e.evidence.map(q => (quoteAt(v.text, q) || { start: 0 }).start)) });
       }
       if (v.continuity.complete === true && valid) coverage.read++;
-      else if (v.continuity.passed && v.continuity.passed === v.continuity.fp) coverage.passed++;
+      else if (v.continuity.passed && v.continuity.passed === v.continuity.fp) { coverage.passed++; passedFound += rows.length; }
+      else if (setAside()) aside++;
       events.push(...rows.sort((a, b) => a.offset - b.offset));
     }
   }
   coverage.missing = coverage.total - coverage.read;
   coverage.complete = !missingChapter && coverage.missing === 0;
   if (missingChapter) coverage.unavailable = true;
+  if (aside) coverage.aside = aside;
+  if (passedFound) coverage.passedFound = passedFound;
   return { events, coverage, cards };
 }
