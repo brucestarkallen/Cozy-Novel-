@@ -22,7 +22,7 @@
  * nor in a name joined with a hyphen ("Mary" is not in "Mary-Jane"). */
 import { newId, nameKey, estimateTokens, hashText } from '../util.js';
 import { picked, matchCard, chapterLabel } from './shape.js';
-import { foldedText, foldName, nameInText, firstSentence, samePersonName, titlesConflict, isGroupName } from './names.js';
+import { foldedText, foldName, nameInText, firstSentence, samePersonName, titlesConflict } from './names.js';
 import { superActive } from './auto.js';
 
 export const ENTRY_KINDS = ['people', 'places', 'things', 'groups', 'lore'];
@@ -681,8 +681,10 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
   const placeOf = new Map();
   /* kept by the name as the book wrote it (never by the name without its article: "The Order" and "Order" are each placed as themselves) */
   /* (thing: what the book tells of a group, a place or a thing — never put on a person's card through another name the
-   * card goes by, only on one that is itself a group, by its whole name: 2.12.41, the review, as his entries are joined —
-   * cardForEntry; "Kuchiki", the clan, is never Rukia Kuchiki's) */
+   * card goes by, only on one by its own whole name, the name being no other person's word: 2.12.41, the review, as his
+   * entries are joined — cardForEntry, peopleCardAsThing; "Kuchiki", the clan, is never Rukia Kuchiki's, and "The
+   * Order", a people card, keeps its facts) */
+  let peopleIx = null;
   const placeFor = (name, thing = false) => {
     const own = nameKey(name);
     const k = thing ? `t\u0001${own}` : own;
@@ -695,8 +697,9 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
     if (!at) {
       for (const kind of ['people', 'places', 'lore']) {
         if (kind === 'people' && thing) {
-          const group = (notes.people || []).filter((c) => c && nameKey(c.name) === own && isGroupName(c.name));
-          if (group.length === 1) { at = { kind, id: group[0].id }; break; }
+          if (!peopleIx) peopleIx = cardIndex({ people: notes.people || [] }).people;
+          const group = peopleCardAsThing(peopleIx, name);
+          if (group) { at = { kind, id: group.id }; break; }
           continue;
         }
         const c = matchCard(notes[kind] || [], name, [], { kind, near: true, slip: false });
@@ -858,6 +861,33 @@ const cardsUnder = (ix, map, keys) => {
   if (at.length > 1) at.sort((a, b) => a - b);
   return at.map((i) => ix.list[i]);
 };
+/* A PEOPLE CARD THAT IS NO PERSON (2.12.41, the review of 2.12.41: the people cards that are groups — "The Order",
+ * "House Wessex", "Akatsuki" — are the very ones names.js isGroupName cannot tell, a reading having given them as
+ * people): his entry that is no person, or what the book tells of a group, a place or a thing, says the name is one,
+ * wherever its card is filed — a people card by the name's own whole name, unless another person goes by that name as a
+ * word of theirs ("Kuchiki", Rukia Kuchiki's: a surname, never the clan's). The card, or null. */
+function peopleCardAsThing(ix, name) {
+  const own = nameKey(name);
+  if (!own) return null;
+  const byName = cardsUnder(ix, ix.byName, [own]);
+  if (byName.length !== 1) return null;
+  const words = foldName(name).split(' ').filter(Boolean);
+  if (!words.length) return null;
+  const said = ` ${words.join(' ')} `;
+  for (const other of cardsUnder(ix, ix.byWord, words)) {
+    if (other === byName[0]) continue;
+    if ([other.name, ...(other.aka || [])].some((n) => ` ${foldName(n)} `.includes(said))) return null;
+  }
+  return byName[0];
+}
+/* whether a person of the notes other than `butId` goes by a name as a word of theirs (the guard of peopleCardAsThing, for
+ * the notes' reading: archivist.js foldRow, a person's row for one of his entries that is no person) */
+export function personGoesBy(people, name, butId = '') {
+  const words = foldName(name).split(' ').filter(Boolean);
+  if (!words.length) return false;
+  const said = ` ${words.join(' ')} `;
+  return (people || []).some((c) => c && c.id !== butId && [c.name, ...(c.aka || [])].some((n) => ` ${foldName(n)} `.includes(said)));
+}
 /* (index: the notes' cards by their names, made once for many entries — entryJoins) */
 export function cardForEntry(e, notes, index = null) {
   const ix = index || cardIndex(notes);
@@ -868,13 +898,17 @@ export function cardForEntry(e, notes, index = null) {
   const at = (kind, c) => ({ kind, id: c.id, about: c.about || '' });
   const twoPeople = (kind, c) => kind === 'people' && (titlesConflict(e.name, c.name) || (nameWords(e.name) >= 2 && nameWords(c.name) >= 2 && !samePersonName(e.name, c.name)));
   /* A PERSON'S CARD FOR AN ENTRY THAT IS NO PERSON (2.12.41, the review: a clan "Kuchiki" still took Rukia Kuchiki's card
-   * through her other name "Kuchiki", and a lore entry "Kurosaki" Ichigo's): only by the card's own whole name, and only
-   * a card that is itself a group (names.js isGroupName: "the harbour runners") — never through a person's other names,
-   * never a surname */
+   * through her other name "Kuchiki", and a lore entry "Kurosaki" Ichigo's): only by the card's own whole name — his
+   * entry's kind says what the name is, wherever its card is filed (peopleCardAsThing, 2.12.41, the review of 2.12.41:
+   * "The Order", a people card, lost his group's entry) — never through a person's other names, never a surname */
   const forThing = (kind) => kind === 'people' && !person;
   for (const kind of kinds) {
-    let byName = cardsUnder(ix[kind], ix[kind].byName, [own]);
-    if (forThing(kind)) byName = byName.filter((c) => isGroupName(c.name));
+    if (forThing(kind)) {
+      const c = peopleCardAsThing(ix[kind], e.name);
+      if (c) return at(kind, c);
+      continue;
+    }
+    const byName = cardsUnder(ix[kind], ix[kind].byName, [own]);
     if (byName.length === 1) return at(kind, byName[0]);
     if (byName.length > 1) return null;
   }

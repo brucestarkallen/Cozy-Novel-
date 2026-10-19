@@ -540,26 +540,84 @@ const OPENERS = new Set([...TOKEN_STOP, 'A', 'An', 'He', 'It', 'We', 'Me', 'Us',
   'Same', 'Own', 'Yours', 'Mine', 'Ours', 'Theirs', 'Himself', 'Herself', 'Itself', 'Myself', 'Themselves', 'Ourselves', 'Yourself'].map((w) => w.toLowerCase()));
 const ANY_WORD = /(?<![\p{L}\p{M}\p{N}'’-])\p{L}[\p{L}\p{M}'’-]*/gu;
 const wordKey = (w) => String(w || '').replace(/['’]s$/i, '').replace(/['’-]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-export function nameWordsIn(text) {
+/* a text's words by their keys: those it writes with a capital (the first form of each) — and those of them it writes so
+ * inside a sentence (`mid`) — and those it writes in small letters */
+const SENTENCE_START = /[.!?…"“”‘’'(\[—–*_\n]/;
+function wordsScanned(text) {
+  const t = String(text || '');
   const small = new Set();
   const caps = new Map();
-  for (const m of String(text || '').matchAll(ANY_WORD)) {
+  const mid = new Set();
+  for (const m of t.matchAll(ANY_WORD)) {
     const w = m[0];
     const k = wordKey(w);
     if (!k) continue;
-    if (/^\p{Lu}/u.test(w)) { if (!caps.has(k)) caps.set(k, w); } else small.add(k);
+    if (!/^\p{Lu}/u.test(w)) { small.add(k); continue; }
+    if (!caps.has(k)) caps.set(k, w);
+    let i = m.index - 1;
+    while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
+    if (i >= 0 && !SENTENCE_START.test(t[i])) mid.add(k);
   }
+  return { small, caps, mid };
+}
+/* (known: the book's own names by their words — names.js nameWordsOf, a Map of each word to 'person' or 'thing' — 2.12.41,
+ * the review of 2.12.41: a name the page also writes as a word, "Will" beside "he will stay", "Rose" beside "a rose", was
+ * never a name, and his edit taking Will out of the page took nothing out. A word of a person's name, written with a
+ * capital, is a name; a word of a place's, a thing's or lore's name — "Magic", "Order" — only where the page writes it
+ * so inside a sentence, never for a sentence it opens.) */
+function namesScanned(s, known) {
   const out = new Set();
-  for (const [k, w] of caps) if (k.length >= 2 && !small.has(k) && !OPENERS.has(k) && !/^I['’]/.test(w) && !CONTRACTION.test(w)) out.add(k);
+  for (const [k, w] of s.caps) {
+    if (k.length < 2 || /^I['’]/.test(w) || CONTRACTION.test(w)) continue;
+    const kind = known ? (known instanceof Map ? known.get(k) : known.has(k) ? 'person' : '') : '';
+    if (kind === 'person' || (kind === 'thing' && s.mid.has(k)) || (!s.small.has(k) && !OPENERS.has(k))) out.add(k);
+  }
   return out;
 }
-/* the names (nameWordsIn) the words before give that the words after do not, in any letters — sorted */
-export function nameWordsGone(before, after) {
-  const was = nameWordsIn(before);
+export function nameWordsIn(text, { known = null } = {}) {
+  return namesScanned(wordsScanned(text), known);
+}
+/* THE NAMES A CHANGE TOOK OUT OF A PAGE (2.12.41): the names (nameWordsIn) the words before give that the words after do
+ * not — sorted. A name stands in the words after in any letters ("TOM!", "tom"), but a name the words before also write
+ * as a word ("Will" and "he will") only as a name, with a capital; a name joined with a hyphen stands while its parts do
+ * ("Mary-Jane" written "Mary Jane", and the other way about: 2.12.41, the review of 2.12.41 — the hyphen alone taken out
+ * took the name out). known: the book's names at the moment of the change (nameWordsOf), kept with it as it is made. */
+export function nameWordsGone(before, after, { known = null } = {}) {
+  const b = wordsScanned(before);
+  const was = namesScanned(b, known);
   if (!was.size) return [];
-  const now = new Set();
-  for (const m of String(after || '').matchAll(ANY_WORD)) now.add(wordKey(m[0]));
-  return [...was].filter((k) => !now.has(k)).sort();
+  const a = wordsScanned(after);
+  const any = new Set([...a.caps.keys(), ...a.small]);
+  const named = new Set(a.caps.keys());
+  for (const set of [any, named]) for (const k of [...set]) if (k.includes('-')) for (const part of k.split('-')) if (part) set.add(part);
+  const stands = (k) => {
+    const where = b.small.has(k) ? named : any;
+    return where.has(k) || (k.includes('-') && k.split('-').filter(Boolean).every((part) => where.has(part)));
+  };
+  return [...was].filter((k) => !stands(k)).sort();
+}
+/* THE BOOK'S NAMES BY THEIR WORDS (2.12.41, the review of 2.12.41): every word of the names given — his entries' and the
+ * notes' cards', their other names too — as nameWordsGone knows them, never a title, a rank or a joining word ("Captain
+ * Hayes" gives Hayes; "The Order" gives Order). A Set of keys; with `things` too, a Map: each word of `names` (people's)
+ * to 'person', each other word of `things` (places', things', lore's) to 'thing'. */
+export function nameWordsOf(names, things = null) {
+  const wordsOf = (list) => {
+    const out = new Set();
+    for (const n of list || []) {
+      for (const m of String(n || '').matchAll(ANY_WORD)) {
+        const k = wordKey(m[0]);
+        if (k.length < 2 || NAME_STOP.has(k) || NAME_PARTICLES.has(k) || titleOf(k) || k === 'a' || k === 'an') continue;
+        out.add(k);
+        if (k.includes('-')) for (const part of k.split('-')) if (part.length >= 2) out.add(part);
+      }
+    }
+    return out;
+  };
+  const people = wordsOf(names);
+  if (!things) return people;
+  const out = new Map([...wordsOf(things)].map((k) => [k, 'thing']));
+  for (const k of people) out.set(k, 'person');
+  return out;
 }
 
 
