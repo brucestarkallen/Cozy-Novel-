@@ -14,7 +14,7 @@ import { numberWords, plural, timeAgo, nameKey, openOf, countWords } from '../ut
 import { showSent } from './sent.js';
 import { webUrl } from '../model/call.js';
 import { thinkBox, updateThinkBox } from './think.js';
-import { wordsOf, changesComing, editableOf, partsOf, labelNow, wordsNow } from '../novel/changes.js';
+import { wordsOf, changesComing, editableOf, partsOf, labelNow, wordsNow, madeGone } from '../novel/changes.js';
 import { enterFull, leaveFull, fullKind } from './full.js';
 import { paced, follower, streamLines } from './live.js';
 import { drawProse, growProse } from './prose.js';
@@ -1779,7 +1779,8 @@ function changeList(novelId, turn, v) {
     const mark = { made: '✓', waiting: '•', writing: '…', refused: '✗', undone: '↶', skipped: '–' }[c.status] || '•';
     /* a waiting one that could not land now (its words gone, its thing changed since): said, with no Apply (M224) */
     const stale = c.status === 'waiting' && !c.copied ? talk.waitingWhy(novelId, c) : '';
-    const state = { made: c.op && c.op.rewrite !== undefined ? `written again by the writer from ${c.edited ? 'your' : 'its'} note${c.said ? ` — ${c.said}` : ''} — one arrow away from the words before` : c.edited ? 'made with your words' : c.with ? c.said : (c.said && c.op && (c.op.find !== undefined || c.op.text !== undefined) ? c.said : ''), writing: 'the writer is writing it again — it streams on the page', waiting: stale ? `can’t be made now — ${stale}` : c.group ? 'waiting for Apply — made together with the others of its kind here' : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'replaced by a newer answer’s change to the same' : 'left as it was' }[c.status] || '';
+    const gone = c.status === 'made' && !c.copied ? madeGone(novelId, c) : '';
+    const state = gone ? `made, but ${gone}` : { made: c.op && c.op.rewrite !== undefined ? `written again by the writer from ${c.edited ? 'your' : 'its'} note${c.said ? ` — ${c.said}` : ''} — one arrow away from the words before` : c.edited ? 'made with your words' : c.with ? c.said : (c.said && c.op && (c.op.find !== undefined || c.op.text !== undefined) ? c.said : ''), writing: 'the writer is writing it again — it streams on the page', waiting: stale ? `can’t be made now — ${stale}` : c.group ? 'waiting for Apply — made together with the others of its kind here' : 'waiting for Apply', refused: `couldn’t be made — ${c.said || 'no reason given'}`, undone: c.undoneSaid ? `undone in part — ${c.undoneSaid}` : 'undone', skipped: c.aside ? 'replaced by a newer answer’s change to the same' : 'left as it was' }[c.status] || '';
     const row = h('div.change.' + c.status,
       h('div.chead', h('b', `${mark} ${labelNow(novelId, c)}`), state ? h('small', state) : null),
       c.status !== 'refused' ? h('div.cwhat', whatChanged(novelId, c)) : (c.op && c.op.find !== undefined ? h('div.cwhat', 'It looked for: ', h('del', clip(c.op.find, 140))) : null),

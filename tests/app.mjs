@@ -6679,7 +6679,8 @@ await test('a change claimed only in words is asked for once — “Done — …
   for (const [t, want] of [['Done — Mira is nineteen now.', true], ['Mira’s card has been updated: she’s nineteen.', true], ['Updated Mira to nineteen.', true], ['Done — Mira is nineteen now, not seventeen.', true], ['I’ve changed her age to nineteen.', true],
     ['I’ve changed my mind about the ending — it works.', false], ['If I changed the ending, she would never forgive him.', false], ['Since I rewrote passage 2.3 earlier, the seam holds.', false],
     ['I have updated nothing yet.', false], ['If you cut the adverb, the opening now reads much more cleanly.', false], ['I cut a scene like this from my own first draft.', false], ['Should I change the ending?', false],
-    ['Done.', true], ['All set!', true], ['Done reading.', false], ['Done with the chapters — here is what I think.', false]]) {
+    ['Done.', true], ['All set!', true], ['Done reading.', false], ['Done with the chapters — here is what I think.', false],
+    ['Dr. Updated the notes, and I left them.', false], ['Dr. Smith’s card has been updated.', true]]) {
     assert.equal(talk.claimsChange(t), want, t);
   }
   const b = await makeBook([['Mira was seventeen.']], { manual: true });
@@ -19909,6 +19910,217 @@ await test('nothing is written again by itself on a connection waited out after 
   await putAway(b);
 });
 
+/* (2.12.42 — a writer that sends nothing at all, not a keepalive. The scripted stand-in’s hang keeps the line warm, so the
+ * quiet leash never lets go. This one holds the socket with zero bytes only for a page or a sentence written again,
+ * and answers every other ask at once.) */
+async function silentWriterModel(port) {
+  const http = await import('node:http');
+  const asked = [];
+  const api = { asked, holdWriter: true, grades: null, prose: 'Mara lit the lamp. He asked for this one.' };
+  const textOf = (last) => {
+    if (last.includes('What I want different')) return api.prose;
+    if (last.includes('Check these passages')) return JSON.stringify(api.grades ? { edits: [], grades: [api.grades] } : { edits: [] });
+    if (last.includes('Find every slip of the hand')) return JSON.stringify({ edits: [] });
+    if (last.includes('Read it as one chapter')) return JSON.stringify({ edits: [] });
+    if (last.includes('Add the quotation marks')) return JSON.stringify({ paragraphs: [] });
+    if (last.includes('Answer with {"ok": true}')) return '{"ok": true}';
+    if (last.includes('Answer with only this')) return '{"entries": []}';
+    if (last.includes('Summarise ') && last.includes("for the book's notes")) return JSON.stringify({ summary: 'Mara keeps the light.', name: 'The Light' });
+    if (last.includes('Write the summary again')) return JSON.stringify({ summary: 'Mara keeps the light.' });
+    if (last.includes('Its summary, as it stands')) return JSON.stringify({ wrong: [], missing: [] });
+    if (last.includes('Which is the better page')) return JSON.stringify({ better: 'same', why: 'neither' });
+    if (last.includes(prompts.AUDIT_ASK)) return JSON.stringify({ clear: true, verdict: 'These hold.' });
+    if (last.includes(prompts.TIMELINE_ASK)) return JSON.stringify({ timeline: [] });
+    if (last.includes('were read into the notes') || last.includes('Update the notes')) return JSON.stringify({ people: [], timeline: [], bibliography: [] });
+    return '{}';
+  };
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ data: [{ id: 'scripted' }] })); return; }
+      let sent = {};
+      try { sent = JSON.parse(body || '{}'); } catch (_) { /* none */ }
+      const last = String(((sent.messages || []).filter((m) => m.role === 'user').pop() || {}).content || '');
+      const writer = last.includes('What I want different');
+      const silent = writer && api.holdWriter;
+      asked.push({ kind: writer ? 'rewrite' : 'other', silent, his: last.includes('His own page.'), span: last.includes('Write it again without') });
+      if (silent) return;
+      const text = textOf(last);
+      if (sent.stream === true) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.flushHeaders();
+        res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: null }] }) + '\n\n');
+        res.write('data: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + '\n\n');
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] }));
+    });
+  });
+  await new Promise((r) => server.listen(port, '127.0.0.1', r));
+  api.close = async () => { server.closeAllConnections(); await new Promise((r) => server.close(() => r())); };
+  api.rewrites = () => asked.filter((x) => x.kind === 'rewrite').length;
+  return api;
+}
+
+/* (2.12.42 — a silent writer on a page or a sentence written again by itself came back as a passing fault with no
+ * leash, so it was asked again every ten minutes for ever and never counted toward letting it be) */
+await test('a silent writer on a page or a sentence written again by itself is asked, waited, counted and let be at the second — never a third time; his own Write it again still goes out', async () => {
+  const keep = call.onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
+  const on = () => ({ on: true, from: Date.now() - 1000 });
+  const model = await silentWriterModel(PORT + 8);
+  /* the job starts inside the look and may finish before the look returns: take it as soon as it is there */
+  const takeJob = async (novelId, run) => {
+    const done = run();
+    let job = null;
+    for (let k = 0; k < 400 && !job; k++) { job = checker.forTests().lifting.get(novelId); if (!job) await sleep(15); }
+    return { done, job };
+  };
+  globalThis.__cozyLeashQuietMs = 400;
+  globalThis.__cozyLeashQuietMostMs = 1600;
+  try {
+    /* a shorter leash is waited and not counted, and nothing is asked of that model again before then */
+    model.grades = failing(3);
+    model.holdWriter = true;
+    await setHouse({ learned: null, url: `http://127.0.0.1:${PORT + 8}/v1` }, { checksFrom: 0, judge: { target: 9 }, autoLift: on() });
+    const b = await makeBook([[{ text: 'Mara lit the lamp and waited.', model: 'scripted', how: 'write', ask: { direction: 'She lights it.', length: 'scene' } }]], { manual: true });
+    markAllSeen(b);
+    const first = await takeJob(b.novelId, () => checker.runCheck(b.novelId));
+    assert.ok(first.job, 'the page was asked');
+    const stalled = await first.job;
+    await first.done;
+    assert.equal(stalled.leashed, 'quiet', 'a silent model comes back as a stall, not a fault to ask again for ever');
+    assert.ok(!stalled.passing, 'a stall is not the passing fault that waits ten minutes');
+    await quietAll();
+    const v = picked(b.ch().passages[0]);
+    assert.equal(v.liftFailed, undefined, 'a shorter leash is not a reason to give the page up');
+    assert.equal((v.tries && v.tries.lift && v.tries.lift.n) || 0, 0, 'not counted');
+    assert.ok(Boolean(v.tries && v.tries.lift && Number(v.tries.lift.next) > store.phoneNow()), 'waited as long as it was waited');
+    assert.equal(silentEnds(b) > store.phoneNow(), false, 'a shorter leash does not wait the whole connection out');
+    const n1 = model.rewrites();
+    checker.forTests().autoAfter(b.novelId);
+    assert.equal(model.rewrites(), n1, 'not asked again before its time');
+    await quietAll();
+    await putAway(b);
+    await reset();
+    delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashQuietMostMs;
+  {
+    /* the longest leash: counted, the connection waited out, let be at the second, and his own ask still goes */
+    globalThis.__cozyLeashQuietMs = 500;
+    globalThis.__cozyLeashQuietMostMs = 500;
+    model.asked.length = 0;
+    model.grades = failing(3);
+    model.holdWriter = true;
+    model.prose = 'Mara lit the lamp. He asked for this one.';
+    await setHouse({ learned: null, url: `http://127.0.0.1:${PORT + 8}/v1` }, { checksFrom: 0, judge: { target: 9 }, autoLift: on() });
+    const b = await makeBook([[{ text: 'Mara lit the lamp and waited.', model: 'scripted', how: 'write', ask: { direction: 'She lights it.', length: 'scene' } }]], { manual: true });
+    markAllSeen(b);
+    const once = await takeJob(b.novelId, () => checker.runCheck(b.novelId));
+    assert.ok(once.job, 'asked the first time');
+    await once.job;
+    await once.done;
+    await quietAll();
+    let v = picked(b.ch().passages[0]);
+    assert.equal(model.rewrites(), 1, 'asked once');
+    assert.equal(v.tries.lift.n, 1, 'counted on the longest leash');
+    assert.equal(v.liftFailed, undefined);
+    assert.ok(silentEnds(b) > store.phoneNow(), 'the writer’s connection is waited out');
+    assert.ok(checker.stateOf(b.novelId).words.includes('A page written again by itself is asked again'), checker.stateOf(b.novelId).words);
+    /* the version’s own wait is already past: only the connection’s silence holds the next ask */
+    store.change('chapter', b.ids[0], (ch) => { picked(ch.passages[0]).tries.lift.next = store.phoneNow() - 1000; }, { now: true });
+    checker.forTests().liftTried.clear();
+    checker.forTests().autoAfter(b.novelId);
+    assert.equal(checker.forTests().lifting.size, 0, 'nothing asked while its model is waited out');
+    assert.equal(model.rewrites(), 1);
+    await quietAll();
+    /* once that wait has passed: asked again, and let be */
+    const untilWait = silentEnds(b);
+    if (untilWait > store.phoneNow()) await sleep(untilWait - store.phoneNow() + 80);
+    checker.forTests().liftTried.clear();
+    checker.forTests().autoAfter(b.novelId);
+    const second = checker.forTests().lifting.get(b.novelId);
+    assert.ok(second, 'asked the second time');
+    await second;
+    await quietAll();
+    v = picked(b.ch().passages[0]);
+    assert.ok(v.liftFailed && v.liftFailed.why, 'let be at the second');
+    assert.equal(model.rewrites(), 2, 'asked twice, not three');
+    assert.ok(checker.stateOf(b.novelId).words.includes('A page written again by itself did not come — Write it again asks for it.'), checker.stateOf(b.novelId).words);
+    checker.forTests().liftTried.clear();
+    store.change('novel', b.novelId, (n) => { if (n.memory) n.memory.silent = null; }, { now: true });
+    checker.forTests().autoAfter(b.novelId);
+    assert.equal(checker.forTests().lifting.size, 0, 'never asked a third time');
+    assert.equal(model.rewrites(), 2);
+    /* his own Write it again is not held, even while the writer’s model is waited out */
+    model.holdWriter = false;
+    const conn = writer.connFor(store.peek('house', 'house'), 'writer');
+    store.change('novel', b.novelId, (n) => { n.memory = { ...(n.memory || {}), silent: { [archivist.choicePrint(conn)]: { until: store.phoneNow() + 60000, leashMs: 60000 } } }; }, { now: true });
+    const his = await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id, note: 'His own page.' });
+    assert.equal(his.ok, true, his.error);
+    assert.ok(model.asked.some((x) => x.his && !x.silent), 'his own ask went out');
+    assert.equal(silentEnds(b) > store.phoneNow(), false, 'his ask overrules the wait');
+    await store.flush();
+    const kept = (await onPhone('chapter', b.ids[0])).passages[0];
+    assert.ok((kept.versions || []).some((x) => x.liftFailed), 'the giving up is kept with the book');
+    await quietAll();
+    await putAway(b);
+    await reset();
+  }
+    /* the same for a sentence */
+    model.asked.length = 0;
+    model.grades = null;
+    model.holdWriter = true;
+    model.prose = 'The harbour smelled of salt.';
+    await setHouse({ learned: null, url: `http://127.0.0.1:${PORT + 8}/v1` }, { checksFrom: 0, judge: { on: false }, autoFix: on(), ...HIS({ avoid: 'tar' }) });
+    const s = await makeBook([[]], { manual: true });
+    writer.addMine({ novelId: s.novelId, chapterId: s.ids[0], text: 'The harbour smelled of tar.' });
+    markAllSeen(s);
+    const spanOnce = await takeJob(s.novelId, () => checker.runCheck(s.novelId));
+    assert.ok(spanOnce.job, 'the sentence was asked');
+    await spanOnce.job;
+    await spanOnce.done;
+    await quietAll();
+    let page = picked(s.ch().passages[0]);
+    assert.equal(model.asked.filter((x) => x.span).length, 1, 'the sentence was asked once');
+    assert.equal(page.tries.span.n, 1, 'counted');
+    assert.equal((page.spanFailed || []).length, 0);
+    const until1 = silentEnds(s);
+    if (until1 > store.phoneNow()) await sleep(until1 - store.phoneNow() + 50);
+    checker.forTests().spanTried.clear();
+    checker.forTests().autoAfter(s.novelId);
+    const spanSecond = checker.forTests().lifting.get(s.novelId);
+    assert.ok(spanSecond, 'the sentence was asked the second time');
+    await spanSecond;
+    await quietAll();
+    page = picked(s.ch().passages[0]);
+    assert.deepEqual(page.spanFailed, ['The harbour smelled of tar.'], 'the sentence is let be at the second');
+    assert.equal(model.asked.filter((x) => x.span).length, 2);
+    assert.ok(checker.stateOf(s.novelId).words.includes('A sentence written again by itself did not come'), checker.stateOf(s.novelId).words);
+    /* his own Write it again on the sentence still goes, during the wait the second stall set */
+    model.holdWriter = false;
+    const spot = checker.spotOf(s.ids[0], s.ch().passages[0].id, checker.suggestions(s.novelId).find((x) => x.item.kind === 'avoid').item);
+    assert.ok(spot, 'the words still stand');
+    const own = await writer.rewriteSelection({ novelId: s.novelId, chapterId: s.ids[0], passageId: s.ch().passages[0].id, start: spot.start, end: spot.end, note: 'Write it again without “tar”.', fix: true });
+    assert.equal(own.ok, true, own.error);
+    assert.equal(model.asked.filter((x) => x.span).length, 3, 'his own Write it again went out');
+    checker.forTests().spanTried.clear();
+    store.change('novel', s.novelId, (n) => { if (n.memory) n.memory.silent = null; }, { now: true });
+    checker.forTests().autoAfter(s.novelId);
+    assert.equal(checker.forTests().lifting.size, 0, 'the sentence is never asked a third time by itself');
+    await quietAll();
+    await putAway(s);
+  } finally {
+    keep();
+    delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashQuietMostMs;
+    await model.close();
+    await setHouse();
+  }
+});
+
 /* (2.12.41, round 7 — what was taken out, its model silent on it: its count and its wait lived in the page's memory, by
  * what was asked, let go with every reload — asked again after each, never set aside) */
 await test('what was taken out, its model silent on it, waits as long as it was waited — its wait and its count kept with the book, through a reload, and said; counted on the longest leash, set aside at the second and said so; nothing asked in a loop', async () => {
@@ -20520,7 +20732,7 @@ await test('a name two people share is neither one of them: a fact under it, giv
   assert.deepEqual([withEntry('Em', 'Emilia Vermaine'), withEntry('Emilia', 'Em')], [true, true]);
 });
 
-await test('how long the phone waits on a silent provider: his page sixteen minutes, a page the app writes again by itself ten, a helper three minutes past its leash, Test leashed as a helper is — and Test lets a silent provider go', async () => {
+await test('how long the phone waits on a silent provider: his page sixteen minutes, a page the app writes again by itself three minutes past its leash, a helper three minutes past its leash, Test leashed as a helper is — and Test lets a silent provider go', async () => {
   /* (the checker's own fixes on, so a few words are written again by themselves) */
   await setHouse({ context: 64000 }, { autoFix: { on: true, from: 0 } });
   const named = [];
@@ -20539,7 +20751,8 @@ await test('how long the phone waits on a silent provider: his page sixteen minu
     /* a few words the app writes again by itself (as the checker's fix does) */
     const full = picked(b.ch().passages[0]).text;
     const s = full.indexOf('Mara lit'), e = full.indexOf(' Outside');
-    assert.deepEqual(await seen(async () => { await script([{ text: 'Mara struck a match.' }]); await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id, start: s, end: e, auto: true }); }), [call.BACKGROUND_WAIT_S], 'written again by itself: ten minutes');
+    /* an automatic rewrite is leashed as a worker is (2.12.42): the relay waits three minutes past that leash, so a silent model is let go by the app first. Through 2.12.41 this waited ten minutes, and the stall came back as a passing fault. */
+    assert.deepEqual(await seen(async () => { await script([{ text: 'Mara struck a match.' }]); await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id, start: s, end: e, auto: true }); }), [Math.ceil(call.LEASH_QUIET_MS / 1000) + 180], 'written again by itself: three minutes past its leash');
     await quietAll();
     /* the helper's reading: three minutes past its leash */
     assert.deepEqual(await seen(async () => { await script([{ text: '{}' }]); await archivist.run(b.novelId); }), [Math.ceil(call.LEASH_QUIET_MS / 1000) + 180], 'the helper: three minutes past its leash');
@@ -21190,6 +21403,193 @@ await test('his partner’s change to his entry and to a card, laid again over h
   const n = await onPhone('novel', b.novelId);
   assert.deepEqual([n.bibliography[0].text, n.bibliography[0].line], ['Heir of the Wayne line, and the last of it.', 'The heir.']);
   assert.deepEqual([n.notes.people[0].about, n.notes.people[0].ties], ['The heir, and he knows it.', 'Son of Reginald.']);
+  await putAway(b);
+});
+
+await test('a change to a plan, a summary, a chapter’s name, the book’s words, an entry or a card, laid again over another window: it lands where its words still stand, and where they do not the row says it no longer reads that way', async () => {
+  await setHouse();
+  const b = await makeBook([['Jovan came home.']], { manual: true, brief: 'The heir waits.' });
+  store.change('chapter', b.ids[0], shape.chapterSteps.setPlan('She waits at the gate.'), { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.setSummary({ text: 'She waits at the gate.', fp: shape.chapterPrint(b.ch(0)), at: 1, by: 'you' }), { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.setName('The gate', 'you'), { now: true });
+  store.change('novel', b.novelId, (n) => {
+    n.bibliography = [bib.tidyEntry(bib.newEntry({ id: 'bb-j', name: 'Jovan', kind: 'people', text: 'Heir of the Wayne line.', at: 1000, by: 'you' }))];
+    n.notes.people.push({ id: 'pe-j', name: 'Jovan', aka: [], about: 'The heir waits.', ties: '', updated: { by: 'helper', at: 1 } });
+  }, { now: true });
+  await store.flush();
+  await otherWindow('chapter', b.ids[0], (c) => {
+    c.plan = 'She waits at the gate. The rain has come.';
+    c.summary = { ...c.summary, text: 'She waits at the gate. The rain has come.' };
+    c.name = 'The gate at dusk';
+  });
+  await otherWindow('novel', b.novelId, (n) => {
+    n.brief = 'The heir waits. He knows the house.';
+    n.bibliography[0].text = 'Heir of the Wayne line. He is the last.';
+    n.notes.people[0] = { ...n.notes.people[0], about: 'The heir waits. He knows the house.', updated: { by: 'helper', at: 5 } };
+  });
+  const plan = changes.makeChange(b.novelId, { plan: 1, text: 'She waits by the lamp at the gate.' });
+  const summary = changes.makeChange(b.novelId, { summary: 1, text: 'She waits by the lamp at the gate.' });
+  const name = changes.makeChange(b.novelId, { chapter: 1, name: 'The iron gate' });
+  const about = changes.makeChange(b.novelId, { book: 'about', text: 'The heir waits by the lamp.' });
+  const entry = changes.makeChange(b.novelId, { entry: 'Jovan', text: 'Heir of the Wayne line, and known for it.' });
+  const card = changes.makeChange(b.novelId, { note: 'people', name: 'Jovan', about: 'The heir waits by the lamp.' });
+  for (const r of [plan, summary, name, about, entry, card]) assert.equal(r.status, 'made', r.said);
+  await store.flush();
+  const ch = await onPhone('chapter', b.ids[0]);
+  const n = await onPhone('novel', b.novelId);
+  assert.equal(ch.plan, 'She waits by the lamp at the gate. The rain has come.');
+  assert.equal(ch.summary.text, 'She waits by the lamp at the gate. The rain has come.');
+  assert.equal(ch.name, 'The iron gate at dusk');
+  assert.equal(n.brief, 'The heir waits by the lamp. He knows the house.');
+  assert.equal(n.bibliography[0].text, 'Heir of the Wayne line, and known for it. He is the last.');
+  assert.equal(n.notes.people[0].about, 'The heir waits by the lamp. He knows the house.');
+  for (const r of [plan, summary, name, about, entry, card]) assert.equal(changes.madeGone(b.novelId, r), '');
+  await putAway(b);
+
+  const d = await makeBook([['Jovan came home.']], { manual: true, brief: 'The heir waits.' });
+  store.change('chapter', d.ids[0], shape.chapterSteps.setPlan('She waits at the gate.'), { now: true });
+  await store.flush();
+  await otherWindow('chapter', d.ids[0], (c) => { c.plan = 'Night fell on the road.'; });
+  const missed = changes.makeChange(d.novelId, { plan: 1, text: 'She waits by the lamp.' });
+  assert.equal(missed.status, 'made');
+  await store.flush();
+  assert.equal((await onPhone('chapter', d.ids[0])).plan, 'Night fell on the road.');
+  assert.match(changes.madeGone(d.novelId, missed), /the plan no longer reads that way/);
+  await putAway(d);
+});
+
+await test('a new entry laid again over another window’s entry of the same name: one entry, the new words after his — another kind of the same name keeps both', async () => {
+  await setHouse();
+  const b = await makeBook([['Tom came home.']], { manual: true });
+  await store.flush();
+  await otherWindow('novel', b.novelId, (n) => {
+    n.bibliography = [bib.tidyEntry(bib.newEntry({ id: 'bb-tom', name: 'Tom', kind: 'people', text: 'Tom came home.', at: 1, by: 'you' }))];
+  });
+  assert.equal(changes.makeChange(b.novelId, { entry: 'Tom', text: 'He was tired of the road.' }).status, 'made');
+  await store.flush();
+  const n = await onPhone('novel', b.novelId);
+  assert.equal(n.bibliography.length, 1);
+  assert.equal(n.bibliography[0].id, 'bb-tom');
+  assert.ok(n.bibliography[0].text.includes('Tom came home.'), n.bibliography[0].text);
+  assert.ok(n.bibliography[0].text.includes('He was tired of the road.'), n.bibliography[0].text);
+  await putAway(b);
+
+  const d = await makeBook([['Tom came home.']], { manual: true });
+  await store.flush();
+  await otherWindow('novel', d.novelId, (n) => {
+    n.bibliography = [bib.tidyEntry(bib.newEntry({ id: 'bb-place', name: 'Tom', kind: 'places', text: 'A town on the coast.', at: 1, by: 'you' }))];
+  });
+  assert.equal(changes.makeChange(d.novelId, { entry: 'Tom', kind: 'people', text: 'Tom came home from the war.' }).status, 'made');
+  await store.flush();
+  const m = await onPhone('novel', d.novelId);
+  assert.equal(m.bibliography.length, 2);
+  assert.deepEqual(m.bibliography.map((e) => e.kind).sort(), ['people', 'places']);
+  await putAway(d);
+});
+
+await test('the Undo of a name changed everywhere puts back a page it remade over another window’s words, and leaves a page edited again after the rename', async () => {
+  await setHouse();
+  const b = await makeBook([['Tom came home from the war.']], { manual: true });
+  await store.flush();
+  await otherWindow('chapter', b.ids[0], (c) => { picked(c.passages[0]).text = 'Tom came home from the war. The rain fell.'; });
+  const made = changes.makeChange(b.novelId, { rename: { from: 'Tom', to: 'Thomas' } });
+  assert.equal(made.status, 'made', made.said);
+  await store.flush();
+  const mid = picked((await onPhone('chapter', b.ids[0])).passages[0]).text;
+  assert.equal(mid, 'Thomas came home from the war. The rain fell.');
+  const back = changes.undoChange(b.novelId, made);
+  assert.equal(back.ok, true, back.said);
+  await store.flush();
+  assert.equal(picked((await onPhone('chapter', b.ids[0])).passages[0]).text, 'Tom came home from the war. The rain fell.');
+  await putAway(b);
+
+  const d = await makeBook([['Tom came home from the war.']], { manual: true });
+  const renamed = changes.makeChange(d.novelId, { rename: { from: 'Tom', to: 'Thomas' } });
+  assert.equal(renamed.status, 'made', renamed.said);
+  await store.flush();
+  await otherWindow('chapter', d.ids[0], (c) => { picked(c.passages[0]).text = 'Thomas came home, and he did not speak.'; });
+  changes.undoChange(d.novelId, renamed);
+  await store.flush();
+  assert.equal(picked((await onPhone('chapter', d.ids[0])).passages[0]).text, 'Thomas came home, and he did not speak.');
+  await putAway(d);
+});
+
+await test('Quick add keeps the rename count of the row: after a name changes, the next request carries his words through it and keep mine still matches — the row still shows what he typed', async () => {
+  await setHouse();
+  const b = await makeBook([['Tom keeps the old watch by the gate.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'The watch waits.', conflicts: [{ mine: 'Tom keeps a new watch', against: 'Tom keeps the old watch by the gate.', why: 'which watch' }], entries: [] }) }]);
+  const first = await quickadd.quickAdd({ novelId: b.novelId, words: 'Tom keeps a new watch.' });
+  assert.equal(first.ok, true, first.error);
+  assert.equal(typeof first.row.renameCount, 'number');
+  assert.ok((first.row.conflicts || []).some((c) => !c.overruled), JSON.stringify(first.row.conflicts || first.row.aside));
+  const renamed = changes.makeChange(b.novelId, { rename: { from: 'Tom', to: 'Thomas' } });
+  assert.equal(renamed.status, 'made', renamed.said);
+  await store.flush();
+  const stored = (await onPhone('novel', b.novelId)).quick.find((r) => r.id === first.row.id);
+  assert.equal(stored.said, 'Tom keeps a new watch.');
+  assert.equal(quickadd.wordsAgain(b.novelId, stored), 'Thomas keeps a new watch.');
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Yours stands.', conflicts: [{ mine: 'Thomas keeps a new watch', against: 'Thomas keeps the old watch by the gate.', why: 'his word', overruled: true }], entries: [] }) }]);
+  const second = await quickadd.quickAdd({ novelId: b.novelId, words: 'keep mine' });
+  assert.equal(second.ok, true, second.error);
+  const sent = (await quickBodies()).map((x) => (x.body.messages || []).map((m) => String(m.content || '')).join('\n')).join('\n');
+  assert.match(sent, /I said: “Thomas keeps a new watch\./);
+  assert.equal(/I said: “Tom keeps a new watch/.test(sent), false);
+  assert.ok((second.row.conflicts || []).some((c) => c.overruled), JSON.stringify(second.row.conflicts));
+  await putAway(b);
+});
+
+await test('a sentence written again by itself is counted only when that sentence lands — another window’s page, the sentence gone, is not counted', async () => {
+  await setHouse({}, { autoFix: { on: true, from: 0 } });
+  const b = await makeBook([['The harbour smelled of tar.']], { manual: true });
+  await store.flush();
+  const p = b.ch().passages[0];
+  const text = picked(p).text;
+  const vid = picked(p).id;
+  /* the sentence is written onto its own version first, and that save already holds “oak”: growing the page then, while
+   * the old sentence still stands, is what makes the lay go through the changed-meanwhile path. The count is queued
+   * with that lay. Only the save that already carries the laid sentence is the one another window writes over. */
+  let grew = false;
+  let swapped = false;
+  const wasFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const body = init && typeof init.body === 'string' ? init.body : '';
+    const put = init && String(init.method || '').toUpperCase() === 'PUT' && String(url).includes('/api/store/chapter/');
+    if (put && body.includes('The harbour smelled of oak.')) {
+      let data = null;
+      try { data = JSON.parse(body).data; } catch (_) { data = null; }
+      const v = data && (data.passages || []).flatMap((q) => q.versions || []).find((x) => x.id === vid);
+      const now = v ? String(v.text || '') : '';
+      if (!grew && now === 'The harbour smelled of tar.') {
+        grew = true;
+        await otherWindow('chapter', b.ids[0], (c) => {
+          const x = (c.passages[0].versions || []).find((z) => z.id === vid);
+          if (x) x.text = 'The harbour smelled of tar. The rain fell.';
+        });
+      } else if (grew && !swapped && now.includes('The harbour smelled of oak.')) {
+        swapped = true;
+        await otherWindow('chapter', b.ids[0], (c) => {
+          const x = (c.passages[0].versions || []).find((z) => z.id === vid);
+          if (x) { x.text = 'The harbour smelled of smoke.'; delete x.spans; }
+        });
+      }
+    }
+    return wasFetch(url, init);
+  };
+  try {
+    await reset();
+    await script([{ text: 'The harbour smelled of oak.' }]);
+    const out = await writer.rewriteSelection({ novelId: b.novelId, chapterId: b.ids[0], passageId: p.id, start: 0, end: text.length, note: 'Write it again without “tar”.', auto: true, fix: true });
+    await store.flush();
+    assert.equal(out.ok, true, JSON.stringify(out));
+  } finally { globalThis.fetch = wasFetch; }
+  const v = picked((await onPhone('chapter', b.ids[0])).passages[0]);
+  assert.equal(grew, true, 'the page grew in the other window while the sentence was written');
+  assert.equal(swapped, true, 'the other window wrote over the page before the sentence was laid');
+  assert.equal(v.text, 'The harbour smelled of smoke.');
+  assert.equal(Number(v.spans) || 0, 0, 'not counted when the sentence never landed');
   await putAway(b);
 });
 

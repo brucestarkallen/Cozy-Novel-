@@ -20,7 +20,7 @@ import { assemble, requiredLength, SAFETY, partnerReply, PARTNER_FLOOR } from '.
 import { contextOf } from '../model/providers.js';
 import { connFor, connName, recount, rewrite as writerRewrite, busy as writerBusy } from './writer.js';
 import { turnSteps, newTurn, newVersion, picked, novelSteps, chapterLabel, chapterText, chapterNumber, passageNumbers, NOTE_KINDS, matchCard, renameCount, renamesSince } from './shape.js';
-import { renameIn } from './names.js';
+import { renameIn, splitSentences } from './names.js';
 import { newId, numberWords } from '../util.js';
 import { playOpening, playOnwards, readBack, tellLine, sceneWords, ideasRequest, leftOutWords, fence, entryReadWords, CHOICES_OPEN, CHOICES_CLOSE } from './prompts.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, finishTail, dropTop, dropMarkup, partBlock, mendSpacing } from './textshape.js';
@@ -971,7 +971,7 @@ const CLAIM_WORDS = [
 const NOT_A_CLAIM = new RegExp(String.raw`\b(?:if|had I|would|could|should|might|whether|suppose|imagine|unless)\b|\bI\s+(?:have\s+not|haven['’]t|did\s+not|didn['’]t|won['’]t|can['’]t|cannot|couldn['’]t|never)\b|\b(?:${CHANGE_VERBS})\s+(?:nothing|none)\b|\b(?:nothing|none)\s+(?:of\s+it\s+)?(?:has\s+been|was|is)\s+(?:${CHANGE_VERBS})\b|\bnot\s+(?:yet\s+)?(?:been\s+)?(?:${CHANGE_VERBS})\b|\b(?:last time|previously|already|yesterday|earlier,? I|since I|in (?:my|an|the) (?:last|earlier|previous|other) (?:answer|reply|message))\b|\bchanged (?:my|your|his|her) (?:mind|view|thinking)\b|\b(?:my|your) own (?:first |earlier |old )?(?:draft|work|version|book|story|manuscript|writing)\b|\b(?:my|your) (?:first|earlier|old) (?:draft|version|manuscript)\b|\bwhen I\b`, 'i');
 export function claimsChange(prose) {
   const unquoted = String(prose || '').replace(/"[^"\n]{0,400}"|“[^”\n]{0,400}”|‘[^’\n]{0,200}’|(?<![\p{L}])'[^'\n]{0,200}'(?![\p{L}])/gu, ' ');
-  return unquoted.split(/(?<=[.!…])\s+|\n+/).some((sentence) => {
+  return splitSentences(unquoted, /(?<=[.!…])\s+|\n+/).some((sentence) => {
     const t = sentence.trim();
     if (!t || /\?\s*$/.test(t)) return false;
     return CLAIM_WORDS.some((re) => re.test(t)) && !NOT_A_CLAIM.test(t);

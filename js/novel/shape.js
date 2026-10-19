@@ -588,10 +588,10 @@ export function sameEnd(a, b) {
  * in the newer words `now` — the change goes in there, and the rest of them stay as they are; standing nowhere, or more
  * than once, nothing (null). Only the words the change found are ever replaced, never another window's. */
 const RELAY_WORDS = 3;
-export function relaidOn(was, after, now) {
+/* the stretch a change touches, with a few whole words either side, as it stood (`was`) and as it left the words (`after`) */
+function relayWindow(was, after) {
   const a = String(was || '');
   const b = String(after || '');
-  const n = String(now || '');
   let s = 0;
   while (s < a.length && s < b.length && a[s] === b[s]) s++;
   let t = 0;
@@ -606,11 +606,33 @@ export function relaidOn(was, after, now) {
     while (end < a.length && /\s/.test(a[end])) end++;
     while (end < a.length && !/\s/.test(a[end])) end++;
   }
-  const found = a.slice(start, end);
+  return { a, b, start, end, found: a.slice(start, end) };
+}
+export function relaidOn(was, after, now) {
+  const { a, b, start, end, found } = relayWindow(was, after);
+  const n = String(now || '');
   if (!found.trim()) return null;
   const at = n.indexOf(found);
   if (at < 0 || n.indexOf(found, at + 1) >= 0) return null;
   return n.slice(0, at) + b.slice(start, b.length - (a.length - end)) + n.slice(at + found.length);
+}
+/* the words the change itself left, in that same stretch — what still has to be readable for the change to stand */
+export function laidStretch(was, after) {
+  const { a, b, start, end } = relayWindow(was, after);
+  return b.slice(start, b.length - (a.length - end));
+}
+/* the words a change leaves, on the words there now (2.12.42): still as it found them, the change as made; already the
+ * words it left, nothing to lay (null); the stretch still standing once, the change laid there and the rest kept
+ * (relaidOn); standing nowhere or more than once, nothing (null) */
+export function relayedOn(from, to, now) {
+  const a = String(from == null ? '' : from);
+  const b = String(to == null ? '' : to);
+  const n = String(now == null ? '' : now);
+  if (n === a) return b === n ? null : b;
+  if (n === b) return null;
+  const laid = relaidOn(a, b, n);
+  if (laid == null || laid === n) return null;
+  return laid;
 }
 
 export function newPassage(by, text = '', fields = {}) {
@@ -1176,25 +1198,44 @@ export const novelSteps = {
       const wrote = was !== undefined && cur ? asked.filter((k) => !hisSince(cur, k)) : asked;
       if (was !== undefined && !wrote.length) return false;
       const next = JSON.parse(JSON.stringify(cur || words));
+      /* (a string it wrote, on a card another window has changed since — not his own newer typing, which is already out
+       * of `wrote`: laid where the stretch still stands, never this window’s whole field over his extra words; a part
+       * that cannot be laid is left as it stands — 2.12.42) */
+      const laid = [];
+      const textual = (v) => v == null || typeof v === 'string';
       for (const field of wrote) {
-        if (words[field] === undefined) delete next[field];
-        else next[field] = JSON.parse(JSON.stringify(words[field]));
+        if (words[field] === undefined) {
+          if (was && cur && as(cur[field]) !== as(was[field])) continue;
+          if (next[field] !== undefined) { delete next[field]; laid.push(field); }
+          continue;
+        }
+        if (was && cur && textual(was[field]) && textual(words[field]) && textual(cur[field])) {
+          const got = relayedOn(was[field] == null ? '' : was[field], words[field] == null ? '' : words[field], cur[field] == null ? '' : cur[field]);
+          if (got == null) continue;
+          next[field] = got;
+          laid.push(field);
+          continue;
+        }
+        if (was && cur && as(cur[field]) !== as(was[field])) continue;
+        next[field] = JSON.parse(JSON.stringify(words[field]));
+        laid.push(field);
       }
-      if (wrote.includes('name') && cur && nameKey(next.name) !== nameKey(cur.name)) next.aka = [...(next.aka || []), cur.name];
-      if (wrote.includes('aka') || wrote.includes('name')) next.aka = (next.aka || []).filter((a, j, all) => nameKey(a) !== nameKey(next.name) && all.findIndex((b) => nameKey(b) === nameKey(a)) === j);
-      if (wrote.includes('now')) {
+      if (!laid.length) return false;
+      if (laid.includes('name') && cur && nameKey(next.name) !== nameKey(cur.name)) next.aka = [...(next.aka || []), cur.name];
+      if (laid.includes('aka') || laid.includes('name')) next.aka = (next.aka || []).filter((a, j, all) => nameKey(a) !== nameKey(next.name) && all.findIndex((b) => nameKey(b) === nameKey(a)) === j);
+      if (laid.includes('now')) {
         delete next.nowPid; delete next.nowAt;
         if (next.now && (words.nowAt || (n.order || []).length)) next.nowAt = words.nowAt || n.order[n.order.length - 1];
       }
-      next.updated = hisStamp(cur, wrote, at);
+      next.updated = hisStamp(cur, laid, at);
       if (i >= 0) list[i] = next; else list.push(next);
       /* Everyone still uses the last complete notes during a rebuild. His
        * explicit corrections belong there immediately; partial helper work
        * does not. The snapshot has no memory, so this applies only once. */
       const from = n.memory && n.memory.rereadFrom;
       if (from && n.memory.undo && n.memory.undo.keep) {
-        const own = newCard(kind, { id: words.id, name: words.name, updated: { at }, ...Object.fromEntries(wrote.map((k) => [k, words[k]])), ...(words.nowAt ? { nowAt: words.nowAt } : {}) });
-        novelSteps.editNote(kind, own, wrote, { create: true })({ notes: from.notes || (from.notes = {}), order: n.order });
+        const own = newCard(kind, { id: words.id, name: next.name, updated: { at }, ...Object.fromEntries(laid.map((k) => [k, next[k]])), ...(next.nowAt && laid.includes('now') ? { nowAt: next.nowAt } : {}) });
+        novelSteps.editNote(kind, own, laid, { create: true })({ notes: from.notes || (from.notes = {}), order: n.order });
       }
       return true;
     };

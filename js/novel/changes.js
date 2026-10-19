@@ -15,7 +15,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey, wordsElsewhere, passagePrint, hisAtOf, hasWords as passageHasWords, hisCard } from './shape.js';
+import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey, wordsElsewhere, passagePrint, hisAtOf, hasWords as passageHasWords, hisCard, relayedOn, laidStretch } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords, linesOf, sameLines } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
@@ -1193,14 +1193,40 @@ function entryStep(found, made, { more = '' } = {}) {
   return (n) => {
     const list = Array.isArray(n.bibliography) ? n.bibliography : [];
     const now = list.find((x) => x && x.id === after.id) || null;
-    if (!cur) { if (now) return false; novelSteps.putEntry(after)(n); return true; }
+    if (!cur) {
+      if (now) return false;
+      /* (another window's entry of the same name and kind, made meanwhile under another id: its words go on that entry,
+       * after the words already there, never a second entry — another kind of the same name may be another thing, and
+       * both stay. 2.12.42) */
+      const named = entryFor(list, after.name, { kind: after.kind || '' });
+      const hit = named && named.entry;
+      if (hit && (hit.kind || '') === (after.kind || '')) {
+        const extra = String(after.text || '').trim();
+        const have = String(hit.text || '');
+        if (!extra || have.includes(extra)) return false;
+        const merged = clone(hit);
+        merged.text = [have.trim(), extra].filter(Boolean).join('\n\n');
+        merged.at = after.at;
+        novelSteps.putEntry(merged)(n);
+        return true;
+      }
+      novelSteps.putEntry(after)(n);
+      return true;
+    }
     if (!now) return false;
     const next = clone(now);
     let any = false;
     for (const k of ENTRY_PARTS) {
       if (same(after[k], cur[k])) continue;
       if (same(now[k], cur[k])) { next[k] = clone(after[k]); any = true; }
-      else if (k === 'text' && more && !String(now.text || '').includes(more)) { next.text = [String(now.text || '').trim(), more].filter(Boolean).join('\n\n'); any = true; }
+      else if (k === 'text') {
+        const have = String(now.text || '');
+        const want = String(after.text || '');
+        if (have === want) continue;
+        const laid = relayedOn(String(cur.text || ''), want, have);
+        if (laid != null) { next.text = laid; any = true; }
+        else if (more && !have.includes(more)) { next.text = [have.trim(), more].filter(Boolean).join('\n\n'); any = true; }
+      }
     }
     if (!any) return false;
     novelSteps.putEntry({ ...tidyEntry(next), at: after.at, ...(after.by ? { by: after.by } : {}) })(n);
@@ -1331,7 +1357,16 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     } else return refuse('it gave no words');
     if (next === old) return refuse('it would change nothing');
     const before = m.builtin && !m.ownWords ? undefined : old;
-    put('house', 'house', moduleWhile(m.id, old, next), { now: true });
+    /* (laid where the module's words still stand — his typing in another window kept around the stretch — never the
+     * whole module written over. Undo still asks for the words exactly as left: moduleWhile. 2.12.42) */
+    put('house', 'house', (hs) => {
+      const live = listModules(hs).find((x) => x.id === m.id);
+      if (!live) return false;
+      const laid = relayedOn(old, next, String(live.text || ''));
+      if (laid == null) return false;
+      moduleSteps.set(m.id, { text: laid })(hs);
+      return true;
+    }, { now: true });
     return { ...base, label: `The module “${m.name}”`, status: 'made', undo: { what: 'module', id: m.id, before, after: next }, before: cutWords(old, 400), after: cutWords(next, 400) };
   }
 
@@ -1358,11 +1393,17 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     const after = { text: next, fp: chapterPrint(chapter), at, by: 'you' };
     /* kept for the chapter as it reads, so a version brought back brings his back too (Cozy Tavern's M680-9) */
     const keptBefore = clone((chapter.summaries || []).find((x) => x.fp === after.fp) || null);
-    /* (both only where the summary still reads as the change found it — his own summary typed meanwhile in another window
-     * stays, and is the one kept for these words: 2.12.41) */
-    const set = chapterSteps.setSummary(after, was);
-    const keep = chapterSteps.keepSummary(after);
-    put('chapter', chapterId, (c) => { if (set(c) === false) return false; keep(c); return true; }, { now: true });
+    /* (the summary's words laid where they still stand — another window's words around that stretch stay. The step that
+     * sets a summary whole still asks for the one it found, and Undo uses that. 2.12.42) */
+    put('chapter', chapterId, (c) => {
+      const cur = String((c.summary && c.summary.text) || '');
+      const laid = relayedOn(old, next, cur);
+      if (laid == null) return false;
+      const row = laid === next ? after : { ...after, text: laid };
+      chapterSteps.setSummary(row)(c);
+      chapterSteps.keepSummary(row)(c);
+      return true;
+    }, { now: true });
     return { ...base, status: 'made', undo: { what: 'summary', chapterId, before: was, after: clone(after), keptBefore }, before: old, after: next };
   }
 
@@ -1388,7 +1429,14 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     const { chapter, chapterId } = spot0;
     const old = String(chapter.plan || '');
     if (next === old) return refuse('it would change nothing');
-    put('chapter', chapterId, chapterSteps.setPlan(next, old), { now: true });
+    /* (laid where his plan still reads as the change found it, or where that stretch still stands once — another window's
+     * words around it stay. setPlan itself stays exact, for Undo. 2.12.42) */
+    put('chapter', chapterId, (c) => {
+      const laid = relayedOn(old, next, String(c.plan || ''));
+      if (laid == null) return false;
+      chapterSteps.setPlan(laid)(c);
+      return true;
+    }, { now: true });
     return { ...base, status: 'made', undo: { what: 'plan', chapterId, before: old, after: next }, before: old, after: next };
   }
 
@@ -1513,8 +1561,14 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     if (name === (chapter.name || '')) return refuse('it already has that name');
     /* how it was, taken before the change (the record changes in place) */
     const was = { name: chapter.name || '', nameBy: chapter.nameBy || '' };
-    /* named for him: the helper never names it again */
-    put('chapter', chapterId, chapterSteps.setName(name, 'you', was.name), { now: true });
+    /* named for him: the helper never names it again. (laid where the name still stands — setName itself stays exact, for
+     * Undo. 2.12.42) */
+    put('chapter', chapterId, (c) => {
+      const laid = relayedOn(was.name, name, String(c.name || ''));
+      if (laid == null) return false;
+      chapterSteps.setName(laid, 'you')(c);
+      return true;
+    }, { now: true });
     return { ...base, status: 'made', undo: { what: 'chapter', chapterId, before: was, after: name }, before: was.name, after: name };
   }
 
@@ -1537,7 +1591,21 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const spot = locateNamed(String(k.text), op.find, names);
       /* (the helper's account put right — still the helper's, kept current from the book: never frozen as his own, 2.12.19) */
       const after = { text: putIn(String(k.text), spot, words), at };
-      put('novel', novelId, novelSteps.moveKept([{ key: keyOf, from: clone(k), to: after }]), { now: true });
+      /* (the helper's account, laid where those words still stand — 2.12.42) */
+      put('novel', novelId, (n) => {
+        const cur = n.kept && n.kept[keyOf];
+        const have = String((cur && cur.text) || '');
+        const from = String(k.text || '');
+        if (have === from) {
+          if (JSON.stringify(cur) !== JSON.stringify(k)) return false;
+          novelSteps.setKept(keyOf, after)(n);
+          return true;
+        }
+        const laid = relayedOn(from, after.text, have);
+        if (laid == null) return false;
+        novelSteps.setKept(keyOf, { ...cur, text: laid, at })(n);
+        return true;
+      }, { now: true });
       return { ...base, status: 'made', undo: { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [{ key: keyOf, before: clone(k), after: clone(after) }] }, before: k.text, after: after.text };
     }
     let next;
@@ -1563,8 +1631,17 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
      * laid again over his newer words typed in another window, they stay: 2.12.41, a step laid again over another
      * window's newer copy) */
     const added = op.find === undefined && op.add !== undefined ? text(op.add) : '';
+    /* (a paragraph added stays added after his newer words. Anything else is laid where the stretch still stands — his
+     * words either side of it stay. setField and setMeta themselves stay exact, for Undo. 2.12.42) */
     const addOn = (n) => { const cur = String(n[field] || ''); if (cur === old) { n[field] = next; return true; } if (cur.includes(added)) return false; n[field] = [cur.replace(/\s+$/, ''), added].filter(Boolean).join('\n\n'); return true; };
-    put('novel', novelId, meta ? novelSteps.setMeta({ [field]: next }, { [field]: old }) : added ? addOn : novelSteps.setField(field, next, old), { now: true });
+    const layField = (n) => {
+      const cur = String((meta ? (n.meta || {})[field] : n[field]) || '');
+      const laid = relayedOn(old, next, cur);
+      if (laid == null) return false;
+      if (meta) novelSteps.setMeta({ [field]: laid })(n); else novelSteps.setField(field, laid)(n);
+      return true;
+    };
+    put('novel', novelId, meta ? (added ? novelSteps.setMeta({ [field]: next }, { [field]: old }) : layField) : added ? addOn : layField, { now: true });
     return { ...base, status: 'made', undo: { what: 'book', field, meta, before: old, after: next }, before: old, after: next };
   }
 
@@ -1697,7 +1774,19 @@ export function undoChange(novelId, change) {
       const p = c && (c.passages || []).find((y) => y.id === x.passageId);
       /* changed on the page itself (2.12.2): its words before put back, where it still reads as the change left it */
       if (x.inPlace) {
-        const got = putBackWords({ novelId, chapterId: x.chapterId, passageId: x.passageId, versionId: x.versionId, expect: x.after, before: x.before, retire: !asRead(x.passageId), hold: false });
+        let got = putBackWords({ novelId, chapterId: x.chapterId, passageId: x.passageId, versionId: x.versionId, expect: x.after, before: x.before, retire: !asRead(x.passageId), hold: false });
+        /* (a rename laid over another window's newer words remade the page: it still reads as that rename of the words
+         * kept before it, so those words go back. A page edited again after the rename does not read so, and stays.
+         * 2.12.42) */
+        if (!got.ok && (u.renamed || []).length) {
+          const chNow = store.peek('chapter', x.chapterId);
+          const pNow = chNow && (chNow.passages || []).find((y) => y.id === x.passageId);
+          const vNow = pNow && (pNow.versions || []).find((y) => y.id === x.versionId);
+          const rules = (u.renamed || []).map((pair) => renameRule(pair.from, pair.to)).filter(Boolean);
+          const keptWords = vNow && Array.isArray(vNow.before) && vNow.before.length ? String(vNow.before[vNow.before.length - 1].text || '') : '';
+          const renamed = keptWords ? replaceMany(keptWords, rules).text : '';
+          if (vNow && keptWords && renamed === String(vNow.text || '') && renamed !== keptWords) got = putBackWords({ novelId, chapterId: x.chapterId, passageId: x.passageId, versionId: x.versionId, expect: vNow.text, before: keptWords, retire: !asRead(x.passageId), hold: false });
+        }
         if (!got.ok) { kept++; continue; }
         putBack.add(x.passageId);
         back++;
@@ -2143,28 +2232,110 @@ export function changeShort(c) {
   return '';
 }
 /* a change made that the page no longer shows: he put back the words before it, or another version is on show (his
- * report, 2.12.2: the partner must know what the book holds now) — '' when it stands */
+ * report, 2.12.2: the partner must know what the book holds now) — '' when it stands. The same for a plan, a summary, a
+ * chapter's name, the book's own words, a module, an entry, a card: made is said only while the words it left still
+ * stand (2.12.42). */
+function textStands(before, after, now) {
+  const a = String(before == null ? '' : before);
+  const b = String(after == null ? '' : after);
+  const n = String(now == null ? '' : now);
+  if (n === b || a === b) return n === b || a === b;
+  if (n === a) return false;
+  const fresh = laidStretch(a, b);
+  if (!String(fresh || '').trim()) return false;
+  const at = n.indexOf(fresh);
+  return at >= 0 && n.indexOf(fresh, at + 1) < 0;
+}
+function textGone(before, after, now, what) {
+  return textStands(before, after, now) ? '' : `${what} no longer reads that way`;
+}
+const BOOK_GONE = { brief: 'what it’s about', style: 'how it reads', plans: 'where it’s headed', title: 'the title', subtitle: 'the subtitle' };
 export function madeGone(novelId, c) {
   const u = c && c.status === 'made' && c.undo;
-  if (!u || (u.what !== 'words' && u.what !== 'passage')) return '';
-  const ch = store.peek('chapter', u.chapterId);
-  const p = ch && (ch.passages || []).find((x) => x.id === u.passageId);
-  if (!p) return 'the passage has been taken out since';
-  const v = picked(p);
-  if (!v || v.id !== u.versionId) return 'another version of the passage is on show now';
-  const o = c.op || {};
-  const to = o.replace !== undefined ? o.replace : o.text;
-  if (u.what !== 'words') return '';
-  /* put back, or written over since (his edit, a fix of the checker's): said as it happened */
-  const now = String(v.text || '');
-  const back = u.before !== undefined && u.before !== u.after && now === String(u.before);
-  if (back) return 'the page no longer reads that way — the words before it were put back';
-  if (String(to || '').trim() && !now.includes(String(to).trim())) {
-    /* who wrote over them, and what the page says there now — never only "changed since" (his report, 18 October: told
-     * that much and no more, the partner could not see the page, said its own line was gone, then that it was there) */
-    const who = writtenOverBy(v, u);
-    const there = readsNow(String(u.after || ''), now);
-    return `the page no longer reads that way — ${who ? `${who} since` : 'those words were changed since'}${there ? `; it reads there now: “${there}”` : ''}`;
+  if (!u) return '';
+  if (u.what === 'words' || u.what === 'passage') {
+    const ch = store.peek('chapter', u.chapterId);
+    const p = ch && (ch.passages || []).find((x) => x.id === u.passageId);
+    if (!p) return 'the passage has been taken out since';
+    const v = picked(p);
+    if (!v || v.id !== u.versionId) return 'another version of the passage is on show now';
+    const o = c.op || {};
+    const to = o.replace !== undefined ? o.replace : o.text;
+    if (u.what !== 'words') return '';
+    /* put back, or written over since (his edit, a fix of the checker's): said as it happened */
+    const now = String(v.text || '');
+    const back = u.before !== undefined && u.before !== u.after && now === String(u.before);
+    if (back) return 'the page no longer reads that way — the words before it were put back';
+    if (String(to || '').trim() && !now.includes(String(to).trim())) {
+      /* who wrote over them, and what the page says there now — never only "changed since" (his report, 18 October: told
+       * that much and no more, the partner could not see the page, said its own line was gone, then that it was there) */
+      const who = writtenOverBy(v, u);
+      const there = readsNow(String(u.after || ''), now);
+      return `the page no longer reads that way — ${who ? `${who} since` : 'those words were changed since'}${there ? `; it reads there now: “${there}”` : ''}`;
+    }
+    return '';
+  }
+  if (u.what === 'plan') {
+    const ch = store.peek('chapter', u.chapterId);
+    if (!ch) return 'that chapter is not there any more';
+    return textGone(u.before, u.after, String(ch.plan || ''), 'the plan');
+  }
+  if (u.what === 'summary') {
+    const ch = store.peek('chapter', u.chapterId);
+    if (!ch) return 'that chapter is not there any more';
+    return textGone(String((u.before && u.before.text) || ''), String((u.after && u.after.text) || ''), String((ch.summary && ch.summary.text) || ''), 'the summary');
+  }
+  if (u.what === 'chapter') {
+    const ch = store.peek('chapter', u.chapterId);
+    if (!ch) return 'that chapter is not there any more';
+    const before = u.before && typeof u.before === 'object' ? String(u.before.name || '') : String(u.before || '');
+    return textGone(before, u.after, String(ch.name || ''), 'the chapter’s name');
+  }
+  if (u.what === 'book') {
+    const live = store.peek('novel', novelId);
+    if (!live) return '';
+    const now = String((u.meta ? (live.meta || {})[u.field] : live[u.field]) || '');
+    return textGone(u.before, u.after, now, BOOK_GONE[u.field] || 'the book’s words');
+  }
+  if (u.what === 'module') {
+    const m = listModules(store.peek('house', 'house') || {}).find((x) => x.id === u.id);
+    if (!m) return 'that module is not there any more';
+    return textGone(u.before == null ? '' : u.before, u.after, String(m.text || ''), 'the module');
+  }
+  if (u.what === 'entry') {
+    const list = entriesOf(store.peek('novel', novelId));
+    const cur = list.find((e) => e && e.id === u.id) || null;
+    if (!u.after) return cur ? 'the entry is back in the bibliography' : '';
+    if (!u.before) {
+      if (cur) return '';
+      const named = entryFor(list, u.after.name, { kind: u.after.kind || '' });
+      const hit = named && named.entry;
+      const extra = String(u.after.text || '').trim();
+      if (hit && (hit.kind || '') === (u.after.kind || '') && (!extra || String(hit.text || '').includes(extra))) return '';
+      return 'the entry no longer reads that way';
+    }
+    if (!cur) return 'the entry has been taken out since';
+    for (const k of ENTRY_PARTS) {
+      if (JSON.stringify(u.before[k] == null ? null : u.before[k]) === JSON.stringify(u.after[k] == null ? null : u.after[k])) continue;
+      if (k === 'text' || k === 'line' || k === 'name') { if (!textStands(u.before[k], u.after[k], cur[k])) return 'the entry no longer reads that way'; }
+      else if (JSON.stringify(cur[k] == null ? null : cur[k]) !== JSON.stringify(u.after[k] == null ? null : u.after[k])) return 'the entry no longer reads that way';
+    }
+    return '';
+  }
+  if (u.what === 'note') {
+    const list = ((store.peek('novel', novelId) || {}).notes || {})[u.kind] || [];
+    const cur = list.find((x) => x && x.id === u.id) || null;
+    if (!u.after) return cur ? 'the card is back in the notes' : '';
+    if (!cur) return 'the card has been taken out since';
+    const fields = (u.fields || []).filter((k) => k !== 'updated');
+    for (const k of fields) {
+      if (JSON.stringify(u.before && u.before[k] != null ? u.before[k] : null) === JSON.stringify(u.after[k] == null ? null : u.after[k])) continue;
+      const was = u.before ? u.before[k] : '';
+      const after = u.after[k];
+      if (typeof after === 'string' || typeof was === 'string' || was == null) { if (!textStands(was || '', after || '', (cur && cur[k]) || '')) return 'the card no longer reads that way'; }
+      else if (JSON.stringify(cur[k] == null ? null : cur[k]) !== JSON.stringify(after == null ? null : after)) return 'the card no longer reads that way';
+    }
+    return '';
   }
   return '';
 }

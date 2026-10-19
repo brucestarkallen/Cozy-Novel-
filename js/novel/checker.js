@@ -363,6 +363,8 @@ export function stateOf(novelId) {
   if (s && (s.state === 'retry' || s.state === 'elsewhere')) return { state: 'waiting', words: s.words, count };
   const again = automaticWait(novelId);
   if (again) return { state: 'waiting', words: `An automatic rewrite couldn’t finish just now. It tries again by itself in ${archivist.waitWords(again.until - Date.now())}.`, count };
+  /* a page or a sentence written again by itself, waited out or let be (2.12.42) — said with the rest, never "up to date" while it is owed */
+  const autoSaid = autoRewriteSaid(novelId);
   /* ITS MODEL KEPT SILENT, OR WHAT WAITS ITS TIME (2.12.41, round 8 — said in the helper's light's voice: archivist.js
    * whatWaits): nothing is asked of a model that kept silent for as long as it is ever waited until its wait is over —
    * the helper's silence or the checker's own on the same connection — never "in a moment" meanwhile; and what waits its
@@ -372,7 +374,7 @@ export function stateOf(novelId) {
   const quietSaid = quiet ? `The checker’s model sent nothing for ${archivist.waitWords(quiet.leashMs)} — the checker asks it again ${quiet.when}, and nothing more until then.` : '';
   /* (nothing is checked "in a moment" while its model is waited out) */
   const toGo = quiet ? 0 : waiting(novelId);
-  if (toGo) return { state: 'waiting', words: [toGo > 3 ? `${plural(toGo, 'passage')} to check — the newest first, a few at a time.` : 'The newest words are checked in a moment.', waits && waits.words].filter(Boolean).join(' '), count };
+  if (toGo) return { state: 'waiting', words: [toGo > 3 ? `${plural(toGo, 'passage')} to check — the newest first, a few at a time.` : 'The newest words are checked in a moment.', waits && waits.words, autoSaid].filter(Boolean).join(' '), count };
   /* green says only what is true: words brought in from a file, never sent
    * unasked, are not called checked; a page that stopped partway waits for its
    * Go on; one its model would not check is said */
@@ -381,7 +383,7 @@ export function stateOf(novelId) {
   const cut = cutWaiting(novelId);
   const aside = setAsideList(novelId).length;
   const asideSaid = aside ? `${aside === 1 ? 'One passage' : plural(aside, 'passage')} its model would not check — in Suggestions, with Check it again.` : '';
-  if (count) return { state: 'found', words: [`${plural(count, 'suggestion')} to look at.`, asideSaid, quietSaid, waits && waits.words].filter(Boolean).join(' '), count };
+  if (count) return { state: 'found', words: [`${plural(count, 'suggestion')} to look at.`, asideSaid, quietSaid, waits && waits.words, autoSaid].filter(Boolean).join(' '), count };
   const more = [
     cut ? `${cut === 1 ? 'A passage that stopped partway is' : `${plural(cut, 'passage')} that stopped partway are`} checked once Go on finishes ${cut === 1 ? 'it' : 'them'}.` : '',
     asideSaid,
@@ -389,7 +391,7 @@ export function stateOf(novelId) {
     older ? `${plural(older, 'passage')} brought in from a file ${older === 1 ? 'is' : 'are'} checked only when you ask.` : '',
   ].filter(Boolean).join(' ');
   /* (`held`: waiting its time, never about to check — his presses stand there to ask now: ui/checks.js) */
-  if (quiet || waits) return { state: 'waiting', words: [quietSaid, waits && waits.words, more].filter(Boolean).join(' '), count: 0, held: true };
+  if (quiet || waits || autoSaid) return { state: 'waiting', words: [quietSaid, waits && waits.words, autoSaid, more].filter(Boolean).join(' '), count: 0, held: true };
   return { state: 'clean', words: more ? `${cut || aside ? 'Everything else new' : 'Everything new'} is checked — nothing to change. ${more}` : 'Everything is checked — nothing to change.', count: 0 };
 }
 /* WHAT THE CHECKER WAITS ITS TIME FOR (2.12.41, round 8): a passage's checking or its proofreading, a paragraph's speech
@@ -454,6 +456,51 @@ function checkerWaits(novelId) {
   const soonest = Math.min(...Object.values(rows).flat().map((r) => r.at));
   return { ms: Math.max(0, soonest - now), words: said.join(' ') };
 }
+/* a page or a sentence written again by itself that is waiting its time, or was let be (2.12.42) */
+function autoRewriteDue(novelId) {
+  const now = store.phoneNow();
+  for (const c of chaptersOf(novelId)) for (const p of c.passages || []) {
+    const v = p.by === 'break' ? null : picked(p);
+    if (!v || !v.tries) continue;
+    const lt = v.tries.lift;
+    if (lt && lt.fp === sigOf(v) && (Number(lt.n) || 0) < 2 && Number(lt.next) > now) return true;
+    const st = v.tries.span;
+    if (st && st.fp === sigOf(v) && (Number(st.n) || 0) < 2 && Number(st.next) > now) return true;
+  }
+  return false;
+}
+function autoRewriteSaid(novelId) {
+  const now = store.phoneNow();
+  const busy = busyNow(novelId);
+  let lifts = 0;
+  let spans = 0;
+  let at = Infinity;
+  let gaveLift = 0;
+  let gaveSpan = 0;
+  for (const c of chaptersOf(novelId)) {
+    for (const p of c.passages || []) {
+      const v = p.by === 'break' ? null : picked(p);
+      if (!v) continue;
+      const e = entryFor(c, p);
+      if (v.liftFailed && e && (e.items || []).some((x) => x.kind === 'grade')) gaveLift++;
+      if (e && (v.spanFailed || []).some((f) => (e.items || []).some((x) => x.find === f && x.replace === null))) gaveSpan++;
+      const lt = autoHeld(v, 'lift', sigOf(v));
+      if (lt && (Number(lt.n) || 0) < 2 && Number(lt.next) > now) { lifts++; at = Math.min(at, Number(lt.next)); }
+      const st = autoHeld(v, 'span', sigOf(v), (v.tries && v.tries.span && v.tries.span.find) || '');
+      if (st && (Number(st.n) || 0) < 2 && Number(st.next) > now && e && (e.items || []).some((x) => x.find === st.find && x.replace === null)) { spans++; at = Math.min(at, Number(st.next)); }
+    }
+  }
+  const bits = [];
+  if (lifts + spans > 0 && at < Infinity) {
+    const when = archivist.inWhile(Math.max(0, at - now), busy);
+    if (lifts && !spans) bits.push(lifts === 1 ? `A page written again by itself is asked again ${when} — its model was too slow to answer for it.` : `${plural(lifts, 'page')} written again by itself are asked again, the first ${when} — its model was too slow to answer for them.`);
+    else if (spans && !lifts) bits.push(spans === 1 ? `A sentence written again by itself is asked again ${when} — its model was too slow to answer for it.` : `${plural(spans, 'sentence')} written again by itself are asked again, the first ${when} — its model was too slow to answer for them.`);
+    else bits.push(`What is written again by itself is asked again, the first ${when} — its model was too slow to answer for it.`);
+  }
+  if (gaveLift) bits.push(gaveLift === 1 ? 'A page written again by itself did not come — Write it again asks for it.' : `${plural(gaveLift, 'page')} written again by itself did not come — Write it again asks for them.`);
+  if (gaveSpan) bits.push(gaveSpan === 1 ? 'A sentence written again by itself did not come — Write it again asks for it.' : `${plural(gaveSpan, 'sentence')} written again by itself did not come — Write it again asks for them.`);
+  return bits.join(' ');
+}
 
 /* ------------------------------------------------------------ when */
 
@@ -489,7 +536,8 @@ function busyNow(novelId) { return writerBusy(novelId) || lifting.has(novelId); 
  * light is: archivist.js lightTimed — 2.12.41, round 8) */
 export function stateTimed(novelId) {
   const f = failures.get(novelId);
-  return Boolean((f && f.until > Date.now()) || automaticWait(novelId) || archivist.silentWait(novelId, checkerConn(store.peek('house', 'house') || {})) || checkerWaits(novelId));
+  const house = store.peek('house', 'house') || {};
+  return Boolean((f && f.until > Date.now()) || automaticWait(novelId) || archivist.silentWait(novelId, checkerConn(house)) || archivist.silentWait(novelId, connFor(house, 'writer')) || checkerWaits(novelId) || autoRewriteDue(novelId));
 }
 /* waiting out a failure, or stopped for a connection turned away: tried again now by his hand (Cozy Tavern M752-010) */
 export function stalled(novelId) {
@@ -1180,6 +1228,53 @@ function triedDone(novelId, chapterId, a, what) {
     if (Object.keys(rest).length) w.tries = rest; else delete w.tries;
   }, { checkpoint: true });
 }
+/* WHAT AN AUTOMATIC REWRITE ASKED, KEPT WITH THE BOOK (2.12.42 — a page or a sentence written again by itself whose
+ * model sent nothing came back as a passing fault, so it was asked again every ten minutes for ever, and never counted
+ * toward letting it be). One rule with the helper's (archivist.js stallRule): waited as long as it was waited; counted
+ * on the longest leash or when it made no progress, a refusal counted; let be at the second — the lift or the sentence
+ * given up on that version. Kept on the version it was asked of, for its words as they were (`v.tries.lift`,
+ * `v.tries.span`: {fp, n, next, find, refused, conn}), each count worked out once and laid only where the copy still
+ * holds what it counted from. */
+function autoHeld(v, what, fp, find) {
+  const t = v && v.tries && v.tries[what];
+  if (!t || t.fp !== fp) return null;
+  if (what === 'span' && find && t.find !== find) return null;
+  return t;
+}
+function autoCount(chapterId, a, what, count, next, extra = {}) {
+  const c = store.peek('chapter', chapterId);
+  const p = c && (c.passages || []).find((x) => x.id === a.pid);
+  const v = p && (p.versions || []).find((x) => x.id === a.vid);
+  if (!v || sigOf(v) !== a.fp) return 0;
+  const was = autoHeld(v, what, a.fp, a.find);
+  const n = ((was && Number(was.n)) || 0) + count;
+  const row = { fp: a.fp, n, ...(next ? { next } : {}), ...(a.find ? { find: a.find } : {}), ...((was && was.refused) || extra.refused ? { refused: true } : {}), ...(extra.conn ? { conn: extra.conn } : {}) };
+  const found = JSON.stringify((v.tries && v.tries[what]) || null);
+  store.change('chapter', chapterId, (ch) => {
+    const q = (ch.passages || []).find((x) => x.id === a.pid);
+    const w = q && (q.versions || []).find((x) => x.id === a.vid);
+    if (!w || hashText(String(w.text || '')) !== a.fp) return false;
+    if (JSON.stringify((w.tries && w.tries[what]) || null) !== found) return false;
+    w.tries = { ...(w.tries || {}), [what]: { ...row } };
+  }, { checkpoint: true });
+  return n;
+}
+function autoDone(chapterId, a, what) {
+  const c = store.peek('chapter', chapterId);
+  const p = c && (c.passages || []).find((x) => x.id === a.pid);
+  const v = p && (p.versions || []).find((x) => x.id === a.vid);
+  if (!autoHeld(v, what, a.fp, a.find)) return;
+  const found = JSON.stringify(v.tries[what]);
+  store.change('chapter', chapterId, (ch) => {
+    const q = (ch.passages || []).find((x) => x.id === a.pid);
+    const w = q && (q.versions || []).find((x) => x.id === a.vid);
+    if (!w || !w.tries || !w.tries[what] || JSON.stringify(w.tries[what]) !== found) return false;
+    const { [what]: _gone, ...rest } = w.tries;
+    if (Object.keys(rest).length) w.tries = rest; else delete w.tries;
+  }, { checkpoint: true });
+}
+/* (waiting its time after a stall: not asked before then) */
+const autoWaitsOn = (v, what, fp, find) => { const t = autoHeld(v, what, fp, find); return Boolean(t && (Number(t.n) || 0) < 2 && Number(t.next) > store.phoneNow()); };
 /* a chapter read whole, its tries kept on the chapter for its words as they were asked (`wholeTry` {sig, n, next}) */
 const wholeTryOf = (c, sig) => (c && c.wholeTry && c.wholeTry.sig === sig ? c.wholeTry : null);
 function wholeCount(chapterId, sig, count, next) {
@@ -2951,8 +3046,34 @@ function automaticWait(novelId) {
   const f = autoFailures.get(novelId);
   return (a.fix !== null || a.lift !== null) && f && f.until > Date.now() ? f : null;
 }
-function afterAutomatic(novelId, tried, key, out) {
-  if (!out || out.ok) { if (out && out.ok) autoFailures.delete(novelId); return out; }
+function afterAutomatic(novelId, tried, key, out, place) {
+  if (!out || out.ok) {
+    if (out && out.ok) {
+      autoFailures.delete(novelId);
+      if (place) autoDone(place.chapterId, place, place.what);
+    }
+    return out;
+  }
+  /* a stall, or a refusal: counted on the version by the same rule as every other stage (archivist.js stallRule) —
+   * waited as long as it was waited, counted on the longest leash or when it made no progress, a refusal counted,
+   * let be at the second. Never the ten-minute loop. A writer silent on its longest leash is waited out for that
+   * connection, as the helper's and the checker's are (2.12.42). */
+  if (place && (out.leashed || out.refused)) {
+    tried.delete(key);
+    const rule = out.leashed ? archivist.stallRule(out) : { counted: true, wait: 0 };
+    if (out.leashed === 'quiet' && out.longest) {
+      const conn = connFor(store.peek('house', 'house') || {}, 'writer');
+      if (conn) archivist.setSilent(novelId, conn, out.leashMs);
+    }
+    const n = autoCount(place.chapterId, place, place.what, rule.counted ? 1 : 0, rule.wait ? store.phoneNow() + rule.wait : 0, { refused: Boolean(out.refused), conn: triesPrint(connFor(store.peek('house', 'house') || {}, 'writer')) });
+    if (rule.counted && n >= 2) {
+      autoDone(place.chapterId, place, place.what);
+      letAutomaticBe(place, out.error);
+    } else if (rule.wait) schedule(novelId, rule.wait);
+    else schedule(novelId, 1500);
+    tell(novelId);
+    return out;
+  }
   if (out.passing || out.busy || out.needsConnection) tried.delete(key);
   if (out.passing && store.peek('novel', novelId)) {
     const n = ((autoFailures.get(novelId) || {}).n || 0) + 1;
@@ -2961,6 +3082,33 @@ function afterAutomatic(novelId, tried, key, out) {
     schedule(novelId, ms);
   } else if (out.busy) schedule(novelId, 4000);
   return out;
+}
+/* the second counted stall or refusal: the lift or the sentence is given up on that version, and said where the
+ * other passed-by things are said */
+function letAutomaticBe(place, why) {
+  const still = (w) => w && hashText(String(w.text || '')) === place.fp;
+  if (place.what === 'span') {
+    try {
+      store.change('chapter', place.chapterId, (ch) => {
+        const q = (ch.passages || []).find((x) => x.id === place.pid);
+        const w = q && (q.versions || []).find((x) => x.id === place.vid);
+        /* only the words it was counted on, and only once — another window's newer words stay free of it */
+        if (!still(w) || (w.spanFailed || []).includes(place.find)) return false;
+        w.spanFailed = [...(w.spanFailed || []), place.find];
+        return true;
+      }, { now: true });
+    } catch (_) { /* the chapter is gone */ }
+    return;
+  }
+  try {
+    store.change('chapter', place.chapterId, (ch) => {
+      const q = (ch.passages || []).find((x) => x.id === place.pid);
+      const w = q && (q.versions || []).find((x) => x.id === place.vid);
+      if (!still(w) || w.liftFailed) return false;
+      w.liftFailed = { at: store.phoneNow(), why: cutWords(why || 'no words came', 200) };
+      return true;
+    }, { now: true });
+  } catch (_) { /* the chapter is gone */ }
 }
 /* a paragraph's speech marks written again: held to its marks alone (writer.js rewriteSelection `marks`) — by his
  * button and by itself the same */
@@ -3010,6 +3158,14 @@ function autoAfter(novelId) {
   const judge = judgeOf(house);
   const stands = standsNow(house);
   let next = null;
+  /* the soonest a page or a sentence already asked is waited before it is asked again */
+  let soon = null;
+  const noteWait = (v, what, find) => {
+    const t = autoHeld(v, what, sigOf(v), find);
+    if (!t || (Number(t.n) || 0) >= 2 || !(Number(t.next) > store.phoneNow())) return;
+    const ms = Number(t.next) - store.phoneNow();
+    if (soon === null || ms < soon) soon = ms;
+  };
   for (const c of chaptersOf(novelId)) {
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
@@ -3049,7 +3205,10 @@ function autoAfter(novelId) {
         const g = e.grade;
         const card = (e.items || []).find((x) => x.kind === 'grade');
         const under = g && g.of && g.overall < judge.target && card;
-        if (under && !v.chosen && since(v, a.lift) && liftsOf(p).length < MAX_LIFTS && !liftTried.has(`${v.id}|${sigOf(v)}`) && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
+        if (under && !v.chosen && since(v, a.lift) && liftsOf(p).length < MAX_LIFTS && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
+          /* (waited out after a stall: not asked before then — the count is on the version, 2.12.42) */
+          if (autoWaitsOn(v, 'lift', sigOf(v))) { noteWait(v, 'lift'); continue; }
+          if (liftTried.has(`${v.id}|${sigOf(v)}`)) continue;
           if (!next) next = { chapterId: c.id, passageId: p.id, v, note: card.lift || g.lift, lift: liftsOf(p).length + 1 };
           /* its fixes wait for the passage written again */
           continue;
@@ -3067,7 +3226,11 @@ function autoAfter(novelId) {
           e = v ? checkOf(now, np, v) : null;
           if (!e) continue;
         }
-        const span = (e.items || []).find((x) => x.replace === null && x.kind !== 'grade' && x.find && stands(x) && !(x.marks && !x.asked) && !spanTried.has(`${v.id}|${hashText(String(v.text || ''))}|${x.find}`) && !(v.spanFailed || []).includes(x.find));
+        const waitingSpan = autoHeld(v, 'span', sigOf(v));
+        const spanHeld = Boolean(waitingSpan && (Number(waitingSpan.n) || 0) < 2 && Number(waitingSpan.next) > store.phoneNow());
+        /* one sentence's wait is the version's: another sentence is not asked over it, or its count would be lost */
+        if (spanHeld) noteWait(v, 'span', waitingSpan.find);
+        const span = spanHeld ? null : (e.items || []).find((x) => x.replace === null && x.kind !== 'grade' && x.find && stands(x) && !(x.marks && !x.asked) && !spanTried.has(`${v.id}|${hashText(String(v.text || ''))}|${x.find}`) && !(v.spanFailed || []).includes(x.find) && !autoWaitsOn(v, 'span', sigOf(v), x.find));
         const cur = ((store.peek('chapter', c.id) || c).passages || []).find((x) => x.id === p.id) || p;
         if (span && !next && spansOf(cur) < MAX_SPANS) next = { span: true, chapterId: c.id, passageId: p.id, v, item: span };
       }
@@ -3079,24 +3242,27 @@ function autoAfter(novelId) {
    * round 8 — what was written again by itself was asked of the very model being waited out) */
   const quietWriter = next ? archivist.silentWait(novelId, connFor(house, 'writer')) : null;
   if (quietWriter) { schedule(novelId, quietWriter.ms + 1000); next = null; }
+  else if (!next && soon !== null) schedule(novelId, Math.max(50, soon));
   if (next && next.span && !busyNow(novelId)) {
     /* (the version keeps its id as its words change in place: tried once for these words) */
     const key = `${next.v.id}|${hashText(String(next.v.text || ''))}|${next.item.find}`;
     spanTried.add(key);
     const spot = spanSpot(String(next.v.text || ''), next.item);
     if (!spot.why) {
+      const place = { what: 'span', chapterId: next.chapterId, pid: next.passageId, vid: next.v.id, fp: sigOf(next.v), find: next.item.find };
       const job = writeSpanAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, start: spot.start, end: spot.end, note: spanNote(next.item), fromVersion: next.v, auto: true, fix: true, marks: spanMarks(next.item) })
         .then((out) => {
           if (out && out.ok) archivist.nudge(novelId);
-          /* failed for a real reason: kept on the version, never tried by itself again */
-          else if (out && !out.stopped && !out.yielded && !out.passing && !out.busy && !out.needsConnection) {
+          /* failed for a real reason: kept on the version, never tried by itself again. A stall or a refusal is counted
+           * instead, and let be at the second (afterAutomatic, 2.12.42) */
+          else if (out && !out.stopped && !out.yielded && !out.passing && !out.busy && !out.needsConnection && !out.leashed && !out.refused) {
             /* (added to the list as the copy has it, once — never this window's older list over another's: 2.12.41) */
             try { store.change('chapter', next.chapterId, (ch) => { const q = (ch.passages || []).find((x) => x.id === next.passageId); const w = q && (q.versions || []).find((x) => x.id === next.v.id); if (!w || (w.spanFailed || []).includes(next.item.find)) return false; w.spanFailed = [...(w.spanFailed || []), next.item.find]; return true; }, { now: true }); } catch (_) { /* the chapter is gone */ }
           }
           return out;
         })
         .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
-        .then((out) => afterAutomatic(novelId, spanTried, key, out))
+        .then((out) => afterAutomatic(novelId, spanTried, key, out, place))
         .finally(() => { lifting.delete(novelId); writingAgain.delete(novelId); });
       writingAgain.set(novelId, next.passageId);
       lifting.set(novelId, job);
@@ -3104,17 +3270,19 @@ function autoAfter(novelId) {
   } else if (next && !next.span && !busyNow(novelId)) {
     const liftKey = `${next.v.id}|${sigOf(next.v)}`;
     liftTried.add(liftKey);
+    const place = { what: 'lift', chapterId: next.chapterId, pid: next.passageId, vid: next.v.id, fp: sigOf(next.v) };
     const job = writeAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, note: next.note, fromVersion: next.v, lift: next.lift })
       .then((out) => {
         if (out && out.ok) archivist.nudge(novelId);
-        /* failed for a real reason: kept on the version, never tried by itself again, and said on its grade (S11-G6) */
-        else if (out && !out.stopped && !out.yielded && !out.passing && !out.busy && !out.needsConnection) {
+        /* failed for a real reason: kept on the version, never tried by itself again, and said on its grade (S11-G6).
+         * A stall or a refusal is counted instead, and let be at the second (afterAutomatic, 2.12.42) */
+        else if (out && !out.stopped && !out.yielded && !out.passing && !out.busy && !out.needsConnection && !out.leashed && !out.refused) {
           try { store.change('chapter', next.chapterId, chapterSteps.setVersion(next.passageId, next.v.id, { liftFailed: { at: Date.now(), why: cutWords(out.error || 'no words came', 200) } }), { now: true }); } catch (_) { /* the chapter is gone */ }
         }
         return out;
       })
       .catch((err) => ({ ok: false, error: String((err && err.message) || err) }))
-      .then((out) => afterAutomatic(novelId, liftTried, liftKey, out))
+      .then((out) => afterAutomatic(novelId, liftTried, liftKey, out, place))
       .finally(() => { lifting.delete(novelId); writingAgain.delete(novelId); });
     writingAgain.set(novelId, next.passageId);
     lifting.set(novelId, job);

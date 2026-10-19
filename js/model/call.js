@@ -519,9 +519,10 @@ const leashOf = (ms, name) => (Number(globalThis[name]) > 0 ? Number(globalThis[
  * tells the relay how long to wait, in seconds: three minutes past its own leash (2.12.41, round 5 — a minute was the
  * margin, and a tab hidden for five minutes runs its timers once a minute, so its leash could be heard late and the
  * relay let go first) — or, his page, which has no leash but his Stop, a minute past the longest any silent provider
- * is waited. The app's own pages, written again by themselves, have no Stop to wait for: the relay waits ten minutes
- * for them, as it did (2.12.41, round 5 — they waited the page's sixteen, the helper and the checker standing down all
- * the while); and Test, which only asks whether the connection answers, is leashed as a worker is. */
+ * is waited. An automatic rewrite is leashed as a worker is (writer.js passes leash with background), so the app lets a
+ * silent model go first and the stall comes back with how long it was waited. A background call with no leash — none
+ * now — would wait ten minutes (BACKGROUND_WAIT_S). Test, which only asks whether the connection answers, is leashed
+ * as a worker is. */
 const relayWait = (ms) => Math.ceil(ms / 1000) + 180;
 const unleashedWait = () => Math.ceil(leashOf(QUIET_MOST_MS, '__cozyLeashQuietMostMs') / 1000) + 60;
 export const BACKGROUND_WAIT_S = 600;
@@ -569,7 +570,9 @@ function sleep(ms, signal) {
  *   opts.worker      a helper's call: no prefill, no penalties or stop words
  *   opts.patient     a helper may wait out "slow down" and try again
  *   opts.leash       let go on a worker's leash though it is no worker's (Ideas, Test)
- *   opts.background  a page the app writes again by itself — no Stop of his to wait for (BACKGROUND_WAIT_S)
+ *   opts.background  a page the app writes again by itself — no Stop of his to wait for. When it is also leashed
+ *                    (writer.js, an automatic rewrite) the relay waits three minutes past that leash, as a worker's
+ *                    does; otherwise ten minutes (BACKGROUND_WAIT_S)
  *   opts.signal      his Stop
  *   opts.onText / opts.onThinking   the words as they arrive
  *   opts.onSent(rec) where the request went and its body, word for word

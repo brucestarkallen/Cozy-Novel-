@@ -23,7 +23,7 @@
 import * as store from '../store.js';
 import { ask, emptyWhy } from '../model/call.js';
 import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
-import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writer.js';
+import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow, setHisAsk } from './writer.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows, plural } from '../util.js';
 import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps, renameCount, renamesSince, wordsElsewhere } from './shape.js';
@@ -71,6 +71,8 @@ setNotesWait(async (novelId, ms, signal) => {
   const until = Date.now() + ms;
   while (readingNow.has(novelId) && Date.now() < until && !(signal && signal.aborted)) await new Promise((r) => setTimeout(r, 150));
 });
+/* his own page, Rewrite, Write it again or Go on overrules a wait on the writer's model that kept silent (2.12.42) */
+setHisAsk((novelId, conn) => hisPress(novelId, conn));
 /* whether the notes are being kept for this book: a helper chosen, and its connection not turned away */
 export function keepingNotes(novelId) { return Boolean(connFor(store.peek('house', 'house') || {}, 'helper')) && !blocked.has(novelId); }
 /* WHETHER THE HELPER READS BY ITSELF WHAT THE BOOK STILL OWES — one answer for every screen that says so (2.12.40, the

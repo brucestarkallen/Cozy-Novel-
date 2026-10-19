@@ -21,7 +21,8 @@ import { nowLabelOf } from '../novel/prompts.js';
 import { plural, nameKey, slug, numberWords } from '../util.js';
 import * as archivist from '../novel/archivist.js';
 import { connFor } from '../novel/writer.js';
-import { quickAdd, quickBusy, stopQuick, quickLog, undoQuick, clearQuick, putBackQuick, askingWhere, goneIn, tabsNow, settleGone } from '../novel/quickadd.js';
+import { quickAdd, quickBusy, stopQuick, quickLog, undoQuick, clearQuick, putBackQuick, askingWhere, goneIn, tabsNow, settleGone, wordsAgain } from '../novel/quickadd.js';
+import { madeGone } from '../novel/changes.js';
 
 /* app.js: closeSide (the notes drawer on a phone), showCard (a card of the
  * notes), whenOpen (a passage, its words lit), openSearch (every place),
@@ -533,7 +534,7 @@ const listed = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join('
 function quickRow(novelId, r, redraw) {
   const row = h('div.quickrow', { 'data-id': r.id });
   row.append(h('p.quick-mine', r.said));
-  const again = () => h('button.btn.small.quiet', { title: 'Puts these words back in the box, before anything you have typed there, to send again.', onclick: () => { putInBox(novelId, r.said); redraw(); requestAnimationFrame(() => document.querySelector('.bibview .quickbox')?.focus()); } }, 'Ask again');
+  const again = () => h('button.btn.small.quiet', { title: 'Puts these words back in the box, before anything you have typed there, to send again.', onclick: () => { putInBox(novelId, wordsAgain(novelId, r)); redraw(); requestAnimationFrame(() => document.querySelector('.bibview .quickbox')?.focus()); } }, 'Ask again');
   /* being asked: here, or in another window — never "stopped" while it still asks */
   const where = askingWhere(novelId, r);
   if (where === 'here') { row.append(h('p.quick-wait', h('span.ring', { 'aria-hidden': 'true' }), 'Holding it against the book…')); return row; }
@@ -579,7 +580,7 @@ function quickRow(novelId, r, redraw) {
               : a.addedWhy ? ` — your entry, added to: ${a.addedWhy}, so only what is new went in` : ' — your entry, added to');
     row.append(section('Into the bibliography', added.map((a) => h('li' + (a.status === 'undone' ? '.undone' : ''),
       a.status !== 'undone' && live.has(a.entryId) ? h('button.link', { title: `Open ${a.name}.`, onclick: () => showRef(novelId, `e:${a.entryId}`) }, a.name) : h('span', a.name),
-      how(a)))));
+      how(a), a.status === 'made' && a.change && madeGone(novelId, a.change) ? ' — it no longer reads that way' : ''))));
   }
   if ([...added, ...book].some((a) => a.status === 'made' && a.change)) row.append(h('div.btnrow', h('button.btn.small.quiet', { title: 'Takes back out what this answer put in — its entries, and your book’s words as they were — anything changed since stays as it is.', onclick: () => { const back = undoQuick(novelId, r.id); if (back.said.length) toast(back.said.join(' · '), 6000); else if (back.back) toast('Taken back out.'); redraw(); } }, 'Undo these')));
   /* its Undo let go: said, never just gone (the newest that put something in keep theirs) */
@@ -599,8 +600,10 @@ function quickRow(novelId, r, redraw) {
       const kids = [h('span', `“${x.mine}”`), ' — ', h('span', x.label), ` said “${x.was}”`];
       if (x.kind === 'about') {
         const b = book.find((y) => y.at === i);
+        const gone = b && b.status === 'made' && b.change && madeGone(novelId, b.change);
         kids.push(!b ? ' — it still says it.'
-          : b.status === 'made' || b.status === 'kept' ? `; it says “${b.now}” now.`
+          : gone ? ' — it no longer reads that way.'
+            : b.status === 'made' || b.status === 'kept' ? `; it says “${b.now}” now.`
             : b.status === 'undone' ? ' — put back as it was.'
               : b.noWords ? noWords
                 : b.couldNot ? couldNot

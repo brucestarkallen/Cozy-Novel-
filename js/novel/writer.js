@@ -291,6 +291,14 @@ export function setNotesWait(fn) { notesWait = fn; }
 /* the helper keeps the words it read of a version about to grow in place (Go on), so it reads what is added as a change — never the whole again as new (archivist.js retireIfSeen) */
 let beforeGrow = null;
 export function setBeforeGrow(fn) { beforeGrow = fn; }
+/* his own ask — a new page, Rewrite, Write it again, Go on — overrules a wait on the writer's model that kept silent
+ * (archivist.js hisPress). The app's own rewrites do not: they are what the wait holds. (2.12.42) */
+let hisAsk = null;
+export function setHisAsk(fn) { hisAsk = fn; }
+function pressedWrite(novelId) {
+  const conn = connFor(house(), 'writer');
+  if (hisAsk && conn) hisAsk(novelId, conn);
+}
 
 /* -------------------------------------------------------- the one loop */
 
@@ -418,8 +426,12 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       signal: ctl.signal,
       noStructured: carryOn,
       /* (a page written again by itself — the checker's lift, a few words mended by themselves: nobody is there to press
-       * Stop, so the relay waits ten minutes on a silent provider, as it did, never his page's sixteen — call.js) */
+       * Stop. It is leashed as the helper's and the checker's asks are, so a model that sends nothing comes back as a
+       * stall — how long it was waited, and whether that was the longest it is ever waited — and the checker counts it
+       * (checker.js afterAutomatic). Through 2.12.41 the relay waited ten minutes and the stall came back as a passing
+       * fault with none of that, so the page was asked again every ten minutes. 2.12.42) */
       background: Boolean(job.auto),
+      leash: Boolean(job.auto),
       onText: (s) => {
         if (!ownsPage()) { job.gone = true; ctl.abort(); return; }
         if (!automaticAllowed()) return;
@@ -577,8 +589,14 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       const error = leak.leaked && finalWords(out, text).trim() ? 'the answer held nothing before the provider’s own markers' : out.ok ? emptyWhy(out, thought) : out.error;
       /* a passing fault (no answer, busy, down) — said apart, so what the app writes by itself tries again another time */
       const st = Number(out.status) || 0;
-      const passing = !out.ok && !out.permanent && (st === 0 || st === 408 || st === 429 || st >= 500);
-      return { ok: false, error, notes, thought: kept, ...(passing ? { passing: true, ...(Number.isFinite(out.retryAfterMs) && out.retryAfterMs > 0 ? { retryAfterMs: out.retryAfterMs } : {}) } : {}) };
+      /* a stall is not a fault to wait out: it carries how long it was waited, and the checker counts it (2.12.42).
+       * A passing fault is only a real miss — no answer, busy, down — with nothing of a leash on it. */
+      const passing = !out.ok && !out.leashed && !out.permanent && (st === 0 || st === 408 || st === 429 || st >= 500);
+      /* (the stall, as the call let it go: the checker counts an automatic rewrite by it — archivist.js stallRule.
+       * A model that finished and sent nothing refused the page: counted the same, not a fault to wait out for ever. 2.12.42) */
+      const leashed = out.leashed ? { leashed: out.leashed, ...(out.longest ? { longest: true } : {}), ...(out.leashMs ? { leashMs: out.leashMs } : {}) } : {};
+      const refused = Boolean(out.ok) && !out.leashed;
+      return { ok: false, error, notes, thought: kept, ...leashed, ...(refused ? { refused: true } : {}), ...(passing ? { passing: true, ...(Number.isFinite(out.retryAfterMs) && out.retryAfterMs > 0 ? { retryAfterMs: out.retryAfterMs } : {}) } : {}) };
     }
     const cutWhy = out.stopped ? 'you stopped it'
       : !out.cut ? undefined
@@ -769,6 +787,7 @@ export function repairBrokenWords(novelId) {
 
 /* The next part of the chapter (at its end, or after a given passage). */
 export async function writeNext({ novelId, chapterId, direction = '', length = 'scene', after = null }) {
+  pressedWrite(novelId);
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -835,6 +854,7 @@ export function takeOf(passage) {
 
 /* Another take on a passage: the same request again, a new version beside the old. */
 export async function anotherTake({ novelId, chapterId, passageId }) {
+  pressedWrite(novelId);
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -878,6 +898,7 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
 
 /* A rewrite of a whole passage, with his note. */
 export async function rewrite({ novelId, chapterId, passageId, note = '', fromVersion = null, lift = 0 }) {
+  if (!lift) pressedWrite(novelId);
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -919,6 +940,7 @@ export async function rewrite({ novelId, chapterId, passageId, note = '', fromVe
  * rewrite — 52 words made 18 — and quotation marks around the whole answer were taken off, so speech became narration).
  * {goesOn, carried}: the speech going on past the words, or carried into them (textshape.js speechFaults) */
 export async function rewriteSelection({ novelId, chapterId, passageId, start, end, note = '', fromVersion = null, auto = false, fix = false, marks = false }) {
+  if (!auto) pressedWrite(novelId);
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -992,8 +1014,9 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
       store.change('chapter', chapterId, chapterSteps.removeVersion(passageId, version.id), { now: true });
       if (shownWas && shownWas.id === version.id) store.change('chapter', chapterId, chapterSteps.pick(passageId, baseV.id), { now: true });
       if (once && changeInPlace({ novelId, chapterId, passageId, versionId: baseV.id, next: cur.slice(0, at) + fresh + cur.slice(at + old.length), by: 'checker', extra: auto ? { auto: true } : {} })) {
-        /* (counted on the version as the copy has it, once — laid again over a copy that holds it, never twice: 2.12.41) */
-        if (auto) { const was = Number(target.spans) || 0; store.change('chapter', chapterId, (ch) => { const q = (ch.passages || []).find((x) => x.id === passageId); const w = q && (q.versions || []).find((x) => x.id === baseV.id); if (!w || (Number(w.spans) || 0) !== was) return false; w.spans = was + 1; return true; }, { now: true }); }
+        /* (counted on the version as the copy has it, once, and only while the new sentence is in those words — laid
+         * again over a copy the sentence never reached, never counted. 2.12.42) */
+        if (auto) { const was = Number(target.spans) || 0; const sentence = fresh; store.change('chapter', chapterId, (ch) => { const q = (ch.passages || []).find((x) => x.id === passageId); const w = q && (q.versions || []).find((x) => x.id === baseV.id); if (!w || (Number(w.spans) || 0) !== was || !String(w.text || '').includes(sentence)) return false; w.spans = was + 1; return true; }, { now: true }); }
         await store.flush('chapter', chapterId);
         return { ...out, inPlace: true, versionId: baseV.id };
       }
@@ -1024,6 +1047,7 @@ export function joinOn(base, more) {
 
 /* Go on from where a cut passage stops: the words join its last word. */
 export async function goOn({ novelId, chapterId, passageId }) {
+  pressedWrite(novelId);
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);
@@ -1074,6 +1098,7 @@ export async function goOn({ novelId, chapterId, passageId }) {
 
 /* A scene he played, written into the chapter as prose. */
 export async function playToProse({ novelId, chapterId, play, transcript, mine = '', length = 'scene' }) {
+  pressedWrite(novelId);
   const stopHere = preflight(novelId);
   if (stopHere) return stopHere;
   const book = await bookOf(novelId);

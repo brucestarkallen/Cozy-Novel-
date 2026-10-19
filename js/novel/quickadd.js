@@ -39,7 +39,7 @@ import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { findIn } from './search.js';
 import { namesAndFigures, foldedText, foldName, nearName, stopEndsNoSentence, renameIn } from './names.js';
 import { entriesOf, entriesNamed, entryFor, otherKindSaid, entryWords, kindSaid, kindOf, nameForms, makeFinder, formKey } from './bibliography.js';
-import { makeChange, undoChange } from './changes.js';
+import { makeChange, undoChange, madeGone } from './changes.js';
 import * as archivist from './archivist.js';
 import { newId, estimateTokens, numberWords, truthOf } from '../util.js';
 
@@ -1936,15 +1936,17 @@ function mendBook(novelId, changes, finder, words, { standing = [], againWhy = '
  * row kept from before says it the same way. */
 const many = (n, one, more) => (n === 1 ? `One ${one}` : `${numberWords(n)} ${more}`);
 const KEPT_WHAT = { about: 'what it’s about', style: 'how it reads' };
-function plainAccount(r, { his = false } = {}) {
+function plainAccount(r, { his = false, novelId = '' } = {}) {
   const your = his ? 'my' : 'your';
   const ours = his ? 'mine' : 'yours';
   const out = [];
   /* (every entry it put in went in, whatever was done with it since) */
   const made = (r.added || []).map((a) => a.name);
-  const mended = (r.book || []).filter((b) => b.status !== 'refused').map((b) => b.label);
+  const mended = (r.book || []).filter((b) => b.status !== 'refused' && b.status !== 'undone' && !(novelId && b.status === 'made' && b.change && madeGone(novelId, b.change))).map((b) => b.label);
   if (made.length) out.push(`${listOf(made)} went into ${your} bibliography.`);
   if (mended.length) out.push(`${listOf(mended)} now say${mended.length === 1 ? 's' : ''} what ${your} newer words say.`);
+  const missed = (r.book || []).filter((b) => novelId && b.status === 'made' && b.change && madeGone(novelId, b.change)).map((b) => b.label);
+  if (missed.length) out.push(`${listOf(missed)} no longer ${missed.length === 1 ? 'reads' : 'read'} that way.`);
   if (!made.length && !mended.length) out.push('Nothing went in.');
   const held = (r.refused || []).filter((x) => x.held).length + (r.held || []).length;
   if (held) out.push(`${many(held, 'entry waits', 'entries wait')} with what the book says otherwise.`);
@@ -1978,6 +1980,39 @@ function plainAccount(r, { his = false } = {}) {
 
 /* the Quick adds before that ride with what he says next: the newest few answered */
 const earlierRows = (novel) => quickLog(novel).filter((r) => r.state === 'done').slice(-4);
+/* A ROW CARRIED THROUGH THE RENAMES MADE SINCE IT WAS SENT (2.12.42): a row made from then on keeps the book's rename
+ * count. Where it is used again — the next request, and whether "keep mine" is the same words — those words take the
+ * names the book uses now. The row he sees still shows his words as he typed them. A row from before, with no count,
+ * stays as he typed it: the book cannot say which renames came after it. The change it made, and its Undo, are never
+ * rewritten. */
+const CARRY_KEYS = new Set(['said', 'verdict', 'mine', 'against', 'was', 'now', 'why', 'label', 'name', 'rule', 'quote', 'error', 'againWhy']);
+function carriedQuick(novel, row) {
+  if (!row || typeof row.renameCount !== 'number') return row;
+  const since = renamesSince(novel, row.renameCount);
+  if (!since.length) return row;
+  const walk = (v, key) => {
+    if (typeof v === 'string') return CARRY_KEYS.has(key) ? renameIn(v, since) : v;
+    if (Array.isArray(v)) {
+      if (key === 'held' || key === 'questions') return v.map((x) => (typeof x === 'string' ? renameIn(x, since) : walk(x, key)));
+      return v.map((x) => walk(x, key));
+    }
+    if (v && typeof v === 'object') {
+      if (key === 'change' || key === 'undo') return v;
+      const out = {};
+      for (const [k, x] of Object.entries(v)) out[k] = walk(x, k);
+      return out;
+    }
+    return v;
+  };
+  return walk(row, '');
+}
+/* his words back in the box, carried through the renames since that row — the row itself still shows them as typed */
+export function wordsAgain(novelId, row) {
+  const said = String((row && row.said) || '');
+  if (!row || typeof row.renameCount !== 'number') return said;
+  const since = renamesSince(store.peek('novel', novelId), row.renameCount);
+  return since.length ? renameIn(said, since) : said;
+}
 /* the request as his partner's connection sees the book now, for these words: {request, shown} — shown, the entries it
  * gives whole (id -> their words as they stand) */
 function requestFor(novelId, words, c) {
@@ -1996,7 +2031,7 @@ function requestFor(novelId, words, c) {
   const pas = passagesNaming(novel, chapters, names, Math.floor(room / 2));
   /* what was said before in Quick add, the newest few (never the one being asked) — what came of each, where the app
    * said it, told again in his own voice (2.12.40, the review) */
-  const earlier = earlierRows(novel).map((r) => (r.verdictBy === 'app' ? { ...r, verdict: plainAccount(r, { his: true }) } : r));
+  const earlier = earlierRows(novel).map((r) => { const row = carriedQuick(novel, r); return row.verdictBy === 'app' ? { ...row, verdict: plainAccount(row, { his: true, novelId }) } : row; });
   const request = quickAddRequest({ words, earlier, ...prem, ...ent, ...pas });
   /* (whole: an entry past its room rides by its opening only — prompts.js entryRow — and is never written over from that) */
   const whole = ent.entries.filter((e) => String(entryWords(e) || '').length <= PREMISE_ROOM);
@@ -2051,7 +2086,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
   /* (its time and its beat in the phone's time, as another browser judges them: askingWhere — 2.12.41, the review) */
   const at = rowTime(quickLog(novel0));
   lastAt = at;
-  const row = { id: newId('qa'), at, said: t, state: 'asking', beat: store.phoneNow(), tab: store.CLIENT, browser: store.BROWSER };
+  const row = { id: newId('qa'), at, said: t, state: 'asking', beat: store.phoneNow(), tab: store.CLIENT, browser: store.BROWSER, renameCount: renameCount(novel0) };
   /* asking from before the row is laid in: the screen drawn for the row draws it as being asked */
   const ctl = new AbortController();
   running.set(novelId, { ctl, rowId: row.id });
@@ -2219,7 +2254,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
      * a page's contradiction in where he had said nothing of it) */
     const log = quickLog(novel);
     const here = log.findIndex((r) => r.id === row.id);
-    const answering = log.slice(0, here < 0 ? log.length : here).filter((r) => r.state === 'done').slice(-1)[0];
+    const answering = carriedQuick(novel, log.slice(0, here < 0 ? log.length : here).filter((r) => r.state === 'done').slice(-1)[0]);
     const waited = answering ? (answering.conflicts || []).filter((x) => !x.overruled) : [];
     const sameQuote = (x, y) => foldName(x) === foldName(y) || stands(x, y) || stands(y, x);
     let overNot = 0;
@@ -2282,7 +2317,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     const agreed = !fix && !refused.length && !overNot && book.every((b) => b.status === 'made') && added.every((a) => !a.notAsWritten)
       && read.changes.every((c) => c.in) && read.conflicts.every((c) => !c.overruled || c.in) && Boolean(read.verdict);
     const facts = { ...shown, added, refused, book, ...(keptAgain.length ? { keptAgain } : {}), ...(keeps.length && !helper ? { keptNone: true } : {}) };
-    const done = settle({ state: 'done', ...facts, verdict: agreed ? read.verdict : plainAccount(facts), verdictBy: agreed ? 'partner' : 'app' });
+    const done = settle({ state: 'done', ...facts, verdict: agreed ? read.verdict : plainAccount(facts, { novelId }), verdictBy: agreed ? 'partner' : 'app' });
     for (const k of keptAgain) archivist.keepAgain(novelId, k);
     /* the notes follow what went in: an entry changed under a card has them checked against it (archivist.js auditDue) */
     if (added.length || book.some((b) => b.status === 'made')) archivist.nudge(novelId, 1500);
@@ -2293,7 +2328,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     const why = line((e && e.message) || String(e), 400) || 'something went wrong on the way';
     try {
       if (partial && ((partial.added || []).length || (partial.book || []).some((b) => b.status === 'made'))) {
-        return { ok: true, row: settle({ state: 'done', ...partial, book: partial.book || [], verdict: plainAccount({ ...partial }), verdictBy: 'app' }) };
+        return { ok: true, row: settle({ state: 'done', ...partial, book: partial.book || [], verdict: plainAccount({ ...partial }, { novelId }), verdictBy: 'app' }) };
       }
       return { ok: false, error: why, row: settle({ state: 'failed', error: why }), giveBack: t };
     } catch (_) { return { ok: false, error: why, giveBack: t }; }

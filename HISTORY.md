@@ -1125,3 +1125,43 @@ Browser: every walk, 1,540 checks, all passed — accessibility 56, bibliography
 The helper's reading request is unchanged (md5 8c1953420ccbe468b7053cd5f8cfae81).
 
 Not run: a real model, a phone's own browser, profile_performance (a profiler, with nothing to pass or fail).
+
+## 2.12.42, a silent rewrite let be, and a change said made only while it still reads that way
+
+What 2.12.41 left. Each one below was read in the code, run, and then the guard was taken out so the test failed, and put back.
+
+**A page or a sentence written again by itself, on a writer that sends nothing.**
+- **What he saw.** With **Write it again by itself** on, or a sentence the checker writes again by itself, a writer that sent nothing came back as an ordinary miss. It was asked again after a minute, then three, then every ten minutes, and never counted toward letting that page or sentence be.
+- **Now.** That rewrite is waited the way a helper’s or a checker’s ask is. The stall is counted on the version. At the second counted stall the page or the sentence is let be, and said so, the same way the other things passed by are. A shorter quiet stall is waited and not counted. A refusal is counted. His own **Write**, **Rewrite** and **Go on** are not held, and still go out. A stall is not a miss that passed.
+
+**Made, only while the book still reads that way.**
+- **What he saw.** After another window saved first, a change his partner or Quick add made to a plan, a summary, a chapter’s name, the book’s words, a module, an entry or a card could fail to land. The card or the row still said made. A new entry of a name another window had just added was added again, so the book held two.
+- **Now.** Each of those is laid again where its own words still stand (the stretch of the change, a few words either side, the way a page already was). Where they do not stand, the card and the Quick add row say it no longer reads that way. Undo still matches the words exactly, so a card he typed on since is not written over. A new entry is found the way the bibliography finds one, by name and kind: the same kind gets the new words after the words already there, and only when they are not already in it; another kind stays two entries.
+
+**Undo of a name changed everywhere.** A page another window had just edited, which the rename then remade, was left with the new name after Undo, and the old name everywhere else. If that page still reads as the same rename of the words kept before it, those words go back. A page edited again after the rename does not read that way, and stays.
+
+**A sentence written again by itself is counted only when that sentence lands.** Another window’s page that no longer holds the sentence is not counted.
+
+**Quick add and a rename.** A new row keeps how many renames the book had when he said it. The next request, and whether **keep mine** is the same words, carry his words through the renames since. **Ask again** puts those words in the box, with the new name. The row on the screen still shows what he typed. A row from before this, which has no count, stays as he typed it: the book cannot say which renames came after it.
+
+**The partner’s sentences.** Whether to ask again for a changes block no longer splits a sentence at “Dr.” or “Mr.”. It uses the same split as everywhere else that decides a sentence. What counts as a claim is unchanged.
+
+**Left, and why.**
+- Undo’s “n put back”, and the notes’ check’s record of what it changed, are worked out in this window before the phone answers. A step that then is not laid was still counted. Making the toast wait for the phone would only say the same local answer later. It is left.
+- The helper’s count of a stall (`stageCount`) is an absolute number, so a save the phone already took is not added again. Two windows counting the same stall before either save lands can leave the lower number, so a stage let be in one window can be asked once more. It does not loop. It was left rather than change that count without a test in which two windows both run the helper.
+- Several passages refused together still end that look for about a second and a half, then each is asked alone. It does not loop. Continuing them inside the same look is not a small change.
+- The phone keeps the last 30 saves of a record. Past that, a lost answer can be played again. Unchanged.
+- An old one-page name swap from before 2.12.41 can still look like a rename everywhere where the book cannot tell them apart. Unchanged.
+- A tab hidden past three minutes of late timers was not confirmed. There is no phone browser here.
+
+Tests. App suite, the whole of it once on this code: 800 passed, 0 failed. The new ones hold the silent writer (asked, waited, counted, let be at the second, never a third time, and his own Write it again still goes out), a change of each kind laid again or said to no longer read that way, one entry of the same name and kind, the rename’s Undo on a page remade over another window’s words, the sentence counted only when it lands, and Quick add’s rename count. The partner’s “Dr.” sentence is in the existing claim test. An older test still expected the ten-minute wait for a sentence written again by itself; that expectation was the bug, and it now expects three minutes past the quiet leash. Each guard was undone in turn and its test failed with an AssertionError, then the guard was put back: the stall counted, the plan laid again, the one entry, the page put back, the sentence not counted, Ask again and the next request carrying the new name, and “Dr.” not ending the sentence. With the automatic rewrite’s leash forced off, the wait test failed on “three minutes past its leash”; the leash was put back, which is the code this suite ran.
+
+Node: checker_edges 14, instructions 37, craft 179, personas 4, workflows 17, final_workflows 19, notes_integrity 24, branches 19, archivist_reliability 20, timeline 13, automation_integrity 15, stream_integrity 6, thinking 348 of 348, prefill_words 6, provider_edges 7, branch_imports 7, storage_integrity 12, store_removal 6, search_integrity 4, search_performance 5, textshape_fuzz 4. All passed.
+
+Python: server 89, backup_integrity 3, branch_storage 11. All passed.
+
+Browser: 26 walks passed with the same counts as 2.12.41 — bibliography 44, branch imports 13, branches 49, checks 54, composer drafts 27, exports 12, main 81, more 312, notes 17, overlap 184, desk performance 21, pane performance 24, search performance 13, world performance 38, quick add 60, reading colours 47, removal 24, room backing 18, settings 26, story map 24, summaries 17, surface stability 25, timeline 35, update performance 25, viewpoint 26, worlds 185. Three failed here and failed the same way on the already-pushed 2.12.41, so they are not this release: accessibility 48 passed, 1 failed (the browser refused to resize a window it had taken full screen, and the rest of that walk never ran); cozy 31 passed, 1 failed (a long title at 412px); dialogs 47 passed, 1 failed (Begin a book, the sheet was not in the page in the same moment). No CSS and no walk was changed to hide them.
+
+The helper's reading request is unchanged (md5 8c1953420ccbe468b7053cd5f8cfae81).
+
+Not run: a real model, a phone's own browser, profile_performance (a profiler, with nothing to pass or fail).
