@@ -24,13 +24,32 @@ def check(name, ok, saw=''):
 
 
 async def open_bib(pg):
-    # (on a wide screen Notes beside the page is a column: pressed again it closes — opened only when it is not open)
-    if not await pg.locator('[data-notes-view=bibliography]').is_visible():
+    # (on a wide screen Notes beside the page is a column: pressed again it closes — opened only when it is not open; and
+    # once more where the column a reload brings back was still being drawn when it was looked for)
+    for _ in range(3):
+        if await pg.locator('[data-notes-view=bibliography]').is_visible():
+            break
         await H.panes_call(pg, 'showSide', ['notes'])
+        await pg.wait_for_timeout(500)
     await pg.wait_for_selector('[data-notes-view=bibliography]')
     await pg.click('[data-notes-view=bibliography]')
     await pg.wait_for_selector('.bibview .quickbox')
     await pg.wait_for_timeout(250)
+
+
+async def ask(pg, words):
+    # his words sent with Check and add, and the row they make waited for until it is answered
+    await pg.locator('.bibview .quickbox').fill(words)
+    await pg.get_by_role('button', name='Check and add').click()
+    for _ in range(300):
+        last = pg.locator('.bibview .quickrow').last
+        if await last.count() and (await last.locator('.quick-mine').inner_text()).strip() == words and not await last.locator('.quick-wait').count():
+            break
+        await pg.wait_for_timeout(100)
+    await pg.wait_for_timeout(300)
+
+
+QUIET_NOW = "import('/js/app.js').then((m) => m.quietNow())"
 
 
 async def scenario(browser, w, hgt, mobile):
@@ -142,6 +161,35 @@ async def scenario(browser, w, hgt, mobile):
     lit = await pg.evaluate("(pid) => { const p = document.querySelector(`#passages .passage[data-id=\"${pid}\"]`); return Boolean(p && (p.classList.contains('selected') || p.querySelector('mark, .found'))); }", fx['pid'])
     check(f'{tag} the tap goes to the page that says otherwise', lit)
 
+    # (2.12.40, the review) an entry resting on what a page says otherwise is held back, said under Not put in, and the row
+    # has Ask again — his words back in the box, before anything typed there
+    await open_bib(pg)
+    await ask(pg, 'HELDBACK Emilia has black hair.')
+    row = await pg.locator('.bibview .quickrow').last.inner_text()
+    check(f'{tag} an entry resting on what a page says otherwise: held back under Not put in, saying why',
+          'Not put in' in row and 'Emilia Vermaine — it says what Chapter One, Passage 1 says otherwise (“Emilia has black hair”)' in row and 'it waits for your word' in row, row)
+    again = pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again')
+    check(f'{tag} a row that held something back has Ask again', await again.count() == 1, row)
+    if await again.count():
+        await again.click()
+        await pg.wait_for_timeout(300)
+        kept = await pg.locator('.bibview .quickbox').input_value()
+        check(f'{tag} Ask again puts his words back in the box', kept == 'HELDBACK Emilia has black hair.', kept)
+    await pg.locator('.bibview .quickbox').fill('')
+
+    # a newer word of his that went into no entry says so, with Ask again
+    await ask(pg, 'LONE Emilia has a brother.')
+    row = await pg.locator('.bibview .quickrow').last.inner_text()
+    check(f'{tag} a newer word that went in nowhere says it did not go in',
+          'It changes your earlier words' in row and 'it did not go in: nothing it wrote carries it. Send your words again.' in row
+          and await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').count() == 1, row)
+
+    # set aside: "yours went in" only where the entry put in says his words — never "not held back" unchecked
+    await ask(pg, 'ASIDE Emilia Vermaine is an elder whose eyes are green.')
+    row = await pg.locator('.bibview .quickrow').last.inner_text()
+    check(f'{tag} set aside, with yours said to go in only where an entry put in says them',
+          'Set aside' in row and 'so yours went into Emilia Vermaine.' in row and 'not held back' not in row, row)
+
     # what he types while it asks is kept: when the ask fails, his words come back before it, never in its place — and
     # Ask again the same (2.12.40, the audit)
     await open_bib(pg)
@@ -158,6 +206,51 @@ async def scenario(browser, w, hgt, mobile):
     await pg.wait_for_timeout(300)
     kept = await pg.locator('.bibview .quickbox').input_value()
     check(f'{tag} Ask again never writes over what the box holds', kept == both, kept)
+
+    # (2.12.40, the review) a Quick add being asked is work on its way: an update waits for it (app.js quietNow), and
+    # leaving the page asks first; reloaded mid-ask, the row its closed tab was asking says at once that it stopped — its
+    # tab's lock is gone (store.liveTabs), never "being checked in another window" for two minutes
+    await pg.locator('.bibview .quickbox').fill('')
+    await pg.evaluate("() => document.activeElement && document.activeElement.blur && document.activeElement.blur()")
+    # (quiet, and staying quiet a moment: nothing else on its way — a save, the helper — that would keep it from being so)
+    quiet, still = False, 0
+    for _ in range(400):
+        still = still + 1 if await pg.evaluate(QUIET_NOW) else 0
+        if still >= 15:
+            quiet = True
+            break
+        await pg.wait_for_timeout(100)
+    check(f'{tag} quiet before it asks', quiet)
+    gate = 'SLOW The Gloam Gate is a ruin on the old north road, where the hunters of the Iron Covenant once kept their watch over the drowned city below.'
+    await pg.locator('.bibview .quickbox').fill(gate)
+    await pg.get_by_role('button', name='Check and add').click()
+    await pg.wait_for_selector('.bibview .quickrow .quick-wait', timeout=8000)
+    # (for three seconds of its asking — its own saves landed meanwhile — never quiet)
+    loud = True
+    for _ in range(30):
+        if await pg.evaluate(QUIET_NOW):
+            loud = False
+            break
+        await pg.wait_for_timeout(100)
+    still_asking = await pg.locator('.bibview .quickrow .quick-wait').count() > 0
+    check(f'{tag} while Quick add asks, no update lands', loud and still_asking, [loud, still_asking])
+    asks_first = await pg.evaluate("() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }")
+    check(f'{tag} leaving the page while it asks asks first', asks_first)
+    pg.on('dialog', lambda d: asyncio.ensure_future(d.accept()))
+    await H.settled_reload(pg)
+    await pg.wait_for_selector('#desk:not([hidden])', timeout=10000)
+    await pg.wait_for_timeout(600)
+    await open_bib(pg)
+    seen = ''
+    for _ in range(50):
+        seen = await pg.locator('.bibview .quickrow', has_text='SLOW The Gloam Gate').last.inner_text()
+        if 'its window closed before it answered' in seen:
+            break
+        await pg.wait_for_timeout(100)
+    check(f'{tag} reloaded mid-ask, its row says at once that it stopped, with Ask again',
+          'Not checked — its window closed before it answered. Nothing went in.' in seen and 'Being checked in another window' not in seen and 'Ask again' in seen, seen)
+    kept = await pg.evaluate("(nid) => import('/js/store.js').then((s) => { const r = (s.peek('novel', nid).quick || []).find((x) => x.said.startsWith('SLOW The Gloam Gate')); return r ? [r.state, Boolean(r.closed), r.tab || ''] : null; })", nid)
+    check(f'{tag} and it is kept as stopped, for every window', kept == ['stopped', True, ''], kept)
     errs = [x for x in logs if x.startswith('PAGEERROR')]
     check(f'{tag} no page errors', not errs, errs[:3])
     await pg.context.close()

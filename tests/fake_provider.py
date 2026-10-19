@@ -48,6 +48,9 @@ def answer_for(body):
         # rows as they stand: the entries again.
         asked = next((m.get("content") for m in msgs if m.get("role") == "user" and isinstance(m.get("content"), str) and "Hold my words against the book as it stands" in m.get("content")), last_user)
         said = asked.split('to go into my bibliography now:\n"""\n', 1)[-1].split('\n"""', 1)[0]
+        # (the walk's own words that tell it how to answer — never part of what he adds)
+        flags = set(re.findall(r"\b(HELDBACK|LONE|ASIDE)\b", said))
+        said = re.sub(r"\b(?:HELDBACK|LONE|ASIDE)\s*", "", said)
         entries, conflicts = [], []
         for sentence in re.split(r"(?<=[.!?])\s+", said):
             m = re.match(r"^(?:The )?([A-Z][\w’' -]+?) is (.+?)[.!?]?$", sentence.strip())
@@ -56,6 +59,17 @@ def answer_for(body):
                 entries.append({"name": name, "kind": "groups" if "council" in what else "lore", "line": what[:1].upper() + what[1:], "text": f"{name}: {what}."})
         if "I looked up the words you quoted" in last_user:
             return json.dumps({"entries": entries})
+        # (2.12.40, the review) HELDBACK: his newer word changes words a page holds, and the entry it writes says it —
+        # asked again, it gives no entry for it, so that entry waits; LONE: his newer word changes his own entry's words, and
+        # it writes no entry to carry it; ASIDE: it says the book says otherwise in words that stand nowhere
+        if "HELDBACK" in flags:
+            page = re.search(r"[^.\n\"]*silver hair[^.\n\"]*", asked.split("The passages of the book that name", 1)[-1])
+            return json.dumps({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has black hair", "was": page.group(0).strip() if page else "silver hair", "where": "your entry", "why": "your newer word"}],
+                               "entries": [{"name": "Emilia Vermaine", "kind": "people", "line": "An elder vampire.", "text": "Emilia has black hair now."}]})
+        if "LONE" in flags:
+            return json.dumps({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has a brother", "was": "She has no family of her own yet", "where": "your entry Emilia Vermaine", "why": "your newer word"}], "entries": []})
+        if "ASIDE" in flags:
+            return json.dumps({"verdict": "Green eyes wait for your word.", "conflicts": [{"mine": "her eyes are green", "against": "her eyes were always grey", "where": "Chapter One, Passage 1", "why": "grey"}], "entries": entries})
         if "black hair" in said:
             page = re.search(r"[^.\n\"]*silver hair[^.\n\"]*", last_user.split("The passages of the book that name", 1)[-1])
             if page:
