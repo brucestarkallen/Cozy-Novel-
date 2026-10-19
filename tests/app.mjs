@@ -8966,6 +8966,12 @@ await test('a helper or a checker waiting out a failure, or stopped for a connec
   for (let i = 0; i < 100 && archivist.pendingWork(b.novelId); i++) await sleep(50);
   assert.equal(archivist.pendingWork(b.novelId), false, 'read at once, never ten minutes on');
   assert.equal(archivist.stalled(b.novelId), false);
+  /* (the run that read it is still on its way: since 2.12.41, round 7, every run goes on to the backfills and the notes'
+   * check after its reading. It ends before the helper is stopped here — run() leaves a book to the run already on it,
+   * and that run, slow on a busy machine, read his edit below and this part failed; a run in flight while the helper is
+   * stopped is no state of the app, where only the run itself stops it) */
+  for (let i = 0; i < 600 && archivist.forTests().running.size; i++) await sleep(50);
+  await quietAll();
   /* stopped for good: tried again too */
   await reset();
   A.blocked.set(b.novelId, { conn: archivist.connPrint(writer.connFor(store.peek('house', 'house'), 'helper')), words: null });
