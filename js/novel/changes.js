@@ -372,6 +372,43 @@ function loose(str) {
   }
   return { s: out.join(''), starts, ends };
 }
+/* A FIX CARRIED THROUGH A CHANGE OF NAMES (2.12.41, round 7 — the review of round 5, its F1 and F8): the words it finds
+ * and its new words read where they stand — `text` the page as the fix was found in it, `swap` the change of names: the
+ * page renamed whole, and the page with the fix laid in renamed whole, so a name already part of the one it becomes
+ * stays as it is ("Oda" in "Lord Oda Nobunaga": the finding was renamed by itself, "Lord Oda Nobunaga Nobunaga smiled",
+ * a fix that could never apply) — each read back by what stands either side of it, renamed as the page is. {find,
+ * replace}, or null: a name across its edge, or its words no longer in one place of the page — never kept as a fix
+ * that cannot apply */
+export function fixCarried(text, find, replace, swap) {
+  const t = String(text || '');
+  const spot = locate(t, find);
+  if (spot.why) return null;
+  const head = swap(t.slice(0, spot.start));
+  const tail = swap(t.slice(spot.end));
+  const between = (whole) => (whole.length >= head.length + tail.length && whole.startsWith(head) && whole.endsWith(tail) ? whole.slice(head.length, whole.length - tail.length) : null);
+  const page = swap(t);
+  const found = between(page);
+  if (!found || !found.trim()) return null;
+  const replaced = typeof replace === 'string' ? between(swap(t.slice(0, spot.start) + replace + t.slice(spot.end))) : replace;
+  if (replaced === null) return null;
+  const again = locate(page, found);
+  if (again.why || again.start !== head.length) return null;
+  return { find: found, replace: replaced };
+}
+/* a check's findings carried through a change of names, each where it stands (fixCarried), their why with it — or null
+ * when one cannot be carried: the page is checked again */
+export function findingsCarried(text, items, swap) {
+  const out = [];
+  for (const it of items || []) {
+    if (!it || typeof it !== 'object') { out.push(it); continue; }
+    const words = { ...(typeof it.why === 'string' ? { why: swap(it.why) } : {}), ...(typeof it.lift === 'string' ? { lift: swap(it.lift) } : {}), ...(typeof it.unheld === 'string' ? { unheld: swap(it.unheld) } : {}) };
+    if (typeof it.find !== 'string' || !it.find) { out.push({ ...clone(it), ...words }); continue; }
+    const c = fixCarried(text, it.find, it.replace, swap);
+    if (!c) return null;
+    out.push({ ...clone(it), find: c.find, ...(typeof it.replace === 'string' ? { replace: c.replace } : {}), ...words });
+  }
+  return out;
+}
 export function locate(text, find) {
   const f = String(find || '');
   if (!f.trim()) return { why: 'it named no words to change' };
@@ -827,11 +864,15 @@ function keptFollows(untouched, quiet, put, undo) {
       const list = once(facts.facts.map((f) => { const c = carriedCodex({ ...facts, facts: [f] }, text, quiet); return c && c.facts.length === 1 ? c.facts[0] : f; }));
       if (JSON.stringify(list) !== JSON.stringify(facts.facts)) keptRow(put, undo, at, 'codex', facts, { ...clone(facts), facts: list });
     }
+    /* (the checker's findings, each where it stands in the page — fixCarried: its words found are the page's own, which
+     * the change left as they are, and its new words renamed in their place; one that cannot be carried lets the
+     * checking go, and the page is checked again — never a fix kept that cannot apply: 2.12.41, round 7, F8) */
     const live = store.peek('chapter', x.chapterId);
     const e = live && live.checks && live.checks[x.passage.id] && live.checks[x.passage.id][v.id];
     if (e && e.sig === hashText(text) && Array.isArray(e.items)) {
-      const items = e.items.map((it) => ({ ...clone(it), ...(typeof it.find === 'string' ? { find: quiet(it.find) } : {}), ...(typeof it.replace === 'string' ? { replace: quiet(it.replace) } : {}) }));
-      if (JSON.stringify(items) !== JSON.stringify(e.items)) keptRow(put, undo, at, 'check', e, { ...clone(e), items });
+      const items = findingsCarried(text, e.items, quiet);
+      if (!items) keptRow(put, undo, at, 'check', e, null);
+      else if (JSON.stringify(items) !== JSON.stringify(e.items)) keptRow(put, undo, at, 'check', e, { ...clone(e), items });
     }
   }
 }
@@ -848,6 +889,20 @@ const keptRowStep = (at, field, from, to) => (ch) => {
   const print = hashText(String(v.text || ''));
   if (field === 'check') {
     const cur = ch.checks && ch.checks[at.passageId] && ch.checks[at.passageId][at.versionId];
+    /* (one let go — a finding the change could not carry: the page checked again — and put back by its Undo while no
+     * checking has come since) */
+    if (!to) {
+      if (!cur || JSON.stringify(cur) !== JSON.stringify(from)) return false;
+      delete ch.checks[at.passageId][at.versionId];
+      return;
+    }
+    if (!from) {
+      if (cur || print !== to.sig) return false;
+      ch.checks = ch.checks || {};
+      ch.checks[at.passageId] = ch.checks[at.passageId] || {};
+      ch.checks[at.passageId][at.versionId] = clone(to);
+      return;
+    }
     if (!cur || print !== to.sig || JSON.stringify(cur) !== JSON.stringify(from)) return false;
     ch.checks[at.passageId][at.versionId] = clone(to);
     return;
@@ -950,12 +1005,14 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
         v.continuity = JSON.parse(JSON.stringify(turns));
       }, { now: true });
     }
-    /* the checker's findings on it, their words changed with it */
+    /* the checker's findings on it, their words changed with it — each taken from the renamed page by where it stood
+     * (fixCarried, 2.12.41, round 7, F8: renamed by itself, a finding inside a longer new name could never apply); one
+     * that cannot be carried leaves the new words to be checked again */
     const live = store.peek('chapter', x.chapterId);
     const e = live && live.checks && live.checks[x.passage.id] && live.checks[x.passage.id][x.version.id];
     if (e && e.sig === hashText(was.text)) {
-      const items = (e.items || []).map((it) => ({ ...clone(it), ...(typeof it.find === 'string' ? { find: quiet(it.find) } : {}), ...(typeof it.replace === 'string' ? { replace: quiet(it.replace) } : {}) }));
-      put('chapter', x.chapterId, chapterSteps.setCheck(x.passage.id, made.versionId, { ...clone(e), sig: hashText(next), items }), { now: true });
+      const items = findingsCarried(was.text, e.items || [], quiet);
+      if (items) put('chapter', x.chapterId, chapterSteps.setCheck(x.passage.id, made.versionId, { ...clone(e), sig: hashText(next), items }), { now: true });
     }
   }
   for (const [chapterId, map] of Object.entries(seenNow)) put('novel', novelId, novelSteps.seen(chapterId, map), { now: true });
@@ -1012,8 +1069,10 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
   const { undo, counts } = names ? renameEverywhere(novelId, novel, items.map((x) => x.rule), put, why, items.map((x) => ({ from: x.from, to: x.to }))) : replaceEverywhere(novelId, novel, items, put, why);
   if (names && counts.some((n) => n > 0)) {
     undo.renamed = items.map((x) => ({ from: x.from, to: x.to }));
+    /* (marked, so its Undo is known as one — names.js renameSteps, 2.12.41, round 7) */
+    undo.renamedId = newId('rn');
     /* (counted on the book — work on its way judges by the count, never a clock; kept an hour, in the phone's time: 2.12.41) */
-    put('novel', novelId, novelSteps.noteRenames(undo.renamed, store.phoneNow()));
+    put('novel', novelId, novelSteps.noteRenames(undo.renamed, store.phoneNow(), { id: undo.renamedId }));
   }
   const missing = (i) => (names ? `“${items[i].from}” does not stand anywhere in the book` : 'those words stand nowhere in those chapters');
   if (!counts.some((n) => n > 0)) return bases.map((b, i) => ({ ...b, status: 'refused', said: missing(i) }));
@@ -1599,7 +1658,7 @@ export function undoChange(novelId, change) {
     }
     if (Object.keys(asideBack).length) store.change('novel', novelId, novelSteps.setAside(asideBack), { now: true });
     /* work on its way since the names changed is given them back as they were */
-    if ((u.renamed || []).length && back) store.change('novel', novelId, novelSteps.noteRenames(u.renamed.map((x) => ({ from: x.to, to: x.from })), store.phoneNow()), { now: true });
+    if ((u.renamed || []).length && back) store.change('novel', novelId, novelSteps.noteRenames(u.renamed.map((x) => ({ from: x.to, to: x.from })), store.phoneNow(), u.renamedId ? { undoes: u.renamedId } : {}), { now: true });
     for (const x of u.summaries || []) {
       const c = store.peek('chapter', x.chapterId);
       if (!c || JSON.stringify(c.summary || null) !== JSON.stringify(x.after)) continue;

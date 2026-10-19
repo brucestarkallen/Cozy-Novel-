@@ -28,13 +28,14 @@
 import * as store from '../store.js';
 import { connFor, connById, busy as writerBusy, recount, rewrite as writeAgain, rewriteSelection as writeSpanAgain } from './writer.js';
 import * as archivist from './archivist.js';
-import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, howOf, bornOf, chapterText, duelMatches, writtenOf, mixedHands, autoBaseOf, hasWords, chapterClosed } from './shape.js';
+import { picked, passageNumbers, chapterLabel, chapterNumber, chapterSteps, novelSteps, howOf, bornOf, chapterText, duelMatches, writtenOf, mixedHands, autoBaseOf, hasWords, chapterClosed, renameCount, renamesSince } from './shape.js';
+import { renameIn } from './names.js';
 import { changeInPlace } from './inplace.js';
 import { numberedText, shortOf, notesBehind, passagesAfter } from './context.js';
 import { bibItems, ridingItems } from './bibliography.js';
 import { superOn, superFrom, autoOf } from './auto.js';
 import { checkerFrame, checkRequest, wholeRequest, marksRequest, proofRequest, duelRequest, avoidList, avoidLine, lateFor, CHECK_KINDS, JUDGE_CHECKS, macroNames, withMacros, standingNotes, namedBook } from './prompts.js';
-import { locate, chapterNumber as chapterNum } from './changes.js';
+import { locate, fixCarried, chapterNumber as chapterNum } from './changes.js';
 import { findIn } from './search.js';
 import { stockIn, repeatsIn } from './stock.js';
 import { straysIn, markupAt, unmarked, speechFaults, changeSpan, uniqueAround, marksOnlyResult, speechMarks, pairWalk, spacingSlips } from './textshape.js';
@@ -957,6 +958,28 @@ function setAsideCheck(novelId, chapterId, a, why, conn) {
 
 /* one checking: these passages read (a passage longer than one request
  * carries, in parts); what it would change, kept */
+/* A FINDING ASKED BEFORE A NAME WAS CHANGED EVERYWHERE (2.12.41, round 7 — the review of round 5, its F1: laid as
+ * given, a fix asked before Emilia became Emmeline — "She smiled" → "Emilia smiled", on a page the name never stood in —
+ * wrote the old name back into the book): on a page the change left as it was, its new words and its why take every
+ * change of names made since its words were taken (`renamesAt`), each where it stands — changes.js fixCarried: a name
+ * already part of the one it became left as it is — and one that cannot be carried is not laid: its page is checked
+ * again (`a.renamedAway`). On a page the change reached, what it found is of the words before the change, kept with
+ * them as given (an Undo brings them back). */
+function findingNow(novelId, a, renamesAt, item) {
+  const since = renamesSince(store.peek('novel', novelId), renamesAt);
+  if (!since.length) return item;
+  const swap = (t) => renameIn(t, since);
+  if (swap(a.text) !== a.text) return item;
+  const c = fixCarried(a.text, item.find, item.replace, swap);
+  if (!c) { a.renamedAway = true; return null; }
+  return { ...item, find: c.find, replace: c.replace, ...(typeof item.why === 'string' ? { why: swap(item.why) } : {}), ...(typeof item.unheld === 'string' ? { unheld: swap(item.unheld) } : {}) };
+}
+/* (its other words — a grade's lift — the same way, on a page the change left as it was) */
+function wordsNow(novelId, a, renamesAt, t) {
+  const since = renamesSince(store.peek('novel', novelId), renamesAt);
+  if (!since.length || typeof t !== 'string' || renameIn(a.text, since) !== a.text) return t;
+  return renameIn(t, since);
+}
 async function checkBatch(novelId, conn, batch, limit, choice) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
@@ -987,6 +1010,8 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, text, sig: sigOf(v), model: v.model || '', cut: Boolean(v.cut), items: [], stock: stockIn(text, { not: ask }), strays: straysIn(text), repeats: repeatsIn(text, priorOf(p)), marks: marksOf(text, Boolean(v.cut)), ask, tries: ((entryFor(chapter, p) || {}).tries || 0) });
   }
   const keys = new Set(asked.keys());
+  /* (how many changes of names the book had as these words were taken: findingNow) */
+  const renamesAt = renameCount(novel);
   const system = [checkerFrame(house, view), avoidLine(avoid)].filter(Boolean).join('\n\n');
   const one = asked.size === 1 ? [...asked.entries()][0] : null;
   const numbered = one && countWords(one[1].text) > limit
@@ -1122,7 +1147,8 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     /* two fixes over the same words: the first stands */
     if (a.items.some((x) => overlaps(x, spot)) || wasLeft(a, find, e.replace)) continue;
     const kind = CHECK_KINDS.includes(String(e.kind || '').toLowerCase()) ? String(e.kind).toLowerCase() : 'humanize';
-    a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), ...saysOf(novelId, chapter.id, a.pid, kind, e.says, a.text.slice(0, spot.start)), start: spot.start, end: spot.end });
+    const item = findingNow(novelId, a, renamesAt, { id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), ...saysOf(novelId, chapter.id, a.pid, kind, e.says, a.text.slice(0, spot.start)), start: spot.start, end: spot.end });
+    if (item) a.items.push(item);
   }
   if (!gradeOnly) for (const a of asked.values()) foundHere(a, avoid, leftFor.get(a.pid), { cut: a.cut });
   const graded = new Map();
@@ -1151,11 +1177,13 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     return;
   }
   for (const a of asked.values()) {
+    /* (a finding a change of names made meanwhile could not carry: not laid — checked again, findingNow) */
+    if (a.renamedAway) continue;
     a.items.sort((x, y) => x.start - y.start);
     const items = a.items.map(({ start, end, ...rest }) => rest);
     const grade = graded.get(a.pid) || null;
     /* under his mark: a suggestion of its own, to write it again toward it — or leave it */
-    if (grade && judge && grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: '', lift: grade.lift || '', target: judge.target, grade });
+    if (grade && judge && grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: '', lift: wordsNow(novelId, a, renamesAt, grade.lift || ''), target: judge.target, grade });
     /* where the passage stands now (moved while it was checked: there; taken out: nowhere) */
     const home = homeOf(novelId, chapter.id, a.pid);
     if (!home) continue;
@@ -1491,6 +1519,7 @@ async function duel(novelId, conn, d, choice) {
   const vy = p && (p.versions || []).find((v) => v.id === d.y);
   if (!novel || !vx || !vy) return null;
   const snapshot = { pid: p.id, x: vx.id, y: vy.id, xSig: writtenSig(vx), ySig: writtenSig(vy), xModel: vx.model, yModel: vy.model };
+  const renamesAt = renameCount(novel);
   const currentPair = () => {
     const n = store.peek('novel', novelId), c = store.peek('chapter', chapter.id);
     const live = c && (c.passages || []).find((x) => x.id === p.id);
@@ -1528,7 +1557,10 @@ async function duel(novelId, conn, d, choice) {
   const winner = first === second ? first : 'tie';
   await archivist.mustHold('checker', novelId);
   if (!currentPair()) return { changed: true };
-  const row = { ...snapshot, winner, why: clean(winner === 'tie' ? '' : first === winner ? one.obj.why : two.obj.why, 300), at: Date.now() };
+  /* (its why with the changes of names made while it was read — the two takes still read as they did: currentPair) */
+  const since = renamesSince(store.peek('novel', novelId), renamesAt);
+  const why = clean(winner === 'tie' ? '' : first === winner ? one.obj.why : two.obj.why, 300);
+  const row = { ...snapshot, winner, why: since.length ? renameIn(why, since) : why, at: Date.now() };
   store.change('chapter', chapter.id, chapterSteps.setDuel(d.key, row), { checkpoint: true });
   await store.flush('chapter', chapter.id);
   tell(novelId);
@@ -1649,6 +1681,7 @@ async function proofRead(novelId, conn, batch, limit, choice) {
     asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, sig: sigOf(v), text: String(v.text || ''), items: [] });
   }
   const keys = new Set(asked.keys());
+  const renamesAt = renameCount(novel);
   const one = asked.size === 1 ? [...asked.entries()][0] : null;
   const numbered = one && countWords(one[1].text) > limit
     ? archivist.partsOf(one[1].text, limit).map((part) => `[${one[0]}] ${part}`)
@@ -1663,6 +1696,7 @@ async function proofRead(novelId, conn, batch, limit, choice) {
   const proofs = was ? was.proofs.slice() : [];
   const settleAll = (fields) => {
     for (const a of asked.values()) {
+      if (a.renamedAway) continue;
       const home = homeOf(novelId, chapter.id, a.pid);
       const c = home && store.peek('chapter', home);
       const p = c && (c.passages || []).find((x) => x.id === a.pid);
@@ -1718,7 +1752,8 @@ async function proofRead(novelId, conn, batch, limit, choice) {
     const find = a.text.slice(spot.start, spot.end);
     if (noFix(find, e.replace) || !slipSize(find, e.replace)) continue;
     if (a.items.some((x) => overlaps(x, spot))) continue;
-    a.items.push({ id: newId('sg'), kind: 'grammar', find, replace: e.replace, why: clean(e.why) || 'a slip of the hand', proof: true, start: spot.start, end: spot.end });
+    const item = findingNow(novelId, a, renamesAt, { id: newId('sg'), kind: 'grammar', find, replace: e.replace, why: clean(e.why) || 'a slip of the hand', proof: true, start: spot.start, end: spot.end });
+    if (item) a.items.push(item);
   }
   /* laid beside what was found in each passage: inside a fix found already over the same words, when its words still
    * hold the slip; never over one he left */
@@ -2033,6 +2068,7 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
   const asked = new Map();
   for (const p of ps) { const v = picked(p); asked.set(`${ci}.${nums.get(p.id)}`, { pid: p.id, vid: v.id, sig: sigOf(v), text: String(v.text || ''), ask: askWords(v), items: [] }); }
   const keys = new Set(asked.keys());
+  const renamesAt = renameCount(novel);
   const byPid = new Map([...asked.values()].map((a) => [a.pid, a]));
   /* the parts: as many passages as one ask carries — a longer passage alone, in pieces */
   const limit = Math.max(150, Math.min(WHOLE_WORDS, Math.floor((archivist.readingRoom(conn, fixedOf(house, novel, conn)) * 0.5) / 1.4)));
@@ -2136,13 +2172,16 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
       if (noFix(find, e.replace)) continue;
       if (a.items.some((x) => overlaps(x, spot))) continue;
       const kind = String(e.kind || '').toLowerCase() === 'seam' ? 'seam' : 'continuity';
-      a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), whole: true, ...saysOf(novelId, chapter.id, a.pid, kind, e.says, a.text.slice(0, spot.start)), start: spot.start, end: spot.end });
+      const item = findingNow(novelId, a, renamesAt, { id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), whole: true, ...saysOf(novelId, chapter.id, a.pid, kind, e.says, a.text.slice(0, spot.start)), start: spot.start, end: spot.end });
+      if (item) a.items.push(item);
     }
     merge(r.refs);
     await store.flush('chapter', chapter.id);
     if (k + 1 < runs.length) wholePart.set(key, { pid: runs[k + 1].first.id, piece: runs[k + 1].piece === undefined ? -1 : runs[k + 1].piece });
   }
-  wholeDone(chapter.id, sig, words);
+  /* (a finding a change of names made meanwhile could not carry: the chapter is read whole again, never marked read
+   * without it — findingNow) */
+  if (![...asked.values()].some((a) => a.renamedAway)) wholeDone(chapter.id, sig, words);
   wholePart.delete(key);
   wholeMiss.delete(key);
   wholeWait.delete(key);

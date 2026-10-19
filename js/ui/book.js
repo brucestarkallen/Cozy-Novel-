@@ -69,7 +69,8 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder, 
   const say = h('p.say');
   const again = h('button.btn.quiet.small', { title: 'The helper writes this afresh from the book; what stands here is used until its new words land.', onclick: () => {
     if (!connFor(store.peek('house', 'house') || {}, 'helper')) { toast('No helper is chosen, so nothing can be written from the book — choose one in Settings → Connections. What stands here stays.', 6000); return; }
-    archivist.keepAgain(novelId, key);
+    /* (by his hand: asked now, afresh — a wait after a stall is his to overrule, 2.12.41, round 7) */
+    archivist.keepAgain(novelId, key, { byHand: true });
     draw();
     toast('The helper writes it again from the book — what stands is used until then.');
   } }, 'Write it from the book again');
@@ -103,11 +104,18 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder, 
     const k = (n.kept && n.kept[key]) || null;
     kept.value = (k && k.text) || '';
     const helper = connFor(store.peek('house', 'house') || {}, 'helper');
+    /* (its writing waiting its time after a stall: said, with when — and one its model would not write, said so, with Write
+     * it from the book again: 2.12.41, round 7 — it said it was being written, or that it is written once there are words) */
+    const wait = helper ? archivist.keepWait(novelId, key) : null;
+    const slow = wait && wait.when ? `the helper’s model was too slow to answer for it, so the helper asks again ${wait.when}` : '';
+    const tried = Boolean(k && !String(k.text || '').trim() && !k.again && k.by !== 'you');
     if (!helper) say.textContent = 'No helper is chosen, so nothing is kept here yet. Choose one in Settings → Connections.';
-    else if (k && (k.again || k.by === 'you')) say.textContent = k.text ? 'Being written again from the book — what stands here is used until the new words land.' : 'Being written again from the book.';
+    else if (k && (k.again || k.by === 'you')) say.textContent = slow ? `Being written again from the book — ${slow}.${k.text ? ' What stands here is used until the new words land.' : ''}` : k.text ? 'Being written again from the book — what stands here is used until the new words land.' : 'Being written again from the book.';
     else if (k && k.text) say.textContent = `The helper’s own account of the book — only to read: it keeps it current from the pages (last ${timeAgo(k.at)}). To change what the book is about, change your words above.`;
+    else if (tried) say.textContent = 'The helper’s model would not write this from the book — it is written as the book is read on, or when you press Write it from the book again.';
+    else if (slow) say.textContent = `The helper writes this from the book — ${slow}.`;
     else say.textContent = 'The helper writes this from the book once there are words in it, and keeps it current from then on.';
-    again.hidden = !(k && k.text) || Boolean(k && (k.again || k.by === 'you'));
+    again.hidden = !((k && k.text) || tried) || Boolean(k && (k.again || k.by === 'you'));
   }
   draw();
   return { el: wrap, draw };
@@ -271,6 +279,10 @@ export function openBook(novelId, { onGone, onClose } = {}) {
     h('p.say.book-wordcount', `${plural(n.meta.words || 0, 'word')} · ${plural((n.order || []).length, 'chapter')}`));
   /* what the helper keeps arrives while the sheet is open */
   off = store.subscribe('novel', novelId, () => { about.draw(); reads.draw(); drawNarration(); drawSound(); drawChar(); drawGoal(); });
+  /* (what waits its time is said with when: said again as it passes, while the sheet is open — 2.12.41, round 7, F11) */
+  const tick = setInterval(() => { if (store.peek('novel', novelId)) { about.draw(); reads.draw(); } }, 30000);
+  const unsub = off;
+  off = () => { clearInterval(tick); unsub(); };
 
   /* what the first Cozy Novel held that has no place of its own here, word for word */
   const kept = (n.migrated && Array.isArray(n.migrated.kept)) ? n.migrated.kept : [];

@@ -11131,11 +11131,19 @@ await test('a chapter’s summary whose ask stalls on its words is asked once mo
     store.change('chapter', b.ids[0], (c) => { for (const x of c.passages) for (const v of x.versions) v.at = Date.now() - 3600000; }, { now: true });
     for (let k = 0; k < 2; k++) {
       archivist.forTests().failures.delete(b.novelId);
+      /* (2.12.41, round 7 — changed with a comment why: a stall now ends summing up for the run, never the run, and its
+       * next try waits as long as it was waited, kept with the book — the run booked for it let go, this run is made once
+       * that time has come) */
+      await quietAll();
+      const r = ((b.novel().memory || {}).tries || {})['summary:' + b.ids[0]];
+      if (r && Number(r.next) > store.phoneNow()) await sleep(Number(r.next) - store.phoneNow() + 1100);
       await reset();
       await script([{ hang_after: '{"summary": "Mara' }]);
       await archivist.run(b.novelId);
     }
     assert.ok(Object.keys(b.novel().memory.aside || {}).some((k) => k.startsWith('summary:')), JSON.stringify(b.novel().memory.aside || {}));
+    /* passed by, it reads "not summed up" as it reads now — never asked again until its words change */
+    assert.deepEqual([archivist.summaryWait(b.novelId, b.ids[0]), b.ch().summary || null], [{ passed: true }, null]);
     await putAway(b);
   } finally {
     delete globalThis.__cozyLeashQuietMs;
@@ -16975,7 +16983,7 @@ await test('a page read for its turns or its facts alone keeps its tries on its 
  * left with the words before a name changed everywhere, a reading laid only on the take on show — and a passage moved
  * while its change was read) */
 const isProbeAsk = (x) => lastAsk(x).includes('Answer with {"ok": true} and nothing else.');
-await test('a page its model is only slow on is read once its leash, learned as the app keeps it, is long enough — a stall ends that reading for the run, never counted and never probed, the notes’ check read all the same; one that always stalls is passed by after two stalls on the longest leash', async () => {
+await test('a page its model is only slow on is read once its leash, learned as the app keeps it, is long enough — a stall ends that reading for the run, never counted and never probed, the notes’ check read all the same but while its silent model is waited out; one that always stalls is passed by after two stalls on the longest leash', async () => {
   /* the leash as the app keeps it: what a silence teaches kept on the connection in the house (app.js onLearn) — here
    * from 300 ms, twice as long after each silence, to 1,200 at most (as three minutes, six, twelve, a quarter of an hour) */
   const keep = call.onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
@@ -17015,7 +17023,23 @@ await test('a page its model is only slow on is read once its leash, learned as 
         const tag = `${what}, silent ${silent} s: ${JSON.stringify(runs)}`;
         assert.deepEqual(runs.map((x) => x[0]), [300, 600, 1200, 1200, 1200], `${tag} — the leash grows as the app keeps it`);
         assert.ok(runs.every((x) => x[2] === 0), `${tag} — no probe asked for a stall`);
-        assert.ok(runs.slice(0, silent < 1 ? 2 : 4).every((x) => x[3] >= 1), `${tag} — the notes’ check read in every run it stalled`);
+        /* (2.12.41, round 7 — changed with a comment why, the review of round 5, its F4: on the longest leash nothing more is
+         * asked of a model that just kept silent for as long as it is ever waited, until as long has passed — the notes'
+         * check of those runs, and of the run made at once after them, is asked once that wait is over) */
+        assert.ok(runs.slice(0, 2).every((x) => x[3] >= 1), `${tag} — the notes’ check read in every run it stalled on a shorter leash`);
+        if (silent >= 1) {
+          assert.ok(runs.slice(2).every((x) => x[3] === 0), `${tag} — on the longest leash, nothing more asked of that model until as long has passed`);
+          const until = Number(((b.novel().memory || {}).silent || {}).until) || 0;
+          if (until > store.phoneNow()) await sleep(until - store.phoneNow() + 1100);
+          await reset();
+          await script([{ text: JSON.stringify({ clear: true, verdict: 'These hold.' }) }]);
+          store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
+          archivist.forTests().failures.delete(b.novelId);
+          await archivist.run(b.novelId);
+          await quietAll();
+          const r = await everyRequest();
+          assert.deepEqual([r.filter(isAuditAsk).length, r.filter(what === 'turns' ? isTurnsAsk : isBibAsk).length], [1, 0], `${tag} — its wait over: the notes’ check asked, the page passed by asked no more`);
+        }
         const v = picked(b.ch().passages[0]);
         if (silent < 1) {
           assert.deepEqual(runs.map((x) => [x[1], x[4]]), [[1, 0], [1, 0], [1, 0], [0, 0], [0, 0]], `${tag} — read on the third, never counted`);
@@ -17323,7 +17347,7 @@ await test('a change whose reading cannot vouch for the rest of its passage — 
 
 /* (2.12.40, the second review of the Timeline's fixes: the phone's relay let a silent model go before the app's own leash
  * could; a reading kept whole the Timeline would not count read; who did what to whom; a try counted on the take on show) */
-await test('a model silent past every leash is let go by the app, never by the phone’s relay first — its leash grows to the longest, the stall is counted there and the page passed by after two, the notes’ check read every run; his own page waits past the relay’s own wait too', async () => {
+await test('a model silent past every leash is let go by the app, never by the phone’s relay first — its leash grows to the longest, the stall is counted there and the page passed by after two, the notes’ check read every run but while its silent model is waited out; his own page waits past the relay’s own wait too', async () => {
   const http = await import('node:http');
   /* a second phone whose relay waits on a silent provider a second when it is told nothing — its ten minutes, scaled as
    * the leashes are here (a minute to a tenth of a second) — and a model silent for the Timeline's reading */
@@ -17396,7 +17420,17 @@ await test('a model silent past every leash is let go by the app, never by the p
     const tag = JSON.stringify(runs);
     assert.deepEqual(runs.map((x) => x[0]), [300, 600, 1200, 1500, 1500, 1500], `${tag} — the leash grows past the relay's own wait`);
     assert.deepEqual(runs.map((x) => [x[1], x[4]]), [[1, 0], [1, 0], [1, 0], [1, 1], [1, 2], [0, 0]], `${tag} — counted only on the longest leash, passed by after two`);
-    assert.ok(runs.slice(0, 5).every((x) => x[2] >= 1), `${tag} — the notes' check read in every run it stalled`);
+    /* (2.12.41, round 7 — changed with a comment why, the review of round 5, its F4: on the longest leash nothing more is
+     * asked of a model that just kept silent for as long as it is ever waited, until as long has passed — the notes'
+     * check of those runs, and of the run made at once after them, is asked once that wait is over) */
+    assert.deepEqual(runs.map((x) => x[2] >= 1), [true, true, true, false, false, false], `${tag} — the notes' check read in every run it stalled on a shorter leash; on the longest, once its wait is over`);
+    const until = Number(((b.novel().memory || {}).silent || {}).until) || 0;
+    if (until > store.phoneNow()) await sleep(until - store.phoneNow() + 1100);
+    asked.length = 0;
+    store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
+    await archivist.run(b.novelId);
+    await quietAll();
+    assert.deepEqual([asked.filter((k) => k === 'audit').length, asked.filter((k) => k === 'turns').length], [1, 0], 'its wait over: the notes’ check asked, the page passed by asked no more');
     assert.ok(runs.every((x) => x[3] === 0), `${tag} — no probe asked for a stall`);
     assert.deepEqual([archivist.timelineDue(b.novelId).length, coverOf(b).passed], [0, 1]);
     await putAway(b);
@@ -17445,28 +17479,33 @@ await test('a reading kept whole is read for the Timeline whatever its cards are
   await putAway(b);
 });
 
-await test('who does what to whom is part of a turn — “Emilia betrays Jovan.” and “Jovan betrays Emilia.” on one sentence are two, and a reading again giving one side keeps the other; a turn saying nothing but its card’s name is never another', async () => {
+await test('a turn told from either side by two readings is one turn, the newer reading’s — two of one reading are two, however alike; a turn saying nothing but its card’s name is never another', async () => {
   const notes = { people: [{ id: 'pe-e', name: 'Emilia Vermaine', aka: ['Emilia'] }, { id: 'pe-j', name: 'Jovan Wessex', aka: ['Jovan'] }], threads: [] };
   const text = 'At the docks Emilia and Jovan sold each other to the Order. Jovan was hit, and Jovan was cut. They fell in love that night. Rain fell.';
   const q = 'Emilia and Jovan sold each other to the Order';
   const ej = turnRow('Emilia betrays Jovan.', q);
   const je = turnRow('Jovan betrays Emilia.', q);
   const of = (rows) => tlmod.continuityOf(rows, notes, { text });
-  assert.deepEqual(tlmod.mergeContinuity(of([ej]), of([je]), text).events.map((e) => e.text), [ej.text, je.text], 'each side read by a reading of its own: both');
+  /* (2.12.41, round 7 — changed with a comment why, the decision after the review of round 5: round 4 kept two readings'
+   * tellings of one deed from either side apart by the name that stood first, round 5 by a telling that plainly named
+   * both (doerOf); each made the Timeline show something false — a deed both share, "meets", "marries", "argues with",
+   * told from either side was two rows, and "Jovan falls to Emilia's betrayal." read the wrong way round. Round 2's rule
+   * is back: the same cards and the same thing said are one turn whatever the side — the duplicate is the visible fault;
+   * opposite deeds read by two readings fold into the newer one's, the rarer fault) */
+  assert.deepEqual(tlmod.mergeContinuity(of([ej]), of([je]), text).events.map((e) => e.text), [je.text], 'each side read by a reading of its own: one, the newer reading’s');
+  /* two of one reading are two (mergeContinuity oneReading): opposite deeds told in one reading stay */
+  assert.deepEqual(of([ej, je]).events.map((e) => e.text), [ej.text, je.text], 'one reading: both');
+  assert.deepEqual(tlmod.mergeContinuity(of([ej]), of([je]), text, { oneReading: true }).events.map((e) => e.text), [ej.text, je.text], 'the rows of one reading: both');
   assert.deepEqual(tlmod.mergeContinuity(of([ej]), of([turnRow('Emilia betrays Jovan to the Order.', q)]), text).events.map((e) => e.text), ['Emilia betrays Jovan to the Order.'], 'the same side worded again: once');
-  /* (who does it told by one name and a pronoun: nothing plain, so the rule before decides — the same cards and the same
-   * thing said: one, the newer reading's. Changed in 2.12.41, round 5, with a comment why: round 4 kept a turn that
-   * named fewer than two never the same as another, so these two were two — and so was the same turn told by a pronoun,
-   * a possessive or the passive, shown twice (the review of round 4, its F3: six such pairs). The side is decided only
-   * where both tellings plainly name both, "A … B"; a duplicate is the worse fault, and a telling with one name cannot
-   * say whose deed it is — "Jovan falls to her betrayal." opens with the one it is done to) */
+  /* (told by one name and a pronoun: the same cards and the same thing said — one, the newer reading's) */
   assert.deepEqual(tlmod.mergeContinuity(of([turnRow('Emilia betrays him.', q)]), of([turnRow('Jovan betrays her.', q)]), text).events.map((e) => e.text), ['Jovan betrays her.'], 'one side each, a name each: nothing plain — one, as before round 4');
   assert.deepEqual(tlmod.mergeContinuity(of([turnRow('She betrays Jovan.', q)]), of([turnRow('Jovan betrays her.', q)]), text).events.map((e) => e.text), ['Jovan betrays her.'], 'a pronoun first, and a name with a pronoun after: one');
   const hit = { kind: 'character', cards: [{ kind: 'people', name: 'Jovan Wessex' }], text: 'Jovan is hit.', evidence: ['Jovan was hit, and Jovan was cut'], stance: 'fact' };
   assert.deepEqual(tlmod.mergeContinuity(of([hit]), of([{ ...hit, text: 'Jovan is cut.' }]), text).events.map((e) => e.text), ['Jovan is hit.', 'Jovan is cut.'], 'saying nothing but his name: two');
   /* the same turn word for word, read again by another reading: once — however little it says, whoever it names */
   for (const r of [hit, turnRow('They fall in love.', 'They fell in love that night')]) assert.deepEqual(tlmod.mergeContinuity(of([r]), of([r]), text).events.map((e) => e.text), [r.text], `${r.text} read twice: once`);
-  /* through the helper: one reading kept both sides, not whole; read again, the new reading naming one side */
+  /* through the helper: one reading kept both sides, not whole; read again, the new reading naming one side — the other
+   * folds into it (round 2's rule, as above) */
   await setHouse({ context: 64000 });
   const b = await makeBook([[text, 'The lamp guttered.']], { manual: true });
   peopleIn(b);
@@ -17480,7 +17519,7 @@ await test('who does what to whom is part of a turn — “Emilia betrays Jovan.
   await reset();
   await script([{ turns: true, text: JSON.stringify({ timeline: [{ source: 'Chapter One, passage 1', events: [ej] }] }) }]);
   await archivist.run(b.novelId);
-  assert.deepEqual([turnsHere(b), tlmod.continuityDone(picked(b.ch().passages[0]))], [[ej.text, je.text].sort(), true]);
+  assert.deepEqual([turnsHere(b), tlmod.continuityDone(picked(b.ch().passages[0]))], [[ej.text], true]);
   await putAway(b);
 });
 
@@ -17735,10 +17774,12 @@ await test('a page its model was too slow to answer for is asked again by itself
         const t1 = (picked(b.ch().passages[0]).tries || {})[key] || {};
         const booked = bookedIn(b.novelId);
         assert.deepEqual([await asks(), t1.n, Number(t1.next) > store.phoneNow(), booked >= 1500 && booked <= 3500], [1, 1, true, true], `${tag}: counted once, asked again as long after — the run booked for it (${booked} ms)`);
-        /* what waits, and when: never "up to date" */
-        assert.deepEqual(archivist.lightOf(b.novelId), { state: 'waiting', words: what === 'turns'
+        /* what waits, and when: never "up to date" — its model kept silent for as long as it is ever waited, so nothing
+         * more is asked of it until as long has passed, said first (2.12.41, round 7 — changed with a comment why: the
+         * review of round 5, its F4) */
+        assert.deepEqual(archivist.lightOf(b.novelId), { state: 'waiting', words: 'The helper’s model sent nothing for a minute — the helper asks it again in a moment, and nothing more until then. ' + (what === 'turns'
           ? 'The helper reads 1 passage for the Timeline again in a moment — its model was too slow to answer for it.'
-          : 'The helper reads 1 page for the bibliography again in a moment — its model was too slow to answer for it.' }, tag);
+          : 'The helper reads 1 page for the bibliography again in a moment — its model was too slow to answer for it.') }, tag);
         if (what === 'bib') assert.equal(archivist.bibOwedLine(b.novelId), '1 page is not read for the bibliography yet — the helper’s model was too slow to answer for it, so the helper reads it again by itself in a moment.', tag);
         else assert.equal(archivist.readsByItself(coverOf(b).owed, archivist.readAgainLater(b.novelId, 'turns', coverOf(b).owedOf)), 'the helper’s model was too slow to answer for it, so the helper reads it again by itself in a moment', tag);
         /* a run meanwhile — another page's, say — asks it nothing: never at once of a model that just kept silent so long */
@@ -17866,6 +17907,41 @@ await test('pages their model will not read together are asked a page at a time 
   await setHouse();
 });
 
+/* (2.12.41, round 7 — the review of round 5, its F10, MUT-B: a page at a time was kept while one waits its time after a
+ * stall — `if (!again && !readAgainLater(…))` — but no test failed with that let go: two waiting were asked together
+ * again once their waits were over, though their model had refused the pages together) */
+await test('pages their model will not read together are still asked a page at a time once those too slow to answer for have waited their time — the Timeline’s and the bibliography’s — never asked together again', async () => {
+  for (const what of ['turns', 'bib']) {
+    await setHouse({ context: 64000, learned: null });
+    const b = await makeBook([['FIRST PAGE: ' + EMILIA, 'SECOND PAGE: Rain fell on the river.', 'THIRD PAGE: The ferry came late.', 'FOURTH PAGE: The bell rang twice.']], { manual: true });
+    peopleIn(b);
+    markAllSeen(b, what === 'turns' ? { turns: false } : { facts: false });
+    if (what === 'bib') store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+    const key = what === 'turns' ? 'turns' : 'facts';
+    const isAsk = what === 'turns' ? isTurnsAsk : isBibAsk;
+    /* the first two tried once on a model too slow to answer for them, each waiting four seconds — as a backfill keeps such
+     * a try (tryOnce) */
+    const wait = store.phoneNow() + 4000;
+    store.change('chapter', b.ids[0], (c) => { for (const p of c.passages.slice(0, 2)) { const v = picked(p); v.tries = { [key]: { fp: util.hashText(v.text), n: 1, next: wait } }; } }, { now: true });
+    const pages = (m) => ['FIRST', 'SECOND', 'THIRD', 'FOURTH'].filter((x) => m.includes(`${x} PAGE`)).map((x) => x.toLowerCase());
+    const asked = async () => (await everyRequest()).filter(isAsk).map((x) => pages(lastAsk(x)));
+    const run = async () => { await quietAll(); archivist.forTests().failures.delete(b.novelId); await archivist.run(b.novelId); await quietAll(); };
+    await reset();
+    /* the other two together refused as these words (its model answers a harmless ask); every other ask read as asked */
+    await script([{ [what]: true, status: 403, message: 'content flagged by moderation' }]);
+    await run();
+    await run();
+    const tries = () => b.ch().passages.map((p) => ((picked(p).tries || {})[key] || {}).n || 0);
+    assert.deepEqual([await asked(), tries()], [[['third', 'fourth'], ['third'], ['fourth']], [1, 1, 0, 0]], `${what}: the two together once, refused; then each alone, read — the first two not asked before their time`);
+    /* their waits over: asked again a page at a time, never the two together */
+    if (wait > store.phoneNow()) await sleep(wait - store.phoneNow() + 1100);
+    await run();
+    assert.deepEqual([(await asked()).slice(3), tries(), (what === 'turns' ? archivist.timelineDue(b.novelId) : archivist.bibDue(b.novelId)).length], [[['first'], ['second']], [0, 0, 0, 0], 0], `${what}: a page at a time once their waits are over`);
+    await putAway(b);
+  }
+  await setHouse();
+});
+
 await test('a check of the notes owed next — the next group of a round — is said so by the light, never that the notes are up to date, and comes by itself', async () => {
   const b = await makeBook([['Mara kept the light. Tom mended the nets.']], { manual: true });
   markAllSeen(b);
@@ -17931,7 +18007,7 @@ async function silentIsleModel(port) {
   api.close = async () => { server.closeAllConnections(); await new Promise((r) => server.close(() => r())); };
   return api;
 }
-await test('a passage its model stays silent on past every leash is set aside after two stalls on the longest leash alone — every run on the way still reads the other pages, sums up the chapters and checks the notes; its wait said, booked and kept on its take; nothing asked in a loop; set aside, it is said wherever its notes, turns and facts are counted, and his change to its words has it read again', async () => {
+await test('a passage its model stays silent on past every leash is set aside after two stalls on the longest leash alone — a run whose stall is on a shorter leash still reads the other pages, sums up the chapters and checks the notes, and on the longest nothing more is asked of that model until as long has passed; its wait said, booked and kept on its take; nothing asked in a loop; set aside, it is said wherever its notes, turns and facts are counted, and his change to its words has it read again', async () => {
   /* the leash as the app keeps it (app.js onLearn), scaled: 400 ms, then its longest, 800 — three minutes, then a quarter
    * of an hour */
   const keep = call.onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
@@ -17967,33 +18043,47 @@ await test('a passage its model stays silent on past every leash is set aside af
     const booked = bookedIn(b.novelId);
     assert.ok(booked >= 1000 && booked <= 2600, `the run booked for its wait: ${booked}`);
     await quietAll();
-    /* 2: once its wait is over — another page read first; the Silent Isle silent on the longest leash: counted */
+    /* 2: once its wait is over — another page read first; the Silent Isle silent on the longest leash: counted — and
+     * nothing more asked of that model until as long has passed, said so (2.12.41, round 7 — changed with a comment why,
+     * the review of round 5, its F4: the summary, its check and the notes' check were asked of it at once, seconds after
+     * it kept silent for as long as it is ever waited) */
     await itsTime();
     another(0, 'Mara kept the light at the Point all night.');
     from = model.asked.length;
     await archivist.run(b.novelId);
     k = kinds(from);
-    assert.deepEqual(tally(k), [1, 1, 1, 1, 1, 0], `run 2: ${k}`);
+    assert.deepEqual(tally(k), [1, 1, 0, 0, 0, 0], `run 2: ${k}`);
     assert.equal(tryOf().n, 1, 'counted on its longest leash');
+    assert.ok(archivist.lightOf(b.novelId).words.startsWith('The helper’s model sent nothing for a minute — the helper asks it again in a moment, and nothing more until then.'), archivist.lightOf(b.novelId).words);
     await quietAll();
     /* (a reload: what the page's memory held is gone — the count is on its take) */
     archivist.forTests().stuck.clear();
-    /* 3: at once, its wait not over — never asked; another page read, summed up and the notes checked */
+    /* 3: at once — nothing asked of that model at all until as long has passed (round 7: through round 6 the other page,
+     * the summary and the notes' check were read meanwhile) */
     another(1, 'Mara trimmed the wick at dusk and slept.');
     from = model.asked.length;
     await archivist.run(b.novelId);
     k = kinds(from);
-    assert.deepEqual(tally(k), [1, 0, 1, 1, 1, 0], `run 3: ${k}`);
+    assert.deepEqual(tally(k), [0, 0, 0, 0, 0, 0], `run 3: ${k}`);
     await quietAll();
-    /* 4: its wait over, silent again on the longest leash — set aside, said, with Read it again under Cards */
+    /* 4: its wait over — the other pages read first, then silent again on the longest leash: set aside, said, with Read it
+     * again under Cards; nothing more asked of that model in the run */
     await itsTime();
     another(0, 'Mara kept the light at the Point until dawn.');
     from = model.asked.length;
     await archivist.run(b.novelId);
     k = kinds(from);
-    assert.deepEqual(tally(k), [1, 1, 1, 1, 1, 0], `run 4: ${k}`);
-    assert.deepEqual([archivist.asideNow(b.novel()).map((x) => x.label), tryOf(), archivist.lightOf(b.novelId).words],
-      [['Chapter Two, passage 2'], null, 'The notes are up to date — but for one part its model would not read (in the notes, with Read it again).']);
+    assert.deepEqual(tally(k), [1, 1, 0, 0, 0, 0], `run 4: ${k}`);
+    assert.deepEqual([archivist.asideNow(b.novel()).map((x) => x.label), tryOf()], [['Chapter Two, passage 2'], null]);
+    await quietAll();
+    /* 5: once as long as it was waited has passed — the summary, its check and the notes' check owed meanwhile, each once */
+    const silentUntil = Number(((b.novel().memory || {}).silent || {}).until) || 0;
+    if (silentUntil > store.phoneNow()) await sleep(silentUntil - store.phoneNow() + 1100);
+    from = model.asked.length;
+    await archivist.run(b.novelId);
+    k = kinds(from);
+    assert.deepEqual(tally(k), [0, 0, 1, 1, 1, 0], `run 5: ${k}`);
+    assert.equal(archivist.lightOf(b.novelId).words, 'The notes are up to date — but for one part its model would not read (in the notes, with Read it again).');
     /* nothing more asked, by itself or in a loop: its words asked three times in all */
     from = model.asked.length;
     await sleep(3000);
@@ -18082,6 +18172,11 @@ await test('the whole book read again is done only once its every page is read o
     }
     /* waited out, counted, set aside — read again whole all the while, and done once it is set aside */
     assert.deepEqual(states, [[0, true, 0], [1, true, 0], [null, false, 1]], JSON.stringify(states));
+    /* (2.12.41, round 7 — changed with a comment why, the review of round 5, its F4: its model kept silent for as long as
+     * it is ever waited, so the light first says nothing more is asked of it until as long has passed) */
+    const until = Number(((b.novel().memory || {}).silent || {}).until) || 0;
+    assert.ok(until > store.phoneNow() && archivist.lightOf(b.novelId).words.startsWith('The helper’s model sent nothing for'), archivist.lightOf(b.novelId).words);
+    await sleep(until - store.phoneNow() + 200);
     assert.deepEqual([model.asked.filter((x) => x.silent).length, archivist.lightOf(b.novelId).words], [3, 'The notes are up to date — but for one part its model would not read (in the notes, with Read it again).']);
     await putAway(b);
   } finally {
@@ -18091,6 +18186,420 @@ await test('the whole book read again is done only once its every page is read o
     await model.close();
     await setHouse();
   }
+});
+
+/* (2.12.41, round 7 — every other stage that asks the helper, let go on its leash: a stretch, a scene's stretch, a
+ * chapter's summary, its names and figures, a summary's check, What it's about and the notes' check were thrown as a
+ * passing fault on a shorter leash, never counted, and each throw ended the run before the backfills and the notes'
+ * check — one its model never answered held back the book's upkeep for good; and what they counted lived in the page's
+ * memory, let go with every reload) */
+/* a model silent on the asks of the kinds in `silent` — not a word, until the line is let go — and answering every other
+ * ask as one that does as it is asked: each ask kept by its kind, with whether it stayed silent on it */
+async function stageModel(port, silent = []) {
+  const http = await import('node:http');
+  const asked = [];
+  /* (`only`: silent only on an ask holding these words — the one stretch, of several) */
+  const api = { asked, silent: new Set(silent), only: '', url: `http://127.0.0.1:${port}/v1` };
+  const sources = (t, re) => [...t.matchAll(re)].map((m) => m[1]);
+  const kindOf = (last) => (last.includes(prompts.AUDIT_ASK) ? 'audit' : last.includes(prompts.TIMELINE_ASK) ? 'turns'
+    : last.includes('were read into the notes before the book’s bibliography was kept') ? 'bib' : last.includes('Update the notes') ? 'notes'
+      : last.includes('Its summary, as it stands') ? 'check' : last.includes('Write the summary again') ? 'tokens'
+        : last.includes("Here's a stretch of a scene played from") ? 'scene' : last.startsWith("Here's a stretch of") ? 'stretch'
+          : last.includes('Summarise ') && last.includes("for the book's notes") ? 'summary' : last.includes('for the writer to read before every page') ? 'keep'
+            : last.includes('Answer with {"ok": true}') ? 'probe' : 'other');
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ data: [{ id: 'scripted' }] })); return; }
+      let sent = {};
+      try { sent = JSON.parse(body || '{}'); } catch (_) { /* none */ }
+      const last = String(((sent.messages || []).filter((m) => m.role === 'user').pop() || {}).content || '');
+      const kind = kindOf(last);
+      const quiet = api.silent.has(kind) && (!api.only || last.includes(api.only));
+      asked.push({ kind, silent: quiet, at: Date.now() });
+      const streamed = sent.stream === true;
+      if (streamed) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.flushHeaders(); }
+      if (quiet) return;
+      const passages = sources(last, /^(Passage \d+)$/gm);
+      const answer = kind === 'notes' ? { people: [], timeline: passages.map((source) => ({ source, events: [] })), bibliography: passages.map((source) => ({ source, facts: [] })) }
+        : kind === 'turns' ? { timeline: sources(last, /^(Chapter [^\n]+?, passage \d+):$/gm).map((source) => ({ source, events: [] })) }
+        : kind === 'bib' ? { bibliography: sources(last, /^(Chapter [^\n]+?, passage \d+):$/gm).map((source) => ({ source, facts: [] })) }
+        : kind === 'summary' || kind === 'tokens' ? { summary: 'Mara keeps the light at the Point.', name: 'The Light' }
+        : kind === 'stretch' || kind === 'scene' ? { summary: 'The shore is walked again and again.' }
+        : kind === 'check' ? { wrong: [], missing: [] } : kind === 'audit' ? { clear: true, verdict: 'These hold.' }
+        : kind === 'keep' ? { about: 'A keeper and her light.', style: 'Plain, and close to her.' } : kind === 'probe' ? { ok: true } : {};
+      const text = JSON.stringify(answer);
+      if (!streamed) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] })); return; }
+      res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: null }] }) + '\n\n');
+      res.write('data: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + '\n\n');
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  await new Promise((r) => server.listen(port, '127.0.0.1', r));
+  api.kinds = (from = 0) => asked.slice(from).map((x) => (x.silent ? `${x.kind}!` : x.kind));
+  api.close = async () => { server.closeAllConnections(); await new Promise((r) => server.close(() => r())); };
+  return api;
+}
+const STAGE_WORDS = (n) => Array.from({ length: n }, (_, i) => `the long shore walked for the ${i % 40}th time`).join(', ') + '.';
+/* each stage as a book owes it — its ask the only one its model stays silent on — with what it says while it waits, and
+ * what is left once it is passed by; every book owes the Timeline its pages (turns: false) and the notes' check
+ * (auditAsked), the stages after them all */
+const STAGES = {
+  summary: {
+    book: async () => makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: true }),
+    says: (L) => `The helper sums up ${L} again`,
+    passed: (b) => {
+      assert.deepEqual([archivist.summaryWait(b.novelId, b.ids[0]), b.ch(0).summary || null, context.shortOf(b.ch(0)).startsWith('(not summarised yet')], [{ passed: true }, null, true], 'not summed up, said so: and the writer gets its words as the room allows');
+      assert.deepEqual(archivist.asideNow(b.novel()).map((x) => x.label), ['the summary of Chapter One'], 'set aside, with Read it again under Cards');
+    },
+  },
+  tokens: {
+    /* (Tom a card of the notes: a name the summary may not lose — names.js hardTokens) */
+    book: async () => { const b = await makeBook([['Mara kept the light at the Point with Tom.'], ['Gulls wheeled.']], { manual: true }); store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-t', name: 'Tom', about: 'A fisherman.', updated: { at: 1 } }); }, { now: true }); return b; },
+    says: (L) => `The helper checks the names and figures in the summary of ${L} again`,
+    them: true,
+    passed: (b) => assert.deepEqual([b.ch(0).summary.text, b.ch(0).summary.again], ['Mara keeps the light at the Point.', undefined], 'the summary left standing as it is'),
+  },
+  stretch: {
+    house: (url) => ({ conn: { context: 12000 }, extra: { connections: [{ ...CONN, context: 12000 }, { ...CONN, id: 'c-h', context: 32000, learned: null, url }], roles: { writer: 'c-w', helper: 'c-h' } } }),
+    only: 'SILENT SHORE',
+    book: async () => makeBook([Array.from({ length: 4 }, (_, i) => (i ? '' : 'SILENT SHORE. ') + STAGE_WORDS(220)), ['Gulls wheeled.']], { manual: true }),
+    says: (L) => `The helper sums up part of ${L} again`,
+    passed: (b, r) => assert.deepEqual(archivist.stretchWait(b.novelId, 'chapter', b.ids[0], r.fp), { passed: true }, 'passed by until its words change'),
+  },
+  scene: {
+    house: (url) => ({ conn: { context: 12000 }, extra: { connections: [{ ...CONN, context: 12000 }, { ...CONN, id: 'c-h', context: 32000, learned: null, url }], roles: { writer: 'c-w', helper: 'c-h' } } }),
+    book: async () => {
+      const b = await makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: true });
+      const play = { id: util.newId('pl'), novelId: b.novelId, chapterId: b.ids[0], who: 'Mara', title: 'A scene', turns: Array.from({ length: 6 }, (_, i) => ({ id: `t${i}`, by: i % 2 ? 'you' : 'ai', versions: [{ id: `tv${i}`, text: (i ? '' : 'SILENT SHORE. ') + STAGE_WORDS(220) }] })) };
+      await store.create('play', play.id, play);
+      store.change('novel', b.novelId, (n) => { n.plays = [play.id]; }, { now: true });
+      b.playId = play.id;
+      return b;
+    },
+    only: 'SILENT SHORE',
+    says: (L) => `The helper sums up part of the scene played as Mara from ${L} again`,
+    passed: (b, r) => assert.deepEqual(archivist.stretchWait(b.novelId, 'scene', b.playId, r.fp), { passed: true }, 'passed by until its words change'),
+  },
+  check: {
+    book: async () => {
+      const b = await makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: true });
+      store.change('chapter', b.ids[0], (c) => { c.summary = { text: 'Mara keeps the light at the Point.', by: 'helper', fp: shape.chapterPrint(c), at: Date.now() }; }, { now: true });
+      return b;
+    },
+    says: () => 'The helper checks the summary of Chapter One again',
+    passed: (b) => assert.equal(Boolean(((b.ch(0).summary || {}).checked || {}).unread), true, 'passed by with its mark'),
+  },
+  keep: {
+    book: async () => makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: false }),
+    says: () => 'The helper writes What it’s about and How it reads from the book again',
+    them: true,
+    passed: (b) => assert.deepEqual(['about', 'style'].map((k) => [((b.novel().kept || {})[k] || {}).text, Boolean(((b.novel().kept || {})[k] || {}).again)]), [['', false], ['', false]], 'kept as tried: written as the book is read on, or by Write it from the book again'),
+  },
+  audit: {
+    book: async () => makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: true }),
+    says: () => 'The helper checks the notes against the book again',
+    them: true,
+    passed: (b) => assert.deepEqual([Boolean((b.novel().memory.audit || {}).failed), Boolean(b.novel().memory.auditAsked)], [true, false], 'said so — with Check the notes against the book'),
+  },
+};
+/* what is asked after each stage in the run's own order: the stages after a stall go on */
+const AFTER = { stretch: ['summary', 'turns', 'audit'], scene: ['summary', 'turns', 'audit'], summary: ['turns', 'audit'], tokens: ['turns', 'audit'], check: ['turns', 'audit'], keep: ['audit'], audit: [] };
+async function stageStalls(stage) {
+  const s = STAGES[stage];
+  const keep = call.onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
+  /* the leash as the app keeps it (app.js onLearn), scaled: 400 ms, then its longest, 800 — three minutes, then a quarter
+   * of an hour */
+  globalThis.__cozyLeashQuietMs = 400;
+  globalThis.__cozyLeashQuietMostMs = 800;
+  const model = await stageModel(PORT + 8, [stage]);
+  model.only = s.only || '';
+  try {
+    const h = s.house ? s.house(model.url) : { conn: { context: 64000, learned: null, url: model.url } };
+    await setHouse(h.conn, h.extra || {});
+    const b = await s.book();
+    store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-m', name: 'Mara', about: 'The keeper.', updated: { at: 1 } }); n.memory = { ...(n.memory || {}), auditAsked: true }; }, { now: true });
+    markAllSeen(b, { turns: false });
+    const rec = () => Object.values(b.novel().memory.tries || {}).find((r) => r && r.what === stage) || null;
+    const itsTime = async () => { const next = Number((rec() || {}).next) || 0; if (next > store.phoneNow()) await sleep(next - store.phoneNow() + 1100); };
+    const tag = (k) => `${stage}: ${k.join(' ')}`;
+    const its = (k) => k.filter((x) => x === `${stage}!`).length;
+    /* 1: silent on the shorter leash — waited out, never counted; the stages after it go on in the same run */
+    let from = model.asked.length;
+    await archivist.run(b.novelId);
+    let k = model.kinds(from);
+    assert.equal(its(k), 1, tag(k));
+    for (const after of AFTER[stage]) assert.ok(k.includes(after), `${tag(k)} — ${after} asked in the same run`);
+    assert.deepEqual([rec() && rec().n, Number((rec() || {}).next) > store.phoneNow()], [0, true], `${stage}: never counted, its wait kept`);
+    /* its wait kept with the book: on the phone, so a reload or another window keeps it */
+    await store.flush();
+    const onIt = Object.values(((await onPhone('novel', b.novelId)).memory || {}).tries || {}).find((r) => r && r.what === stage) || {};
+    assert.deepEqual([onIt.n, Number(onIt.next) > store.phoneNow()], [0, true], `${stage}: kept with the book on the phone`);
+    /* what waits, and when, said by the light — never a failure: no Try again now (its chapter by its label as it stands:
+     * named since by the summary that came) */
+    const L = () => shape.chapterLabel(b.novel(), b.ch(0), { withName: true });
+    assert.deepEqual([archivist.lightOf(b.novelId), archivist.stalled(b.novelId)], [{ state: 'waiting', words: `${s.says(L())} in a moment — its model was too slow to answer for ${s.them ? 'them' : 'it'}.` }, false], stage);
+    const booked = bookedIn(b.novelId);
+    assert.ok(booked >= 1000 && booked <= 3000, `${stage}: the run booked for its wait (${booked})`);
+    await quietAll();
+    /* 2: a run before its time asks it nothing */
+    from = model.asked.length;
+    archivist.forTests().stuck.clear();
+    await archivist.run(b.novelId);
+    assert.equal(its(model.kinds(from)), 0, `${stage}: not asked before its time`);
+    await quietAll();
+    /* 3: its time come — silent on the longest leash: counted; nothing more asked of that model until as long has
+     * passed, said so (the review of round 5, its F4): the notes' check, owed again, not asked in that run */
+    if (stage !== 'audit') store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
+    await itsTime();
+    from = model.asked.length;
+    await archivist.run(b.novelId);
+    k = model.kinds(from);
+    assert.deepEqual([its(k), rec() && rec().n, k.length], [1, 1, 1], `${tag(k)} — counted, and nothing more asked`);
+    const light = archivist.lightOf(b.novelId);
+    assert.ok(light.state === 'waiting' && light.words.startsWith('The helper’s model sent nothing for a minute — the helper asks it again in a moment, and nothing more until then.') && light.words.includes(s.says(L())) && !archivist.stalled(b.novelId), `${stage}: ${light.words}`);
+    await quietAll();
+    /* 4: its time come again — silent again: passed by, said so */
+    const r2 = rec();
+    await itsTime();
+    from = model.asked.length;
+    await archivist.run(b.novelId);
+    k = model.kinds(from);
+    assert.equal(its(k), 1, tag(k));
+    s.passed(b, r2);
+    /* nothing more asked of it, by itself or in a loop, its runs left to book themselves */
+    from = model.asked.length;
+    await sleep(3500);
+    k = model.kinds(from);
+    assert.deepEqual([its(k), model.asked.filter((x) => x.silent).length], [0, 3], `${tag(k)} — asked three times in all`);
+    await quietAll();
+    await putAway(b);
+  } finally {
+    keep();
+    delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashQuietMostMs;
+    await model.close();
+    await setHouse();
+  }
+}
+for (const stage of Object.keys(STAGES)) {
+  await test(`a ${stage === 'tokens' ? 'summary’s names and figures' : stage === 'keep' ? 'What it’s about' : stage === 'audit' ? 'check of the notes' : stage === 'check' ? 'summary’s check' : stage === 'scene' ? 'scene’s stretch' : `chapter’s ${stage}`} its model stays silent on is waited as long as it was waited, its wait kept with the book and said — never a failure, never Try again now; the stages after it go on in the same run; counted on the longest leash, nothing more asked of that model until as long has passed; passed by at the second and said so; nothing asked in a loop (round 7: ${stage})`, () => stageStalls(stage));
+}
+
+/* (2.12.41, round 7 — what was taken out, its model silent on it: its count and its wait lived in the page's memory, by
+ * what was asked, let go with every reload — asked again after each, never set aside) */
+await test('what was taken out, its model silent on it, waits as long as it was waited — its wait and its count kept with the book, through a reload, and said; counted on the longest leash, set aside at the second and said so; nothing asked in a loop', async () => {
+  const keep = call.onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
+  globalThis.__cozyLeashQuietMs = 400;
+  globalThis.__cozyLeashQuietMostMs = 800;
+  const model = await silentIsleModel(PORT + 8);
+  try {
+    await setHouse({ context: 64000, learned: null, url: `http://127.0.0.1:${PORT + 8}/v1` });
+    const b = await makeBook([['Mara kept the light at the Point.', 'THE SILENT ISLE rose from the sea before her.', 'Gulls wheeled over the Point.']], { manual: true });
+    store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-m', name: 'Mara', about: 'The keeper.', updated: { at: 1 } }); }, { now: true });
+    markAllSeen(b);
+    /* he takes the Silent Isle out (its words kept for the notes to read, as the page keeps them): the notes read what it
+     * took out of them */
+    const pid = b.ch().passages[1].id;
+    archivist.retireIfSeen(b.novelId, b.ids[0], pid);
+    store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(pid), { now: true });
+    const rec = () => Object.values((b.novel().memory || {}).tries || {}).find((r) => r && r.what === 'out') || null;
+    const itsTime = async () => { const next = Number((rec() || {}).next) || 0; if (next > store.phoneNow()) await sleep(next - store.phoneNow() + 1100); };
+    const silentNow = () => model.asked.filter((x) => x.silent).length;
+    /* 1: silent on the shorter leash — waited out, never counted; its wait kept with the book, on the phone, and said —
+     * never a failure: no Try again now */
+    await archivist.run(b.novelId);
+    assert.deepEqual([silentNow(), rec() && rec().n, Number((rec() || {}).next) > store.phoneNow()], [1, 0, true], 'never counted, its wait kept');
+    await store.flush();
+    const onIt = Object.values(((await onPhone('novel', b.novelId)).memory || {}).tries || {}).find((r) => r && r.what === 'out') || {};
+    assert.deepEqual([onIt.n, Number(onIt.next) > store.phoneNow()], [0, true], 'kept with the book on the phone');
+    assert.deepEqual([archivist.lightOf(b.novelId), archivist.stalled(b.novelId)], [{ state: 'waiting', words: 'The helper reads what was taken out of Chapter One again in a moment — its model was too slow to answer for it.' }, false]);
+    await quietAll();
+    /* 2: a reload — what the page's memory held is gone — and a run before its time: it is asked nothing */
+    archivist.forTests().stuck.clear();
+    await archivist.run(b.novelId);
+    assert.equal(silentNow(), 1, 'not asked before its time');
+    await quietAll();
+    /* 3: its time come — silent on the longest leash: counted */
+    await itsTime();
+    await archivist.run(b.novelId);
+    assert.deepEqual([silentNow(), rec() && rec().n], [2, 1], 'counted on its longest leash');
+    await quietAll();
+    /* 4: a reload again; its time come, and the wait on its silent model over — silent again: set aside, said so */
+    archivist.forTests().stuck.clear();
+    await itsTime();
+    const silentUntil = Number(((b.novel().memory || {}).silent || {}).until) || 0;
+    if (silentUntil > store.phoneNow()) await sleep(silentUntil - store.phoneNow() + 1100);
+    await archivist.run(b.novelId);
+    const aside = archivist.asideNow(b.novel()).map((x) => x.label);
+    assert.deepEqual([silentNow(), rec(), aside.length, /^what was taken out of Chapter One/.test(aside[0] || '')], [3, null, 1, true], `set aside, said so: ${aside}`);
+    await quietAll();
+    /* nothing more asked, by itself or in a loop */
+    const from = model.asked.length;
+    await sleep(3000);
+    assert.deepEqual([model.asked.length - from, silentNow()], [0, 3], 'nothing more asked');
+    await quietAll();
+    await putAway(b);
+  } finally {
+    keep();
+    delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashQuietMostMs;
+    await model.close();
+    await setHouse();
+  }
+});
+
+await test('reading the whole book again, the light says both — that the book is being read again, and what waits its time meanwhile', async () => {
+  await setHouse({ context: 64000 });
+  const b = await makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: true });
+  markAllSeen(b);
+  /* a summary its model was too slow to answer for, waiting its time (as stageStalled keeps it) */
+  const wait = (c) => ({ what: 'summary', fp: shape.chapterPrint(b.ch(0)), chapterId: b.ids[0], label: 'Chapter One', n: 0, next: store.phoneNow() + 5 * 60 * 1000, ...c });
+  store.change('novel', b.novelId, (n) => { n.memory = { ...(n.memory || {}), tries: { ['summary:' + b.ids[0]]: wait() } }; }, { now: true });
+  const said = 'The helper sums up Chapter One again in five minutes — its model was too slow to answer for it.';
+  assert.equal(archivist.lightOf(b.novelId).words, said, 'alone: what waits');
+  archivist.readAgain(b.novelId);
+  await quietAll();
+  /* every page to read again: both */
+  assert.deepEqual(archivist.lightOf(b.novelId), { state: 'waiting', words: `Reading the whole book again — until it is done, the writer and the rest go on with the notes as they were. ${said}` });
+  /* every page read again but one that waits its time: both still */
+  markAllSeen(b);
+  store.change('chapter', b.ids[1], (c) => { const v = picked(c.passages[0]); v.tries = { notes: { fp: util.hashText(v.text), n: 0, next: store.phoneNow() + 5 * 60 * 1000 } }; }, { now: true });
+  store.change('novel', b.novelId, (n) => { const seen = { ...(n.memory.seen || {}) }; delete seen[b.ids[1]]; n.memory = { ...n.memory, seen }; }, { now: true });
+  const light = archivist.lightOf(b.novelId);
+  assert.ok(light.words.startsWith('Reading the whole book again — until it is done, the writer and the rest go on with the notes as they were. ') && light.words.includes(said), light.words);
+  archivist.undoLast(b.novelId);
+  await quietAll();
+  await putAway(b);
+});
+
+await test('a model that kept silent for as long as it is ever waited is asked nothing more until as long has passed — the batch, then each page alone, never seconds apart; the light says so (the review of round 5, its F4)', async () => {
+  globalThis.__cozyLeashQuietMs = 700;
+  globalThis.__cozyLeashQuietMostMs = 700;
+  try {
+    await setHouse({ context: 64000, learned: null });
+    const b = await makeBook([['Mara kept the light on the point.', 'Tom mended the nets in the rain.', 'The tide went out at last.']], { manual: true });
+    store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+    markAllSeen(b, { facts: false });
+    await reset();
+    await script(Array.from({ length: 12 }, () => ({ bib: true, pause: 30, text: JSON.stringify({ bibliography: [] }) })));
+    const t0 = Date.now();
+    const seen = [];
+    const words = [];
+    archivist.run(b.novelId);
+    while (Date.now() - t0 < 7000) {
+      const r = (await everyRequest()).filter(isBibAsk);
+      for (let i = seen.length; i < r.length; i++) seen.push(Date.now() - t0);
+      const l = archivist.lightOf(b.novelId);
+      if (l.words.startsWith('The helper’s model sent nothing for')) words.push(l.words);
+      await sleep(50);
+    }
+    await quietAll();
+    /* each ask after a stall comes once as long as the stall was waited has passed — never at once */
+    const gaps = seen.slice(1).map((at, i) => at - (seen[i] + 700));
+    assert.ok(seen.length >= 2 && gaps.every((g) => g >= 550), `asks at ${seen.join(', ')} ms — left alone after each stall ${gaps.join(', ')} ms`);
+    assert.ok(words.length > 0 && words[0].startsWith('The helper’s model sent nothing for a minute — the helper asks it again in a moment, and nothing more until then.'), words[0]);
+    assert.equal(archivist.stalled(b.novelId), false, 'never a failure: no Try again now');
+    await putAway(b);
+  } finally {
+    delete globalThis.__cozyLeashQuietMs;
+    delete globalThis.__cozyLeashQuietMostMs;
+    await setHouse();
+  }
+});
+
+/* (2.12.41, round 7 — his press while the helper waits on a model that kept silent for as long as it is ever waited: it
+ * said "in a moment", or that the notes were being checked, while nothing was asked for a quarter of an hour) */
+await test('his press asks now — Check the notes against the book, Write it from the book again, Read it again, Read them all again and Try again now overrule the wait on a model that kept silent; left alone, the book waits it out, and the light says so', async () => {
+  await setHouse({ context: 64000 });
+  const b = await makeBook([['Mara kept the light. Tom mended the nets.', 'The tide went out.']], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-m', name: 'Mara', about: 'The keeper.', updated: { at: 1 } }); }, { now: true });
+  const helper = writer.connFor(store.peek('house', 'house'), 'helper');
+  /* its model silent for as long as it is ever waited, a minute ago — as the helper keeps it (helperJson, setSilent) */
+  const silence = () => store.change('novel', b.novelId, shape.novelSteps.setMemory({ silent: { conn: archivist.choicePrint(helper), until: store.phoneNow() + 14 * 60000, leashMs: 15 * 60000 } }), { now: true });
+  const waits = () => Boolean(archivist.silentWait(b.novelId));
+  /* left alone: nothing asked, and the light says why and until when */
+  silence();
+  store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
+  await reset();
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'These hold.' }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual([(await everyRequest()).length, waits(), archivist.lightOf(b.novelId).words], [0, true, 'The helper’s model sent nothing for fifteen minutes — the helper asks it again in fourteen minutes, and nothing more until then.']);
+  await quietAll();
+  /* Check the notes against the book: asked now */
+  archivist.askAudit(b.novelId, { byHand: true });
+  assert.equal(waits(), false, 'Check the notes against the book');
+  assert.ok(await untilSo(async () => (await requests()).filter(isAuditAsk).length === 1 && !archivist.forTests().running.size, 6000), 'the notes checked now');
+  await quietAll();
+  /* the others, each from the wait */
+  silence();
+  archivist.keepAgain(b.novelId, 'about', { byHand: true });
+  assert.equal(waits(), false, 'Write it from the book again');
+  await quietAll();
+  silence();
+  assert.deepEqual([archivist.tryNow(b.novelId), waits()], [true, false], 'Try again now');
+  await quietAll();
+  const ps = b.ch().passages;
+  const aside = (i) => ({ chapterId: b.ids[0], sig: archivist.signature(picked(ps[i])), label: `Chapter One, passage ${i + 1}`, why: 'its model sent nothing', at: Date.now() });
+  silence();
+  store.change('novel', b.novelId, shape.novelSteps.setAside({ [ps[0].id]: aside(0) }), { now: true });
+  assert.deepEqual([archivist.readAside(b.novelId, ps[0].id), waits()], [true, false], 'Read it again');
+  await quietAll();
+  silence();
+  store.change('novel', b.novelId, shape.novelSteps.setAside({ [ps[0].id]: aside(0), [ps[1].id]: aside(1) }), { now: true });
+  assert.deepEqual([archivist.readAllAside(b.novelId), waits()], [2, false], 'Read them all again');
+  await quietAll();
+  await putAway(b);
+});
+
+await test('owed is owed: a page whose wait came over a minute ago and is not asked yet is said by the light — “in a moment”, or once the page being written is done — never that the notes are up to date; the newest words and the notes’ check owed are said so too while a page is being written (the review of round 5, its F6 and F10)', async () => {
+  await setHouse({ context: 64000 });
+  const b = await makeBook([[EMILIA, 'Rain fell on the river.']], { manual: true });
+  peopleIn(b);
+  markAllSeen(b, { turns: false });
+  store.change('chapter', b.ids[0], (ch) => { const v = picked(ch.passages[0]); v.tries = { turns: { fp: util.hashText(v.text), n: 1, next: store.phoneNow() - 61000 } }; v.continuity = undefined; const w = picked(ch.passages[1]); w.continuity = { schema: 1, fp: util.hashText(w.text), events: [], complete: true }; }, { now: true });
+  assert.equal(archivist.timelineDue(b.novelId).length, 1);
+  assert.deepEqual(archivist.lightOf(b.novelId), { state: 'waiting', words: 'The helper reads 1 passage for the Timeline again in a moment — its model was too slow to answer for it.' }, 'its wait over a minute ago: said all the same');
+  /* a page being written: once that page is done */
+  await reset();
+  await script([{ text: 'The wind rose over the cliffs and the lamp burned on.', pause: 2 }]);
+  const writing = writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
+  for (let k = 0; k < 100 && !writer.busy(b.novelId); k++) await sleep(20);
+  assert.deepEqual([writer.busy(b.novelId), archivist.lightOf(b.novelId).words], [true, 'The helper reads 1 passage for the Timeline again once the page being written is done — its model was too slow to answer for it.']);
+  await writing;
+  await quietAll();
+  /* the newest words, while a page is written */
+  const c = await makeBook([['Mara kept the light.', 'The tide rose.']], { manual: true });
+  assert.deepEqual(archivist.lightOf(c.novelId), { state: 'waiting', words: 'The helper reads the newest words in a moment.' });
+  await reset();
+  await script([{ text: 'The gulls cried over the water.', pause: 2 }]);
+  const writingC = writer.writeNext({ novelId: c.novelId, chapterId: c.ids[0] });
+  for (let k = 0; k < 100 && !writer.busy(c.novelId); k++) await sleep(20);
+  assert.equal(archivist.lightOf(c.novelId).words, 'The helper reads the newest words once the page being written is done.');
+  /* the notes' check owed next, while a page is being written */
+  const d = await makeBook([['Mara kept the light. Tom mended the nets.']], { manual: true });
+  markAllSeen(d);
+  store.change('novel', d.novelId, (n) => {
+    n.notes.people.push({ id: 'pe-m', name: 'Mara', about: 'The keeper.', updated: { at: 1 } }, { id: 'pe-t', name: 'Tom', about: 'A fisherman.', updated: { at: 1 } });
+    n.memory = { ...(n.memory || {}), audit: { at: 1, reads: 0, v: archivist.AUDIT_V, groupMax: 1 }, auditAsked: true };
+  }, { now: true });
+  await writingC;
+  await quietAll();
+  await reset();
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'These hold.' }) }, { text: 'The lamp guttered and caught again.', pause: 2 }]);
+  await archivist.run(d.novelId);
+  assert.equal(archivist.lightOf(d.novelId).words, archivist.AUDIT_NEXT, 'one group checked, the next owed');
+  const writingD = writer.writeNext({ novelId: d.novelId, chapterId: d.ids[0] });
+  for (let k = 0; k < 100 && !writer.busy(d.novelId); k++) await sleep(20);
+  assert.equal(archivist.lightOf(d.novelId).words, 'The helper checks the notes against the book once the page being written is done.');
+  await writingD;
+  await quietAll();
+  await putAway(b);
+  await putAway(c);
+  await putAway(d);
+  await setHouse();
 });
 
 /* (2.12.41, round 5 — the third review of the Timeline's fourth round: a name changed everywhere while a reading is out,
@@ -18218,6 +18727,150 @@ await test('a rename and its Undo while a reading is out leave its answer as it 
   await setHouse();
 });
 
+/* (2.12.41, round 7 — the review of round 5, its F1: only the notes' reading and the page being written took the changes
+ * of names made while they were out; a backfill's answer, a summary's and the checker's findings were laid as given) */
+await test('an answer asked before a name was changed everywhere takes the new name when it lands — a backfill’s turn and fact, a chapter’s summary, the checker’s fix — on a page the name never stood in, nothing read again; its words quoted from that page stay as the page has them, a name already inside the one it became too', async () => {
+  await setHouse({ context: 64000 });
+  const SMILE = 'She smiled at Jovan in the rain.';
+  const row = (text, quote) => ({ kind: 'relationship', cards: EJ, text, evidence: [quote], stance: 'fact' });
+  for (const what of ['turns', 'facts']) {
+    const b = await makeBook([[EMILIA, SMILE]], { manual: true });
+    peopleIn(b);
+    store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+    markAllSeen(b, what === 'turns' ? { turns: false } : { facts: false });
+    /* (the first page read already: its own turns and facts, kept through the rename by itself) */
+    store.change('chapter', b.ids[0], (ch) => { const v = picked(ch.passages[0]); v.continuity = { schema: 1, fp: util.hashText(v.text), events: [], complete: true }; v.codex = { schema: 1, fp: util.hashText(v.text), facts: [], complete: true }; }, { now: true });
+    const answer = what === 'turns'
+      ? { timeline: [{ source: 'Chapter One, passage 2', events: [row('Emilia warms to Jovan.', 'She smiled at Jovan')] }] }
+      : { bibliography: [{ source: 'Chapter One, passage 2', facts: [{ name: 'Jovan', kind: 'people', fact: 'Emilia smiles at him in the rain.', evidence: 'She smiled at Jovan' }] }] };
+    await reset();
+    await script([{ [what === 'turns' ? 'turns' : 'bib']: true, text: JSON.stringify(answer), pause: 0.8 }]);
+    const running = archivist.run(b.novelId);
+    for (let k = 0; k < 300 && !(await everyRequest()).length; k++) await sleep(20);
+    assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } }).status, 'made');
+    await running;
+    await quietAll();
+    assert.deepEqual([readOf(b, 1)[what], owedNow(b), (await everyRequest()).length], [what === 'turns' ? ['Emmeline warms to Jovan. [Emmeline Vermaine, Jovan Wessex]'] : ['Emmeline smiles at him in the rain. [Jovan]'], [0, 0], 1], `${what}: the new name, nothing read again`);
+    await putAway(b);
+  }
+  /* a fact quoting a page the name already stood in whole — "Oda" inside "Lord Oda Nobunaga", which the change leaves as
+   * it is: its quote stays as the page has it, never renamed by itself */
+  const LORD = 'Lord Oda Nobunaga smiled at Jovan in the rain.';
+  const o = await makeBook([['Oda rode in at dawn.', LORD]], { manual: true });
+  store.change('novel', o.novelId, (n) => { n.notes.people.push({ id: 'pe-o', name: 'Oda', about: 'A lord.', updated: { at: 1 } }, { id: 'pe-j', name: 'Jovan Wessex', aka: ['Jovan'], about: 'A hunter.', updated: { at: 1 } }); n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+  markAllSeen(o, { facts: false });
+  store.change('chapter', o.ids[0], (ch) => { const v = picked(ch.passages[0]); v.codex = { schema: 1, fp: util.hashText(v.text), facts: [], complete: true }; }, { now: true });
+  await reset();
+  await script([{ bib: true, pause: 0.8, text: JSON.stringify({ bibliography: [{ source: 'Chapter One, passage 2', facts: [{ name: 'Jovan', kind: 'people', fact: 'Oda smiles at him in the rain.', evidence: 'Oda Nobunaga smiled at Jovan' }] }] }) }]);
+  const goes = archivist.run(o.novelId);
+  for (let k = 0; k < 300 && !(await everyRequest()).length; k++) await sleep(20);
+  assert.equal(changes.makeChange(o.novelId, { rename: { from: 'Oda', to: 'Lord Oda Nobunaga' } }).status, 'made');
+  await goes;
+  await quietAll();
+  assert.equal(picked(o.ch().passages[1]).text, LORD, 'that page left as it was');
+  assert.deepEqual([readOf(o, 1).facts, owedNow(o)[1]], [['Lord Oda Nobunaga smiles at him in the rain. [Jovan]'], 0], 'its quote kept as the page has it: the fact laid');
+  await putAway(o);
+  /* a chapter's summary: the chapter the name never stood in */
+  const s = await makeBook([[SMILE], [EMILIA]], { manual: true });
+  peopleIn(s);
+  markAllSeen(s);
+  store.change('chapter', s.ids[0], (c) => { for (const x of c.passages) for (const v of x.versions) v.at = Date.now() - 3600000; }, { now: true });
+  await reset();
+  await script([{ pause: 0.8, text: JSON.stringify({ summary: 'Emilia smiles at Jovan in the rain.', name: 'Rain' }) }]);
+  const summing = archivist.run(s.novelId);
+  for (let k = 0; k < 300 && !(await everyRequest()).length; k++) await sleep(20);
+  assert.equal(changes.makeChange(s.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } }).status, 'made');
+  await summing;
+  await quietAll();
+  assert.equal((s.ch(0).summary || {}).text, 'Emmeline smiles at Jovan in the rain.', 'the summary says the new name');
+  await putAway(s);
+  /* the checker's fix: the page the name never stood in — its new words take the new name, the words it finds stay */
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const k = await makeBook([[EMILIA, SMILE]], { manual: true });
+  peopleIn(k);
+  markAllSeen(k);
+  checker.checkChapter(k.novelId, k.ids[0]);
+  await reset();
+  await script([{ pause: 0.8, text: JSON.stringify({ edits: [{ passage: '1.2', kind: 'clarity', find: 'She smiled', replace: 'Emilia smiled', why: 'Emilia is the one who smiles' }] }) }]);
+  const checking = checker.runCheck(k.novelId);
+  for (let t = 0; t < 300 && !(await everyRequest()).length; t++) await sleep(20);
+  assert.equal(changes.makeChange(k.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } }).status, 'made');
+  await checking;
+  await quietAll();
+  const p2 = k.ch().passages[1];
+  const found = ((((k.ch().checks || {})[p2.id] || {})[picked(p2).id] || {}).items || []).filter((x) => x.kind === 'clarity');
+  assert.deepEqual(found.map((x) => [x.find, x.replace, x.why]), [['She smiled', 'Emmeline smiled', 'Emmeline is the one who smiles']], 'never the old name written back into the book');
+  await putAway(k);
+  await setHouse();
+});
+
+/* (the review of round 5, its F8: a finding renamed by itself, never read where it stands — "Oda Nobunaga smiled" inside
+ * "Lord Oda Nobunaga smiled" became "Lord Oda Nobunaga Nobunaga smiled", a fix that could never apply) */
+await test('a name changed everywhere carries the checker’s findings where they stand: on a page it never stood in, inside a longer new name, a fix that still applies; on a page it changes, taken from the new words by its place — one it cannot carry is let go and its page checked again, never kept as a fix that cannot apply', async () => {
+  await setHouse({ context: 64000 });
+  const LORD = 'Lord Oda Nobunaga smiled at Jovan in the rain.';
+  const b = await makeBook([['Oda rode in at dawn.', LORD]], { manual: true });
+  markAllSeen(b);
+  const p2 = b.ch().passages[1];
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p2.id, picked(p2).id, { round: 'r1', sig: util.hashText(LORD), at: Date.now(), items: [{ id: 'i1', kind: 'clarity', find: 'Oda Nobunaga smiled', replace: 'Oda Nobunaga grinned', why: 'a livelier verb' }] }), { now: true });
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Oda', to: 'Lord Oda Nobunaga' } }).status, 'made');
+  const v2 = picked(b.ch().passages[1]);
+  const it = ((((b.ch().checks || {})[p2.id] || {})[v2.id] || {}).items || [])[0] || {};
+  assert.deepEqual([v2.text, it.find, it.replace, changes.locate(v2.text, it.find).why || ''], [LORD, 'Oda Nobunaga smiled', 'Oda Nobunaga grinned', ''], 'the fix as the page needs it — it still applies');
+  await putAway(b);
+  /* a page the change reaches: each finding taken from the new words by where it stood */
+  const c = await makeBook([['Emilia smiled at Jovan. She wept by the stair.', 'Mara smiled. Kara smiled.']], { manual: true });
+  peopleIn(c);
+  markAllSeen(c);
+  const [q1, q2] = c.ch().passages;
+  store.change('chapter', c.ids[0], shape.chapterSteps.setCheck(q1.id, picked(q1).id, { round: 'r1', sig: util.hashText(picked(q1).text), at: Date.now(), items: [{ id: 'i1', kind: 'clarity', find: 'She wept', replace: 'Emilia wept', why: 'name her' }] }), { now: true });
+  store.change('chapter', c.ids[0], shape.chapterSteps.setCheck(q2.id, picked(q2).id, { round: 'r1', sig: util.hashText(picked(q2).text), at: Date.now(), items: [{ id: 'i2', kind: 'clarity', find: 'Kara smiled', replace: 'Kara grinned', why: 'livelier' }] }), { now: true });
+  assert.equal(changes.makeChange(c.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } }).status, 'made');
+  const w1 = picked(c.ch().passages[0]);
+  const e1 = (((c.ch().checks || {})[q1.id] || {})[w1.id] || {});
+  assert.deepEqual([w1.text, (e1.items || []).map((x) => [x.find, x.replace, x.why])], ['Emmeline smiled at Jovan. She wept by the stair.', [['She wept', 'Emmeline wept', 'name her']]], 'taken from the new words by its place');
+  /* Kara made Mara: "Mara smiled" now stands twice — the fix could never apply; the new words are checked again */
+  assert.equal(changes.makeChange(c.novelId, { rename: { from: 'Kara', to: 'Mara' } }).status, 'made');
+  const w2 = picked(c.ch().passages[1]);
+  const e2 = ((c.ch().checks || {})[q2.id] || {})[w2.id] || null;
+  /* (a rename changes the words in place, on the same version: what stood is of the words before — never of these) */
+  assert.deepEqual([w2.text, Boolean(e2 && e2.sig === util.hashText(w2.text))], ['Mara smiled. Mara smiled.', false], 'never a fix kept that cannot apply: the page checked again');
+  await putAway(c);
+});
+
+/* (the review of round 5, its F7 and F10's MUT-E) */
+await test('a name changed back by hand is a change of names, never taken for an Undo — work on its way is given the book’s words; and an Undo after a later change leaves what that change made of a page the name never stood in as it is', async () => {
+  await setHouse({ context: 64000 });
+  const TEXT = 'Emilia bit Jovan. Emmeline watched from the stair.';
+  for (const how of ['Undo', 'back by hand']) {
+    const b = await makeBook([[TEXT]], { manual: true });
+    peopleIn(b);
+    const first = changes.makeChange(b.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } });
+    const second = how === 'Undo' ? changes.undoChange(b.novelId, first) : changes.makeChange(b.novelId, { rename: { from: 'Emmeline', to: 'Emilia' } });
+    assert.ok(second.ok || second.status === 'made', JSON.stringify(second));
+    const book = picked(b.ch().passages[0]).text;
+    assert.deepEqual([book, namesjs.renameIn(TEXT, (b.novel().memory || {}).renames || [])], how === 'Undo'
+      ? [TEXT, TEXT]
+      : ['Emilia bit Jovan. Emilia watched from the stair.', 'Emilia bit Jovan. Emilia watched from the stair.'], `${how}: the words as read, given the changes, are the book's own`);
+    await putAway(b);
+  }
+  /* an Undo after a later change: what the later change made of a page it never stood in stays */
+  const SMILE = 'She smiled at Jovan in the rain.';
+  const row = (text, quote) => ({ kind: 'relationship', cards: EJ, text, evidence: [quote], stance: 'fact' });
+  const c = await makeBook([['Emilia bit Jovan while Mara watched.', SMILE]], { manual: true });
+  peopleIn(c);
+  markAllSeen(c);
+  store.change('chapter', c.ids[0], (ch) => { const v = picked(ch.passages[1]); v.continuity = tlmod.continuityOf([row('Emilia warms to Jovan, as Mara once did.', 'She smiled at Jovan')], c.novel().notes, { text: SMILE }); }, { now: true });
+  const turn = () => readOf(c, 1).turns;
+  const first = changes.makeChange(c.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } });
+  assert.deepEqual(turn(), ['Emmeline warms to Jovan, as Mara once did. [Emmeline Vermaine, Jovan Wessex]']);
+  assert.equal(changes.makeChange(c.novelId, { rename: { from: 'Mara', to: 'Marla' } }).status, 'made');
+  assert.deepEqual(turn(), ['Emmeline warms to Jovan, as Marla once did. [Emmeline Vermaine, Jovan Wessex]']);
+  assert.equal(changes.undoChange(c.novelId, first).ok, true);
+  assert.deepEqual(turn(), ['Emmeline warms to Jovan, as Marla once did. [Emmeline Vermaine, Jovan Wessex]'], 'changed since: kept as it is, never the words from before both');
+  await putAway(c);
+});
+
 await test('a name changed everywhere from a browser whose clock runs three minutes behind, while a reading or a page is out: the reading and the page take the new name all the same — the changes are counted on the book, never judged by a clock', async () => {
   await setHouse({ context: 64000 });
   /* the rename's record as that browser writes it: its time three minutes behind this one's */
@@ -18252,14 +18905,20 @@ await test('a name changed everywhere from a browser whose clock runs three minu
   await setHouse();
 });
 
-await test('a turn told another way is one turn — in the passive, by a pronoun, a possessive, a name it goes by, two acting together, a group in the passive — and the opposite deed is two: in the passive, after a possessive, after a phrase a name shares a word with; a name it goes by is kept with the turn', () => {
+await test('a turn told another way, from either side, is one turn — in the passive, by a pronoun, a possessive, a name it goes by, two acting together, a group in the passive, the other way round, a deed both share; two turns of one reading are two however alike; the same turn word for word is one', () => {
   const E = { id: 'pe-e', kind: 'people', name: 'Emilia Vermaine' };
   const J = { id: 'pe-j', kind: 'people', name: 'Jovan Wessex' };
   const M = { id: 'pe-m', kind: 'people', name: 'Mara of the Gate' };
   const O = { id: 'pe-o', kind: 'people', name: 'The Iron Order' };
+  const H = { id: 'pe-h', kind: 'people', name: 'Emilia Hart' };
   let k = 0;
   const t = (text, refs, quote = 'She sold him to the Order') => ({ id: `tl-${++k}`, kind: 'relationship', refs, text, evidence: [quote], stance: 'fact' });
   const PAGE = 'She sold him to the Order at the gate, and Jovan knew it at once. Emilia and Mara stood together over him.';
+  /* (2.12.41, round 7 — changed with a comment why, the decision after the review of round 5: round 5's doerOf told "the
+   * opposite deed" apart where both tellings plainly named both — and split a deed both share in two from one side,
+   * "Emilia meets Jovan at the gate." beside "Jovan meets Emilia at the gate.", and read "Jovan falls to Emilia's
+   * betrayal." the wrong way round. Round 2's rule is back: the same cards and the same thing said are one turn, whatever
+   * the side — the duplicate row is the visible fault, an opposite deed read by two readings the rarer one) */
   const one = [
     [t('Emilia betrayed Jovan.', [E, J]), t('Jovan was betrayed by Emilia.', [E, J])],
     [t('She betrays Jovan.', [E, J]), t('She betrays Jovan to the Order.', [E, J])],
@@ -18267,23 +18926,27 @@ await test('a turn told another way is one turn — in the passive, by a pronoun
     [t('Em betrays Jovan.', [E, J]), t('Em betrays Jovan to the Order.', [E, J])],
     [t('Emilia and Mara betray Jovan.', [E, J, M], 'Emilia and Mara stood together'), t('Mara and Emilia betray Jovan.', [E, J, M], 'Emilia and Mara stood together')],
     [t('The Iron Order hunted Emilia.', [E, O]), t('Emilia was hunted by the Iron Order.', [E, O])],
-  ];
-  const two = [
     [t('Jovan betrayed Emilia.', [E, J]), t('Jovan was betrayed by Emilia.', [E, J])],
     [t('Emilia betrays Jovan.', [E, J]), t('Emilia’s brother Jovan betrays her.', [E, J])],
     [t('At the gate, Jovan betrays Mara.', [J, M]), t('At the gate, Mara betrays Jovan.', [J, M])],
+    /* a deed both share, told from either side (the review of round 5, its F2) */
+    [t('Emilia meets Jovan at the gate.', [E, J]), t('Jovan meets Emilia at the gate.', [E, J])],
+    [t('Emilia argues with Jovan.', [E, J]), t('Jovan argues with Emilia.', [E, J])],
+    [t('Emilia marries Jovan.', [E, J]), t('Jovan marries Emilia.', [E, J])],
+    [t('Emilia fights Jovan.', [E, J]), t('Jovan fights Emilia.', [E, J])],
+    [t('Emilia betrays Emilia Hart.', [H, E]), t('Emilia Vermaine betrays Emilia Hart.', [H, E])],
   ];
-  assert.deepEqual(one.map(([a, b]) => tlmod.sameTurn(a, b, PAGE)), one.map(() => true), 'the same turn told another way: one');
-  assert.deepEqual(two.map(([a, b]) => tlmod.sameTurn(a, b, PAGE)), two.map(() => false), 'the opposite deed: two');
-  /* a name it goes by, kept with the turn as the reading's turns are resolved (continuityOf): "Em" tells her side */
+  assert.deepEqual(one.map(([a, b]) => tlmod.sameTurn(a, b, PAGE)), one.map(() => true), 'one, whichever side tells it');
+  /* a name she goes by: the same turn too */
   const notes = { people: [{ id: 'pe-e', name: 'Emilia Vermaine', aka: ['Em'] }, { id: 'pe-j', name: 'Jovan Wessex', aka: [] }], threads: [] };
   const read = (text) => tlmod.continuityOf([{ kind: 'relationship', cards: [{ kind: 'people', name: 'Emilia Vermaine' }, { kind: 'people', name: 'Jovan Wessex' }], text, evidence: ['She sold him to the Order'], stance: 'fact' }], notes, { text: PAGE }).events[0];
-  const em = read('Em betrays Jovan.');
-  assert.deepEqual(em.refs.find((r) => r.id === 'pe-e').aka, ['Em'], 'the name she goes by kept with the turn');
-  assert.deepEqual([tlmod.sameTurn(em, read('Jovan betrays Em.'), PAGE), tlmod.sameTurn(em, read('Emilia betrays Jovan to the Order.'), PAGE)], [false, true], 'told by the name she goes by: her side');
-  /* through the merge of two readings: one row for the same turn, two for the opposite deeds */
-  const merged = (a, b) => tlmod.mergeContinuity({ schema: 1, fp: util.hashText(PAGE), complete: true, events: [a] }, { schema: 1, fp: util.hashText(PAGE), complete: true, events: [b] }, PAGE).events.length;
-  assert.deepEqual([...one.map(([a, b]) => merged(a, b)), ...two.map(([a, b]) => merged(a, b))], [1, 1, 1, 1, 1, 1, 2, 2, 2]);
+  assert.deepEqual([tlmod.sameTurn(read('Em betrays Jovan.'), read('Jovan betrays Em.'), PAGE), tlmod.sameTurn(read('Em betrays Jovan.'), read('Emilia betrays Jovan to the Order.'), PAGE)], [true, true], 'by the name she goes by too: one');
+  /* through the merge of two readings: one row each — and of one reading, never folded: two rows each */
+  const kept = (a, b, oneReading = false) => tlmod.mergeContinuity({ schema: 1, fp: util.hashText(PAGE), complete: true, events: [a] }, { schema: 1, fp: util.hashText(PAGE), complete: true, events: [b] }, PAGE, { oneReading }).events.length;
+  assert.deepEqual(one.map(([a, b]) => kept(a, b)), one.map(() => 1), 'two readings: one row');
+  assert.deepEqual(one.map(([a, b]) => kept(a, b, true)), one.map(() => 2), 'one reading: two rows, however alike');
+  /* the same turn word for word, its mark: one, even in one reading */
+  assert.equal(kept(one[0][0], one[0][0], true), 1);
 });
 
 await test('the helper’s light says what its failure waits for as it is read: the time left with Try again now, then that it tries again now — or, a page being written, once that page is done', async () => {
@@ -18365,8 +19028,10 @@ await test('how long the phone waits on a silent provider: his page sixteen minu
   } finally {
     globalThis.fetch = before;
   }
-  /* Test lets a provider that never answers go on its leash — it has no Stop (its ask is not streamed: a provider that
-   * answers nothing at all, here) */
+  /* Test lets a provider that never answers go on its leash — it has no Stop — and says it gave no answer in that time,
+   * never that it is not working (2.12.41, round 7 — changed with a comment why, the review of round 5, its F9: its ask
+   * was not streamed, so its leash measured the whole answer, and a model only slow to answer was said to be not
+   * working); a provider that answers nothing at all, here */
   const http = await import('node:http');
   const silent = http.createServer((req, res) => { req.on('data', () => {}); req.on('end', () => { if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ data: [{ id: 'scripted' }] })); } }); });
   await new Promise((r) => silent.listen(PORT + 7, '127.0.0.1', r));
@@ -18374,11 +19039,45 @@ await test('how long the phone waits on a silent provider: his page sixteen minu
   try {
     const t0 = Date.now();
     const out = await call.tryConnection({ ...CONN, id: 'c-t', url: `http://127.0.0.1:${PORT + 7}/v1` }, { speed: false });
-    assert.deepEqual([out.ok, /sent nothing/.test(out.words), Date.now() - t0 < 5000], [false, true, true], `${out.words} (${Date.now() - t0} ms)`);
+    /* (and how long his page waits for it, as it does: a word from it for sixteen minutes, the relay's wait on his page) */
+    assert.deepEqual([out.ok, out.words, Date.now() - t0 < 5000], [false, 'It gave no answer in a minute — it may only be slow to answer, or its provider may be down. Test waits no longer than that; a page waits up to sixteen minutes for a word from it, or until you press Stop.', true], `${out.words} (${Date.now() - t0} ms)`);
   } finally {
     delete globalThis.__cozyLeashQuietMs;
     silent.closeAllConnections();
     await new Promise((r) => silent.close(() => r()));
+  }
+  /* a model slow to answer — a second of thinking before it says "ready", past the leash — heard thinking all the while
+   * on a stream: waited for, and working; asked without a stream it would say nothing until its answer was done */
+  const slow = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ data: [{ id: 'scripted' }] })); return; }
+      let sent = {};
+      try { sent = JSON.parse(body || '{}'); } catch (_) { /* none */ }
+      if (sent.stream !== true) { setTimeout(() => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ready', reasoning_content: 'Thinking it over.' }, finish_reason: 'stop' }] })); }, 1000); return; }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.flushHeaders();
+      let n = 0;
+      const beat = setInterval(() => {
+        if (res.destroyed) { clearInterval(beat); return; }
+        if (n++ < 6) { res.write('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: 'Thinking it over. ' }, finish_reason: null }] }) + '\n\n'); return; }
+        clearInterval(beat);
+        res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: 'ready' }, finish_reason: null }] }) + '\n\n');
+        res.write('data: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + '\n\n');
+        res.end('data: [DONE]\n\n');
+      }, 170);
+    });
+  });
+  await new Promise((r) => slow.listen(PORT + 7, '127.0.0.1', r));
+  globalThis.__cozyLeashQuietMs = 300;
+  try {
+    const out = await call.tryConnection({ ...CONN, id: 'c-t', url: `http://127.0.0.1:${PORT + 7}/v1` }, { speed: false });
+    assert.deepEqual([out.ok, /^Working\./.test(out.words), out.words.includes('It answered “ready”')], [true, true, true], out.words);
+  } finally {
+    delete globalThis.__cozyLeashQuietMs;
+    slow.closeAllConnections();
+    await new Promise((r) => slow.close(() => r()));
   }
   await setHouse();
 });

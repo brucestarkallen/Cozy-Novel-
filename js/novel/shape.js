@@ -1187,11 +1187,14 @@ export const novelSteps = {
    * count was lower, in whichever browser either was made, whatever their clocks say — renamesSince. 2.12.41, round 5:
    * judged by the renaming browser's clock against the reading's, a rename made where the clock runs behind was missed,
    * and what the reading found lost) */
-  noteRenames: (pairs, at) => (n) => {
+  /* (`mark`: {id} — the change of names, by its own mark — or {undoes} — the Undo of the change so marked: an Undo puts each
+   * page's words back as they were, which no change of names does — names.js renameSteps, 2.12.41, round 7) */
+  noteRenames: (pairs, at, mark = {}) => (n) => {
     n.memory = n.memory || {};
     const count = (Number(n.memory.renameN) || 0) + 1;
     n.memory.renameN = count;
-    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at, n: count }))].filter((x) => at - x.at < 3600000).slice(-20);
+    const tag = { ...(mark && mark.id ? { id: mark.id } : {}), ...(mark && mark.undoes ? { undoes: mark.undoes } : {}) };
+    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at, n: count, ...tag }))].filter((x) => at - x.at < 3600000).slice(-20);
   },
   /* what the helper's model would not read, set aside with why (archivist.js) */
   setAside: (entries) => (n) => { n.memory = n.memory || {}; n.memory.aside = { ...(n.memory.aside || {}), ...entries }; },
