@@ -943,9 +943,15 @@ export const novelSteps = {
   setMemory: (patch) => (n) => { n.memory = { ...(n.memory || {}), ...patch }; },
   /* a name changed everywhere, kept for a little while: work asked before it
    * (a page on its way, a reading) is given the new name when it lands */
+  /* (each change of names counted on the book — its `n`: work asked before it is work that took the book's words while the
+   * count was lower, in whichever browser either was made, whatever their clocks say — renamesSince. 2.12.41, round 5:
+   * judged by the renaming browser's clock against the reading's, a rename made where the clock runs behind was missed,
+   * and what the reading found lost) */
   noteRenames: (pairs, at) => (n) => {
     n.memory = n.memory || {};
-    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at }))].filter((x) => at - x.at < 3600000).slice(-20);
+    const count = (Number(n.memory.renameN) || 0) + 1;
+    n.memory.renameN = count;
+    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at, n: count }))].filter((x) => at - x.at < 3600000).slice(-20);
   },
   /* what the helper's model would not read, set aside with why (archivist.js) */
   setAside: (entries) => (n) => { n.memory = n.memory || {}; n.memory.aside = { ...(n.memory.aside || {}), ...entries }; },
@@ -969,6 +975,11 @@ export const novelSteps = {
   },
   clearRemoved: (ids) => (n) => { if (n.memory && n.memory.removed) n.memory.removed = n.memory.removed.filter((x) => !ids.includes(x.id)); },
 };
+/* how many changes of names the book has had (noteRenames) — noted when work takes the book's words — and the names
+ * changed since a count was noted, in order: work asked before them is given them when it lands (archivist.js
+ * readChanges, writer.js; names.js renameIn applies them one change at a time) */
+export const renameCount = (novel) => Number(((novel || {}).memory || {}).renameN) || 0;
+export const renamesSince = (novel, count) => (((novel || {}).memory || {}).renames || []).filter((x) => x && Number(x.n) > count);
 
 /* ----------------------------------------------------- steps (chapter) */
 

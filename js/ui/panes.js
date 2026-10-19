@@ -836,7 +836,9 @@ function drawNotes() {
   const novelId = P.novelId;
   /* Notes → Bibliography (bibliography.js): drawn again only when what it shows changed */
   if (notesView === 'bibliography') {
-    const sig = bibliographyPrint(novelId);
+    /* (and its line for the pages not read yet as it reads now — those asked again once their wait is over, with when:
+     * archivist.js bibOwedLine, 2.12.41) */
+    const sig = JSON.stringify([bibliographyPrint(novelId), archivist.bibOwedLine(novelId)]);
     if (sig === bibSignature && ui.rightBody.querySelector('.bibview')) return;
     bibSignature = sig;
     notesSignature = '';
@@ -884,6 +886,8 @@ function drawNotes() {
       /* whether a helper reads what the Timeline lacks by itself (archivist.js timelineBackfill) — none chosen, or one
        * whose connection was turned away, never said to (2.12.40, the audit) */
       helper: () => archivist.helperState(novelId),
+      /* of the passages not read yet, those asked again once their wait is over (archivist.js readAgainLater, 2.12.41) */
+      later: (owedOf) => archivist.readAgainLater(novelId, 'turns', owedOf),
       readAgain: () => {
         notesView = 'cards';
         drawSide();

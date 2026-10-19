@@ -217,6 +217,23 @@ async def states(browser):
           await s.flush();
         }""", ids)
         await pg.wait_for_function("(document.querySelector('.timeline-gaps p') || {}).textContent?.includes('1 passage was set aside')")
+        # (2.12.41) the passage owed, tried once on a model too slow to answer: said with when the helper reads it again by
+        # itself — never "a few at a time" while nothing was booked (a helper chosen, nothing else owed it would ask)
+        await pg.evaluate("""async (ids) => {
+          const s = await import('/js/store.js'), sh = await import('/js/novel/shape.js'), a = await import('/js/novel/archivist.js'), {hashText} = await import('/js/util.js');
+          const conn = {id: 'c-h', name: 'Helper', url: 'http://127.0.0.1:9/v1', model: 'stand-in', key: 'k'};
+          s.change('house', 'house', (h) => { h.connections = [...(h.connections || []).filter((c) => c.id !== 'c-h'), conn]; h.roles = {...(h.roles || {}), helper: 'c-h', checker: 'off'}; });
+          const c = s.peek('chapter', ids.cid);
+          s.change('novel', ids.nid, sh.novelSteps.seen(ids.cid, Object.fromEntries(c.passages.map((p) => [p.id, a.signature(sh.picked(p))]))));
+          s.change('chapter', ids.cid, (ch) => { const v = sh.picked(ch.passages.find((p) => p.id === ids.owed)); v.tries = {turns: {fp: hashText(v.text), n: 1, next: s.phoneNow() + 15 * 60 * 1000}}; });
+          await s.flush();
+        }""", ids)
+        try:
+            await pg.wait_for_function("(document.querySelector('.timeline-gaps p') || {}).textContent?.includes('too slow to answer')", timeout=5000)
+        except Exception:
+            pass
+        gaps = await pg.inner_text('.timeline-gaps')
+        check('a passage its model was too slow to answer for: said with when the helper reads it again by itself', '1 passage is not read for the Timeline yet — the helper’s model was too slow to answer for it, so the helper reads it again by itself in fifteen minutes, and its turns show here as they are read.' in gaps and 'a few at a time' not in gaps, gaps)
         # the helper stopped: its connection turned away (the checker off, so nothing is asked)
         await pg.evaluate("""async (ids) => {
           const s = await import('/js/store.js'), a = await import('/js/novel/archivist.js');

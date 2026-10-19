@@ -682,10 +682,38 @@ export function renameRule(from, to) {
     to: (m) => (m === up && up !== from ? String(to).toUpperCase() : to),
   };
 }
-/* names changed in a text, all at once: pairs [{from, to}] */
+/* NAMES CHANGED ONE CHANGE AFTER ANOTHER (2.12.41, round 5 — the review of round 4: every pair ran in one pass, as if
+ * all were made together, so a rename and its Undo while a reading was out gave the answer the name undone — a stray
+ * card, its turns lost — and a name renamed again gave it the first new name): in turn, one change at a time — the pairs
+ * one change made together (one count `n`, else one time `at`) in one pass, as a swap must be — and a change undone (its
+ * pairs given back the other way round after it, nothing between touching those names) never made, nor its Undo. Pairs
+ * that say nothing of when (mend.js: the swaps one change made) are one change. */
+function renameSteps(pairs) {
+  const groups = [];
+  for (const x of (pairs || []).filter((p) => p && p.from && p.to && p.from !== p.to)) {
+    const key = x.n !== undefined ? `n${x.n}` : x.at !== undefined ? `a${x.at}` : '';
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.pairs.push(x); else groups.push({ key, pairs: [x] });
+  }
+  const names = (g) => new Set(g.pairs.flatMap((p) => [String(p.from).toLowerCase(), String(p.to).toLowerCase()]));
+  const undoes = (g, h) => g.pairs.length === h.pairs.length && g.pairs.every((p) => h.pairs.some((q) => q.from === p.to && q.to === p.from));
+  const out = [];
+  for (const g of groups) {
+    const mine = names(g);
+    let undone = -1;
+    for (let k = out.length - 1; k >= 0; k--) {
+      if (undoes(out[k], g)) { undone = k; break; }
+      if ([...names(out[k])].some((w) => mine.has(w))) break;
+    }
+    if (undone >= 0) out.splice(undone, 1); else out.push(g);
+  }
+  return out.map((g) => g.pairs);
+}
+/* names changed in a text: pairs [{from, to}] — made together, or one change after another (renameSteps) */
 export function renameIn(text, pairs) {
-  const rules = (pairs || []).filter((x) => x && x.from && x.to && x.from !== x.to).map((x) => renameRule(x.from, x.to));
-  return rules.length ? replaceMany(text, rules).text : String(text == null ? '' : text);
+  let t = String(text == null ? '' : text);
+  for (const step of renameSteps(pairs)) t = replaceMany(t, step.map((x) => renameRule(x.from, x.to))).text;
+  return t;
 }
 /* every word of an answer renamed: strings in it, however deep (a helper's answer asked before a name changed) */
 export function renameAll(value, pairs) {

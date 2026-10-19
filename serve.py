@@ -55,15 +55,20 @@ HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).ex
 PORT = int(os.environ.get("COZYNOVEL_PORT") or "8081")
 
 
+# the longest the relay ever waits on a silent provider, whatever it is told: a day (2.12.41, round 5 — a wait of 1e10
+# seconds, named or set, was past what a socket can be given, and every such call came back as a transport error)
+RELAY_MOST = 24 * 3600
+
+
 def _relay_wait():
     # how long the relay waits on a silent provider when the page names no wait (every call of the page names one,
-    # a minute past its own leash: call.js relayWait) — ten minutes, or COZYNOVEL_RELAY_TIMEOUT seconds when set
-    # (the tests scale it with the page's leashes)
+    # past its own leash: call.js relayWait) — ten minutes, or COZYNOVEL_RELAY_TIMEOUT seconds when set (the tests
+    # scale it with the page's leashes), never past RELAY_MOST
     try:
         v = float(os.environ.get("COZYNOVEL_RELAY_TIMEOUT") or 0)
     except ValueError:
         v = 0
-    return v if 0 < v < float("inf") else 600
+    return min(v, RELAY_MOST) if 0 < v < float("inf") else 600
 
 
 RELAY_WAIT = _relay_wait()
@@ -1996,7 +2001,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if isinstance(k, str) and isinstance(v, str):
                 req.add_header(k, v)
         named = spec.get("timeout")
-        timeout = named if isinstance(named, (int, float)) and not isinstance(named, bool) and 0 < named < float("inf") else RELAY_WAIT
+        timeout = min(named, RELAY_MOST) if isinstance(named, (int, float)) and not isinstance(named, bool) and 0 < named < float("inf") else RELAY_WAIT
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
         except urllib.error.HTTPError as e:
