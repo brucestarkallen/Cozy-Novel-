@@ -719,7 +719,9 @@ function renameEverywhere(novelId, novel, rules, put, why, pairs = []) {
     /* (what it read as before it changes on the page itself: its words, their facts) */
     /* (its turns only while they are of these words, as its facts — timeline.js continuityNow, 2.12.40) */
     const was = { text: String(x.version.text || ''), sig: archivist.signature(x.version), codex: clone(codexNow(x.version)), continuity: clone(continuityNow(x.version)) };
-    const made = newVersionOn(put, novelId, x, next, why, { retire: false, rename: true });
+    /* (laid again over another window's newer words — his edit there a few words from the name — the names changed in
+     * them as they stand, never the page left as it was: `remake`, inplace.js inPlaceStep) */
+    const made = newVersionOn(put, novelId, x, next, why, { retire: false, rename: true, remake: quiet });
     undo.passages.push(made);
     restamp.push({ x, made, next, was });
   }

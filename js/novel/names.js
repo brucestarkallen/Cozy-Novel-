@@ -679,25 +679,71 @@ export function nameByEvidence(k, { known = null, book = null } = {}) {
  * opening one as the word itself (`open`), or in small letters (`small`), anywhere — its pages as they read, the cards,
  * his entries, his own words (`texts`: their words, an array or a function giving one, asked for only when a word is;
  * a text of his own given as {text, his: true} — one he typed in small letters, no capital inside a sentence in it,
- * says nothing by its small letters: "tom, mara’s brother" makes no "tom" a word). Each word by one pass over the
- * texts, kept while this is asked (a key's own letters, a possessive or a contraction after them), the texts' accents
- * off as the keys' are ("Zoë" is "zoe" — round 5: a name with an accent stood nowhere). */
+ * says nothing by its small letters: "tom, mara’s brother" makes no "tom" a word). Each text read once while its words
+ * stay the same — its words by their keys, accents off as the keys' are ("Zoë" is "zoe": round 5, a name with an
+ * accent stood nowhere), a possessive or a contraction and a closing quote off — so a word is asked of the whole book
+ * at the cost of one look at each text (round 5: each word asked was looked for through every page, a fifth of a second
+ * of the page's time for one change in place on a big book). */
 const accentsOff = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '');
-const typedSmallKept = new Map();
-const typedSmall = (t) => {
-  let got = typedSmallKept.get(t);
-  if (got === undefined) {
-    got = true;
-    for (const m of t.matchAll(/\p{Lu}/gu)) {
-      let i = m.index - 1;
+const IN_SMALL = 1;
+const INSIDE = 2;
+const OPENING = 4;
+const textsRead = new Map();
+let keysRead = 0;
+const KEYS_READ_MOST = 400000;
+/* (how long the character at `i` is where it is one of a word's — a letter, a mark, a figure, an apostrophe or a hyphen —
+ * else 0: by its code where it is plain, the rest as \p{…} reads it) */
+const WORD_CHAR = /^[\p{L}\p{M}\p{N}]$/u;
+function wordChar(t, i) {
+  const c = t.charCodeAt(i);
+  if (c < 128) return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c === 39 || c === 45 ? 1 : 0;
+  if (c === 8217) return 1;
+  if (c >= 0xd800 && c <= 0xdbff) { const s = String.fromCodePoint(t.codePointAt(i)); return WORD_CHAR.test(s) ? s.length : 0; }
+  return WORD_CHAR.test(t[i]) ? 1 : 0;
+}
+const quoteOrHyphen = (c) => c === 39 || c === 8217 || c === 45;
+function textRead(text) {
+  let got = textsRead.get(text);
+  if (got) return got;
+  const t = accentsOff(text);
+  const words = new Map();
+  let small = true;
+  const n = t.length;
+  let at = 0;
+  while (at < n) {
+    let len = wordChar(t, at);
+    if (!len) { at++; continue; }
+    const start = at;
+    while (at < n && len) { at += len; len = at < n ? wordChar(t, at) : 0; }
+    /* (a quote or a hyphen before it is none of it) */
+    let s = start;
+    while (s < at && quoteOrHyphen(t.charCodeAt(s))) s++;
+    if (s === at) continue;
+    const w = t.slice(s, at);
+    let k = w.toLowerCase();
+    /* (a possessive or a contraction off, and a closing quote: "Mara’s", "Mara’ll", "Mara’" are Mara) */
+    if (k.includes("'") || k.includes('’') || k.endsWith('-')) k = k.replace(/['’](?:s|ll|d|re|ve|m)$/, '').replace(/['’-]+$/, '');
+    if (!k) continue;
+    const c0 = w.charCodeAt(0);
+    let flag = IN_SMALL;
+    if (c0 < 128 ? c0 >= 65 && c0 <= 90 : /^\p{Lu}/u.test(w)) {
+      /* (a quote before it opens it, as a quote does; a dash typed as hyphens is looked past) */
+      let i = s - 1;
+      while (i >= 0 && t[i] === '-') i--;
       while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
-      if (i >= 0 && !SENTENCE_START.test(t[i]) && /\p{L}/u.test(t[m.index + 1] || '')) { got = false; break; }
+      const inside = i >= 0 && !SENTENCE_START.test(t[i]);
+      /* (typed all in small letters: no capital inside a sentence before another letter — "I" alone is no sign) */
+      if (inside && w.length > 1 && /\p{L}/u.test(w[1])) small = false;
+      flag = inside ? INSIDE : SUFFIXED.test(w) ? 0 : OPENING;
     }
-    if (typedSmallKept.size >= 2000) typedSmallKept.clear();
-    typedSmallKept.set(t, got);
+    words.set(k, (words.get(k) || 0) | flag | 8);
   }
+  got = { words, small };
+  keysRead += words.size;
+  if (keysRead > KEYS_READ_MOST) { textsRead.clear(); keysRead = words.size; }
+  textsRead.set(text, got);
   return got;
-};
+}
 export function bookEvidence(texts) {
   let list = null;
   const seen = new Map();
@@ -707,19 +753,14 @@ export function bookEvidence(texts) {
     got = { any: false, mid: false, open: false, small: false };
     seen.set(k, got);
     if (!k) return got;
-    if (list === null) list = ((typeof texts === 'function' ? texts() : texts) || []).map((x) => (typeof x === 'string' ? { text: x, his: false } : x)).filter((x) => x && typeof x.text === 'string' && x.text).map((x) => ({ text: accentsOff(x.text), his: Boolean(x.his) }));
-    const re = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}'’-])${escRe(k)}(?:['’](?:s|ll|d|re|ve|m))?(?![\\p{L}\\p{M}\\p{N}'’-])`, 'giu');
-    for (const { text: t, his } of list) {
-      re.lastIndex = 0;
-      for (let m = re.exec(t); m; m = re.exec(t)) {
-        got.any = true;
-        if (!/^\p{Lu}/u.test(m[0])) { if (!his || !typedSmall(t)) got.small = true; } else {
-          let i = m.index - 1;
-          while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
-          if (i >= 0 && !SENTENCE_START.test(t[i])) got.mid = true;
-          else if (!SUFFIXED.test(m[0])) got.open = true;
-        }
-      }
+    if (list === null) list = ((typeof texts === 'function' ? texts() : texts) || []).map((x) => (typeof x === 'string' ? { text: x, his: false } : x)).filter((x) => x && typeof x.text === 'string' && x.text).map((x) => ({ read: textRead(x.text), his: Boolean(x.his) }));
+    for (const { read, his } of list) {
+      const f = read.words.get(k);
+      if (!f) continue;
+      got.any = true;
+      if (f & IN_SMALL && (!his || !read.small)) got.small = true;
+      if (f & INSIDE) got.mid = true;
+      if (f & OPENING) got.open = true;
     }
     return got;
   };

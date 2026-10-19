@@ -14466,6 +14466,7 @@ await test('his entry is weighed against his premise by when each of its words w
   await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', mine: [{ kind: 'entry', name: 'Emilia Vermaine', holds: false, contradicts: 'Emilia Vermaine had black hair', text: `Emilia Vermaine has black hair. She rules the youngest house. ${RAVEN}`, why: 'his own page' }] }) }]);
   await archivist.run(b.novelId);
   assert.equal(bib.entriesOf(b.novel())[0].text, `Emilia Vermaine has black hair. She rules the youngest house. ${RAVEN}`, 'put right');
+  assert.deepEqual(weigh()[3], [{ name: 'Emilia Vermaine', words: ['The youngest elder.', 'Emilia Vermaine has black hair.', RAVEN] }], 'only the sentence the check changed is newer — “She” for her name keeps its time');
   assert.equal(archivist.undoLast(b.novelId), true);
   assert.deepEqual(bib.entriesOf(b.novel())[0], before, 'its Undo puts it back as it was, with when each word was written');
   /* an entry kept with no time at all (none of its words' times known) is never the newer: his premise stands over it */
@@ -14631,6 +14632,21 @@ await test('a name changed everywhere laid again over another window’s newer c
   assert.deepEqual([kept.bibliography[0].name, kept.bibliography[0].text, kept.brief, kept.notes.people.find((c) => c.id === 'pe-t')], ['Thomas', 'Thomas came home from the war. Thomas is blind now.', 'Thomas comes home, and Mara keeps the light.', { ...theirs.notes.people.find((c) => c.id === 'pe-t'), name: 'Thomas' }]);
   const keptC = await onPhone('chapter', b.ids[0]);
   assert.deepEqual([shape.premiseOf(keptC.passages[1]), picked(keptC.passages[1]).text], ['Thomas, Mara’s brother, comes home from the war, and Thomas limps.', 'Thomas came home from the war. Mara held him at the door.'], 'his newer premise with the name changed too');
+  await putAway(b);
+});
+
+await test('a name changed everywhere laid again over his edit of the page in another window, a few words from the name: the names change in his newer words, every word of his kept (round 5)', async () => {
+  await setHouse();
+  const b = await tomBook();
+  await store.flush();
+  const NEWER = 'Tom came back home from the war, thin. Mara held him at the door. Tom slept.';
+  await otherWindow('chapter', b.ids[0], (c) => { c.passages[1].versions[0].text = NEWER; });
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  await store.flush('chapter', b.ids[0]);
+  await store.flush('chapter', b.ids[0]);
+  const kept = await onPhone('chapter', b.ids[0]);
+  const v = picked(kept.passages[1]);
+  assert.deepEqual([v.text, v.before.at(-1).text, v.before.at(-1).rename], ['Thomas came back home from the war, thin. Mara held him at the door. Thomas slept.', NEWER, true]);
   await putAway(b);
 });
 
@@ -16681,8 +16697,9 @@ await test('names changed everywhere before 2.12.41 are marked so once, when the
   assert.deepEqual(await old(MARLA, ['Tom']), [2, [[], []]], 'no card and no entry for her');
   /* who did the deed, told by his card alone: no page names Tom now, but his card stands */
   assert.deepEqual(await old([['Tom held the door for the old woman.', 'Jovan held the door for the old woman.']], ['Tom', 'Jovan']), [0, [['partner']]], 'Tom’s card stands');
-  /* a name with an accent stands where it stands ("Zoë" still on another page) */
+  /* a name with an accent stands where it stands ("Zoë" still on another page), and one with a quote closing on it */
   assert.deepEqual(await old([['Zoë held the door for the old woman.', 'Zara held the door for the old woman.'], ['Zoë slept by the fire.', 'Zoë slept by the fire.']], ['Zara']), [0, [['partner'], undefined]], 'Zoë still on a page');
+  assert.deepEqual(await old([['Kara held the door for the old woman.', 'Lena held the door for the old woman.'], ['She called ‘Come here, Kara’ into the dark.', 'She called ‘Come here, Kara’ into the dark.']], ['Lena']), [0, [['partner'], undefined]], '‘Come here, Kara’');
 });
 
 await test('who put in each word of a page kept before 2.12.41 is worked out once when the book opens, after its old names changed everywhere are marked, and kept with the page — never worked out again each time the book opens', async () => {
