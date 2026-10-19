@@ -14661,7 +14661,7 @@ await test('a name changed everywhere changes his words in small letters only wh
   await putAway(b);
 });
 
-await test('a name changed everywhere changes its small letters in his words only where they can only be the name (round 5) — never an everyday word that is also a given name, nor in his words that write the name with its capital, nor where the book’s own words say them as a word; a capital opening his premise is no sign, and each is decided on the words it is laid on, another window’s too', async () => {
+await test('a name changed everywhere changes its small letters in his words only where they can only be the name (round 5) — never an everyday word that is also a given name, nor in his words that write the name with its capital inside a sentence, nor where the book’s own words say them as a word; a capital opening a sentence is no sign, and each is decided on the words it is laid on, another window’s too', async () => {
   await setHouse();
   const people = (b, list) => store.change('novel', b.novelId, (n) => { for (const [id, name, kind = 'people', about = 'Of the book.'] of list) n.notes[kind].push({ id, name, aka: [], about, updated: { chapterId: b.ids[0], at: 1 } }); }, { now: true });
   const page = (text, direction) => ({ text, ask: { direction, length: 'scene' } });
@@ -14674,6 +14674,15 @@ await test('a name changed everywhere changes its small letters in his words onl
   assert.deepEqual(a.ch().passages.map((p) => shape.premiseOf(p)), ['Tom, marla’s brother, comes home from the war.', 'marla waits on the quay for the ships.']);
   assert.equal(archivist.groundsOf(a.novel()).loose.includes(' mara '), false);
   await putAway(a);
+  /* (round 5b) only a capital inside a sentence says he writes the name with its capital in those words: the keyboard's
+   * capital opening a sentence is none — "Mara opens the door. tom sees mara" is his name typed small — and where he
+   * writes "Mara" inside a sentence, "mara’s" beside it is his word */
+  const k = await makeBook([[page('Mara opened the door and smiled at Tom.', 'Mara opens the door. tom sees mara and smiles.'), page('Tom met Mara at the gate.', 'Tom met Mara at the gate, and mara’s brother waved.')]], { manual: true });
+  markAllSeen(k);
+  people(k, [['pe-t', 'Tom'], ['pe-m', 'Mara']]);
+  assert.equal(changes.makeChange(k.novelId, { rename: { from: 'Mara', to: 'Marla' } }).status, 'made');
+  assert.deepEqual(k.ch().passages.map((p) => shape.premiseOf(p)), ['Marla opens the door. tom sees marla and smiles.', 'Tom met Marla at the gate, and mara’s brother waved.']);
+  await putAway(k);
   /* an everyday word that is also a given name: his premise typed all in small letters, and the title, keep it */
   const r = await makeBook([[page('Rose waited on the quay. The tide came in.', 'Rose waits on the quay for the ships.'), page('Mara walked out at dawn.', 'mara walks out to the quay as the sun rose.')]], { manual: true, title: 'the rose of the north' });
   markAllSeen(r);
@@ -14681,16 +14690,24 @@ await test('a name changed everywhere changes its small letters in his words onl
   assert.equal(changes.makeChange(r.novelId, { rename: { from: 'Rose', to: 'Lily' } }).status, 'made');
   assert.deepEqual([...r.ch().passages.map((p) => shape.premiseOf(p)), r.novel().meta.title], ['Lily waits on the quay for the ships.', 'mara walks out to the quay as the sun rose.', 'the rose of the north']);
   await putAway(r);
-  /* each of his words by itself: the premise that writes Tom with his capital keeps its "tom" (the old cat), the one typed
-   * small is renamed */
-  const t = await makeBook([[page('Tom waited on the quay.', 'Tom keeps the light, and the old tom sleeps by the nets.'), page('Tom stood at the gate.', 'tom waits at the gate.')]], { manual: true });
+  /* (round 5b) a word of nature that is a name too, its capital only opening the premise: the word kept */
+  const d = await makeBook([[page('Reed waited by the river.', 'Reed waits by the river, where the reed beds sway.')]], { manual: true });
+  markAllSeen(d);
+  people(d, [['pe-r', 'Reed']]);
+  assert.equal(changes.makeChange(d.novelId, { rename: { from: 'Reed', to: 'Rhys' } }).status, 'made');
+  assert.equal(shape.premiseOf(d.ch().passages[0]), 'Rhys waits by the river, where the reed beds sway.');
+  await putAway(d);
+  /* each of his words by itself: the premise that writes Tom with his capital inside a sentence keeps its "tom" (the old
+   * cat), the one typed small is renamed */
+  const t = await makeBook([[page('Tom waited on the quay.', 'The light is Tom’s, and the old tom sleeps by the nets.'), page('Tom stood at the gate.', 'tom waits at the gate.')]], { manual: true });
   markAllSeen(t);
   people(t, [['pe-t', 'Tom']]);
   assert.equal(changes.makeChange(t.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
-  assert.deepEqual(t.ch().passages.map((p) => shape.premiseOf(p)), ['Thomas keeps the light, and the old tom sleeps by the nets.', 'thomas waits at the gate.']);
+  assert.deepEqual(t.ch().passages.map((p) => shape.premiseOf(p)), ['The light is Thomas’s, and the old tom sleeps by the nets.', 'thomas waits at the gate.']);
   await putAway(t);
   /* the book's own words saying the small letters as a word: a card, or an entry of his that writes the name with its
-   * capital too — never his entry typed in small letters, where they are the name */
+   * capital inside a sentence too — never his entry typed in small letters, nor one whose capital only opens a sentence,
+   * where they are the name */
   const vale = async (extra) => {
     const v = await makeBook([[page('Vale climbed the pass at dawn.', 'vale climbs the pass at dawn.')]], { manual: true });
     markAllSeen(v);
@@ -14703,8 +14720,9 @@ await test('a name changed everywhere changes its small letters in his words onl
   };
   assert.deepEqual(await vale({}), ['vela climbs the pass at dawn.']);
   assert.deepEqual(await vale({ card: true }), ['vale climbs the pass at dawn.'], 'a card says “the vale below”');
-  assert.deepEqual(await vale({ entry: 'Vale keeps the sheep in the vale below the pass.' }), ['vale climbs the pass at dawn.', 'Vela keeps the sheep in the vale below the pass.'], 'his entry says it beside “Vale”');
+  assert.deepEqual(await vale({ entry: 'The sheep are Vale’s, and she keeps them in the vale below the pass.' }), ['vale climbs the pass at dawn.', 'The sheep are Vela’s, and she keeps them in the vale below the pass.'], 'his entry says it beside “Vale’s”');
   assert.deepEqual(await vale({ entry: 'vale keeps the sheep.' }), ['vela climbs the pass at dawn.', 'vela keeps the sheep.'], 'his entry typed small: the name');
+  assert.deepEqual(await vale({ entry: 'Vale keeps the sheep. vale’s dog sleeps by the fold.' }), ['vela climbs the pass at dawn.', 'Vela keeps the sheep. vela’s dog sleeps by the fold.'], 'his entry as his keyboard leaves it: the name');
   /* laid again over another window's newer words (its save turned away): decided on them as they stand */
   const w = await makeBook([[page('Tom waited on the quay. The tide came in.', 'tom waits on the quay for the ships.')]], { manual: true, brief: 'tom keeps the light.' });
   markAllSeen(w);
@@ -14712,7 +14730,7 @@ await test('a name changed everywhere changes its small letters in his words onl
   await store.flush();
   const got = await (await realFetch(`${BASE}/api/store/novel/${w.novelId}`)).json();
   const theirs = JSON.parse(JSON.stringify(got.data));
-  theirs.brief = 'Tom keeps the light, and the old tom sleeps by the nets.';
+  theirs.brief = 'The light is Tom’s, and the old tom sleeps by the nets.';
   assert.equal((await realFetch(`${BASE}/api/store/novel/${w.novelId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Base': String(got.rev) }, body: JSON.stringify({ data: theirs }) })).status, 200);
   const gotC = await (await realFetch(`${BASE}/api/store/chapter/${w.ids[0]}`)).json();
   const theirsC = JSON.parse(JSON.stringify(gotC.data));
@@ -14723,7 +14741,7 @@ await test('a name changed everywhere changes its small letters in his words onl
   await store.flush();
   const n = await onPhone('novel', w.novelId);
   const c = await onPhone('chapter', w.ids[0]);
-  assert.deepEqual([n.brief, shape.premiseOf(c.passages[0]), picked(c.passages[0]).text], ['Thomas keeps the light, and the old tom sleeps by the nets.', 'thomas waits on the quay for the ships until dawn.', 'Thomas waited on the quay. The tide came in.']);
+  assert.deepEqual([n.brief, shape.premiseOf(c.passages[0]), picked(c.passages[0]).text], ['The light is Thomas’s, and the old tom sleeps by the nets.', 'thomas waits on the quay for the ships until dawn.', 'Thomas waited on the quay. The tide came in.']);
   await putAway(w);
 });
 

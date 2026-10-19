@@ -584,7 +584,12 @@ export const EVERYDAY_NAMES = new Set(['rose', 'will', 'mark', 'grace', 'hope', 
   'prince', 'duke', 'earl', 'baron', 'major', 'noble', 'royal', 'angel', 'saint', 'christian', 'destiny', 'harmony', 'melody', 'mercy',
   'patience', 'prudence', 'charity', 'honor', 'honour', 'justice', 'liberty', 'felicity', 'serenity', 'trinity', 'unity', 'clemency',
   'temperance', 'chastity', 'bliss', 'glory', 'love', 'star', 'aurora', 'nova', 'echo', 'haven', 'journey', 'lyric', 'marina', 'meadow',
-  'honey', 'candy', 'sugar', 'merry', 'pip', 'sonny', 'buddy', 'chance', 'black', 'white', 'brown', 'green', 'gray', 'grey', 'red', 'scarlet']);
+  'honey', 'candy', 'sugar', 'merry', 'pip', 'sonny', 'buddy', 'chance', 'black', 'white', 'brown', 'green', 'gray', 'grey', 'red', 'scarlet',
+  /* (round 5b: a capital opening a sentence no longer keeps them as his word — the words of nature and of a craft that
+   * are names too, every one an everyday word) */
+  'reed', 'birch', 'thorn', 'bramble', 'marsh', 'clay', 'field', 'wood', 'hill', 'brooks', 'rivers', 'banks', 'sparrow', 'heron',
+  'carter', 'fisher', 'judge', 'deacon', 'cook', 'potter', 'barber', 'tailor', 'farmer', 'steward', 'gardener', 'monk', 'victor',
+  'rocky', 'stormy', 'phoenix', 'brandy', 'sherry', 'lucky']);
 /* the words a modal or an auxiliary spells — a name that is one of them opens a sentence as the name only where it is no
  * modal there ("Will you stay?" is no Will) — and of them the ones that are given names */
 const MODALS = new Set(['will', 'may', 'can', 'could', 'would', 'should', 'shall', 'must', 'might', 'do', 'does', 'did', 'have', 'has', 'had',
@@ -859,10 +864,18 @@ export function nameRe(name) {
   const forms = [...new Set([n, n.toUpperCase()])].map(escRe).join('|');
   return new RegExp(`${EDGE_BEFORE}(?:${forms})${EDGE_AFTER}`, 'gu');
 }
-/* whether a text writes a name with its capital — as written or in capitals (there the name's small letters are a word of
- * his: "Rose waits on the quay as the sun rose") */
+/* whether a text writes a name with its capital inside a sentence — as written or in capitals (there he writes the name
+ * with its capital, and its small letters are a word of his: "Tom met Mara at the gate, and mara’s brother waved."). A
+ * capital opening a sentence is no sign: a phone keyboard puts it there ("Mara opens the door. tom sees mara and
+ * smiles." writes Mara small — round 5b, as namesScanned reads a capital only inside a sentence) */
 export function nameWritten(text, name) {
-  return new RegExp(nameRe(name).source, 'u').test(String(text || ''));
+  const t = String(text || '');
+  for (const m of t.matchAll(nameRe(name))) {
+    let i = m.index - 1;
+    while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
+    if (i >= 0 && !SENTENCE_START.test(t[i])) return true;
+  }
+  return false;
 }
 /* Several changes of one text made in one pass over it as it stood — each
  * place changed once, by the longest change that finds it there, and never
@@ -945,8 +958,9 @@ function renameSteps(pairs) {
  * review of 2.12.41 — his premise in small letters still named Tom). Only where its small letters can only be the name:
  * never a name of one word whose small letters are an everyday word that is also a given name (EVERYDAY_NAMES — round
  * 5, the review of round 4: "as the sun rose" became "as the sun lily"); changes.js renameEverywhere keeps it off where
- * the book's own words write those small letters as a word, and in a text that writes the name with its capital (and
- * renameOf refuses a rename of one the pages write small). null for a name already in small letters. */
+ * the book's own words write those small letters as a word, and in a text that writes the name with its capital inside
+ * a sentence (nameWritten; and renameOf refuses a rename of one the pages write small). null for a name already in
+ * small letters. */
 export function smallRenameRule(from, to) {
   const f = String(from || '').toLowerCase();
   const t = String(to || '').toLowerCase();

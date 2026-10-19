@@ -665,8 +665,9 @@ export function groupsOf(ops) {
 /* WHETHER THE BOOK'S OWN WORDS SAY A NAME'S SMALL LETTERS AS A WORD OF THEIRS (2.12.41, round 5 — what keeps the name's
  * small letters from being changed in his words): a card of the helper's, or what it keeps of the book (What it's
  * about, How it reads), saying them in small letters — the helper writes names as the book does — or a card or an entry
- * of his saying them beside the name with its capital (there they are a word, never the name; "tom, mara's brother"
- * typed small is the name) */
+ * of his saying them where it writes the name with its capital inside a sentence (there they are a word, never the
+ * name; "tom, mara's brother" typed small is the name, and so is "mara's" beside the capital his keyboard put at the
+ * start of a sentence — round 5b: names.js nameWritten) */
 function smallIsAWord(novel, name, rule) {
   const word = new RegExp(rule.re.source, 'u');
   const says = (t) => typeof t === 'string' && word.test(t);
@@ -694,9 +695,11 @@ function renameEverywhere(novelId, novel, rules, put, why, pairs = []) {
    * letters can only be the name (round 5, the review of round 4): never a name whose small letters are an everyday word
    * that is also a given name (smallRenameRule: "as the sun rose", "the rose of the north" keep their rose), nor one the
    * book's own words say in small letters as a word (smallIsAWord — a page that does refuses the rename itself,
-   * renameOf), and never in a text that writes the name with its capital (there its small letters are his word) —
-   * decided on the words each step is laid on, as they stand, so over another window's newer words too; a capital that
-   * opens a sentence is no sign he writes names with capitals ("Tom, mara’s brother" becomes "Tom, marla’s brother") */
+   * renameOf), and never in a text that writes the name with its capital inside a sentence (there its small letters
+   * are his word: "Tom met Mara at the gate, and mara’s brother waved") — decided on the words each step is laid on, as
+   * they stand, so over another window's newer words too; a capital that opens a sentence is no sign he writes names
+   * with capitals ("Tom, mara’s brother" becomes "Tom, marla’s brother", "Mara opens the door. tom sees mara and
+   * smiles." "Marla opens the door. tom sees marla and smiles." — round 5b) */
   const smallRules = (pairs || []).map((p) => {
     const r = p ? smallRenameRule(p.from, p.to) : null;
     return r && !smallIsAWord(novel, p.from, r) ? r : null;
