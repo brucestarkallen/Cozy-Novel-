@@ -26,7 +26,7 @@
 import * as store from '../store.js';
 import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd, goneWith, whoseGrown, whoseGrownBefore, NOTE_KINDS } from './shape.js';
 import { hashText, countWords } from '../util.js';
-import { codexNow, carriedCodex, entriesOf } from './bibliography.js';
+import { codexNow, carriedCodex, entriesForNotes } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
 import { nameWordsOf } from './names.js';
 
@@ -39,7 +39,9 @@ export function bookNameWords(novel) {
   if (!novel) return null;
   const people = [];
   const things = [];
-  for (const e of entriesOf(novel)) (e.kind === 'people' ? people : things).push(e.name, ...(e.aka || []));
+  /* (never an entry set to Never: his words for himself alone decide nothing — 2.12.41, the review of 2.12.41, as
+   * bibliography.js entriesForNotes keeps them from the notes) */
+  for (const e of entriesForNotes(novel)) (e.kind === 'people' ? people : things).push(e.name, ...(e.aka || []));
   for (const kind of NOTE_KINDS) if (kind !== 'threads') for (const c of ((novel.notes || {})[kind]) || []) if (c) (kind === 'people' ? people : things).push(c.name, ...(c.aka || []));
   const sig = hashText(`${people.join('\u0001')}\u0002${things.join('\u0001')}`);
   if (namesKept.sig !== sig) namesKept = { sig, words: nameWordsOf(people, things) };
@@ -175,7 +177,10 @@ export function foldVersion({ novelId, chapterId, passageId, childId, targetId, 
 
 /* the words as the writer wrote them grew (Go on): its own words, and the
  * words before each change that end as these did, grow with them */
-export function grownFields(v, more) {
+/* (passage: the version's own — for who put in the words of a version made from another, and the names its premise
+ * gives: 2.12.41, the review of 2.12.41 — without it, a Go on of a few of his own page's words written again gave all of
+ * it to the writer) */
+export function grownFields(v, more, passage = null) {
   const was = String((v && v.text) || '');
   const out = {};
   if (v && typeof v.written === 'string' && sameEnd(v.written, was)) out.written = v.written + more;
@@ -191,10 +196,10 @@ export function grownFields(v, more) {
      * cannot grow with it, and went — with it what his edit took out of the page, so his premise was the book again,
      * and what his hand put in): into `gone`, by the same step as the changes let go past BEFORE_KEEP (shape.js goneWith) */
     const left = list.map((_, i) => i).filter((i) => !grows[i]);
-    if (left.length) out.gone = goneWith(v.gone, list, left, was);
+    if (left.length) out.gone = goneWith(v.gone, list, left, was, passage);
   }
   /* (who put in each word: the words added the writer's — shape.js whose) */
-  if (v) out.whose = whoseGrown(v, more);
+  if (v) out.whose = whoseGrown(v, more, passage);
   return out;
 }
 

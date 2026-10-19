@@ -14164,6 +14164,20 @@ await test('a name his edit takes out of a page is told by the book’s names as
   assert.deepEqual(await run('tom, mara’s brother, comes home from the war.', 'Tom came home from the war. Mara held him.', 'Mara waited alone. She had never had a brother.'), { took: ['tom'], stands: false }, 'a premise typed in small letters');
   assert.deepEqual(await run('Mary-Jane comes home.', 'Mary-Jane came home. Tom held her.', 'Mary Jane came home. Tom held her.'), { took: [], stands: true }, 'the hyphen taken out');
   assert.deepEqual(await run('Mary Jane comes home.', 'Mary Jane came home. Tom held her.', 'Mary-Jane came home. Tom held her.'), { took: [], stands: true }, 'a hyphen put in');
+  /* (2.12.41, the review of 2.12.41) his edit right after the page was written, no card for Will yet: the page's own premise gives him */
+  assert.deepEqual(await run('Will, Mara’s brother, waits at the gate.', 'Will stood at the gate. Mara said he will stay.', 'Mara stood at the gate. She said he will stay.'), { took: ['will'], stands: false }, 'Will, given by the page’s premise');
+  /* a premise that writes "will" or "rose" as a word gives no Will nor Rose; "Will you stay?" taken out is no Will taken out */
+  assert.deepEqual(await run('Mara begs Tom to stay, but he will go.', '“Will you stay?” Mara asked. He said he will go at dawn.', '“Stay,” Mara said. He said he will go at dawn.', [['pe-w', 'Will']]), { took: [], stands: true }, '“Will you stay?”');
+  assert.deepEqual((await run('Mara will confront her father tonight.', 'Will watched from the door. Mara will confront her father tonight.', 'Mara will confront her father tonight.', [['pe-w', 'Will'], ['pe-m', 'Mara']])).stands, true, 'a premise with “will” in it');
+  assert.deepEqual((await run('Mara walks out to the quay as the sun rose.', 'Rose waited on the quay. Mara walked out as the sun rose.', 'Mara walked out as the sun rose.', [['pe-r', 'Rose'], ['pe-m', 'Mara']])).stands, true, 'a premise with “rose” in it');
+  /* (Will and Rose the people taken out — the premise's "will" and "rose" are no names of theirs) */
+  assert.deepEqual(await run('Mara will confront her father tonight.', 'Will watched from the door. Mara waited.', 'Mara waited.', [['pe-w', 'Will'], ['pe-m', 'Mara']]), { took: ['will'], stands: true }, 'Will taken out, beside a premise saying “will”');
+  assert.deepEqual(await run('Mara walks out to the quay as the sun rose.', 'Rose waited on the quay. Mara walked out at dawn.', 'Mara walked out at dawn.', [['pe-r', 'Rose'], ['pe-m', 'Mara']]), { took: ['rose'], stands: true }, 'Rose taken out, beside a premise saying “rose”');
+  /* a word of a thing's name only opening a sentence is no name of it */
+  assert.deepEqual(await run('The Order keeps the city quiet.', 'Order was the word of the day. The rain fell.', 'Quiet was the word of the day. The rain fell.', [['lo-o', 'The Order', 'lore']]), { took: [], stands: true }, '“Order” opening a sentence');
+  /* his name with a possessive, or a contraction, is his name */
+  assert.deepEqual(await run('Tom, Mara’s brother, comes home.', 'Tom’s coat hung by the door. Mara touched it.', 'A coat hung by the door. Mara touched it.'), { took: ['tom'], stands: false }, 'Tom’s coat taken out');
+  assert.deepEqual(await run('Mara waits for Tom.', 'Mara stood at the door. Mara waited for Tom.', 'Mara’ll wait for Tom.'), { took: [], stands: true }, 'Mara’ll is Mara');
 });
 
 await test('a page is his own words where most of the words on it now are his own hand’s — his words his partner wrote over are his no longer, his own written over his partner’s are — however many changes went, a Go on and a name changed everywhere', () => {
@@ -14191,6 +14205,95 @@ await test('a page is his own words where most of the words on it now are his ow
   Object.assign(v, inplace.grownFields({ ...v }, ` ${W(200, 'more')}`));
   v.text += ` ${W(200, 'more')}`;
   assert.equal(shape.ownWords(most), false, 'the writer’s Go on made the page the writer’s for the most part');
+  /* (2.12.41, the review of 2.12.41) a Go on that joins on in the middle of a word cut short: one hand for each word, and
+   * the next change finds them so */
+  const lay = (p, f) => { const x = picked(p); for (const [k, val] of Object.entries(f)) { if (val === undefined) delete x[k]; else x[k] = val; } return p; };
+  const cut = shape.newPassage('ai', 'The rain came down on the old harbour and the boats knocked together in the dark while Mara waited by the do', { how: 'write' });
+  lay(cut, shape.inPlaceFields(picked(cut), 'Mara stood alone under the broken lamp, counting the ships that never came back, her hand on the cold rail of the do', 'you', { keepEnd: true }));
+  lay(cut, inplace.grownFields({ ...picked(cut) }, 'or. Nothing moved.'));
+  picked(cut).text += 'or. Nothing moved.';
+  const counted = (x) => picked(x).whose.runs.reduce((s, [, k]) => s + k, 0);
+  assert.equal(counted(cut), 25, 'a hand for each of the 25 words, “door” once');
+  /* (kept with a hand too many, as such a Go on kept it before: the one too many of the writer's words it put in taken off) */
+  picked(cut).whose = { ...picked(cut).whose, runs: [...picked(cut).whose.runs, ['w', 1]] };
+  lay(cut, shape.inPlaceFields(picked(cut), picked(cut).text.replace('cold rail', 'cold iron rail'), 'checker'));
+  assert.deepEqual([counted(cut), shape.ownWords(cut)], [26, true], 'his still, after the checker put “iron” in');
+  /* a long page of his, the checker's mends scattered over it past 600 changes: each word his where it stands as he wrote it */
+  const long = Array.from({ length: 2400 }, (_, i) => `w${i}`);
+  const own = shape.newPassage('you', long.join(' '));
+  const mended = long.map((w, i) => (i % 7 === 3 && i < 7 * 330 ? `x${i}` : w));
+  lay(own, shape.inPlaceFields(picked(own), mended.join(' '), 'checker'));
+  assert.equal(picked(own).whose.runs.filter(([h]) => h === 'you').reduce((s, [, k]) => s + k, 0), 2070, 'his 2,070 words of 2,400');
+  assert.equal(shape.ownWords(own), true);
+  /* a few of his own page's words written again at his note: the rest are still his — by the version's own kind, never
+   * the page's it came from; a page brought in from a file is no words of his hand */
+  const selected = (imported) => {
+    const p = shape.newPassage('you', W(100, 'his'), imported ? { how: 'imported' } : {});
+    const base = picked(p);
+    p.versions.push(shape.newVersion({ how: 'selection', ask: { note: 'Sharper.', from: 0, to: 20 }, text: `${W(10, 'new')} ${W(100, 'his').split(' ').slice(5).join(' ')}`, base: base.id, ...shape.rootOf(base) }));
+    p.pick = 1;
+    return p;
+  };
+  assert.deepEqual([shape.ownWords(selected(false)), shape.hisChange(picked(selected(false)))], [true, true], 'a few of his own page’s words written again');
+  assert.deepEqual([shape.ownWords(selected(true)), shape.hisChange(picked(selected(true)))], [false, true], 'on a page brought in from a file');
+  /* and on the writer's page most of whose words are his edit's: the rest still his */
+  const edited = step(page(), `${W(80, 'his')} ${W(20, 'writer')}`, 'you');
+  const eb = picked(edited);
+  edited.versions.push(shape.newVersion({ how: 'selection', ask: { note: 'Sharper.', from: 0, to: 10 }, text: `${W(5, 'new')} ${eb.text.split(' ').slice(5).join(' ')}`, base: eb.id, ...shape.rootOf(eb) }));
+  edited.pick = 1;
+  assert.equal(shape.ownWords(edited), true, 'a few words written again on the writer’s page his edit made his for the most part');
+  /* a name changed everywhere marked so after its hands were worked out (when the book opened): worked out again */
+  const named = shape.newPassage('you', `${W(40, 'his')} ${Array(60).fill('Mara').join(' ')}`);
+  lay(named, shape.inPlaceFields(picked(named), picked(named).text.replace(/Mara/g, 'Marla'), 'partner'));
+  delete picked(named).whose;
+  assert.equal(shape.ownWords(named), false, 'his partner’s sixty words, as kept before 2.12.41');
+  picked(named).before.at(-1).rename = true;
+  assert.equal(shape.ownWords(named), true, 'marked a name changed everywhere: the words are his again');
+});
+
+await test('a Go on keeps who put in the words of a page made from another — a few of his own page’s words written again stay a page of his — and what an old edit of his it leaves behind took out, by the page’s own premise; an old edit reads the same while it is kept and once it is let go', async () => {
+  await setHouse();
+  const standing = (b) => archivist.standingPremises(b.novel(), { [b.ids[0]]: b.ch() }).map((x) => x.text);
+  const MINE = 'Mara called from the quay. Mara waited by the lamp. Mara counted the ships as they came in, one by one, until the light went. Mara wept for the ones that did not come home.';
+  const WILL = 'Will, Mara’s brother, waits at the gate.';
+  const b = await makeBook([[{ text: MINE, how: 'mine' }, { text: 'Will stood at the gate. Mara said he will stay by the door.', model: 'writer-a', ask: { direction: WILL, length: 'scene' } }]], { manual: true });
+  markAllSeen(b);
+  /* his own page, its last words written again at his note and cut short — Go on may carry it on */
+  const p0 = b.ch().passages[0];
+  const base = picked(p0);
+  store.change('chapter', b.ids[0], shape.chapterSteps.addVersion(p0.id, shape.newVersion({ how: 'selection', ask: { note: 'Gentler.', from: MINE.indexOf('Mara wept'), to: MINE.length }, text: MINE.replace('Mara wept for the ones that did not come home.', 'She grieved quietly for the lost'), base: base.id, ...shape.rootOf(base), cut: true, endCut: true })), { now: true });
+  assert.equal(shape.ownWords(b.ch().passages[0]), true, 'a few of his words written again: his page still');
+  /* an edit of his on the writer's page, kept before 2.12.41 (nothing kept of what it did), that took Will out — the page's
+   * premise gives Will, no card does */
+  store.change('chapter', b.ids[0], (ch) => {
+    const v = picked(ch.passages[1]);
+    v.written = v.text;
+    v.before = [{ text: v.text, by: 'you', at: 100 }];
+    v.hands = ['you'];
+    v.text = 'Mara stood at the gate. She said he would stay.';
+  }, { now: true });
+  assert.deepEqual([shape.laterWords(b.ch().passages[1]).map((w) => w.took), standing(b)], [[['will']], []], 'his old edit took Will out: the premise is no longer the book');
+  await script([{ text: 'ones, and the sea kept them.' }, { text: 'Night fell over the harbour.' }]);
+  assert.equal((await writer.goOn({ novelId: b.novelId, chapterId: b.ids[0], passageId: p0.id })).ok, true);
+  const v0 = picked(b.ch().passages[0]);
+  assert.ok(v0.text.endsWith('the sea kept them.'), v0.text);
+  assert.deepEqual([shape.ownWords(b.ch().passages[0]), v0.whose.runs.some(([h]) => h === 'you')], [true, true], `his words kept his through the Go on: ${JSON.stringify(v0.whose.runs)}`);
+  assert.equal((await writer.goOn({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[1].id })).ok, true);
+  const v1 = picked(b.ch().passages[1]);
+  assert.deepEqual([v1.before, v1.gone && v1.gone.you && v1.gone.you.took, standing(b)], [undefined, ['will'], []], 'left behind by the Go on, what it took out kept: the premise still not the book');
+  await putAway(b);
+  /* an old edit of his, kept before 2.12.41, let go past the changes kept: what it took out read as it read while kept,
+   * never with the book's names of now (a premise in small letters, a card for Will made since) */
+  const names = namesjs.nameWordsOf(['Will', 'Mara'], []);
+  const p = shape.newPassage('ai', 'Will stood at the gate. Mara said he will stay.', { how: 'write', ask: { direction: 'will waits at the gate, and mara with him.', length: 'scene' } });
+  const v = picked(p);
+  v.written = v.text;
+  v.before = [{ text: v.text, by: 'checker', at: 50 }, { text: 'Will stood at the old gate. Mara said he will stay.', by: 'you', at: 100 }];
+  v.hands = ['checker', 'you'];
+  v.text = 'Mara stood at the old gate. She said he will stay.';
+  const tookWhileKept = shape.laterWords(p).map((w) => w.took);
+  for (const w of ['waited', 'stood', 'waited', 'stood']) Object.assign(v, shape.inPlaceFields(v, v.text.replace(/stood|waited/, w), 'checker', { names, passage: p }));
+  assert.deepEqual([v.before.length, v.before.some((x) => x.by === 'you'), v.gone && v.gone.you && v.gone.you.took, shape.laterWords(p).map((w) => w.took)], [shape.BEFORE_KEEP, false, tookWhileKept[0], tookWhileKept], `the same while kept and once let go: ${JSON.stringify(tookWhileKept)}`);
 });
 
 await test('his premise and his newest word on its passage never go over their room beside the page: the newest note cut to fit before it goes, and where only one of them can ride, his note — the premise said left out — even beside a page that replaced long words on a small helper', async () => {
@@ -14280,12 +14383,39 @@ await test('his entry is weighed against his premise by when each of its words w
   assert.equal(shape.premiseAt(b.ch().passages[1]), 0);
   assert.deepEqual(weigh(), [undefined, undefined, undefined, undefined], 'never “older than everything”');
   await putAway(b);
+  /* (2.12.41, the review of 2.12.41) a sentence keeps its time only where its words are the same, in their order, but for
+   * grammar: turned round, a near word of another meaning, "he" for "she", is a newer word */
+  const timed = (was, now, novel = null) => {
+    const prev = { id: 'bb-m', name: 'Mara', aka: [], line: '', text: was, at: 1000 };
+    const n = novel || { bibliography: [prev], notes: { people: [], places: [], lore: [], threads: [] } };
+    n.bibliography = [prev];
+    shape.novelSteps.putEntry({ ...prev, text: now, at: 5000 })(n);
+    return [...shape.stampsOf(n.bibliography[0]).values()].map((t) => (t === 1000 ? 'old' : 'new'));
+  };
+  assert.deepEqual(timed('Mara hates Tom.', 'Tom hates Mara.'), ['new'], 'turned round');
+  assert.deepEqual(timed('Mara serves the Order.', 'The Order serves Mara.'), ['new']);
+  assert.deepEqual(timed('He loves her.', 'She loves him.'), ['new'], 'another person');
+  assert.deepEqual(timed('Mara is bitten.', 'Mara is bitter.'), ['new'], 'a near word of another meaning');
+  assert.deepEqual(timed('She is cruel.', 'She is not cruel.'), ['new']);
+  assert.deepEqual(timed('She is tall. She is strong.', 'She is tall and strong.'), ['old'], 'two joined');
+  assert.deepEqual(timed('She is tall and strong.', 'She is tall. She is strong.'), ['old', 'old'], 'one said again as two');
+  assert.deepEqual(timed('Mara rules the north and fears the sea.', 'Mara rules the north. She fears the sea.'), ['old', 'old'], 'one said again as two, her name and “she” alike');
+  assert.deepEqual(timed('She is tall and strong.', 'She is strong. She is tall.'), ['new', 'new'], 'said again as two, turned round');
+  assert.deepEqual(timed('She is tall and strong.', 'She is tall. She is strong and kind.'), ['new', 'new'], 'said again as two, a word put in');
+  assert.deepEqual(timed('She keeps the lighthuose.', 'She keeps the lighthouse.'), ['old'], 'a slip mended');
+  assert.deepEqual(timed('Mara keeps the lighthouse.', 'She keeps the lighthouse.'), ['old'], 'her name for “she”');
+  assert.deepEqual(timed('Mara wears a sliver ring.', 'Mara wears a silver ring.'), ['old'], 'a slip, where his book never says “sliver”');
+  const notes = { bibliography: [], notes: { people: [{ id: 'pe-t', name: 'Tom', about: 'He found a sliver of glass in the sand.' }], places: [], lore: [], threads: [] } };
+  assert.deepEqual(timed('Mara wears a sliver ring.', 'Mara wears a silver ring.', notes), ['new'], 'a word his book uses elsewhere is no slip');
 });
 
 await test('a name changed everywhere reaches his premises, his notes for writing a page again, the chapters’ plans and his entries — the check never makes a card for the old name — and its Undo takes them all back', async () => {
   await setHouse();
   const b = await tomBook();
   const p0 = b.ch().passages[1];
+  /* (and a premise of his typed in small letters, his name in it with a possessive) */
+  const SMALL = 'tom’s ship comes in at dawn, and mara waits.';
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'The ship came in at dawn. Mara waited on the quay.', { how: 'write', ask: { direction: SMALL, length: 'scene' } })), { now: true });
   /* his note for writing it again, kept on a version of its own */
   store.change('chapter', b.ids[0], (ch) => { const p = ch.passages[1]; p.versions.push(shape.newVersion({ how: 'rewrite', text: 'Tom came home thin from the war. Mara held him at the door.', ask: { note: 'Let Tom limp.', premise: TOM_41 }, from: p.versions[0].id })); p.pick = 1; }, { now: true });
   store.change('chapter', b.ids[0], shape.chapterSteps.setPlan('Tom comes home; Mara opens the door.'), { now: true });
@@ -14298,9 +14428,11 @@ await test('a name changed everywhere reaches his premises, his notes for writin
   const made = changes.makeChange(b.novelId, { rename: { from: 'Tom', to: 'Thomas' } });
   assert.equal(made.status, 'made');
   assert.equal(archivist.auditDue(b.novel()), false, 'no check owed for a name changed in his entries and the cards alike');
-  assert.ok(made.said.includes('1 entry in the bibliography') && made.said.includes('the premises of 1 passage') && made.said.includes('1 chapter plan'), made.said);
+  assert.ok(made.said.includes('1 entry in the bibliography') && made.said.includes('the premises of 2 passages') && made.said.includes('1 chapter plan'), made.said);
   const p = b.ch().passages[1];
   assert.deepEqual([shape.premiseOf(p), p.versions.map((v) => v.ask.premise || v.ask.direction), picked(p).ask.note], ['Thomas, Mara’s brother, comes home from the war.', ['Thomas, Mara’s brother, comes home from the war.', 'Thomas, Mara’s brother, comes home from the war.'], 'Let Thomas limp.'], 'his premise on every version, and his note');
+  assert.equal(shape.premiseOf(b.ch().passages[2]), 'thomas’s ship comes in at dawn, and mara waits.', 'his premise in small letters, as he typed it');
+  assert.equal(archivist.groundsOf(b.novel()).loose.includes(' tom '), false, 'the old name no ground of the book');
   assert.equal(b.ch().plan, 'Thomas comes home; Mara opens the door.');
   const e = bib.entriesOf(b.novel())[0];
   assert.deepEqual([e.name, e.aka, e.line, e.text, e.at], ['Thomas', ['Tommy'], 'Mara’s brother.', 'Thomas came home from the war. Thomas limps.', t0]);
@@ -14317,8 +14449,68 @@ await test('a name changed everywhere reaches his premises, his notes for writin
   assert.equal(changes.undoChange(b.novelId, made).ok, true);
   const q = b.ch().passages[1];
   assert.deepEqual([shape.premiseOf(q), picked(q).ask.note, b.ch().plan, bib.entriesOf(b.novel())[0].name, bib.entriesOf(b.novel())[0].text], [TOM_41, 'Let Tom limp.', 'Tom comes home; Mara opens the door.', 'Tom', 'Tom came home from the war. Tom limps.']);
+  assert.equal(shape.premiseOf(b.ch().passages[2]), SMALL);
   assert.equal(p0.id, q.id);
   assert.equal(b.novel().memory.audit.entries, archivist.entriesPrint(b.novel()), 'and the check’s print of his entries with them');
+  /* (2.12.41, the review of 2.12.41) his entry changed after the name changed owes its check, the name changed back or not */
+  const again = changes.makeChange(b.novelId, { rename: { from: 'Tom', to: 'Thomas' } });
+  assert.equal(again.status, 'made');
+  assert.equal(archivist.auditDue(b.novel()), false);
+  const live = bib.entriesOf(b.novel())[0];
+  store.change('novel', b.novelId, shape.novelSteps.putEntry({ ...live, text: `${live.text} Thomas is blind now.`, at: Date.now(), by: 'you' }), { now: true });
+  assert.equal(archivist.auditDue(b.novel()), true, 'his edit owes a check');
+  assert.equal(changes.undoChange(b.novelId, again).ok, true);
+  assert.deepEqual([archivist.auditDue(b.novel()), bib.entriesOf(b.novel())[0].text], [true, 'Thomas came home from the war. Thomas limps. Thomas is blind now.'], 'his edit kept, and still owed its check');
+  await putAway(b);
+  /* the rename's step for his entry, laid again over a newer copy (his edit in another window meanwhile): the names change
+   * in his newer words, and nothing else is written over them */
+  const swap = (t) => namesjs.renameIn(t, [{ from: 'Tom', to: 'Thomas' }]);
+  const newer = { bibliography: [bib.tidyEntry(bib.newEntry({ id: 'bb-n', name: 'Tom', kind: 'people', text: 'Tom came home. Tom is blind now.', at: 1000, by: 'you' }))], notes: { people: [], places: [], lore: [], threads: [] } };
+  assert.equal(changes.renameEntryStep('bb-n', swap)(newer), true);
+  assert.deepEqual([newer.bibliography[0].name, newer.bibliography[0].text, [...shape.stampsOf(newer.bibliography[0]).values()]], ['Thomas', 'Thomas came home. Thomas is blind now.', [1000, 1000]]);
+  assert.equal(changes.renameEntryStep('bb-n', swap)(newer), false, 'laid twice, the second time changes nothing');
+});
+
+await test('a name changed everywhere laid again over another window’s newer copy (its save turned away) changes the names in the newer words and writes nothing else over them — his entry, his words for the book, a card, his premise', async () => {
+  await setHouse();
+  const b = await tomBook();
+  store.change('novel', b.novelId, shape.novelSteps.putEntry(bib.tidyEntry(bib.newEntry({ id: 'bb-t', name: 'Tom', kind: 'people', text: 'Tom came home from the war.', at: 1000, by: 'you' }))), { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.setField('brief', 'Tom comes home.'), { now: true });
+  await store.flush('novel', b.novelId);
+  await store.flush('chapter', b.ids[0]);
+  /* another window, meanwhile: his entry, his words for the book and a card changed */
+  const got = await (await realFetch(`${BASE}/api/store/novel/${b.novelId}`)).json();
+  const theirs = JSON.parse(JSON.stringify(got.data));
+  theirs.bibliography[0].text = 'Tom came home from the war. Tom is blind now.';
+  theirs.brief = 'Tom comes home, and Mara keeps the light.';
+  theirs.notes.people.find((c) => c.id === 'pe-t').about = 'Mara’s brother, blind since the war.';
+  const sent = await realFetch(`${BASE}/api/store/novel/${b.novelId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Base': String(got.rev) }, body: JSON.stringify({ data: theirs }) });
+  assert.equal(sent.status, 200);
+  /* and his premise, typed again there */
+  const gotC = await (await realFetch(`${BASE}/api/store/chapter/${b.ids[0]}`)).json();
+  const theirsC = JSON.parse(JSON.stringify(gotC.data));
+  theirsC.passages[1].versions[0].ask.direction = 'Tom, Mara’s brother, comes home from the war, and Tom limps.';
+  const sentC = await realFetch(`${BASE}/api/store/chapter/${b.ids[0]}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Base': String(gotC.rev) }, body: JSON.stringify({ data: theirsC }) });
+  assert.equal(sentC.status, 200);
+  /* this window, its copy older: the name changed everywhere — its save turned away, its steps laid again over the newer copy */
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  await store.flush('novel', b.novelId);
+  await store.flush('chapter', b.ids[0]);
+  const kept = await onPhone('novel', b.novelId);
+  assert.deepEqual([kept.bibliography[0].name, kept.bibliography[0].text, kept.brief, kept.notes.people.find((c) => c.id === 'pe-t')], ['Thomas', 'Thomas came home from the war. Thomas is blind now.', 'Thomas comes home, and Mara keeps the light.', { ...theirs.notes.people.find((c) => c.id === 'pe-t'), name: 'Thomas' }]);
+  const keptC = await onPhone('chapter', b.ids[0]);
+  assert.deepEqual([shape.premiseOf(keptC.passages[1]), picked(keptC.passages[1]).text], ['Thomas, Mara’s brother, comes home from the war, and Thomas limps.', 'Thomas came home from the war. Mara held him at the door.'], 'his newer premise with the name changed too');
+  await putAway(b);
+});
+
+await test('a name changed everywhere changes his words in small letters only where the book never writes those small letters as a word of its own: “as the sun rose” keeps its rose', async () => {
+  await setHouse();
+  const b = await makeBook([[{ text: 'Rose waited on the quay. The tide came in.', ask: { direction: 'Rose waits on the quay as the sun rose.', length: 'scene' } }, { text: 'Rose stood at the gate.', ask: { direction: 'rose waits at the gate, and tom with her.', length: 'scene' } }]], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-r', name: 'Rose', aka: [], about: 'She keeps the quay.', updated: { chapterId: b.ids[0], at: 1 } }); }, { now: true });
+  const made = changes.makeChange(b.novelId, { rename: { from: 'Rose', to: 'Lily' } });
+  assert.equal(made.status, 'made', made.said);
+  assert.deepEqual(b.ch().passages.map((p) => [shape.premiseOf(p), picked(p).text]), [['Lily waits on the quay as the sun rose.', 'Lily waited on the quay. The tide came in.'], ['rose waits at the gate, and tom with her.', 'Lily stood at the gate.']], 'the word “rose” his premise writes kept, and his premise in small letters with it');
   await putAway(b);
 });
 
@@ -15821,6 +16013,17 @@ await test('his entry that is no person says what its name is, wherever its card
   const notes = b.novel().notes;
   assert.deepEqual([notes.people.map((c) => c.name), notes.lore.map((c) => c.name)], [[], ['The Order']], 'his group kept as what it is');
   await putAway(b);
+  /* his entry set to Never decides nothing of what a reading files, nor of what a change took out (2.12.41, the review of 2.12.41) */
+  const nv = await makeBook([['The alley was quiet.']], { manual: true });
+  markAllSeen(nv);
+  putEntries(nv, [{ name: 'The Order', kind: 'groups', text: 'A brotherhood sworn to hunt the Sanguelis.', rides: 'never' }, { name: 'Will', kind: 'people', text: 'A boy of the harbour.', rides: 'never' }]);
+  assert.deepEqual([archivist.thingNames(nv.novel()), (inplace.bookNameWords(nv.novel()) || new Map()).has('will')], [null, false], 'no name of his set to Never');
+  store.change('chapter', nv.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'The Order met at dusk in the cathedral.', { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await reset();
+  await script([{ text: JSON.stringify({ people: [{ name: 'The Order', about: 'A brotherhood of hunters who meet at dusk.' }] }) }]);
+  await archivist.run(nv.novelId);
+  assert.deepEqual([nv.novel().notes.people.map((c) => c.name), nv.novel().notes.lore.map((c) => c.name)], [['The Order'], []], 'the reading’s row filed as it gave it');
+  await putAway(nv);
   /* a name a person goes by as a word of theirs stays the person's, though his clan's entry has it */
   const k = await makeBook([['The alley was quiet.']], { manual: true });
   markAllSeen(k);
@@ -15860,21 +16063,36 @@ await test('the writer’s own words put back, or a change put back, leave no ha
   assert.equal(changes.undoChange(b.novelId, made).ok, true);
   assert.deepEqual(picked(b.ch().passages[0]).hands, [], 'his partner’s change undone');
   await putAway(b);
+  /* his edit put back as the fifth change kept, nothing let go: his hand goes with it too (2.12.41, the review of 2.12.41) */
+  const lay = (p, f) => { const x = picked(p); for (const [k, val] of Object.entries(f)) { if (val === undefined) delete x[k]; else x[k] = val; } };
+  const five = shape.newPassage('ai', 'Mara lit the lamp and waited for the ships to come home.', { how: 'write' });
+  for (const w of ['old lamp', 'lamp', 'old lamp', 'lamp']) lay(five, shape.inPlaceFields(picked(five), picked(five).text.replace(/old lamp|lamp/, w), 'checker'));
+  lay(five, shape.inPlaceFields(picked(five), picked(five).text.replace('waited for the ships', 'waited all night for Tom'), 'you'));
+  assert.deepEqual([picked(five).before.length, picked(five).gone], [shape.BEFORE_KEEP, undefined]);
+  lay(five, shape.putBackFields(picked(five)).patch);
+  assert.deepEqual([picked(five).hands, shape.hisChange(picked(five))], [['checker'], false], 'no hand of his after his edit put back');
 });
 
-await test('names changed everywhere before 2.12.41 are marked so once, when the book opens — exactly, from his partner’s kept change, else by the words — and the pages are the writer’s again; a colour his partner changed stays his partner’s', async () => {
+await test('names changed everywhere before 2.12.41 are marked so once, when the book opens — exactly, from his partner’s kept change, else by the words only where the book reads as a name changed everywhere leaves it — and the pages are the writer’s again; his partner’s other changes stay his partner’s: a colour, a name on one page, who did a deed, two parts traded', async () => {
   await setHouse();
-  const make = async (keep) => {
-    const b = await makeBook([[{ text: 'Emilia Vermaine shook out her black hair. Mara watched her from the door.', model: 'writer-a' }, { text: 'Mara lit the green lantern by the door. Tom slept on.', model: 'writer-a' }, { text: 'The rain kept on over the roofs. Mara counted the lamps. Sir slept by the fire.', model: 'writer-a', tookOff: 'Note to you: the dog stays.' }, { text: 'Jovan stood at the gate in the rain.', model: 'writer-a' }]], { manual: true });
+  const make = async (keep, joe = 'card') => {
+    const b = await makeBook([[{ text: 'Emilia Vermaine shook out her black hair. Mara watched her from the door.', model: 'writer-a' }, { text: 'Mara lit the green lantern by the door. Tom slept on.', model: 'writer-a' }, { text: 'The rain kept on over the roofs. Mara counted the lamps. Sir slept by the fire.', model: 'writer-a', tookOff: 'Note to you: the dog stays.' }, { text: 'Jovan stood at the gate in the rain.', model: 'writer-a' },
+      { text: 'Tom held the door for the old woman.', model: 'writer-a' }, { text: 'Green light spilled over the quay. The rain kept on.', model: 'writer-a' }, { text: 'Tom saw the ship first and ran to the quay, and Emilia followed him down.', model: 'writer-a' }]], { manual: true });
     markAllSeen(b);
+    /* (the cards a reading made of them — and of Joe, met on another page; or, for Joe, only an entry of his set to Never) */
+    store.change('novel', b.novelId, (n) => { for (const [id, name] of [['pe-m', 'Mara'], ['pe-t', 'Tom'], ...(joe === 'card' ? [['pe-j', 'Joe']] : []), ['pe-e', 'Emilia Vermaine'], ['pe-s', 'Sir']]) n.notes.people.push({ id, name, aka: [], about: 'Of the book.', updated: { chapterId: b.ids[0], at: 1 } }); }, { now: true });
+    if (joe === 'never') putEntries(b, [{ name: 'Joe', kind: 'people', text: 'A boy of the harbour, for me alone.', rides: 'never' }]);
     const made = [
       changes.makeChange(b.novelId, { rename: { from: 'Mara', to: 'Marla' }, why: 'her name' }),
       changes.makeChange(b.novelId, { passage: '1.2', find: 'green lantern', replace: 'grey lantern', why: 'the colour' }),
       changes.makeChange(b.novelId, { rename: { from: 'Sir', to: 'Galahad' }, why: 'the dog’s name' }),
-      /* (a name his partner swapped on this one page alone: no one's hand either, his conversation kept or not) */
+      /* (his partner's changes on one page alone: a name, who did a deed, a colour opening a sentence, two parts traded) */
       changes.makeChange(b.novelId, { passage: '1.4', find: 'Jovan stood', replace: 'Joe stood', why: 'his name here' }),
+      changes.makeChange(b.novelId, { passage: '1.5', find: 'Tom held', replace: 'Joe held', why: 'Joe did it' }),
+      changes.makeChange(b.novelId, { passage: '1.6', find: 'Green light', replace: 'Grey light', why: 'the colour' }),
+      changes.makeChange(b.novelId, { passage: '1.7', find: 'Tom saw the ship first and ran to the quay, and Emilia followed', replace: 'Emilia saw the ship first and ran to the quay, and Tom followed', why: 'she saw it first' }),
     ];
-    assert.deepEqual(made.map((c) => c.status), ['made', 'made', 'made', 'made']);
+    assert.deepEqual(made.map((c) => c.status), Array(7).fill('made'), JSON.stringify(made.map((c) => c.said)));
     assert.equal(writer.putBackTail({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[2].id }), true);
     /* as 2.12.40 kept them: nothing recorded, his partner's hand for every change, and his own for what he put back */
     store.change('chapter', b.ids[0], (ch) => {
@@ -15892,26 +16110,69 @@ await test('names changed everywhere before 2.12.41 are marked so once, when the
     return b;
   };
   const shown = (b) => b.ch().passages.map((p) => { const v = picked(p); return { marked: (v.before || []).map((x) => Boolean(x.rename)), hands: v.hands, his: shape.hisChange(v) }; });
+  const PARTNERS = { marked: [false], hands: ['partner'], his: true };
   const b = await make(true);
-  assert.deepEqual(shown(b).map((x) => x.his), [true, true, true, true], 'before: every page counted as changed by his partner');
-  assert.equal(await mend.markRenames(b.novelId), 5, 'every name changed, and only those');
+  assert.deepEqual(shown(b).map((x) => x.his), Array(7).fill(true), 'before: every page counted as changed by his partner');
+  assert.equal(await mend.markRenames(b.novelId), 4, 'every name changed everywhere, and only those');
   assert.deepEqual(shown(b), [
     { marked: [true], hands: [], his: false },
     { marked: [true, false], hands: ['partner'], his: true },
     { marked: [true, true, false], hands: [], his: false },
-    { marked: [true], hands: [], his: false },
+    PARTNERS, PARTNERS, PARTNERS, PARTNERS,
   ], JSON.stringify(shown(b)));
   assert.deepEqual(shape.laterWords(b.ch().passages[1]).map((w) => w.how), ['partner'], 'the colour told as his partner’s words — the name changed everywhere never');
   assert.ok(checker.gradesOf(b.novelId).models.some((r) => r.model === 'writer-a' && !r.mixed), JSON.stringify(checker.gradesOf(b.novelId).models));
   assert.equal(b.novel().memory.renamesMarked, mend.RENAMES_V);
   assert.equal(await mend.markRenames(b.novelId), 0, 'once');
   await putAway(b);
-  /* his partner's conversation gone: by the words alone — "Sir", a word as well as a name, is not told from his partner's own change;
-   * his partner's name swapped on one page alone is marked as it was with the conversation kept */
+  /* his partner's conversation gone: by the words alone — a name taken out that still stands in the book (Tom, beside Joe's
+   * card), a name put in no card goes by ("Grey"), two parts traded, are his partner's changes; "Jovan", standing nowhere now,
+   * made "Joe", a card's name, reads as a name changed everywhere leaves it — no record says otherwise; "Sir", a word as well
+   * as a name, is not told from his partner's own change */
   const c = await make(false);
-  await mend.markRenames(c.novelId);
-  assert.deepEqual(shown(c).map((x) => [x.marked, x.hands]), [[[true], []], [[true, false], ['partner']], [[true, false, false], ['partner']], [[true], []]], JSON.stringify(shown(c)));
+  assert.equal(await mend.markRenames(c.novelId), 4);
+  assert.deepEqual(shown(c).map((x) => [x.marked, x.hands]), [[[true], []], [[true, false], ['partner']], [[true, false, false], ['partner']], [[true], []], ...Array(3).fill([[false], ['partner']])], JSON.stringify(shown(c)));
   await putAway(c);
+  /* "Joe" only an entry of his set to Never: no name the book goes by, and "Jovan" made "Joe" stays his partner's change */
+  const d = await make(false, 'never');
+  assert.equal(await mend.markRenames(d.novelId), 3);
+  assert.deepEqual(shown(d).map((x) => [x.marked, x.hands]), [[[true], []], [[true, false], ['partner']], [[true, false, false], ['partner']], ...Array(4).fill([[false], ['partner']])], JSON.stringify(shown(d)));
+  await putAway(d);
+});
+
+await test('who put in each word of a page kept before 2.12.41 is worked out once when the book opens, after its old names changed everywhere are marked, and kept with the page — never worked out again each time the book opens', async () => {
+  await setHouse();
+  const b = await makeBook([[{ text: 'Mara lit the lamp and waited by the door for the ships to come home.', model: 'writer-a' }, { text: 'Tom slept on by the fire.', model: 'writer-a' }, { text: 'Mara called. Mara waited. Mara wept.', how: 'mine' }]], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-m', name: 'Mara', aka: [], about: 'Of the book.', updated: { chapterId: b.ids[0], at: 1 } }); }, { now: true });
+  const pid = b.ch().passages[0].id;
+  assert.equal(writer.saveEdit({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, text: 'Mara lit the lamp and waited all night for Tom by the door.' }), true);
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Mara', to: 'Marla' } }).status, 'made');
+  /* as kept before 2.12.41: the name changed everywhere his partner's change, and nothing kept of who put in which words —
+   * but on his own page, what was worked out with the rename his partner's (a fix folded onto it when the book opened) */
+  store.change('chapter', b.ids[0], (ch) => {
+    for (const p of ch.passages) {
+      const v = picked(p);
+      delete v.whose;
+      for (const x of v.before || []) { delete x.whose; delete x.took; delete x.moved; delete x.rename; }
+      if ((v.before || []).length) v.hands = [...new Set([...(v.hands || []), ...v.before.map((x) => x.by)])];
+    }
+    const own = picked(ch.passages[2]);
+    own.whose = shape.whoseNow(own, ch.passages[2]);
+  }, { now: true });
+  store.change('novel', b.novelId, (n) => { delete (n.memory || {}).renamesMarked; delete (n.memory || {}).whoseKept; }, { now: true });
+  assert.deepEqual([shape.whoseFits(picked(b.ch().passages[0])), shape.ownWords(b.ch().passages[2])], [false, false], 'his own page counted three words of six his partner’s');
+  assert.equal(await mend.keepWhose(b.novelId), 0, 'not before its old names changed everywhere are marked');
+  await mend.markRenames(b.novelId);
+  assert.equal(shape.ownWords(b.ch().passages[2]), true, 'the name changed everywhere marked: his own page all his again');
+  assert.equal(await mend.keepWhose(b.novelId), 2, 'each page with a change kept on it');
+  const v = picked(b.ch().passages[0]);
+  assert.ok(shape.whoseFits(v), JSON.stringify(v.whose));
+  assert.deepEqual(v.whose, shape.whoseNow({ ...v, whose: undefined }, b.ch().passages[0]), 'as worked out from the words before');
+  assert.equal(shape.whoseFits(picked(b.ch().passages[1])), false, 'a page no change touched needs none');
+  assert.equal(b.novel().memory.whoseKept, mend.WHOSE_V);
+  assert.equal(await mend.keepWhose(b.novelId), 0, 'once');
+  await putAway(b);
 });
 
 const turnBook = async () => {
