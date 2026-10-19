@@ -605,6 +605,8 @@ export function keptFor(chapter, passageIds) {
     checks: pick(chapter && chapter.checks),
     checksLeft: pick(chapter && chapter.checksLeft),
     duels: Object.fromEntries(Object.entries((chapter && chapter.duels) || {}).filter(([, d]) => d && ids.has(d.pid))),
+    /* (and what the head to head counted of their pairs, by passage — checker.js duelCount, 2.12.41, round 8) */
+    duelTries: Object.fromEntries(Object.entries((chapter && chapter.duelTries) || {}).filter(([k]) => ids.has(String(k).split(':')[0]))),
     retired: ((chapter && chapter.retired) || []).filter(theirs),
   }));
 }

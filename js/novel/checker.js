@@ -72,7 +72,10 @@ export function checkerConn(house) {
 
 /* A completed reading may be kept, but the next ask belongs to the choice
  * he has now, not a connection captured before he changed it. */
-function checkerChoice(conn) {
+/* (`novelId`: the book it checks — nothing is asked of a model that kept silent for as long as it is ever waited, the
+ * helper's silence or the checker's own on the same connection, until its wait is over: archivist.js silentWait,
+ * 2.12.41, round 8 — the checker asked the very model the helper was waiting out) */
+function checkerChoice(conn, novelId = '') {
   const id = conn.id;
   const print = archivist.choicePrint(conn);
   const current = () => {
@@ -80,11 +83,31 @@ function checkerChoice(conn) {
     return Boolean(now && now.id === id && archivist.choicePrint(now) === print);
   };
   return { current, beforeAsk: () => {
-    if (current()) return;
-    const error = new Error('the checker choice changed');
-    error.checkerChanged = true;
-    throw error;
+    if (!current()) {
+      const error = new Error('the checker choice changed');
+      error.checkerChanged = true;
+      throw error;
+    }
+    if (novelId && archivist.silentWait(novelId, conn)) {
+      const e = new Error('its model kept silent');
+      e.silent = true;
+      throw e;
+    }
   } };
+}
+/* his press asks now — Try again now, Check it again, Check this chapter, Check the whole book: a wait on the checker's
+ * model that kept silent is his to overrule, as the helper's presses overrule its (archivist.js hisPress) — only the
+ * checker's own connection's, never the helper's when it checks with another */
+function pressed(novelId) {
+  const conn = checkerConn(store.peek('house', 'house') || {});
+  if (conn) archivist.hisPress(novelId, conn);
+}
+/* every ask of the checker's: one its model kept silent on for as long as it is ever waited starts that wait for its
+ * connection, as the helper's does (archivist.js setSilent) */
+async function checkerJson(novelId, conn, choice, system, request, want) {
+  const got = await archivist.askJson(conn, system, request, { want, beforeAsk: choice.beforeAsk });
+  if (got && !got.ok && got.leashed === 'quiet' && got.longest) archivist.setSilent(novelId, conn, got.leashMs);
+  return got;
 }
 
 /* ------------------------------------------------------------ what it found */
@@ -221,10 +244,12 @@ export function checkAgain(novelId, chapterId, passageId) {
   const e = p && entryFor(chapter, p);
   if (!e || !e.aside) return false;
   store.change('chapter', chapterId, chapterSteps.dropCheck(p.id, v.id), { now: true, checkpoint: true });
-  /* asked again in its own right, never together with others */
-  stuckC.delete(`${p.id}:${v.id}:${e.sig}`);
+  /* asked again in its own right, never together with others — what was counted toward it let go (kept with the book:
+   * triedCount, round 8), and a wait on its model that kept silent his to overrule (hisPress) */
+  triedDone(novelId, chapterId, { pid: p.id, vid: v.id, sig: e.sig }, 'check');
   failures.delete(novelId);
   blocked.delete(novelId);
+  pressed(novelId);
   schedule(novelId, 300);
   return true;
 }
@@ -232,8 +257,10 @@ export function checkAgain(novelId, chapterId, passageId) {
 /* the passages still to be read by themselves, and the older ones he can ask for */
 export function waiting(novelId) {
   const house = store.peek('house', 'house') || {};
+  /* (but those waiting their time after a stall: said with when, apart — checkerWaits, 2.12.41, round 8) */
+  const print = triesPrint(checkerConn(house));
   let n = 0;
-  for (const c of chaptersOf(novelId)) for (const p of c.passages || []) if (wanted(house, c, p)) n++;
+  for (const c of chaptersOf(novelId)) for (const p of c.passages || []) if (wanted(house, c, p) && !triedWaits(p, 'check', print)) n++;
   return n;
 }
 export function unchecked(novelId, chapterId = null) {
@@ -262,6 +289,23 @@ export function unchecked(novelId, chapterId = null) {
 function waitsForGoOn(house, v) {
   return Boolean(v && v.cut && howOf(v) !== 'imported');
 }
+/* the passages brought in from a file, not asked for yet — only those: never one waiting its time after a stall, nor one
+ * held while its model is waited out, each said with when (stateOf, 2.12.41, round 8: every passage not checked was
+ * counted here once nothing was to be checked in a moment, so one waiting its time was said to be "brought in from a
+ * file") */
+function fromFile(novelId) {
+  const house = store.peek('house', 'house') || {};
+  let n = 0;
+  for (const c of chaptersOf(novelId)) {
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      const v = picked(p);
+      if (!v || v.streaming || !String(v.text || '').trim() || waitsForGoOn(house, v) || entryFor(c, p) || wanted(house, c, p)) continue;
+      n++;
+    }
+  }
+  return n;
+}
 function cutWaiting(novelId) {
   const house = store.peek('house', 'house') || {};
   let n = 0;
@@ -280,9 +324,11 @@ const entering = new Set();
 export function busyAny() { return runningFor.size > 0; }
 const failures = new Map();
 const blocked = new Map();
-/* one passage at a time for a book, after a checking of several its model would not answer; and how often each passage's words were not answered (Cozy Tavern M316, M675-7) */
+/* one passage at a time for a book, after a checking of several its model would not answer (Cozy Tavern M316, M675-7) —
+ * kept in this page's memory: those passages are marked to be asked alone on the book itself (triedCount `alone`), so a
+ * reload costs nothing more than one checking of the others together. How often a passage's words were not answered is
+ * kept with the book (triedCount: 2.12.41, round 8 — `stuckC`, in the page's memory, was let go with every reload) */
 const narrowC = new Set();
-const stuckC = new Map();
 const fns = new Set();
 export function onChecks(fn) { fns.add(fn); return () => fns.delete(fn); }
 function tell(novelId) { for (const fn of fns) { try { fn(novelId); } catch (e) { console.error(e); } } }
@@ -317,24 +363,96 @@ export function stateOf(novelId) {
   if (s && (s.state === 'retry' || s.state === 'elsewhere')) return { state: 'waiting', words: s.words, count };
   const again = automaticWait(novelId);
   if (again) return { state: 'waiting', words: `An automatic rewrite couldn’t finish just now. It tries again by itself in ${archivist.waitWords(again.until - Date.now())}.`, count };
-  const toGo = waiting(novelId);
-  if (toGo) return { state: 'waiting', words: toGo > 3 ? `${plural(toGo, 'passage')} to check — the newest first, a few at a time.` : 'The newest words are checked in a moment.', count };
+  /* ITS MODEL KEPT SILENT, OR WHAT WAITS ITS TIME (2.12.41, round 8 — said in the helper's light's voice: archivist.js
+   * whatWaits): nothing is asked of a model that kept silent for as long as it is ever waited until its wait is over —
+   * the helper's silence or the checker's own on the same connection — never "in a moment" meanwhile; and what waits its
+   * time after a stall is said with when, never "Everything is checked" while it waits */
+  const quiet = archivist.silentWait(novelId, checkerConn(house));
+  const waits = checkerWaits(novelId);
+  const quietSaid = quiet ? `The checker’s model sent nothing for ${archivist.waitWords(quiet.leashMs)} — the checker asks it again ${quiet.when}, and nothing more until then.` : '';
+  /* (nothing is checked "in a moment" while its model is waited out) */
+  const toGo = quiet ? 0 : waiting(novelId);
+  if (toGo) return { state: 'waiting', words: [toGo > 3 ? `${plural(toGo, 'passage')} to check — the newest first, a few at a time.` : 'The newest words are checked in a moment.', waits && waits.words].filter(Boolean).join(' '), count };
   /* green says only what is true: words brought in from a file, never sent
    * unasked, are not called checked; a page that stopped partway waits for its
    * Go on; one its model would not check is said */
   /* (a passage checked but not graded is graded by itself once the judge is on — waiting() counts it, never a task for him: 2.12.38) */
-  const { passages: older } = unchecked(novelId);
+  const older = fromFile(novelId);
   const cut = cutWaiting(novelId);
   const aside = setAsideList(novelId).length;
   const asideSaid = aside ? `${aside === 1 ? 'One passage' : plural(aside, 'passage')} its model would not check — in Suggestions, with Check it again.` : '';
-  if (count) return { state: 'found', words: [`${plural(count, 'suggestion')} to look at.`, asideSaid].filter(Boolean).join(' '), count };
+  if (count) return { state: 'found', words: [`${plural(count, 'suggestion')} to look at.`, asideSaid, quietSaid, waits && waits.words].filter(Boolean).join(' '), count };
   const more = [
     cut ? `${cut === 1 ? 'A passage that stopped partway is' : `${plural(cut, 'passage')} that stopped partway are`} checked once Go on finishes ${cut === 1 ? 'it' : 'them'}.` : '',
     asideSaid,
     /* (every page is checked by itself, in either mode: what waits for him is only words brought in from a file) */
     older ? `${plural(older, 'passage')} brought in from a file ${older === 1 ? 'is' : 'are'} checked only when you ask.` : '',
   ].filter(Boolean).join(' ');
+  /* (`held`: waiting its time, never about to check — his presses stand there to ask now: ui/checks.js) */
+  if (quiet || waits) return { state: 'waiting', words: [quietSaid, waits && waits.words, more].filter(Boolean).join(' '), count: 0, held: true };
   return { state: 'clean', words: more ? `${cut || aside ? 'Everything else new' : 'Everything new'} is checked — nothing to change. ${more}` : 'Everything is checked — nothing to change.', count: 0 };
+}
+/* WHAT THE CHECKER WAITS ITS TIME FOR (2.12.41, round 8): a passage's checking or its proofreading, a paragraph's speech
+ * marks, a chapter read whole and a pair read head to head let go on their leash — each asked again once as long as it
+ * was waited has passed: said with when, as the helper's light says it, and booked (runCheck). {ms (until the soonest),
+ * words} or null */
+function checkerWaits(novelId) {
+  const novel = store.peek('novel', novelId);
+  const house = store.peek('house', 'house') || {};
+  const conn = checkerConn(house);
+  if (!novel || !conn) return null;
+  const print = triesPrint(conn);
+  const now = store.phoneNow();
+  const rows = { check: [], proof: [], marks: [], whole: [], duel: [] };
+  /* (only what the look would ask once its time has come — as nextBatch, proofBatch, runMarks, wholeDue and duelsDue
+   * choose it: one no longer owed is said nowhere) */
+  const judging = Boolean(judgeOf(house));
+  for (const c of chaptersOf(novelId)) {
+    const nums = passageNumbers(c);
+    const where = (pid) => `${chapterLabel(novel, c, { withName: false })}, passage ${nums.get(pid)}`;
+    for (const p of c.passages || []) {
+      if (p.by === 'break') continue;
+      const v = picked(p);
+      const e = entryFor(c, p);
+      /* (said on every paint: a quick look at what is kept first, the words' own marks only for those) */
+      const t = v && v.tries && v.tries.check && wanted(house, c, p) ? triedOn(p, 'check', print) : null;
+      if (t && (Number(t.n) || 0) < 2 && Number(t.next) > now) rows.check.push({ at: Number(t.next), label: where(p.id) });
+      const proofOwed = Boolean(v && v.tries && v.tries.proof && e && !e.aside && !e.proofed && !v.streaming && !v.cut && String(v.text || '').trim());
+      const u = proofOwed ? triedOn(p, 'proof', print) : null;
+      if (u && (Number(u.n) || 0) < 2 && Number(u.next) > now) rows.proof.push({ at: Number(u.next), label: where(p.id) });
+      if (!v || !e || e.aside || v.streaming) continue;
+      for (const x of e.items || []) if (x.marks && x.replace === null && !x.asked && x.stall && Number(x.stall.next) > now) rows.marks.push({ at: Number(x.stall.next) });
+    }
+    const w = c.wholeTry && wholeWanted(c) ? wholeTryOf(c, wholeSig(c)) : null;
+    if (w && (Number(w.n) || 0) < 2 && Number(w.next) > now && (c.wholeRead || {}).sig !== w.sig) rows.whole.push({ at: Number(w.next), label: chapterLabel(novel, c, { withName: false }) });
+    /* (a pair whose two takes still read as they were asked) */
+    if (judging) for (const [key, t] of Object.entries(c.duelTries || {})) {
+      if (!t || (Number(t.n) || 0) >= 2 || !(Number(t.next) > now)) continue;
+      const pid = key.split(':')[0];
+      const p = (c.passages || []).find((x) => x.id === pid);
+      const ids = key.slice(pid.length + 1).split('|');
+      const vs = ids.map((id) => p && (p.versions || []).find((v) => v.id === id));
+      if (!p || vs.some((v) => !v) || t.tk !== `${key}:${vs.slice().sort((a, b) => a.id.localeCompare(b.id)).map(writtenSig).join(':')}`) continue;
+      rows.duel.push({ at: Number(t.next), label: where(pid) });
+    }
+  }
+  const busy = busyNow(novelId);
+  const when = (at) => archivist.inWhile(Math.max(0, at - now), busy);
+  const slow = (n) => `its model was too slow to answer for ${n === 1 ? 'it' : 'them'}`;
+  const said = [];
+  const say = (list, one, many, them = false) => {
+    if (!list.length) return;
+    const l = list.slice().sort((a, b) => a.at - b.at);
+    said.push(l.length === 1 ? `${one(l[0])} again ${when(l[0].at)} — ${slow(them ? 2 : 1)}.` : `${many(l.length)} again, the first ${when(l[0].at)} — ${slow(2)}.`);
+  };
+  say(rows.check, (r) => `The checker checks ${r.label}`, (n) => `The checker checks ${plural(n, 'passage')}`);
+  say(rows.proof, (r) => `The checker proofreads ${r.label}`, (n) => `The checker proofreads ${plural(n, 'passage')}`);
+  say(rows.marks, () => 'The checker sets the speech marks of a paragraph', (n) => `The checker sets the speech marks of ${plural(n, 'paragraph')}`);
+  say(rows.whole, (r) => `The checker reads ${r.label} whole`, (n) => `The checker reads ${plural(n, 'chapter')} whole`);
+  say(rows.duel, (r) => `The checker reads two versions of ${r.label} side by side`, (n) => `The checker reads ${plural(n, 'pair')} of versions side by side`, true);
+  if (!said.length) return null;
+  const soonest = Math.min(...Object.values(rows).flat().map((r) => r.at));
+  return { ms: Math.max(0, soonest - now), words: said.join(' ') };
 }
 
 /* ------------------------------------------------------------ when */
@@ -366,6 +484,13 @@ export function startChecking() {
  * written again by itself (`lifting`) — the writer marks itself busy only once it has read the book, and a checking sent
  * in that moment ran beside the page on its connection. One rule wherever the checker stands down for the page. */
 function busyNow(novelId) { return writerBusy(novelId) || lifting.has(novelId); }
+/* WHETHER THE BUBBLE'S WORDS TELL A TIME THAT PASSES WHILE THEY SHOW — a failure's wait, an automatic rewrite's, its
+ * model's silence, or what waits its time after a stall (ui/checks.js draws them again as it passes, as the helper's
+ * light is: archivist.js lightTimed — 2.12.41, round 8) */
+export function stateTimed(novelId) {
+  const f = failures.get(novelId);
+  return Boolean((f && f.until > Date.now()) || automaticWait(novelId) || archivist.silentWait(novelId, checkerConn(store.peek('house', 'house') || {})) || checkerWaits(novelId));
+}
 /* waiting out a failure, or stopped for a connection turned away: tried again now by his hand (Cozy Tavern M752-010) */
 export function stalled(novelId) {
   const f = failures.get(novelId);
@@ -377,6 +502,8 @@ export function tryNow(novelId) {
   autoFailures.delete(novelId);
   blocked.delete(novelId);
   states.delete(novelId);
+  /* (and a wait on its model that kept silent: his to overrule, as the helper's — archivist.js hisPress, round 8) */
+  pressed(novelId);
   const was = timers.get(novelId);
   if (was) { clearTimeout(was.t); timers.delete(novelId); }
   schedule(novelId, 200);
@@ -463,7 +590,10 @@ function batchWords(conn, house, novel) {
 
 /* the next passages to read: of one chapter, in the book's order, as many
  * words as one checking carries (a longer passage alone, read in parts) */
-function nextBatch(novelId, limit, { one = false } = {}) {
+/* (`skip`: passages this look stopped on — refused, or let go on the leash — never asked twice in one look; `print`: the
+ * connection asking, whose tries it reads — one waiting its time is not asked before then, and one of several its model
+ * would not answer is asked alone: triedOn, 2.12.41, round 8) */
+function nextBatch(novelId, limit, { one = false, skip = null, print = '' } = {}) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
   const from = checksFromOf(house);
@@ -494,15 +624,18 @@ function nextBatch(novelId, limit, { one = false } = {}) {
     let gradeOnly = null;
     for (const p of c.passages || []) {
       if (!wanted(house, c, p) || (tier === 'new' && !isNew(c, p))) continue;
+      if ((skip && skip.has(p.id)) || triedWaits(p, 'check', print)) continue;
       const w = countWords(picked(p).text);
       const has = Boolean(entryFor(c, p));
       if (list.length && has !== gradeOnly) break;
       gradeOnly = has;
-      /* one at a time once a checking of several its model would not answer (the helper's narrow) */
-      if (list.length && (one || words + w > limit)) break;
+      /* one at a time once a checking of several its model would not answer (the helper's narrow) — and, kept with the
+       * book, each of those asked alone */
+      const alone = triedAlone(p, 'check', print);
+      if (list.length && (one || alone || words + w > limit)) break;
       list.push(p);
       words += w;
-      if (w > limit) break;
+      if (w > limit || alone) break;
     }
     if (list.length) {
       const nums = passageNumbers(c);
@@ -521,7 +654,7 @@ export async function runCheck(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return;
   if (!conn) { setState(novelId, null); return; }
-  const choice = checkerChoice(conn);
+  const choice = checkerChoice(conn, novelId);
   if (blocked.has(novelId) && blocked.get(novelId) === archivist.connPrint(conn)) return;
   blocked.delete(novelId);
   const work = async () => {
@@ -538,12 +671,14 @@ export async function runCheck(novelId) {
         }
       }
       let lastAsked = '';
+      /* (what this look stopped on: never asked twice in one look — 2.12.41, round 8) */
+      const skip = new Set();
       for (let n = 0; ; n++) {
         choice.beforeAsk();
         if (busyNow(novelId)) { schedule(novelId, 4000); break; }
         const limit = batchWords(conn, store.peek('house', 'house') || {}, store.peek('novel', novelId) || novel);
-        const batch = nextBatch(novelId, limit, { one: narrowC.has(novelId) });
-        if (!batch) { narrowC.delete(novelId); break; }
+        const batch = nextBatch(novelId, limit, { one: narrowC.has(novelId), skip, print: triesPrint(conn) });
+        if (!batch) { if (!skip.size) narrowC.delete(novelId); break; }
         /* the same words again means nothing could be kept for them: never asked in a loop */
         /* (by its words too: a version keeps its id as its words change on the page, 2.12.2) — a passage whose grade could
          * not be asked for again just now, or read in parts with no whole grade, is asked for its grade alone at the next
@@ -555,10 +690,15 @@ export async function runCheck(novelId) {
         if (n >= 60) { schedule(novelId, 2000); break; }
         lastAsked = asking;
         setState(novelId, 'checking', `Checking ${batch.label}…`);
-        await checkBatch(novelId, conn, batch, limit, choice);
+        const out = await checkBatch(novelId, conn, batch, limit, choice);
         /* what goes in by itself goes in as soon as it is found — the newest page's fixes never wait for the backlog
          * after it (2.12.40, the audit: through 2.12.39 they waited for every checking of the look, up to sixty) */
         autoAfter(novelId);
+        /* A STALL OR A REFUSAL STOPS ONLY THAT (2.12.41, round 8): let go on its leash, the checking stops for this look —
+         * the proofreading, the speech marks, the chapters read whole and the head to head go on; a passage refused is
+         * asked again at the next look, the passages after it checked meanwhile */
+        if (out && out.stalled) break;
+        if (out && out.refused) skip.add(out.refused);
       }
       /* Check this chapter / Check the whole book answered: once nothing of a chapter waits for it, it is a chapter like
        * any other (2.12.40, the audit: it stayed asked for good — a page cut short there was checked before its Go on,
@@ -594,12 +734,25 @@ export async function runCheck(novelId) {
       /* what still waits is looked at again soon — the bubble's "in a moment" is true (every such passage is either
        * checked, graded, or let be at that look: never asked in a loop) */
       if (waiting(novelId)) schedule(novelId, 6000);
+      /* and what waits its time after a stall, once its time has come — booked, never looked at every few seconds
+       * (checkerWaits, 2.12.41, round 8) */
+      const waits = checkerWaits(novelId);
+      if (waits && waits.ms !== null) schedule(novelId, waits.ms + 1000);
     } catch (e) {
       const why = (e && e.message) || String(e);
       if (e && e.checkerChanged) {
         failures.delete(novelId);
         setState(novelId, null);
         if (checkerConn(store.peek('house', 'house') || {})) schedule(novelId, 300);
+        return;
+      }
+      /* its model kept silent for as long as it is ever waited — the helper's silence or its own: nothing more asked of
+       * it until its wait is over, never a failure nor Try again now; said (stateOf), and booked for then */
+      if (e && e.silent) {
+        failures.delete(novelId);
+        setState(novelId, null);
+        const q = archivist.silentWait(novelId, conn);
+        if (q) schedule(novelId, q.ms + 1000);
         return;
       }
       /* another browser has the book now: it finishes the checking */
@@ -962,6 +1115,114 @@ function setAsideCheck(novelId, chapterId, a, why, conn) {
   store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at: Date.now(), items: [], aside: cutWords(why || 'its model would not check it', 300), conn: archivist.connPrint(conn) }, found), { checkpoint: true });
 }
 
+/* WHAT THE CHECKER ASKED, KEPT WITH THE BOOK (2.12.41, round 8 — what decided a passage's set-aside lived in the page's
+ * memory, `stuckC`: a phone tab let go in the background let it go, so a passage its model would not check was asked
+ * again after every reload — and, reloaded between its tries, never set aside; and a stall was thrown as a passing fault
+ * every time, never counted, so a passage its model stays silent on was asked for ever, up to the longest leash each
+ * time, the checker "couldn't finish" in between and the passages after it held back). One rule with the helper's
+ * (archivist.js stallRule): a stall or a refusal stops only that part of the look — the rest goes on; a stall is waited
+ * as long as it was waited, a refusal is asked again at the next look; counted on the longest leash, when it made no
+ * progress, or refused; counted twice, it is passed by and said so (set aside with Check it again; let be). Of several
+ * asked together, each is asked alone from then on. Kept on the version it was asked of, for its words as they were
+ * asked, and by the connection that was asked (`v.tries.check`, `v.tries.proof`: {fp, n, next, alone, refused, conn}) —
+ * as the helper's tries are; each count worked out once and laid as it is, and each step laid only where the copy it is
+ * laid on still holds what it was counted from — played again over a copy that holds it, or over another window's newer
+ * count, it lays nothing (store.js; 2.12.41, a step laid again over another window's newer copy). */
+const NOW = () => store.phoneNow();
+/* (by the connection as he chose it — a lesson its model teaches about itself on the way, its room or a dial it refuses,
+ * is the same choice and never lets go of what was counted: archivist.js choicePrint) */
+const triesPrint = (conn) => (conn ? archivist.choicePrint(conn) : '');
+/* the try kept on a passage's version on show, for its words as they are and the connection asking — or null */
+function triedOn(p, what, print) {
+  const v = p && picked(p);
+  const t = v && v.tries && v.tries[what];
+  return t && t.fp === sigOf(v) && (!t.conn || !print || t.conn === print) ? t : null;
+}
+/* (waiting its time after a stall: not asked before then) */
+const triedWaits = (p, what, print) => { const t = triedOn(p, what, print); return Boolean(t && (Number(t.n) || 0) < 2 && Number(t.next) > NOW()); };
+/* (asked alone from then on: of several asked together its model would not answer) */
+const triedAlone = (p, what, print) => Boolean((triedOn(p, what, print) || {}).alone);
+/* one more try counted (`count` 0: none) for what `a` asked — {pid, vid, sig} — and when it is asked again (`next`, 0: at
+ * the next look); how many it has now */
+function triedCount(novelId, chapterId, a, what, count, next, extra = {}) {
+  const home = homeOf(novelId, chapterId, a.pid);
+  const c = home && store.peek('chapter', home);
+  const p = c && (c.passages || []).find((x) => x.id === a.pid);
+  const v = p && (p.versions || []).find((x) => x.id === a.vid);
+  if (!v || v.streaming || sigOf(v) !== a.sig) return 0;
+  const t = v.tries && v.tries[what];
+  const was = t && t.fp === a.sig && (!t.conn || !extra.conn || t.conn === extra.conn) ? t : null;
+  const n = ((was && Number(was.n)) || 0) + count;
+  const row = { fp: a.sig, n, ...(next ? { next } : {}), ...((was && was.alone) || extra.alone ? { alone: true } : {}), ...(extra.refused ? { refused: true } : {}), ...(extra.conn ? { conn: extra.conn } : {}) };
+  const found = JSON.stringify(t || null);
+  store.change('chapter', home, (ch) => {
+    const q = (ch.passages || []).find((x) => x.id === a.pid);
+    const w = q && (q.versions || []).find((x) => x.id === a.vid);
+    if (!w || w.streaming || hashText(String(w.text || '')) !== a.sig) return false;
+    if (JSON.stringify((w.tries && w.tries[what]) || null) !== found) return false;
+    w.tries = { ...(w.tries || {}), [what]: { ...row } };
+  }, { checkpoint: true });
+  return n;
+}
+/* (answered, or passed by and marked so where it is kept: let go) */
+function triedDone(novelId, chapterId, a, what) {
+  const home = homeOf(novelId, chapterId, a.pid);
+  const c = home && store.peek('chapter', home);
+  const p = c && (c.passages || []).find((x) => x.id === a.pid);
+  const v = p && (p.versions || []).find((x) => x.id === a.vid);
+  if (!v || !v.tries || !v.tries[what]) return;
+  const found = JSON.stringify(v.tries[what]);
+  store.change('chapter', home, (ch) => {
+    const q = (ch.passages || []).find((x) => x.id === a.pid);
+    const w = q && (q.versions || []).find((x) => x.id === a.vid);
+    if (!w || !w.tries || !w.tries[what] || JSON.stringify(w.tries[what]) !== found) return false;
+    const { [what]: _gone, ...rest } = w.tries;
+    if (Object.keys(rest).length) w.tries = rest; else delete w.tries;
+  }, { checkpoint: true });
+}
+/* a chapter read whole, its tries kept on the chapter for its words as they were asked (`wholeTry` {sig, n, next}) */
+const wholeTryOf = (c, sig) => (c && c.wholeTry && c.wholeTry.sig === sig ? c.wholeTry : null);
+function wholeCount(chapterId, sig, count, next) {
+  const c = store.peek('chapter', chapterId);
+  if (!c) return 0;
+  const was = wholeTryOf(c, sig);
+  const n = ((was && Number(was.n)) || 0) + count;
+  const row = { sig, n, ...(next ? { next } : {}) };
+  const found = JSON.stringify(c.wholeTry || null);
+  store.change('chapter', chapterId, (ch) => { if (JSON.stringify(ch.wholeTry || null) !== found) return false; ch.wholeTry = { ...row }; }, { checkpoint: true });
+  return n;
+}
+function wholeTryDone(chapterId) {
+  const c = store.peek('chapter', chapterId);
+  if (!c || !c.wholeTry) return;
+  const found = JSON.stringify(c.wholeTry);
+  store.change('chapter', chapterId, (ch) => { if (!ch.wholeTry || JSON.stringify(ch.wholeTry) !== found) return false; delete ch.wholeTry; }, { checkpoint: true });
+}
+/* a pair read head to head, its tries kept on its chapter for the two takes' words (`duelTries` {key: {tk, n, next, at}}) */
+const duelTryOf = (c, d) => { const t = c && c.duelTries && c.duelTries[d.key]; return t && t.tk === d.tryKey ? t : null; };
+function duelCount(d, count, next) {
+  const c = store.peek('chapter', d.chapterId);
+  if (!c) return 0;
+  const was = duelTryOf(c, d);
+  const n = ((was && Number(was.n)) || 0) + count;
+  const row = { tk: d.tryKey, n, ...(next ? { next } : {}), at: Date.now() };
+  const found = JSON.stringify((c.duelTries && c.duelTries[d.key]) || null);
+  store.change('chapter', d.chapterId, (ch) => {
+    const all = ch.duelTries || {};
+    if (JSON.stringify(all[d.key] || null) !== found) return false;
+    /* (the newest fifty kept, of those the copy has: a pair its takes changed since is asked as new) */
+    const kept = Object.entries({ ...all, [d.key]: row }).sort((x, y) => (Number(y[1] && y[1].at) || 0) - (Number(x[1] && x[1].at) || 0)).slice(0, 50);
+    ch.duelTries = Object.fromEntries(kept.map(([k, x]) => [k, { ...x }]));
+  }, { checkpoint: true });
+  return n;
+}
+function duelTryDone(d) {
+  const c = store.peek('chapter', d.chapterId);
+  if (!c || !c.duelTries || !c.duelTries[d.key]) return;
+  const found = JSON.stringify(c.duelTries[d.key]);
+  store.change('chapter', d.chapterId, (ch) => { if (!ch.duelTries || !ch.duelTries[d.key] || JSON.stringify(ch.duelTries[d.key]) !== found) return false; delete ch.duelTries[d.key]; }, { checkpoint: true });
+}
+
 /* one checking: these passages read (a passage longer than one request
  * carries, in parts); what it would change, kept */
 /* A FINDING ASKED BEFORE A NAME WAS CHANGED EVERYWHERE (2.12.41, round 7 — the review of round 5, its F1: laid as
@@ -1074,33 +1335,65 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
   /* (each of these laid only while the copy still holds the entry it was made from — his Check it again in another window
    * stands: 2.12.41, a step laid again over another window's newer copy, shape.js setCheck) */
   const noGrade = (a) => { const old = keptOf(a); if (old && old.sig === a.sig) store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { ...old, graded: false, tries: 2 }, old), { checkpoint: true }); };
+  /* (the connection asking, by whose tries it is counted: triedCount) */
+  const print = triesPrint(conn);
   for (const words of numbered) {
     choice.beforeAsk();
-    const got = await archivist.askJson(conn, system, gradeOnly ? request(words, { gradesOnly: true }) : request(words), { want: gradeOnly ? (o) => Array.isArray(o.grades) : (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
+    const got = await checkerJson(novelId, conn, choice, system, gradeOnly ? request(words, { gradesOnly: true }) : request(words), gradeOnly ? (o) => Array.isArray(o.grades) : (o) => Array.isArray(o.edits));
     await archivist.mustHold('checker', novelId);
     if (!got.ok) {
       /* WHOSE FAULT (Cozy Tavern M316, M675-7): the connection's stops the
-       * checker until it changes; the model's (down, busy, let go on its
-       * leash) waits; the words' — its model answers a harmless ask but not
-       * this one — a checking of several is read one passage at a time, and
-       * one passage refused a second time is set aside, never asked for ever,
-       * never holding up the passages after it */
+       * checker until it changes; the model's (down, busy) waits; the words' —
+       * its model answers a harmless ask but not this one — a checking of
+       * several is read one passage at a time, and one passage refused a
+       * second time is set aside, never asked for ever, never holding up the
+       * passages after it */
       const several = asked.size > 1;
+      const list = [...asked.values()];
       if (got.leashed === 'gaveway') throw failed(got);
-      if (got.leashed && got.leashed !== 'long') { if (several) narrowC.add(novelId); throw failed(got); }
-      const fault = got.leashed === 'long' ? 'words' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
+      /* LET GO ON ITS LEASH (2.12.41, round 8 — thrown as a passing fault every time, never counted): the checking stops
+       * for this look, never the look; what was asked waits as long as it was waited, kept with the book — of several,
+       * each asked alone from then on; alone, counted on the longest leash or when it made no progress, set aside at its
+       * second (a passage checked already, asked for its grade alone: kept ungraded) */
+      if (got.leashed) {
+        const rule = archivist.stallRule(got);
+        const next = store.phoneNow() + rule.wait;
+        if (several) for (const a of list) triedCount(novelId, chapter.id, a, 'check', 0, next, { alone: true, conn: print });
+        else {
+          const a = list[0];
+          const n = triedCount(novelId, chapter.id, a, 'check', rule.counted ? 1 : 0, next, { conn: print });
+          if (rule.counted && n >= 2) {
+            triedDone(novelId, chapter.id, a, 'check');
+            if (gradeOnly) noGrade(a); else setAsideCheck(novelId, chapter.id, a, got.error, conn);
+          }
+        }
+        await store.flush('chapter', chapter.id);
+        tell(novelId);
+        return { stalled: true };
+      }
+      const fault = await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
       if (fault !== 'words') throw failed(fault === 'model' ? archivist.passingFrom(got) : fault);
-      if (several) { narrowC.add(novelId); const e = failed(got); e.soon = true; throw e; }
-      const a = [...asked.values()][0];
-      const key = `${a.pid}:${a.vid}:${a.sig}`;
-      const n = (stuckC.get(key) || 0) + 1;
-      stuckC.set(key, n);
-      if (n < 2) throw failed({ error: got.error });
-      stuckC.delete(key);
-      if (gradeOnly) noGrade(a); else setAsideCheck(novelId, chapter.id, a, got.error, conn);
+      /* (of several: one at a time from now on, at once — and, kept with the book, each of these asked alone) */
+      if (several) {
+        narrowC.add(novelId);
+        for (const a of list) triedCount(novelId, chapter.id, a, 'check', 0, 0, { alone: true, conn: print });
+        const e = failed(got);
+        e.soon = true;
+        throw e;
+      }
+      /* REFUSED (2.12.41, round 8 — the first refusal was thrown: the checker "couldn't finish", the passages after it
+       * held back a minute, and the count lived in the page's memory, let go with every reload): counted with the book,
+       * asked again at the next look, the passages after it checked meanwhile; set aside at its second */
+      const a = list[0];
+      const n = triedCount(novelId, chapter.id, a, 'check', 1, 0, { refused: true, conn: print });
+      if (n >= 2) {
+        triedDone(novelId, chapter.id, a, 'check');
+        if (gradeOnly) noGrade(a); else setAsideCheck(novelId, chapter.id, a, got.error, conn);
+      }
       await store.flush('chapter', chapter.id);
       tell(novelId);
-      return;
+      /* (set aside: owed no more; refused once: not asked again in this look) */
+      return n >= 2 ? { ok: true } : { refused: a.pid };
     }
     if (!gradeOnly) edits.push(...got.obj.edits);
     if (Array.isArray(got.obj.grades)) grades.push(...got.obj.grades);
@@ -1131,7 +1424,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     const missing = numbered.length === 1 && !gradeOnly ? [...asked.values()].filter((a) => !byPassage.has(a.pid) || !judged(a, byPassage.get(a.pid).list, judge)) : [];
     if (missing.length && choice.current() && judgeOf(store.peek('house', 'house') || {})) {
       const passages = batch.passages.filter((p) => missing.some((a) => a.pid === p.id));
-      const again = await archivist.askJson(conn, system, request(numberedText(novel, chapter, passages), { gradesOnly: true }), { want: (o) => Array.isArray(o.grades), beforeAsk: choice.beforeAsk });
+      const again = await checkerJson(novelId, conn, choice, system, request(numberedText(novel, chapter, passages), { gradesOnly: true }), (o) => Array.isArray(o.grades));
       await archivist.mustHold('checker', novelId);
       /* answered and still no grade: its model will not grade it — checked, never asked in a loop */
       if (again.ok) { gather(again.obj.grades); for (const a of missing) wontGrade.add(a.pid); }
@@ -1179,6 +1472,8 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
       if (grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: '', lift: grade.lift || '', target: judge.target, grade });
       const { graded: _g, tries: _t, ...rest } = old;
       store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { ...rest, items, grade }, old), { checkpoint: true });
+      /* (answered: what it counted, or waited, let go) */
+      triedDone(novelId, chapter.id, a, 'check');
     }
     await store.flush('chapter', chapter.id);
     tell(novelId);
@@ -1199,6 +1494,8 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     const ungraded = judge && !grade && gradeLater.has(a.pid) ? { graded: false, tries: a.tries + 1 } : judge && !grade && wontGrade.has(a.pid) ? { graded: false, tries: 2 } : {};
     /* (read in parts: its chapter, if it is the whole of one, is read whole too — wholeWanted) */
     store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}), ...ungraded, ...(numbered.length > 1 ? { parts: numbered.length } : {}) }), { checkpoint: true });
+    /* (answered: what it counted, or waited, let go) */
+    triedDone(novelId, chapter.id, a, 'check');
   }
   await store.flush('chapter', chapter.id);
   tell(novelId);
@@ -1450,7 +1747,9 @@ function momentOf(v) {
 const duelable = (v) => Boolean(v && !v.streaming && !v.cut && !v.carried && v.model && writtenOf(v).trim() && momentOf(v));
 const writtenSig = (v) => hashText(writtenOf(v));
 const duelKey = (pid, a, b) => `${pid}:${[a, b].sort().join('|')}`;
-/* pairs that could not be judged just now: not asked again until the app starts again */
+/* pairs that could not be judged just now — its model down or busy: not asked again until the app starts again (in this
+ * page's memory: its loss costs one more ask of a model that is down, never a loop). A pair its model would not read, or
+ * was let go on its leash for, is counted with the book (`duelTries`, duelCount — 2.12.41, round 8) */
 const duelTried = new Set();
 
 /* The pairs waiting for the judge: for the version on show, the newest
@@ -1478,6 +1777,10 @@ export function duelsDue(novelId) {
         const key = duelKey(p.id, v.id, u.id);
         const tryKey = `${key}:${[v, u].sort((a, b) => a.id.localeCompare(b.id)).map(writtenSig).join(':')}`;
         if (duelMatches(p, c.duels && c.duels[key]) || duelTried.has(tryKey)) continue;
+        /* (counted twice — refused, or let go on the longest leash — it is let be until their words change; waiting its time
+         * after a stall, it is not asked before then: kept with the book, round 8) */
+        const t = duelTryOf(c, { key, tryKey });
+        if (t && ((Number(t.n) || 0) >= 2 || Number(t.next) > store.phoneNow())) continue;
         out.push({ chapterId: c.id, pid: p.id, x: v.id, y: u.id, key, tryKey });
       }
     }
@@ -1552,13 +1855,21 @@ async function duel(novelId, conn, d, choice) {
   story = storySoFar(novel, chapter.id, Math.max(0, Math.min(4000, Math.floor(spare * 0.3))));
   /* the page it names, however it names it: "A", "A.", "Page A", "a (the first)" (Cozy Tavern M439) */
   const said = (o) => { const text = String(o.better || ''); const m = /^\s*(?:page\s+)?([AB])(?![\p{L}\p{N}])/iu.exec(text); return m ? m[1].toUpperCase() : /^\s*(?:same|tie|equal)(?![\p{L}\p{N}])/iu.test(text) ? 'same' : ''; };
-  /* a pair its model would not read for the pages' own words is let go — never a stop for the checker (S06-G2); only the connection's own fault is */
-  const stopOf = async (got) => { if (got.leashed === 'gaveway') return { gaveWay: true }; if (got.leashed) return null; const f = await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk }); return f && typeof f === 'object' ? { stop: failed(f) } : null; };
-  const one = await archivist.askJson(conn, system, build(pages.x, pages.y, before), { want: (o) => typeof o.better === 'string' && Boolean(said(o)), beforeAsk: choice.beforeAsk });
+  /* a pair its model would not read for the pages' own words, or was let go on its leash for, is counted — never a stop for
+   * the checker (S06-G2); only the connection's own fault is (runDuels, 2.12.41, round 8) */
+  const stopOf = async (got) => {
+    if (got.leashed === 'gaveway') return { gaveWay: true };
+    if (got.leashed) return { stalled: got };
+    const f = await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
+    if (f && typeof f === 'object') return { stop: failed(f) };
+    return f === 'words' ? { refused: got } : null;
+  };
+  const want = (o) => typeof o.better === 'string' && Boolean(said(o));
+  const one = await checkerJson(novelId, conn, choice, system, build(pages.x, pages.y, before), want);
   if (!one.ok) return stopOf(one);
   choice.beforeAsk();
   if (!judgeOf(store.peek('house', 'house') || {}) || !currentPair()) return { changed: true };
-  const two = await archivist.askJson(conn, system, build(pages.y, pages.x, before), { want: (o) => typeof o.better === 'string' && Boolean(said(o)), beforeAsk: choice.beforeAsk });
+  const two = await checkerJson(novelId, conn, choice, system, build(pages.y, pages.x, before), want);
   if (!two.ok) return stopOf(two);
   const first = said(one.obj) === 'A' ? 'x' : said(one.obj) === 'B' ? 'y' : 'tie';
   const second = said(two.obj) === 'A' ? 'y' : said(two.obj) === 'B' ? 'x' : 'tie';
@@ -1597,6 +1908,21 @@ async function runDuels(novelId, conn, choice) {
     /* it made way for his page: read again once the page has gone */
     if (out && out.gaveWay) { duelTried.delete(d.tryKey); schedule(novelId, 20000); return; }
     if (out && out.stop) throw out.stop;
+    /* LET GO ON ITS LEASH (2.12.41, round 8 — let go until the app started again, in the page's memory: a pair its model
+     * stays silent on was asked after every reload, the look held for as long as it was waited each time): it waits as
+     * long as it was waited, kept with the book — counted on the longest leash or when it made no progress, let be at its
+     * second; the head to head stops for this look */
+    if (out && out.stalled) {
+      duelTried.delete(d.tryKey);
+      const rule = archivist.stallRule(out.stalled);
+      duelCount(d, rule.counted ? 1 : 0, store.phoneNow() + rule.wait);
+      tell(novelId);
+      return;
+    }
+    /* refused: counted with the book, asked again at the next look, let be at its second — the next pair read meanwhile */
+    if (out && out.refused) { duelTried.delete(d.tryKey); duelCount(d, 1, 0); continue; }
+    /* (read: what it counted let go) */
+    if (out && out.winner) duelTryDone(d);
   }
 }
 
@@ -1639,7 +1965,9 @@ function likelySlips(text) {
   return out.slice(0, 6);
 }
 /* (the newest chapter first: the page he is writing is proofread before the backlog of the book's older ones) */
-function proofBatch(novelId, limit) {
+/* (one waiting its time after a stall is not asked before then, and one of several its model would not answer is asked
+ * alone — kept with the book, `tries.proof`: 2.12.41, round 8) */
+function proofBatch(novelId, limit, print = '') {
   for (const c of chaptersOf(novelId).reverse()) {
     const list = [];
     let words = 0;
@@ -1648,11 +1976,13 @@ function proofBatch(novelId, limit) {
       const v = picked(p);
       const e = v && entryFor(c, p);
       if (!e || e.aside || e.proofed || v.streaming || v.cut || !String(v.text || '').trim()) continue;
+      if (triedWaits(p, 'proof', print)) continue;
       const w = countWords(v.text);
-      if (list.length && words + w > limit) break;
+      const alone = triedAlone(p, 'proof', print);
+      if (list.length && (alone || words + w > limit)) break;
       list.push(p);
       words += w;
-      if (w > limit) break;
+      if (w > limit || alone) break;
     }
     if (list.length) return { chapterId: c.id, passages: list };
   }
@@ -1665,13 +1995,15 @@ async function runProof(novelId, conn, choice) {
     choice.beforeAsk();
     if (busyNow(novelId)) { schedule(novelId, 4000); return; }
     const limit = batchWords(conn, store.peek('house', 'house') || {}, store.peek('novel', novelId));
-    const batch = proofBatch(novelId, limit);
+    const batch = proofBatch(novelId, limit, triesPrint(conn));
     if (!batch) return;
     if (asks >= PROOF_ASKS) { schedule(novelId, 3000); return; }
     const out = await proofRead(novelId, conn, batch, limit, choice);
     if (out && out.gaveWay) { schedule(novelId, 20000); return; }
     if (out && out.stop) throw out.stop;
-    if (out && out.passing) return;
+    /* (let go on its leash: the proofreading stops for this look — the speech marks, the chapters read whole and the
+     * head to head go on: round 8) */
+    if (out && (out.passing || out.stalled)) return;
   }
 }
 async function proofRead(novelId, conn, batch, limit, choice) {
@@ -1718,12 +2050,31 @@ async function proofRead(novelId, conn, batch, limit, choice) {
     const words = numbered[k];
     const hints = {};
     for (const [n, a] of asked) if (words.includes(`[${n}]`)) { const h = likelySlips(a.text).filter((x) => words.includes(x)); if (h.length) hints[n] = h; }
-    const got = await archivist.askJson(conn, system, proofRequest({ novel: view, chapterLabel: label, numbered: words, his, hints }), { want: (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
+    const got = await checkerJson(novelId, conn, choice, system, proofRequest({ novel: view, chapterLabel: label, numbered: words, his, hints }), (o) => Array.isArray(o.edits));
     await archivist.mustHold('checker', novelId);
     if (!got.ok) {
       if (key) { if (proofPart.size > 100) proofPart.clear(); proofPart.set(key, { k, proofs: proofs.slice() }); }
       if (got.leashed === 'gaveway') return { gaveWay: true };
-      const fault = got.leashed === 'long' ? 'words' : got.leashed ? 'model' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
+      /* LET GO ON ITS LEASH, nothing heard (2.12.41, round 8 — waited out as a passing fault, never counted: a passage its
+       * model stays silent on was proofread for ever): what was asked waits as long as it was waited, kept with the book —
+       * of several, each asked alone from then on; alone, counted on the longest leash, passed by at its second with what
+       * its parts before found (an answer that made no progress at all, or one it would not give, is passed by at once,
+       * as ever) */
+      if (got.leashed === 'quiet') {
+        const rule = archivist.stallRule(got);
+        const next = store.phoneNow() + rule.wait;
+        const print = triesPrint(conn);
+        const list = [...asked.values()];
+        if (list.length > 1) {
+          for (const a of list) triedCount(novelId, chapter.id, a, 'proof', 0, next, { alone: true, conn: print });
+          return { stalled: true };
+        }
+        const n = triedCount(novelId, chapter.id, list[0], 'proof', rule.counted ? 1 : 0, next, { conn: print });
+        if (!(rule.counted && n >= 2)) return { stalled: true };
+        triedDone(novelId, chapter.id, list[0], 'proof');
+        break;
+      }
+      const fault = got.leashed === 'long' ? 'words' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
       if (fault && typeof fault === 'object') return { stop: failed(fault) };
       if (fault === 'words') {
         /* its model would not read these: a few passages are asked again one at a time (as the marks' mender is) — only
@@ -1733,7 +2084,7 @@ async function proofRead(novelId, conn, batch, limit, choice) {
             choice.beforeAsk();
             if (busyNow(novelId)) { schedule(novelId, 4000); return { passing: true }; }
             const out = await proofRead(novelId, conn, { chapterId: batch.chapterId, passages: [p] }, limit, choice);
-            if (out && (out.gaveWay || out.stop || out.passing)) return out;
+            if (out && (out.gaveWay || out.stop || out.passing || out.stalled)) return out;
           }
           return { ok: true };
         }
@@ -1750,6 +2101,7 @@ async function proofRead(novelId, conn, batch, limit, choice) {
   }
   if (key) proofPart.delete(key);
   proofWait.delete(novelId);
+  for (const a of asked.values()) triedDone(novelId, chapter.id, a, 'proof');
   for (const e of proofs) {
     if (!e || typeof e !== 'object' || typeof e.find !== 'string' || typeof e.replace !== 'string') continue;
     const ref = refOf(e.passage, keys);
@@ -1847,20 +2199,32 @@ async function runMarks(novelId, conn, choice) {
         store.change('chapter', c.id, chapterSteps.setCheck(p.id, v.id, { ...e, items: next }, e), { checkpoint: true });
       }
       const live = entryFor(store.peek('chapter', c.id) || c, p) || e;
-      for (const x of live.items || []) if (x.marks && x.replace === null && !x.asked) due.push({ chapterId: c.id, pid: p.id, vid: v.id, sig: sigOf(v), item: x });
+      /* (one waiting its time after a stall is not asked before then — its stall kept on the paragraph's own item, with
+       * the book: 2.12.41, round 8) */
+      for (const x of live.items || []) if (x.marks && x.replace === null && !x.asked && !(x.stall && Number(x.stall.next) > store.phoneNow())) due.push({ chapterId: c.id, pid: p.id, vid: v.id, sig: sigOf(v), item: x });
     }
   }
   if (!due.length) return;
   const wait = marksWait.get(novelId);
   if (wait && wait.until > Date.now()) { schedule(novelId, wait.until - Date.now() + 500); return; }
-  for (let k = 0; k < due.length; k += MARKS_AT_ONCE) {
+  /* a few paragraphs an ask — and one of several its model would not answer asked alone (`stall.alone`) */
+  const groups = [];
+  let open = [];
+  for (const d of due) {
+    if (d.item.stall && d.item.stall.alone) { groups.push([d]); continue; }
+    open.push(d);
+    if (open.length >= MARKS_AT_ONCE) { groups.push(open); open = []; }
+  }
+  if (open.length) groups.push(open);
+  for (let g = 0; g < groups.length; g++) {
     choice.beforeAsk();
     if (busyNow(novelId)) { schedule(novelId, 4000); return; }
-    const out = await askMarks(novelId, conn, choice, due.slice(k, k + MARKS_AT_ONCE));
+    const out = await askMarks(novelId, conn, choice, groups[g]);
     if (out && out.gaveWay) { schedule(novelId, 20000); return; }
     if (out && out.stop) throw out.stop;
-    if (out && out.passing) return;
-    if (k + MARKS_AT_ONCE < due.length && k >= MARKS_AT_ONCE * 2) { schedule(novelId, 3000); return; }
+    /* (let go on its leash: the speech marks stop for this look — the chapters read whole and the head to head go on) */
+    if (out && (out.passing || out.stalled)) return;
+    if (g + 1 < groups.length && g >= 2) { schedule(novelId, 3000); return; }
   }
   tell(novelId);
 }
@@ -1877,7 +2241,7 @@ async function askMarks(novelId, conn, choice, list) {
   const system = checkerFrame(house, namedBook(standingNotes(novel), house));
   const lineOf = (item) => (typeof item.line === 'string' ? item.line : item.find);
   const rows = list.map((x, i) => ({ n: i + 1, line: lineOf(x.item) }));
-  const got = await archivist.askJson(conn, system, marksRequest({ rows }), { want: (o) => Array.isArray(o.paragraphs), beforeAsk: choice.beforeAsk });
+  const got = await checkerJson(novelId, conn, choice, system, marksRequest({ rows }), (o) => Array.isArray(o.paragraphs));
   await archivist.mustHold('checker', novelId);
   const settle = (x, fields) => {
     const c = store.peek('chapter', x.chapterId);
@@ -1886,12 +2250,31 @@ async function askMarks(novelId, conn, choice, list) {
     const e = v && v.id === x.vid && c.checks && c.checks[x.pid] && c.checks[x.pid][x.vid];
     if (!e || e.sig !== x.sig || sigOf(v) !== x.sig) return;
     const left = leftTest((c.checksLeft && c.checksLeft[x.pid]) || []);
-    const items = (e.items || []).map((y) => (y.id === x.item.id ? { ...y, ...fields(String(v.text || ''), y, left) } : y));
+    /* (answered or let be: what its stall counted let go — round 8) */
+    const items = (e.items || []).map((y) => { if (y.id !== x.item.id) return y; const f = fields(String(v.text || ''), y, left); return { ...y, ...f, ...(f.asked ? { stall: undefined } : {}) }; });
     store.change('chapter', x.chapterId, chapterSteps.setCheck(x.pid, x.vid, { ...e, items }, e), { checkpoint: true });
   };
   if (!got.ok) {
     if (got.leashed === 'gaveway') return { gaveWay: true };
-    const fault = got.leashed === 'long' ? 'words' : got.leashed ? 'model' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
+    /* LET GO ON ITS LEASH, nothing heard (2.12.41, round 8 — waited out as a passing fault, never counted: a paragraph its
+     * model stays silent on was asked for ever): it waits as long as it was waited, kept on the paragraph's own item — of
+     * several, each asked alone from then on; alone, counted on the longest leash, and at its second let be as one it
+     * would not set (offered to be written again: spanNote) */
+    if (got.leashed === 'quiet') {
+      const rule = archivist.stallRule(got);
+      const next = store.phoneNow() + rule.wait;
+      if (list.length > 1) for (const x of list) settle(x, (t, y) => ({ stall: { n: (y.stall && Number(y.stall.n)) || 0, next, alone: true } }));
+      else {
+        settle(list[0], (t, y) => {
+          const n = ((y.stall && Number(y.stall.n)) || 0) + (rule.counted ? 1 : 0);
+          return rule.counted && n >= 2 ? { asked: true } : { stall: { n, next, ...(y.stall && y.stall.alone ? { alone: true } : {}) } };
+        });
+      }
+      await store.flush();
+      tell(novelId);
+      return { stalled: true };
+    }
+    const fault = got.leashed === 'long' ? 'words' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
     if (fault && typeof fault === 'object') return { stop: failed(fault) };
     if (fault === 'words') {
       if (list.length > 1) {
@@ -1899,7 +2282,7 @@ async function askMarks(novelId, conn, choice, list) {
           choice.beforeAsk();
           if (busyNow(novelId)) { schedule(novelId, 4000); return { passing: true }; }
           const out = await askMarks(novelId, conn, choice, [x]);
-          if (out && (out.gaveWay || out.stop || out.passing)) return out;
+          if (out && (out.gaveWay || out.stop || out.passing || out.stalled)) return out;
         }
         return { ok: true };
       }
@@ -1958,9 +2341,11 @@ const WHOLE_A_DAY = 6;
 const WHOLE_WORDS = 9000;
 const WHOLE_BEFORE = 24000;
 const dayOf = (t) => Math.floor(t / 86400000);
-/* chapterId:sig -> {n, until}: a passing fault waited out; chapterId:sig -> n: its model would not read it (twice, and it is let be) */
+/* chapterId:sig -> {n, until}: a passing fault waited out (in this page's memory: its loss costs one more ask at once of a
+ * model that is down, never a loop). How often its model would not read it, or was let go on its leash — twice, and it
+ * is let be — is kept with the book (`wholeTry`, 2.12.41, round 8: `wholeMiss`, in the page's memory, was let go with
+ * every reload, so a chapter its model would not read was asked again after each) */
 const wholeWait = new Map();
-const wholeMiss = new Map();
 const wholeList = (c) => (c.passages || []).filter((p) => p.by !== 'break' && hasWords(p));
 const wordsOf = (ps) => ps.reduce((n, p) => n + countWords(String(picked(p).text || '')), 0);
 export function wholeSig(c) {
@@ -1978,7 +2363,7 @@ function wholeWanted(c) {
 /* a chapter whose words as they stand were never read whole — Check this chapter reads it (ui/checks.js) */
 export function wholeOwed(novelId, chapterId) {
   const c = store.peek('chapter', chapterId);
-  return Boolean(c && store.peek('novel', novelId) && wholeWanted(c) && (c.wholeRead || {}).sig !== wholeSig(c) && !(wholeMiss.get(`${c.id}:${wholeSig(c)}`) >= 2));
+  return Boolean(c && store.peek('novel', novelId) && wholeWanted(c) && (c.wholeRead || {}).sig !== wholeSig(c) && !((wholeTryOf(c, wholeSig(c)) || {}).n >= 2));
 }
 /* what he asked for, settled where no read is wanted: a chapter its checking read whole already (one passage, read at
  * once), or one read whole at the words it has now — its ask let go (2.12.35, the audit: it stayed, and a chapter still
@@ -2011,11 +2396,15 @@ function wholeDue(novelId, now = Date.now()) {
     const r = c.wholeRead || {};
     if (r.sig === sig) continue;
     const key = `${c.id}:${sig}`;
-    if ((wholeMiss.get(key) || 0) >= 2) continue;
+    const tried = wholeTryOf(c, sig);
+    if (tried && (Number(tried.n) || 0) >= 2) continue;
     const words = wordsOf(ps);
     if (!c.wholeAsked && !(i < last || chapterClosed(c) || words - (Number(r.words) || 0) >= WHOLE_GROW)) continue;
     const held = wholeWait.get(key);
     if (held && held.until > now) { later(held.until - now); continue; }
+    /* (waiting its time after a stall, kept with the book — even when he asked: round 8) */
+    const left = tried ? Number(tried.next) - store.phoneNow() : 0;
+    if (left > 0) { later(left); continue; }
     if (!c.wholeAsked) {
       if (r.day === dayOf(now) && (r.n || 0) >= WHOLE_A_DAY) continue;
       const rest = (Number(r.at) || 0) + WHOLE_REST - now;
@@ -2050,7 +2439,8 @@ async function runWhole(novelId, conn, choice) {
     if (out && out.stop) throw out.stop;
     /* its model would not read it: once more on a later look, never straight away (a passing fault set its own wait) */
     if (out && out.missed) { schedule(novelId, 30000); return; }
-    if (out && out.passing) return;
+    /* (let go on its leash: the chapters read whole stop for this look — the head to head goes on: round 8) */
+    if (out && (out.passing || out.stalled)) return;
   }
 }
 
@@ -2143,21 +2533,30 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
     const bib = ridingItems(bibItems(view, inHand, { facts: true }), { near: numbered,
       budget: Math.max(0, Math.min(2500, Math.floor(spare * 0.2))), skip: passagesAfter(novel, inHand, chapter.id, { before: r.first.id }, 'write'), byPage: superOn(house) }).words.join('\n\n');
     const req = wholeRequest({ novel: view, chapterLabel: label, numbered, before, beforeFrom: leadFrom, his, sofar: story.text, left: story.left, notesFit, asked: askList, behind, bib, part: k + 1, parts: runs.length });
-    const got = await archivist.askJson(conn, system, req, { want: (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
+    const got = await checkerJson(novelId, conn, choice, system, req, (o) => Array.isArray(o.edits));
     await archivist.mustHold('checker', novelId);
     if (!got.ok) {
       /* (this part is read again first) */
       wholePart.set(key, { pid: r.first.id, piece: r.piece === undefined ? -1 : r.piece });
       /* it made way for his page: read again once the page has gone */
       if (got.leashed === 'gaveway') return { gaveWay: true };
-      const fault = got.leashed === 'long' ? 'words' : got.leashed ? 'model' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
+      /* LET GO ON ITS LEASH, nothing heard (2.12.41, round 8 — waited out as a passing fault, never counted: a chapter its
+       * model stays silent on was asked for ever): waited as long as it was waited, kept with the book; counted on the
+       * longest leash, let be at its second as one it would not read */
+      if (got.leashed === 'quiet') {
+        const rule = archivist.stallRule(got);
+        const n = wholeCount(chapter.id, sig, rule.counted ? 1 : 0, store.phoneNow() + rule.wait);
+        if (rule.counted && n >= 2) { wholeDone(chapter.id, sig, words, { missed: cutWords(got.error || 'its model sent nothing', 200) }); wholePart.delete(key); wholeTryDone(chapter.id); }
+        return { stalled: true };
+      }
+      const fault = got.leashed === 'long' ? 'words' : await archivist.whoseFault(conn, got, { beforeAsk: choice.beforeAsk });
       /* the connection's own: the checker stops, as for any checking */
       if (fault && typeof fault === 'object') return { stop: failed(fault) };
-      /* the words': its model would not read this chapter — twice, and it is let be until its words change */
+      /* the words': its model would not read this chapter — twice, and it is let be until its words change (counted with
+       * the book: round 8) */
       if (fault === 'words') {
-        const n = (wholeMiss.get(key) || 0) + 1;
-        wholeMiss.set(key, n);
-        if (n >= 2) { wholeDone(chapter.id, sig, words, { missed: cutWords(got.error || 'its model would not read it', 200) }); wholePart.delete(key); }
+        const n = wholeCount(chapter.id, sig, 1, 0);
+        if (n >= 2) { wholeDone(chapter.id, sig, words, { missed: cutWords(got.error || 'its model would not read it', 200) }); wholePart.delete(key); wholeTryDone(chapter.id); }
         return { missed: true };
       }
       /* passing (down, busy, too slow): waited out, a minute and then longer, never holding up the rest */
@@ -2191,7 +2590,7 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
    * without it — findingNow) */
   if (![...asked.values()].some((a) => a.renamedAway)) wholeDone(chapter.id, sig, words);
   wholePart.delete(key);
-  wholeMiss.delete(key);
+  wholeTryDone(chapter.id);
   wholeWait.delete(key);
   await store.flush('chapter', chapter.id);
   tell(novelId);
@@ -2492,12 +2891,28 @@ function spanSpot(text, item) {
 }
 
 /* the older passages too: a chapter, or every chapter */
+/* (his presses ask now: a wait on its model that kept silent is his to overrule — archivist.js hisPress — and what the
+ * press asks, the chapter's passages checked and the chapter read whole, is asked afresh: what was counted toward passing
+ * them by, and the wait after a stall, are his to overrule too, as the helper's presses overrule theirs — archivist.js
+ * askAudit; 2.12.41, round 8) */
+function askedAfresh(novelId, chapterId) {
+  const c = store.peek('chapter', chapterId);
+  if (!c) return;
+  for (const p of c.passages || []) {
+    const v = p.by === 'break' ? null : picked(p);
+    if (v && v.tries && v.tries.check) triedDone(novelId, chapterId, { pid: p.id, vid: v.id, sig: sigOf(v) }, 'check');
+  }
+  wholeTryDone(chapterId);
+}
 export function checkChapter(novelId, chapterId) {
   store.change('chapter', chapterId, chapterSteps.checkAll(), { now: true, checkpoint: true });
+  askedAfresh(novelId, chapterId);
+  pressed(novelId);
   schedule(novelId, 300);
 }
 export function checkBook(novelId) {
-  for (const c of chaptersOf(novelId)) store.change('chapter', c.id, chapterSteps.checkAll(), { now: true, checkpoint: true });
+  for (const c of chaptersOf(novelId)) { store.change('chapter', c.id, chapterSteps.checkAll(), { now: true, checkpoint: true }); askedAfresh(novelId, c.id); }
+  pressed(novelId);
   schedule(novelId, 300);
 }
 
@@ -2658,6 +3073,12 @@ function autoAfter(novelId) {
       }
     }
   }
+  /* (written again on the writer's connection: none while it is waited out after its model kept silent for as long as it
+   * is ever waited — the helper's silence or the checker's, the same connection — booked for the end of that wait, his
+   * press asking at once as for the checker's own asks; the fixes, which ask no model, went in all the same: 2.12.41,
+   * round 8 — what was written again by itself was asked of the very model being waited out) */
+  const quietWriter = next ? archivist.silentWait(novelId, connFor(house, 'writer')) : null;
+  if (quietWriter) { schedule(novelId, quietWriter.ms + 1000); next = null; }
   if (next && next.span && !busyNow(novelId)) {
     /* (the version keeps its id as its words change in place: tried once for these words) */
     const key = `${next.v.id}|${hashText(String(next.v.text || ''))}|${next.item.find}`;
@@ -2701,4 +3122,4 @@ function autoAfter(novelId) {
   tell(novelId);
 }
 
-export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried, spanTried, wholeDue, wholeWait, wholeMiss, wholePart, marksWait, proofWait, proofPart }; }
+export function forTests() { return { states, failures, blocked, timers, lifting, autoAfter, running: runningFor, narrow: narrowC, liftTried, spanTried, wholeDue, wholeWait, wholePart, marksWait, proofWait, proofPart, duelTried }; }

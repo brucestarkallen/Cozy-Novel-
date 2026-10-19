@@ -159,6 +159,18 @@ function draw() {
   const state = JSON.stringify([st, Boolean(checker.stalled(C.novelId))]);
   if (C.sheet && (changed || C.sheetState !== state)) drawSheet(st);
   C.sheetState = state;
+  tickState();
+}
+/* WORDS THAT TELL A TIME THAT PASSES ARE DRAWN AGAIN AS IT PASSES (2.12.41, round 8 — as the helper's light is, panes.js
+ * tickLight: "again in fourteen minutes" stood on the bubble and in Suggestions until something else changed): while
+ * they tell a wait (checker.js stateTimed), the bubble and an open Suggestions are drawn again every half minute; never
+ * once nothing waits */
+let stateTick = 0;
+function tickState() {
+  clearTimeout(stateTick);
+  stateTick = 0;
+  if (!C.novelId || !checker.stateTimed(C.novelId)) return;
+  stateTick = setTimeout(() => { stateTick = 0; C.stateDirty = true; drawSoon(); }, 30000);
 }
 
 /* ------------------------------------------------------------ the sheet */
@@ -213,7 +225,10 @@ function drawSheet(st = checker.stateOf(C.novelId)) {
   /* words brought in from a file, checked only when he asks (every other page is checked by itself, in either mode: 2.12.38) */
   const here = checker.unchecked(novelId, C.chapterId);
   const all = checker.unchecked(novelId);
-  const busyNow = st.state === 'checking' || st.state === 'waiting';
+  /* (waiting its time — its model kept silent, or what waits after a stall — is never about to check: Check this chapter
+   * and Check the whole book stand there to ask now, his presses overruling the wait — checker.js stateOf `held`, 2.12.41,
+   * round 8: they were hidden for as long as it waited, and nothing he could find asked sooner) */
+  const busyNow = st.state === 'checking' || (st.state === 'waiting' && !st.held);
   /* waiting out a failure, or stopped: tried again now, by his hand */
   if (checker.stalled(novelId)) row.append(h('button.btn.primary.small', { title: 'The checker tries again at once — even after its connection was turned away. It stops again only if the trouble is still there.', onclick: () => { if (checker.tryNow(novelId)) toast('The checker tries again now.'); } }, 'Try again now'));
   /* (and the passages checked but never graded, with the judge on: graded — their suggestions kept as they are) */
