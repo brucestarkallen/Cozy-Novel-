@@ -17331,6 +17331,45 @@ await test('a name changed everywhere while a reading of two passages is out: th
   await setHouse();
 });
 
+await test('a name changed everywhere reaches what was kept of a page it never stood in — its turns, a fact that names her, a fix the checker offers for it — nothing read again for it; its Undo puts them back; a change refused touches none of it', async () => {
+  await setHouse({ context: 64000 });
+  const SMILE = 'She smiled at Jovan in the rain.';
+  const b = await makeBook([[EMILIA, SMILE]], { manual: true });
+  peopleIn(b);
+  store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+  markAllSeen(b);
+  const p2 = b.ch().passages[1];
+  const v2 = picked(p2);
+  /* what was kept of the page the name never stands in, as a reading and the checker leave it (a fact of another name,
+   * kept since, too: a name that stands nowhere else in the book) */
+  store.change('chapter', b.ids[0], (ch) => {
+    const v = picked(ch.passages[1]);
+    v.continuity = tlmod.continuityOf([turnRow('Emilia warms to Jovan.', 'She smiled at Jovan', { why: 'Emilia forgives him.' })], b.novel().notes, { text: SMILE });
+    v.codex = bib.codexOf([{ name: 'Jovan', kind: 'people', fact: 'Emilia smiles at him in the rain.', evidence: 'She smiled at Jovan' }, { name: 'Jovan', kind: 'people', fact: 'Lena once smiled at him so.', evidence: 'She smiled at Jovan' }], { text: SMILE });
+  }, { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.setCheck(p2.id, v2.id, { round: 'r1', sig: util.hashText(SMILE), at: Date.now(), items: [{ id: 'i1', kind: 'clarity', find: 'She smiled', replace: 'Emilia smiled', why: 'who smiles' }] }), { now: true });
+  const fix = () => ((((b.ch().checks || {})[p2.id] || {})[v2.id] || {}).items || []).map((i) => `${i.find} → ${i.replace}`);
+  const was = [readOf(b, 1), fix()];
+  assert.deepEqual(was, [{ turns: ['Emilia warms to Jovan. / Emilia forgives him. [Emilia Vermaine, Jovan Wessex]'], facts: ['Emilia smiles at him in the rain. [Jovan]', 'Lena once smiled at him so. [Jovan]'], done: true }, ['She smiled → Emilia smiled']]);
+  /* a name that stands nowhere in the book: refused, and nothing kept of the page changed for it */
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Lena', to: 'Mara' } }).status, 'refused');
+  assert.deepEqual([readOf(b, 1), fix()], was, 'a change refused touches nothing');
+  const made = changes.makeChange(b.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } });
+  assert.equal(made.status, 'made');
+  assert.equal(picked(b.ch().passages[1]).text, SMILE, 'its words as they were');
+  assert.deepEqual([readOf(b, 1), fix()], [{ turns: ['Emmeline warms to Jovan. / Emmeline forgives him. [Emmeline Vermaine, Jovan Wessex]'], facts: ['Emmeline smiles at him in the rain. [Jovan]', 'Lena once smiled at him so. [Jovan]'], done: true }, ['She smiled → Emmeline smiled']], 'the page it never stood in: the new name in what was kept of it');
+  assert.deepEqual(tlmod.timelineOf(b.novel(), { [b.ids[0]]: b.ch() }).events.map((e) => e.text), ['Emmeline warms to Jovan.'], 'the Timeline says it so');
+  await reset();
+  await archivist.run(b.novelId);
+  await quietAll();
+  const r = await everyRequest();
+  assert.deepEqual([owedNow(b), r.filter(isTurnsAsk).length, r.filter(isBibAsk).length], [[0, 0], 0, 0], 'nothing read again');
+  assert.equal(changes.undoChange(b.novelId, made).ok, true);
+  assert.deepEqual([readOf(b, 1), fix()], was, 'its Undo puts them back');
+  await putAway(b);
+  await setHouse();
+});
+
 await test('a rename and its Undo while a reading is out leave its answer as it was given — no card under the name undone, every turn and fact kept, nothing read again; a name renamed again while it is out takes the newest name', async () => {
   await setHouse({ context: 64000 });
   const answer = { people: [{ name: 'Emilia Vermaine', now: 'At the quay, watching Jovan.' }],
