@@ -169,7 +169,7 @@ The helper and checker recover from temporary failures while the app can run. Th
 
 ## Keeping it safe
 
-- Every save is numbered; a window holding an older copy can never write over newer work — its change is played again over the newer copy.
+- Every save is numbered; a window holding an older copy can never write over newer work — its change is played again over the newer copy, each step only where the words it changes still read as it found them (his own edit stays his word, the words it replaces kept before it), and a save the phone took whose answer never came is never played twice.
 - Every chapter and book keeps its earlier copies (the newest eight, then one an hour for two days, then one a day for a month): chapters list → **⋯ → Earlier copies of this chapter**. Each copy says how it differs from the chapter now ("1 passage more than now"), copies with the same words are one row, the one that reads as the chapter does now is marked, and **Look** shows a copy's passages — a passage not in the chapter now is named so — before **Bring this copy back**. The chapter as it was a moment before is kept as the newest copy.
 - A copy of everything is kept once a day (the newest fourteen) and just before each update, each said with its books and words, and anything removed waits in **Settings → Backups → Recently deleted** for thirty days, with its name.
 - **Take a copy of everything** downloads one file; **Bring a copy back** adds its books or puts everything back as it was (keeping a copy of what was there first). A book added from a copy keeps its notes as they were read — nothing is read and paid for again.
