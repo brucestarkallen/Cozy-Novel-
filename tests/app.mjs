@@ -7608,8 +7608,11 @@ await test('a passage written again by itself that fails for a real reason is ne
   const refused = { status: 400, message: 'Invalid request: the prompt was refused' };
   await script([{ text: JSON.stringify({ edits: [], grades: [failing(3)] }) }, refused, refused, refused]);
   await checker.runCheck(b.novelId);
-  const out = await checker.forTests().lifting.get(b.novelId);
-  assert.equal(out && out.ok, false);
+  /* (2.12.40: what goes in by itself starts as soon as its passage is checked, never at the look's end — so the writing
+   * may have finished, and let go of its place in `lifting`, before the look does. Through 2.12.39 the job was always
+   * still there when the look ended; what it came to is on the version either way, below) */
+  const job = checker.forTests().lifting.get(b.novelId);
+  if (job) assert.equal((await job).ok, false);
   const p = b.ch().passages[0];
   assert.equal(p.versions.length, 1, 'the page as it was');
   const v = picked(p);
@@ -13894,12 +13897,64 @@ await test('the notes read only the entries the words name, found as the page fi
   const judged = archivist.wordsToJudge(n, chapters).filter((w) => w.what === 'entry').map((w) => w.name).sort();
   assert.deepEqual(judged, ['Night Market', 'Will Turner'], 'judged: the entries the book names as names — never the Never one');
   await putAway(b);
-  /* a book that says “will” and “night” only as words: no entry is judged for it */
-  const c = await makeBook([['She will go to the market at night.']], { manual: true });
-  putEntries(c, [{ name: 'Will Turner', kind: 'people', text: 'A smith.' }, { name: 'Night Market', kind: 'places', text: 'A market.' }]);
+  /* a book that says “will” and “night” only as words, and “Iron” only of a gate: no entry is judged for it — a place or a
+   * group is named by its whole name, as the page finds it */
+  const c = await makeBook([['She will go to the market at night, past the Iron gate.']], { manual: true });
+  putEntries(c, [{ name: 'Will Turner', kind: 'people', text: 'A smith.' }, { name: 'Night Market', kind: 'places', text: 'A market.' }, { name: 'The Iron Covenant', kind: 'groups', text: 'A sworn order.' }]);
   const cn = c.novel();
   assert.deepEqual(archivist.wordsToJudge(cn, Object.fromEntries(cn.order.map((id) => [id, store.peek('chapter', id)]))).filter((w) => w.what === 'entry'), []);
   await putAway(c);
+});
+
+/* (2.12.40, the audit: a backlog of passages wanted for their grade alone went ahead of a page written now; the fixes
+ * found on the newest page waited for every checking of the look; a passage whose grade could not be asked for again
+ * left the bubble saying "in a moment" with nothing booked; Check this chapter stayed asked for good) */
+await test('the checker: a page written now is checked before a backlog waiting for its grades; its fixes go in as soon as it is checked, before the backlog is; a grade that could not be asked for again is asked at a look booked for it; Check this chapter, once answered, is let go', async () => {
+  /* the order: the new page first */
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  const b = await makeBook([['Mara climbed the stair.', 'Tom ran to the gate.', 'The sea rose.'], ['Rain fell on the roof.']]);
+  await script([CK_NONE, CK_NONE]);
+  for (let i = 0; i < 3 && checker.waiting(b.novelId); i++) await checker.runCheck(b.novelId);
+  await setHouse({}, { checksFrom: 0 });
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[1], text: 'New words of his came last.' });
+  await reset();
+  await script([{ text: JSON.stringify({ edits: [], grades: [{ passage: '2.2', checks: ALL_YES(), faults: [] }] }) }, { text: JSON.stringify({ grades: [1, 2, 3].map((n) => ({ passage: `1.${n}`, checks: ALL_YES(), faults: [] })) }) }]);
+  await checker.runCheck(b.novelId);
+  const order = await checkAsk();
+  assert.ok(order.length >= 1 && checkedPart(order[0]).includes('New words of his came last.') && order[0].includes('Suggest only what is worth changing'), 'the page written now first, checked whole');
+  await putAway(b);
+  /* the fixes go in as soon as it is checked: the backlog after it is checked with the fixed words before it */
+  await setHouse({}, { checksFrom: Date.now() - 60000, judge: { on: false }, autoFix: { on: true, from: Date.now() - 1000 } });
+  await reset();
+  const c = await makeBook([['Mara climbed the the stair.', { text: 'Tom came up the path.', at: 0 }]]);
+  await script([{ text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' }] }) }, CK_NONE]);
+  await checker.runCheck(c.novelId);
+  const two = await checkAsk();
+  assert.equal(two.length, 2);
+  assert.ok(checkedPart(two[0]).includes('Mara climbed the the stair.'), 'the new page first');
+  assert.ok(checkedPart(two[1]).includes('Tom came up the path.') && two[1].includes('Mara climbed the stair.') && !two[1].includes('the the stair'), 'the older page checked with the new page’s fix already in before it');
+  assert.equal(picked(c.ch().passages[0]).text, 'Mara climbed the stair.');
+  await putAway(c);
+  /* a grade that could not be asked for again: a look is booked for it */
+  await setHouse({}, { checksFrom: 0 });
+  await reset();
+  const d = await makeBook([['Mara kept the light.']]);
+  await script([CK_NONE, { text: 'Not JSON at all.' }, { text: 'Still not.' }]);
+  await checker.runCheck(d.novelId);
+  assert.equal(checker.waiting(d.novelId), 1, 'still to be graded');
+  assert.equal(checker.forTests().timers.has(d.novelId), true, 'a look is booked for it — "in a moment" is true');
+  await putAway(d);
+  /* Check this chapter answered: let go — words brought in later wait to be asked for, a page cut short for its Go on */
+  await setHouse({}, { checksFrom: 0, judge: { on: false } });
+  await reset();
+  const e = await makeBook([['Old words.', { text: 'Brought in from a file.', how: 'imported' }]]);
+  checker.checkChapter(e.novelId, e.ids[0]);
+  await script([CK_NONE, CK_NONE]);
+  for (let i = 0; i < 3 && checker.waiting(e.novelId); i++) await checker.runCheck(e.novelId);
+  assert.equal(e.ch().checkAll, undefined, 'answered: let go');
+  store.change('chapter', e.ids[0], shape.chapterSteps.addPassage(shape.newPassage('you', 'More brought in later.', { how: 'imported' })), { now: true });
+  assert.equal(checker.waiting(e.novelId), 0, 'words brought in after it: checked only when he asks');
+  await putAway(e);
 });
 
 /* ------------------------------------------------------------ done */

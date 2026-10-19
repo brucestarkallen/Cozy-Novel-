@@ -688,7 +688,10 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .toast .toastwords { flex: 1 1 auto; min-width: 0; }
 .toast .toastact { flex: none; align-self: center; pointer-events: none; margin: -3px -8px -3px 0; padding: 6px 12px; border-radius: 10px; color: #f6c271; font-weight: 600; background: rgba(246,194,113,.12); }
 /* in a sheet: the sheet's own, at its foot */
-.sheet .toast { bottom: calc(var(--safe-b) + 16px); max-width: min(calc(100% - 24px), 520px); }
+.sheet .toast { bottom: var(--toast-above, calc(var(--safe-b) + 16px)); max-width: min(calc(100% - 24px), 520px); }
+/* …never over the sheet's controls: just above the sheet where there is room (dom.js placeInSheet), else at its foot
+ * with room at the end of its words to scroll them clear (2.12.40) */
+.sheet > .box.toastroom > .body { padding-bottom: calc(var(--safe-b) + 28px + var(--toast-room, 56px)); }
 .toast.on .toastact { pointer-events: auto; }
 .toast .toastact:hover, .toast .toastact:focus-visible { background: rgba(246,194,113,.22); }
 .banner {

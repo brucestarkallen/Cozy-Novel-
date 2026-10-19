@@ -895,6 +895,8 @@ export const chapterSteps = {
   },
   /* he asked for the whole chapter to be checked, older passages too — and read whole once they are (checker.js runWhole) */
   checkAll: () => (c) => { c.checkAll = true; c.wholeAsked = true; },
+  /* …and answered: nothing of it waits for that asking any more (checker.js runCheck, 2.12.40) */
+  checkedAll: () => (c) => { delete c.checkAll; },
   /* the chapter read whole by the checker: the words it read (checker.js wholeSig), when, how many times that day,
    * how long it was — or that its model would not read it (missed); his asking for it is answered */
   setWholeRead: (row) => (c) => { c.wholeRead = JSON.parse(JSON.stringify(row)); delete c.wholeAsked; },

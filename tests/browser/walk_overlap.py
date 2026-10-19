@@ -113,6 +113,32 @@ COVERED = r"""(content) => {
   return out;
 }"""
 
+# The line at the bottom's own rectangle against every control of the sheet on top (2.12.40, the audit: the look above
+# finds what lies over a control by what is there at a point, and the line's words let taps through — so a line over a
+# sheet's last buttons went unseen). `end`: the sheet's words scrolled to their end first.
+LINE_OVER = r"""(end) => {
+  const t = document.querySelector('#toast.on');
+  if (!t) return ['(no line showing)'];
+  const box = [...document.querySelectorAll('.sheet.on:not([aria-hidden="true"]) > .box')].pop();
+  if (!box) return ['(no sheet)'];
+  const body = box.querySelector('.body');
+  if (end && body) body.scrollTop = body.scrollHeight;
+  const tr = t.getBoundingClientRect();
+  if (tr.top < 0 || tr.bottom > innerHeight) return ['(the line is off the screen)'];
+  const view = body ? body.getBoundingClientRect() : box.getBoundingClientRect();
+  const out = [];
+  for (const el of box.querySelectorAll('button, input:not([type=hidden]), textarea, select, a[href]')) {
+    if (t.contains(el) || !el.getClientRects().length) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) continue;
+    /* (only what shows: a control scrolled out of the sheet's words is under nothing) */
+    if (body && body.contains(el) && (r.bottom <= view.top || r.top >= view.bottom)) continue;
+    if (end && body && body.contains(el) && el !== [...body.querySelectorAll('button')].pop()) continue;
+    if (r.left < tr.right && r.right > tr.left && r.top < tr.bottom && r.bottom > tr.top) out.push((el.textContent || el.getAttribute('aria-label') || el.tagName).replace(/\s+/g, ' ').trim().slice(0, 30));
+  }
+  return out;
+}"""
+
 SCROLL = """(end) => { for (const s of ['#pageWrap', '#sideBody', '.sheet.on .body', '.playturns', '.talkturns']) for (const el of document.querySelectorAll(s)) el.scrollTop = end ? el.scrollHeight : 0; }"""
 
 
@@ -184,6 +210,24 @@ async def size(browser, w, hgt, mobile):
     await look(pg, f'{tag} Suggestions, a line at the bottom')
     await pg.keyboard.press('Escape')
     await pg.wait_for_timeout(500)
+    # a small sheet opened while a line with its Undo shows, and a long one scrolled to its end: the line lies over
+    # none of their controls
+    await line(pg, 'Put in on the page.')
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => { d.confirmIt('Take it out?', 'It goes to Recently deleted, for thirty days.', 'Take it out'); })")
+    await pg.wait_for_selector('.sheet.on .box')
+    await pg.wait_for_timeout(450)
+    over = await pg.evaluate(LINE_OVER, False)
+    check(f'{tag} a small sheet opened while a line shows: the line lies over none of its buttons', not over, over)
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_timeout(400)
+    await pg.evaluate("""() => import('/js/ui/dom.js').then((d) => { const s = d.openSheet('A long one'); for (let i = 0; i < 40; i++) s.body.append(d.h('button.btn.small', { title: 'A button.' }, `Button ${i + 1}`)); })""")
+    await pg.wait_for_selector('.sheet.on .box')
+    await pg.wait_for_timeout(300)
+    await line(pg, 'Put in on the page.')
+    over = await pg.evaluate(LINE_OVER, True)
+    check(f'{tag} a long sheet with a line showing, scrolled to its end: its last button clear of the line', not over, over)
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_timeout(400)
     # Notes, the partner, a scene
     nid = await pg.evaluate("location.hash.split('/')[2]")
     for tab in ('notes', 'partner'):
@@ -280,16 +324,30 @@ async def size(browser, w, hgt, mobile):
         await look(pg, f'{tag} the scroller held at the foot', content=False)
         await pg.mouse.up()
         await pg.wait_for_timeout(300)
-    # the page's full screen, and reading mode
-    for item, leave in (('Full screen', '.fullexit'), ('Reading mode', '.readexit')):
+    # the page's full screen, and reading mode — on a wide screen the notes' column beside the page goes, is not drawn
+    # while it is gone, and comes back drawn as the book stands (2.12.40, the audit: it was drawn behind them all along)
+    await H.panes_call(pg, 'showSide', ['notes'])
+    await frames(pg)
+    docked = await pg.evaluate("document.querySelector('#sidePane').classList.contains('dock')")
+    for n, (item, leave) in enumerate((('Full screen', '.fullexit'), ('Reading mode', '.readexit'))):
         await pg.click('#moreBtn')
         await pg.locator('.menu-pop button').filter(has_text=item).first.click()
         await pg.wait_for_timeout(700)
         await look(pg, f'{tag} {item}')
         await line(pg, 'Put in on the page.', at='#passages .passage')
         await look(pg, f'{tag} {item}, a line at the bottom')
+        name = f'Zedekiah Vale {n + 1}'
+        if docked:
+            await pg.evaluate("([nid, name]) => import('/js/store.js').then((s) => s.change('novel', nid, (x) => { x.notes.people.push({ id: 'pe-zv' + Date.now(), name, aka: [], about: 'A ferryman.' }); }, { now: true }))", [nid, name])
+            await pg.wait_for_timeout(500)
+            drawn = await pg.evaluate("(name) => document.querySelector('#sideBody').textContent.includes(name)", name)
+            check(f'{tag} {item}: the notes’ column it hides is not drawn behind it', not drawn)
         await pg.locator(leave).first.click()
         await pg.wait_for_timeout(600)
+        if docked:
+            await frames(pg, 4)
+            back = await pg.evaluate("(name) => document.querySelector('#sideBody').textContent.includes(name)", name)
+            check(f'{tag} {item} left: the notes’ column comes back drawn as the book stands', back)
     errs = [x for x in logs if x.startswith('PAGEERROR')]
     check(f'{tag} no page errors', not errs, errs[:3])
     await pg.context.close()

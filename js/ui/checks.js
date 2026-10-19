@@ -46,7 +46,7 @@ export function showJudged(novelId, chapterId, passageId) {
   const go = (words) => () => { s.close(); desk.whenOpen(chapterId, { passageId, show: { query: words } }); };
   s.body.append(h('p.judgehead', h('b', `Graded ${g.overall} of ${g.of || 10}`), judge ? ` — your mark is ${judge.target}${g.overall < judge.target ? '; this is under it' : ''}` : ''));
   if (!g.of) {
-    s.body.append(h('p.say', 'Graded before the ten checks, on another scale: ', GRADE_AXES.filter(([k]) => Number.isFinite(g[k])).map(([k, w]) => `${w} ${g[k]}`).join(' · '), '. Check this chapter grades it on the ten checks.'));
+    s.body.append(h('p.say', 'Graded before the ten checks, on another scale: ', GRADE_AXES.filter(([k]) => Number.isFinite(g[k])).map(([k, w]) => `${w} ${g[k]}`).join(' · '), judge ? '. It is graded on the ten checks by itself, in a moment.' : '. With The judge grades each passage on (Settings → Who does what), it is graded on the ten checks by itself.'));
     return;
   }
   const faults = g.faults || [];
@@ -221,8 +221,10 @@ function drawSheet(st = checker.stateOf(C.novelId)) {
   const allN = all.passages + all.ungraded;
   /* (and a chapter not read whole as it stands, 2.12.33: read whole now — not asked for again while it is waiting to be) */
   const owed = checker.wholeOwed(novelId, C.chapterId) && !store.peek('chapter', C.chapterId)?.wholeAsked;
-  if ((hereN || owed) && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s passages not checked yet — words brought in from a file too — grades any not graded yet, and reads the chapter whole for what disagrees across it.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
-  if (allN > hereN && !busyNow && st.state !== 'off') row.append(h('button.btn.small.quiet', { title: 'The checker reads every passage of the book not checked yet, and grades any not graded yet, a chapter at a time — then reads each chapter whole for what disagrees across it.', onclick: async () => {
+  /* (never while it is in trouble: Try again now is the one way on from there — 2.12.40, the audit: pressing these while it
+   * was stopped did nothing, and said "Checking this chapter.") */
+  if ((hereN || owed) && !busyNow && st.state !== 'off' && st.state !== 'trouble') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s passages not checked yet — words brought in from a file too — grades any not graded yet, and reads the chapter whole for what disagrees across it.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
+  if (allN > hereN && !busyNow && st.state !== 'off' && st.state !== 'trouble') row.append(h('button.btn.small.quiet', { title: 'The checker reads every passage of the book not checked yet, and grades any not graded yet, a chapter at a time — then reads each chapter whole for what disagrees across it.', onclick: async () => {
     const said = [all.passages ? `${plural(all.passages, 'passage')} that haven’t been checked — about ${all.words.toLocaleString()} words —` : '', all.ungraded ? `${all.passages ? 'and ' : ''}${plural(all.ungraded, 'passage')} checked but not graded` : ''].filter(Boolean).join(' ');
     if (!(await confirmIt('Check the whole book?', `${said} go to the checker, a chapter at a time — and each chapter is read whole once its passages are checked.`, 'Check the whole book'))) return;
     checker.checkBook(novelId);

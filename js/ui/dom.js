@@ -112,7 +112,9 @@ function placeToast() {
    * keyboard off its Undo) */
   const home = sheet?.box || document.body;
   if (t.parentElement !== home || t !== home.lastElementChild) home.append(t);
-  if (sheet) { for (const k of ['--toast-x', '--toast-max', '--toast-bottom']) t.style.removeProperty(k); return; }
+  /* (a sheet it left keeps no room made for it) */
+  for (const b of document.querySelectorAll('.sheet > .box.toastroom')) if (b !== home) b.classList.remove('toastroom');
+  if (sheet) { placeInSheet(t, sheet.box); return; }
   const { rect, feet, gutter } = toastPart();
   const x = rect.left + rect.width / 2;
   const half = Math.min(x - rect.left - 12, (gutter ? gutter.left - 8 : rect.right - 12) - x);
@@ -128,6 +130,25 @@ function placeToast() {
   }
   t.style.setProperty('--toast-bottom', `${Math.round(innerHeight - foot + 10)}px`);
 }
+/* IN A SHEET, never over its controls (2.12.40, the audit: at the sheet's foot it lay over a small sheet's last
+ * buttons — a confirm opened while an Undo showed): just above the sheet, where the room above it holds the line;
+ * else at its foot, with the sheet's words given room at their end to scroll clear of it (`toastroom`) */
+function placeInSheet(t, box) {
+  for (const k of ['--toast-x', '--toast-max', '--toast-bottom']) t.style.removeProperty(k);
+  const sheetEl = box.parentElement;
+  const b = box.getBoundingClientRect();
+  const s = sheetEl ? sheetEl.getBoundingClientRect() : { top: 0 };
+  const pad = sheetEl ? parseFloat(getComputedStyle(sheetEl).paddingTop) || 0 : 0;
+  const h = t.getBoundingClientRect().height || 44;
+  if (b.top - h - 10 >= s.top + pad) {
+    t.style.setProperty('--toast-above', `${Math.round(b.height + 10)}px`);
+    box.classList.remove('toastroom');
+  } else {
+    t.style.removeProperty('--toast-above');
+    box.style.setProperty('--toast-room', `${Math.round(h + 12)}px`);
+    box.classList.add('toastroom');
+  }
+}
 /* (placed again while it shows: the box grows with his words, Follow the writing comes and goes, the window turns) */
 let toastWatch = null;
 function watchToast(on) {
@@ -137,10 +158,11 @@ function watchToast(on) {
     addEventListener('resize', () => { if ($('#toast')?.classList.contains('on')) placeToast(); });
   }
   toastWatch.disconnect();
-  if (on) for (const el of [$('#floatRow'), $('.composer'), $('#sideFoot'), $('#sidePane'), $('.pagecol')]) if (el) toastWatch.observe(el);
+  if (on) for (const el of [$('#floatRow'), $('.composer'), $('#sideFoot'), $('#sidePane'), $('.pagecol'), focusedSheet()?.box]) if (el) toastWatch.observe(el);
 }
 function hideToast(t) {
   t.classList.remove('on'); t.inert = true; t.setAttribute('aria-hidden', 'true');
+  for (const b of document.querySelectorAll('.sheet > .box.toastroom')) b.classList.remove('toastroom');
   watchToast(false);
   /* a hint that waited for this line to go comes now */
   const w = hintWaiting;

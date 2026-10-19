@@ -14,14 +14,13 @@
  * found — to be applied one by one or all at once, or left as it is.
  *
  * Nothing is changed without him — unless he switched on what happens by
- * itself (then his own words too, Settings → Who does what): an applied
- * suggestion makes a new version
- * of the passage (the words before are one arrow away); the suggestions of
- * one checking all land on that one new version. What it found is kept on
- * the chapter, for the version it read, only while that version still reads
- * the same. Old writing is never sent unasked: what was written before the
- * checker began on this phone, or brought in from a file, is checked when he
- * asks for a chapter or the whole book.
+ * itself (Apply the checker's fixes by themselves, or Super automatic; then his
+ * own words too, Settings → Who does what): an applied suggestion goes in on
+ * the page itself (2.12.2), the words before kept on the version — ⋯ → Put
+ * back the words before. What it found is kept on the chapter, for the version
+ * it read, only while that version still reads the same. Every page is checked
+ * by itself, in either mode, what is new first (2.12.38); only words brought in
+ * from a file wait for him to ask for a chapter or the whole book.
  *
  * Like the helper, it waits out a passing fault and tries again by itself; a
  * connection turned away for good is not asked again until it changes. */
@@ -448,7 +447,16 @@ function nextBatch(novelId, limit, { one = false } = {}) {
   const from = checksFromOf(house);
   /* what is new first — written since checking began, words changed since they were checked, a chapter he asked for —
    * and only then the book's older pages (2.12.35; in either mode since 2.12.38): a backlog never holds up the newest page */
-  const isNew = (c, p) => { const v = picked(p); return Boolean(c.checkAll) || Boolean(c.checks && c.checks[p.id] && c.checks[p.id][v.id]) || (Number.isFinite(from) && bornOf(v) >= from); };
+  /* (words changed since they were checked: an entry for this version with a stale print — a version keeps its id as
+   * its words change in place, 2.12.2. One checked as it reads now, wanted for its grade alone, is backlog: 2.12.40, the
+   * audit — through 2.12.39 it went ahead of a page written now) */
+  const isNew = (c, p) => {
+    const v = picked(p);
+    if (c.checkAll) return true;
+    const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id];
+    if (e) return e.sig !== sigOf(v);
+    return Number.isFinite(from) && bornOf(v) >= from;
+  };
   for (const older of [false, true]) for (const c of chaptersOf(novelId)) {
     const list = [];
     let words = 0;
@@ -506,7 +514,10 @@ export async function runCheck(novelId) {
         const batch = nextBatch(novelId, limit, { one: narrowC.has(novelId) });
         if (!batch) { narrowC.delete(novelId); break; }
         /* the same words again means nothing could be kept for them: never asked in a loop */
-        /* (by its words too: a version keeps its id as its words change on the page, 2.12.2) */
+        /* (by its words too: a version keeps its id as its words change on the page, 2.12.2) — a passage whose grade could
+         * not be asked for again just now, or read in parts with no whole grade, is asked for its grade alone at the next
+         * look, booked below (2.12.40, the audit: through 2.12.39 none was booked, and the bubble said "in a moment"
+         * until something else woke the checker) */
         const asking = batch.passages.map((p) => `${picked(p).id}:${sigOf(picked(p))}`).join(',');
         if (asking === lastAsked) break;
         /* a whole long book: the rest in a moment, a run at a time */
@@ -514,6 +525,16 @@ export async function runCheck(novelId) {
         lastAsked = asking;
         setState(novelId, 'checking', `Checking ${batch.label}…`);
         await checkBatch(novelId, conn, batch, limit, choice);
+        /* what goes in by itself goes in as soon as it is found — the newest page's fixes never wait for the backlog
+         * after it (2.12.40, the audit: through 2.12.39 they waited for every checking of the look, up to sixty) */
+        autoAfter(novelId);
+      }
+      /* Check this chapter / Check the whole book answered: once nothing of a chapter waits for it, it is a chapter like
+       * any other (2.12.40, the audit: it stayed asked for good — a page cut short there was checked before its Go on,
+       * and words brought in later were checked unasked) */
+      {
+        const hs = store.peek('house', 'house') || {};
+        for (const c of chaptersOf(novelId)) if (c.checkAll && !(c.passages || []).some((p) => wanted(hs, c, p))) store.change('chapter', c.id, chapterSteps.checkedAll(), { checkpoint: true });
       }
       choice.beforeAsk();
       /* every checked passage proofread once for slips alone — the ones checked before this was here too */
@@ -537,6 +558,9 @@ export async function runCheck(novelId) {
       autoAfter(novelId);
       failures.delete(novelId);
       setState(novelId, null);
+      /* what still waits is looked at again soon — the bubble's "in a moment" is true (every such passage is either
+       * checked, graded, or let be at that look: never asked in a loop) */
+      if (waiting(novelId)) schedule(novelId, 6000);
     } catch (e) {
       const why = (e && e.message) || String(e);
       if (e && e.checkerChanged) {
@@ -1884,7 +1908,8 @@ function settleWhole(novelId) {
   }
 }
 /* the next chapter to read whole — {chapter, sig} — or {wait} until one may be, or null. Every page is checked by
- * itself, in either mode (2.12.38), so every ended chapter is read whole by itself too, a few a day (WHOLE_A_DAY) */
+ * itself, in either mode (2.12.38), so every ended chapter is read whole by itself too: a few chapters a look, and one
+ * chapter at most WHOLE_A_DAY times a day */
 function wholeDue(novelId, now = Date.now()) {
   const list = chaptersOf(novelId);
   let last = -1;
@@ -2389,9 +2414,10 @@ export function checkBook(novelId) {
 /* ------------------------------------------------------------ by itself */
 
 /* What he switched on to happen by itself (Settings → Who does what), each
- * from when he switched it on: passages written before are never changed by
- * themselves. null when off. (auto.js autoOf: his two switches, and Super
- * automatic for the fixes) */
+ * from when he switched it on: the fixes go in on every passage checked while it
+ * is on, written before too (2.12.2); a passage under his mark is written again
+ * only when written from then on. null when off. (auto.js autoOf: his two
+ * switches, and Super automatic for the fixes) */
 export { autoOf };
 /* what happens by itself happens to his own words too, once he switches it on (his word, 15 October:
  * "automatically change my word — my own writing is ok too"): a passage under his mark is written again

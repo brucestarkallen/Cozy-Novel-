@@ -37,6 +37,14 @@ const P = { novelId: null, chapterId: null, side: 'notes', playId: null, offs: [
 export function initPanes(elements, appHooks) {
   ui = elements;
   hooks = appHooks;
+  /* a column the page's full screen or reading mode hid is drawn again as they end */
+  let hiddenWas = columnsHidden();
+  new MutationObserver(() => {
+    const now = columnsHidden();
+    if (now === hiddenWas) return;
+    hiddenWas = now;
+    if (!now) { if (leftVisible()) drawChaptersSoon(); if (sideVisible()) drawSideSoon(); }
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   ui.scrim.addEventListener('click', () => { closeLeft(); closeRight(); });
   /* a marked name in a scene's telling opens its card (Tap names) */
   ui.rightBody.addEventListener('click', (e) => {
@@ -95,7 +103,10 @@ function drawChaptersSoon() { if (!chFrame) chFrame = requestAnimationFrame(() =
  * column beside the page; closed, the list is drawn as it opens (openLeft,
  * toggleLeft, dockWide). Every save of a chapter told the list to draw itself
  * again behind a closed drawer, every chapter's words counted each time (2.12.6). */
-function leftVisible() { return Boolean(ui) && !document.getElementById('desk')?.hidden && (P.leftOpen || ui.left.classList.contains('dock')); }
+/* (a column beside the page is not seen in the page's full screen nor in reading mode — novel.css hides it there, and
+ * it was drawn behind them all the same: 2.12.40, the audit; drawn again as it comes back, initPanes) */
+const columnsHidden = () => document.body.classList.contains('fullpage') || document.body.classList.contains('reading');
+function leftVisible() { return Boolean(ui) && !document.getElementById('desk')?.hidden && (P.leftOpen || (ui.left.classList.contains('dock') && !columnsHidden())); }
 
 function dockWide() {
   const w = wide();
@@ -730,7 +741,7 @@ let sideGen = 0;
 const paneCache = new Map();
 let renderedPane = null;
 function sideVisible() {
-  return ui && !document.getElementById('desk')?.hidden && ['open', 'dock', 'full'].some(c => ui.right.classList.contains(c));
+  return ui && !document.getElementById('desk')?.hidden && (['open', 'full'].some(c => ui.right.classList.contains(c)) || (ui.right.classList.contains('dock') && !columnsHidden()));
 }
 function partnerChangesVisible() { return sideVisible() && P.side === 'partner' && ui.rightBody.querySelector('.changes'); }
 /* Returning to a tab should not typeset the same long conversation again.
