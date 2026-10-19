@@ -17291,6 +17291,10 @@ await test('a rename and its Undo while a reading is out leave its answer as it 
   assert.deepEqual(readOf(b, 1), { turns: ['Emilia turns Jovan. [Emilia Vermaine, Jovan Wessex]', 'Jovan lives on. [Jovan Wessex]', 'Jovan turns against her. [Emilia Vermaine, Jovan Wessex]'], facts: ['Emilia is a vampire who bites. [Emilia]'], done: true });
   let r = await everyRequest();
   assert.deepEqual([owedNow(b), r.filter(isTurnsAsk).length, r.filter(isBibAsk).length], [[0, 0], 0, 0], 'nothing read again');
+  /* the change and its Undo as the book keeps them: never made at all — a name the change made, already someone else's
+   * in the words ("Emmeline" here), stays hers (made, then made back, it would be Emilia's) */
+  const kept = (b.novel().memory || {}).renames || [];
+  assert.deepEqual([kept.length, namesjs.renameIn('Emilia bit Jovan. Emmeline watched from the stair.', kept)], [2, 'Emilia bit Jovan. Emmeline watched from the stair.']);
   await putAway(b);
   /* renamed, then renamed again */
   const c = await inFlightBook();
