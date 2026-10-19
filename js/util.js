@@ -125,6 +125,15 @@ export function debounce(fn, ms) {
 
 export function clone(x) { return x === undefined ? undefined : JSON.parse(JSON.stringify(x)); }
 
+/* WORDS AS THEY STAND LINE BY LINE (2.12.41, the review of Quick add: a passage's paragraphs parted or joined, and an
+ * entry put into paragraphs, were turned away as "it would change nothing" — every run of white space was read as one
+ * space): the spaces within a line let go, a run of empty lines one paragraph's break — a line broken, a paragraph
+ * parted, or two joined is a change. `sameLines`: the same words in the same lines and paragraphs. */
+export function linesOf(text) {
+  return String(text ?? '').replace(/\r\n?/g, '\n').replace(/[^\S\n]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+export const sameLines = (a, b) => linesOf(a) === linesOf(b);
+
 /* Words cut to fit, never mid-word (Cozy Tavern's M752): at the last end of a
  * sentence or a clause in the second half, else at the last space, with "…". */
 export function cutWords(text, max) {

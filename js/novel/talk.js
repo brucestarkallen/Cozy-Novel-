@@ -32,7 +32,7 @@ import * as archivist from './archivist.js';
 import { convSteps, conversationsOf, freeName, openName, cleanConvName, markedName } from './conversations.js';
 import { tellerOf, toTeller } from './teller.js';
 import { scenePlan } from './stretches.js';
-import { entriesOf, entryNamed, entryWords, KIND_TITLE, recallOn } from './bibliography.js';
+import { entriesOf, entryFor, entryWords, KIND_TITLE, recallOn } from './bibliography.js';
 import { pickEntries } from './bibpick.js';
 import { appliesOf, superOn } from './auto.js';
 
@@ -700,7 +700,8 @@ function readRows(novelId, asked) {
     }
     /* an entry of his bibliography, whole */
     if (n && typeof n === 'object' && n.entry) {
-      const m = entryNamed(entriesOf(novel), n.entry);
+      /* (found as his partner's change finds it: bibliography.js entryFor) */
+      const m = entryFor(entriesOf(novel), n.entry);
       if (m.ambiguous) return { label: `The entry “${n.entry}”`, text: '(more than one entry goes by that name — ask for it by its full name)', missing: true };
       if (!m.entry) return { label: `The entry “${n.entry}”`, text: '(there is no entry by that name in the bibliography)', missing: true };
       const e = m.entry;

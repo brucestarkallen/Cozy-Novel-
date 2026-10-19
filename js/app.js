@@ -24,7 +24,7 @@ import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
 import { initBibliography } from './ui/bibliography.js';
 import { quickAny } from './novel/quickadd.js';
-import { mendBook } from './novel/mend.js';
+import { mendBook, markRenames } from './novel/mend.js';
 import { initBranches, openBranches } from './ui/branches.js';
 import { openConversation } from './novel/talk.js';
 
@@ -233,6 +233,8 @@ async function repairNow(novelId) {
     if (broken) toast(`${broken === 1 ? 'A passage' : `${broken} passages`} showed a sentence written again that broke off partway — ${broken === 1 ? 'its' : 'their'} words before are back on show.`, 9000);
     /* a grade a fix lost before 2.6.3, put back from the version it was made from */
     keepGrades(novelId);
+    /* names changed everywhere before 2.12.41 marked as such, once — no one's hand on the pages they touched (mend.js) */
+    await markRenames(novelId);
     if (store.peek('talk', novelId)) await talkRepair('talk', novelId);
     for (const id of (store.peek('novel', novelId) || {}).plays || []) if (store.peek('play', id)) await talkRepair('play', id);
   } catch (e) { console.warn(e); }

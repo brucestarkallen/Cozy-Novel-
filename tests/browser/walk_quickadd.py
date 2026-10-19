@@ -177,18 +177,45 @@ async def scenario(browser, w, hgt, mobile):
         check(f'{tag} Ask again puts his words back in the box', kept == 'HELDBACK Emilia has black hair.', kept)
     await pg.locator('.bibview .quickbox').fill('')
 
-    # a newer word of his that went into no entry says so, with Ask again
+    # a newer word of his on his own entry that nothing written carries: asked again and still none, it goes in in his own
+    # words, said so, with Ask again to have it written up (2.12.41, the review: this check held that it "did not go in" —
+    # the app knew the words it changes and his newer words, and left his entry saying "no family" beside "a brother", so
+    # the writer read the old fact; and "your words kept as you wrote them" is never said of words his newer word changed)
     await ask(pg, 'LONE Emilia has a brother.')
     row = await pg.locator('.bibview .quickrow').last.inner_text()
-    check(f'{tag} a newer word that went in nowhere says it did not go in',
-          'It changes your earlier words' in row and 'it did not go in: nothing it wrote carries it. Send your words again.' in row
-          and await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').count() == 1, row)
+    told = await pg.evaluate("(nid) => import('/js/store.js').then((s) => ((s.peek('novel', nid).bibliography || []).find((e) => e.name === 'Emilia Vermaine') || {}).text || '')", nid)
+    check(f'{tag} a newer word with nothing written for it goes in in his own words, said so, with Ask again',
+          'It changes your earlier words' in row and 'it says “Emilia has a brother.” now: put in as you said it — your partner gave no words for it.' in row
+          and 'your newer word put in as you said it — your partner gave no words for it' in row and 'your words kept as you wrote them' not in row
+          and told == 'Emilia has a brother.'
+          and await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').count() == 1, [row, told])
 
     # set aside: "yours went in" only where the entry put in says his words — never "not held back" unchecked
     await ask(pg, 'ASIDE Emilia Vermaine is an elder whose eyes are green.')
     row = await pg.locator('.bibview .quickrow').last.inner_text()
     check(f'{tag} set aside, with yours said to go in only where an entry put in says them',
           'Set aside' in row and 'so yours went into Emilia Vermaine.' in row and 'not held back' not in row, row)
+
+    # (2.12.41, the review) a row another browser was asking, whose window closed long since: said at once that it
+    # stopped — its beat judged in the phone's time, never "being checked in another window" for two minutes after a load
+    # — and kept as stopped from here, for every window
+    await pg.evaluate("(nid) => import('/js/store.js').then((s) => s.change('novel', nid, (x) => { x.quick = [...(x.quick || []), { id: 'qa-far', at: s.phoneNow() - 300000, said: 'FAR The Ash Road is closed.', state: 'asking', beat: s.phoneNow() - 180000, tab: 'tab-far', browser: 'br-far' }]; }, { now: true }))", nid)
+    await open_bib(pg)
+    seen = ''
+    for _ in range(50):
+        seen = await pg.locator('.bibview .quickrow', has_text='FAR The Ash Road').last.inner_text()
+        if 'its window closed before it answered' in seen:
+            break
+        await pg.wait_for_timeout(100)
+    far = None
+    for _ in range(30):
+        far = await pg.evaluate("(nid) => import('/js/store.js').then((s) => { const r = (s.peek('novel', nid).quick || []).find((x) => x.id === 'qa-far'); return r ? [r.state, Boolean(r.closed), r.browser || ''] : null; })", nid)
+        if far and far[0] == 'stopped':
+            break
+        await pg.wait_for_timeout(100)
+    check(f'{tag} another browser’s row whose window closed: said at once that it stopped, with Ask again',
+          'Not checked — its window closed before it answered. Nothing went in.' in seen and 'Being checked in another window' not in seen and 'Ask again' in seen, seen)
+    check(f'{tag} and kept as stopped from here, for every window', far == ['stopped', True, ''], far)
 
     # what he types while it asks is kept: when the ask fails, his words come back before it, never in its place — and
     # Ask again the same (2.12.40, the audit)
