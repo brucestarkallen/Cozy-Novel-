@@ -378,10 +378,13 @@ function chapterMenu(anchor, id, i) {
  * as it stands — or why there is none to send — with its check, and a long
  * chapter's stretches, each in its fold (the level between: archivist.js,
  * context.js stretchesOf). A scene's stretches the same (sceneShortSheet). */
+/* (a line's words begun with a capital) */
+const cap = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 /* (`wait`: its check's next try waiting its time after a stall — archivist.js checkWait) */
 function checkWords(entry, unit, wait = null) {
   const k = entry && entry.checked;
-  if ((!k || !checkedNow(entry)) && wait && wait.when) return `Not checked yet — the helper’s model was too slow to answer for it, so the helper holds it against the ${unit} again ${wait.when}.`;
+  /* (why it is asked again: too slow to answer, or refused the first time — archivist.js againWhy, round 8) */
+  if ((!k || !checkedNow(entry)) && wait && wait.when) return `Not checked yet — ${archivist.againWhy(wait)}, so the helper holds it against the ${unit} again ${wait.when}.`;
   if (!k || !checkedNow(entry)) return `Not checked yet — the helper holds it against the ${unit} next.`;
   if (k.unread) return 'Its model would not check it. It is checked again once its words change.';
   const fixes = (k.fixed || []).map((f) => `“${f.from}” → “${f.to}”`);
@@ -396,7 +399,7 @@ function stretchFolds(rows, unit) {
   const state = (st) => (!checkedNow(st) ? 'not checked yet' : st.checked.unread ? 'its model would not check it' : 'checked');
   const owed = (r) => (r.wait && r.wait.passed
     ? 'Its model would not sum it up — the helper sums it up again once its words change. Until then it rides by its opening and close.'
-    : r.wait && r.wait.when ? `The helper’s model was too slow to answer for it — the helper sums it up again ${r.wait.when}.` : 'The helper sums it up next.');
+    : r.wait && r.wait.when ? `${cap(archivist.againWhy(r.wait))} — the helper sums it up again ${r.wait.when}.` : 'The helper sums it up next.');
   return rows.map((r) => h('details.pane-guide.summary-stretch', h('summary', r.text ? `${r.label} · ${state(r.st)}` : `${r.label} · ${r.wait && r.wait.passed ? 'not summed up' : 'not summed up yet'}`),
     ...(r.text ? [h('p.hint', checkWords(r.st, unit, r.check)), shortText(r.text)] : [h('p.hint', owed(r))])));
 }
@@ -440,7 +443,7 @@ function summaryParts(novelId, chapterId) {
   /* (passed by — its model would not sum it up as it reads now — or its next try waiting its time after a stall: said,
    * with when — 2.12.41, round 7) */
   const wait = archivist.summaryWait(novelId, chapterId);
-  const again = wait && wait.when ? ` The helper’s model was too slow to answer for it — the helper sums it up again ${wait.when}.` : '';
+  const again = wait && wait.when ? ` ${cap(archivist.againWhy(wait))} — the helper sums it up again ${wait.when}.` : '';
   if (sum && sum.by === 'you' && current) parts.push(h('p.hint', 'Your own summary — the helper keeps your words and never changes them.'), shortText(sum.text));
   else if (current) {
     /* (its names and figures asked for again after a stall) */
@@ -1091,7 +1094,7 @@ function checkReport(n, { asked, off, cards }) {
   const left = Math.max(0, archivist.AUDIT_EVERY - (a.reads || 0));
   /* (its next try waiting its time after a stall: said, with when — 2.12.41, round 7) */
   const wait = archivist.stageWait(n.id, 'audit');
-  const slow = wait && wait.when ? `the helper’s model was too slow to answer for them, so the helper checks them again ${wait.when}` : '';
+  const slow = wait && wait.when ? `${archivist.againWhy(wait, true)}, so the helper checks them again ${wait.when}` : '';
   const next = slow ? `It checks them again by itself — ${slow}.` : left ? `It checks again by itself after ${plural(left, 'more reading')}.` : 'It checks again as soon as what is new is read.';
   /* (asked while the helper waits on a model that kept silent for as long as it is ever waited — nothing is asked of it
    * until then: said, with when, never "as soon as what is new has been read" — 2.12.41, round 7, F4) */

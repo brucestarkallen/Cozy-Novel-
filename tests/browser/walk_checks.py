@@ -1,5 +1,6 @@
 """The review sheet stays useful while its suggestions change; stand-in calls only."""
 import asyncio
+import json
 import os
 import harness as H
 from playwright.async_api import async_playwright
@@ -168,6 +169,69 @@ async def main():
             card = await wp.inner_text('.sug:has(.sugheld)')
             check('the chapter read whole: its fix on a card — what it holds to in the book’s words, and where it was found', 'As the book says before it:' in card and 'She set the cup down on the sill' in card and 'Found when the chapter was read whole.' in card and 'the cup cooling on the sill' in card)
             check('no browser exceptions reading the chapter whole', not wlogs)
+            await ctx.close()
+            # (2.12.41, round 8) the checker waiting out a model that kept silent for as long as it is ever waited — the
+            # helper's silence, on the same connection: nothing asked of it, said with when in the bubble and in
+            # Suggestions (never "in a moment"), and Check this chapter there to ask now; what waits its time after a stall
+            # said with when too, and said again as the time passes, nothing else changing
+            ctx = await b.new_context(viewport={'width': 412, 'height': 915})
+            qp = await ctx.new_page()
+            qlogs = []
+            qp.on('pageerror', lambda e: qlogs.append(str(e)))
+            await H.new_book(qp, title='The Quiet Shore')
+            await H.add_conn(qp)
+            await qp.evaluate("""async () => {
+              const s = await import('/js/store.js'); const a = await import('/js/novel/archivist.js'); const ck = await import('/js/novel/checker.js'); const w = await import('/js/novel/writer.js');
+              const id = location.hash.split('/')[2]; const one = s.peek('novel', id).order[0];
+              window.__q = { s, id, print: a.choicePrint(ck.checkerConn(s.peek('house', 'house'))) };
+              s.change('novel', id, (d) => { d.memory = { ...(d.memory || {}), silent: { [window.__q.print]: { until: s.phoneNow() + 14 * 60000, leashMs: 15 * 60000 } } }; });
+              w.addMine({ novelId: id, chapterId: one, text: 'Mara walked the quiet shore at dawn.' });
+              await s.flush();
+            }""")
+            quiet_words = 'The checker’s model sent nothing for fifteen minutes — the checker asks it again in fourteen minutes, and nothing more until then.'
+            bubble = "() => document.querySelector('#checkBubble')?.title || ''"
+            try: await qp.wait_for_function(f"({bubble})().includes('sent nothing for fifteen minutes')", timeout=15000)
+            except Exception: pass
+            title = await qp.evaluate(bubble)
+            if quiet_words not in title: print('  saw:', title)
+            check('the checker waiting out its silent model says so in its bubble, with when', quiet_words in title)
+            await qp.click('#checkBubble')
+            await qp.wait_for_selector('.sugsheet .sugstate')
+            line = await qp.inner_text('.sugsheet .sugstate')
+            buttons = await qp.evaluate("() => [...document.querySelectorAll('.sugsheet .check-actions button')].map((x) => x.textContent.trim())")
+            if not (quiet_words in line and 'Check this chapter' in buttons): print('  saw:', line, buttons)
+            check('and in Suggestions, with Check this chapter there to ask now', quiet_words in line and 'Check this chapter' in buttons)
+            check('nothing was asked of it meanwhile', not [r for r in H.reqs() if 'Check these passages from' in json.dumps(r) and 'Mara walked the quiet shore at dawn.' in json.dumps(r)])
+            await qp.click('.sugsheet .check-actions button:text-is("Check this chapter")')
+            await qp.wait_for_function("""() => { const q = window.__q; const n = q.s.peek('novel', q.id); const sil = (n.memory || {}).silent || {};
+              const c = q.s.peek('chapter', n.order[0]); const p = c.passages.find((x) => (x.versions || []).some((v) => v.text === 'Mara walked the quiet shore at dawn.'));
+              return !sil[q.print] && Boolean(p && c.checks && c.checks[p.id]); }""", timeout=20000)
+            check('Check this chapter asks now: the wait let go, the passage checked', True)
+            await qp.keyboard.press('Escape')
+            await qp.wait_for_timeout(300)
+            # a passage waiting its time after a stall, fifty seconds on (as the checker keeps it, checker.js triedCount)
+            await qp.evaluate("""async () => {
+              const q = window.__q; const w = await import('/js/novel/writer.js'); const sh = await import('/js/novel/shape.js'); const u = await import('/js/util.js');
+              const one = q.s.peek('novel', q.id).order[0];
+              w.addMine({ novelId: q.id, chapterId: one, text: 'The tide came in over the stones.' });
+              q.s.change('chapter', one, (c) => { const p = c.passages.find((x) => (x.versions || []).some((v) => v.text === 'The tide came in over the stones.')); const v = sh.picked(p); v.tries = { check: { fp: u.hashText(v.text), n: 0, next: q.s.phoneNow() + 50000, conn: q.print } }; });
+              await q.s.flush();
+            }""")
+            slow = 'again in a minute — its model was too slow to answer for it.'
+            try: await qp.wait_for_function(f"({bubble})().includes({json.dumps(slow)})", timeout=8000)
+            except Exception: pass
+            title = await qp.evaluate(bubble)
+            if not ('The checker checks Chapter One, passage' in title and slow in title): print('  saw:', title)
+            check('what waits its time after a stall is said with when in the bubble', 'The checker checks Chapter One, passage' in title and slow in title)
+            t0 = asyncio.get_event_loop().time()
+            try:
+                await qp.wait_for_function(f"({bubble})().includes('again in a moment — its model was too slow to answer for it.')", timeout=50000)
+                took, ok = asyncio.get_event_loop().time() - t0, True
+            except Exception:
+                took, ok = asyncio.get_event_loop().time() - t0, False
+            if not (ok and took > 15): print('  saw:', round(took, 1), await qp.evaluate(bubble))
+            check('and said again as the time passes, nothing else changing', ok and took > 15)
+            check('no browser exceptions while it waits', not qlogs)
             await ctx.close()
             await b.close()
     print(f'{passed} passed', flush=True)

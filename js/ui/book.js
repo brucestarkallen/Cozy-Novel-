@@ -107,7 +107,8 @@ function keptField(novelId, key, { label, own, ownPlaceholder, keptPlaceholder, 
     /* (its writing waiting its time after a stall: said, with when — and one its model would not write, said so, with Write
      * it from the book again: 2.12.41, round 7 — it said it was being written, or that it is written once there are words) */
     const wait = helper ? archivist.keepWait(novelId, key) : null;
-    const slow = wait && wait.when ? `the helper’s model was too slow to answer for it, so the helper asks again ${wait.when}` : '';
+    /* (too slow to answer, or refused the first time: archivist.js againWhy, round 8) */
+    const slow = wait && wait.when ? `${archivist.againWhy(wait)}, so the helper asks again ${wait.when}` : '';
     const tried = Boolean(k && !String(k.text || '').trim() && !k.again && k.by !== 'you');
     if (!helper) say.textContent = 'No helper is chosen, so nothing is kept here yet. Choose one in Settings → Connections.';
     else if (k && (k.again || k.by === 'you')) say.textContent = slow ? `Being written again from the book — ${slow}.${k.text ? ' What stands here is used until the new words land.' : ''}` : k.text ? 'Being written again from the book — what stands here is used until the new words land.' : 'Being written again from the book.';
