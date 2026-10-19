@@ -40,7 +40,8 @@ export function appliesOf(house) { return house && house.partnerApplies === 'wai
 
 /* WHEN WHAT HAPPENS BY ITSELF WAS SWITCHED ON (null: off) — fix: the checker's fixes, by his own switch or by Super
  * automatic (the earlier of the two when both are on); lift: a passage under his mark written again, his own switch
- * alone. A fix goes in by itself on every passage checked while it is on, written before too (checker.js autoAfter;
+ * alone. A fix goes in by itself on every passage whose fixes wait while it is on, whenever it was checked — what
+ * waited in Suggestions from before the switch goes in at the next look — written before too (checker.js autoAfter;
  * every page is checked, in either mode, checker.js wanted); a passage is lifted only when written from then on;
  * and a page being written by itself stops the moment the switch that started it is off (writer.js runVersion). Pure. */
 export function autoOf(house) {

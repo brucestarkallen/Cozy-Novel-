@@ -1189,7 +1189,7 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       /* (a card with no Since then is held to its own subject: the quote names it — never a contradiction made of words about someone else) */
       const inSince = q && (String(c.since || '').trim() ? heldIn(q, String(c.since)) >= 0.5
         : row.kind === 'threads' ? heldIn(q, String(c.about || '')) >= 0.5
-          : [c.name, ...(c.aka || [])].some((x) => x && nameInText(foldedText(q), x)));
+          : [c.name, ...(c.aka || [])].some((x) => x && nameInText(foldedText(q, { cased: true }), x)));
       if (!inBook || !inSince) { mineSaid.set(c.id, 'unfounded'); refuse(row.kind, c.name, q ? 'the words it gave for the book saying otherwise are not the book’s' : 'it said the book says otherwise without the book’s words'); continue; }
       const whyNow = cleanText(row.why, 400) || `the book now says “${clipQuote(q)}”`;
       /* a thread is judged whole — its name (the storyline), its words, open or closed (2.12.14): overturned, it is the

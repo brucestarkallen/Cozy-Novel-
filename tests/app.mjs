@@ -16090,6 +16090,136 @@ await test('the checker: a page written now is checked before a backlog waiting 
   await putAway(e);
 });
 
+heading('the review of 2.12.40 (2.12.41)');
+/* (2.12.41, the review of 2.12.40: Check the whole book put a page written now fifth, behind every chapter he asked for,
+ * while the bubble said "the newest first"; his Rewrite the selected words on an older checked page was checked last,
+ * behind the whole backlog — judged new by its page's birth, not its own time) */
+await test('the checker\'s order: what is new first — a page written now before the chapters he asked for, his rewrite of a few words on an older page before the backlog — then the chapters asked, then the rest', async () => {
+  const long = Date.now() - 10 * 86400000;
+  await setHouse({}, { checksFrom: Date.now() - 86400000, judge: { on: false } });
+  const imp = (t) => ({ text: t, how: 'imported', at: long, done: long });
+  const b = await makeBook([[imp('Line one of the old book runs on in the rain.'), imp('Line two of the old book runs on in the rain.')], [{ text: 'The letter lay on the table.', at: long, done: long }]]);
+  checker.checkBook(b.novelId);
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[1], text: 'She opened the letter at last, and read it twice.' });
+  await store.flush();
+  await reset();
+  await script([CK_NONE, CK_NONE, CK_NONE]);
+  await checker.runCheck(b.novelId);
+  const asks = await checkAsk();
+  assert.ok(asks.length >= 2 && checkedPart(asks[0]).includes('She opened the letter at last') && !checkedPart(asks[0]).includes('Line one'), 'the page written now first');
+  assert.ok(checkedPart(asks[1]).includes('Line one of the old book'), 'then the chapter he asked for');
+  assert.deepEqual(b.ids.map((id) => Boolean(store.peek('chapter', id).checkAll)), [false, false], 'and each let go once answered');
+  await putAway(b);
+  /* his Rewrite the selected words on a page checked before: new by its own time, ahead of the backlog */
+  await setHouse({}, { checksFrom: Date.now() - 86400000, judge: { on: false } });
+  const c = await makeBook([[{ text: 'Chapter one opened in the rain.', at: long, done: long }], [{ text: 'The letter lay on the table, folded twice, and nobody read it.', at: long, done: long }]]);
+  await reset();
+  await script([CK_NONE, CK_NONE]);
+  for (let i = 0; i < 3 && checker.waiting(c.novelId); i++) await checker.runCheck(c.novelId);
+  assert.equal(checker.waiting(c.novelId), 0, 'both checked');
+  const p = c.ch(1).passages[0];
+  const t = picked(p).text;
+  const start = t.indexOf('folded twice');
+  store.change('chapter', c.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'An older page never checked.', { how: 'write', at: long, done: long })), { now: true });
+  await reset();
+  await script([{ text: 'creased and creased again' }]);
+  assert.equal((await writer.rewriteSelection({ novelId: c.novelId, chapterId: c.ids[1], passageId: p.id, start, end: start + 'folded twice'.length, note: '' })).ok, true);
+  await quietAll();
+  await reset();
+  await script([CK_NONE, CK_NONE]);
+  await checker.runCheck(c.novelId);
+  const two = await checkAsk();
+  assert.ok(two.length >= 1 && checkedPart(two[0]).includes('creased and creased again'), 'his rewrite of a few words first, ahead of the older page never checked');
+  await putAway(c);
+});
+
+/* (2.12.41, the review of 2.12.40: a passage handed to the writer to be written again by itself — under his mark — was
+ * still being written while the next checking was sent: the writer marks itself busy only once it has read the book) */
+await test('the checker stands down for a passage it just handed to be written again by itself, as for the writer at work: no checking is sent beside it', async () => {
+  const long = Date.now() - 10 * 86400000;
+  await setHouse({}, { checksFrom: Date.now() - 86400000, autoLift: { on: true, from: Date.now() - 1000 } });
+  const b = await makeBook([[{ text: 'Chapter one opened in the rain and closed at the door.', at: long, done: long }], [{ text: 'The letter lay on the table.', at: long, done: long }]]);
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[1], text: 'She opened the letter at last, and read it twice, and then she sat.' });
+  await store.flush();
+  await reset();
+  const grade = (n, fail) => ({ passage: n, checks: Object.fromEntries(prompts.JUDGE_CHECKS.map(([k]) => [k, fail.includes(k) ? 'no' : 'yes'])), faults: fail.map((k) => ({ check: k, words: 'She opened the letter at last', why: 'flat' })), lift: 'Give the moment its weight.' });
+  await script([{ text: JSON.stringify({ edits: [], grades: [grade('2.2', ['pacing', 'specific'])] }) }, { text: 'She opened the letter at last. Her hands shook as she read it twice, and then she sat down hard.', pause: 0.5 }, { text: JSON.stringify({ edits: [], grades: [grade('1.1', [])] }) }]);
+  await checker.runCheck(b.novelId);
+  assert.equal((await checkAsk()).length, 1, 'one checking in the look: the next waits for the page being written again');
+  assert.ok(checker.forTests().lifting.has(b.novelId) || writer.busy(b.novelId), 'the page is being written again');
+  await quietAll();
+  await putAway(b);
+});
+
+/* (2.12.41, the review of 2.12.40: "it tries again by itself in 10 minutes" stood for as long as the state did — its wait
+ * over while a page was being written, the look it booked deferred, it still said so, with no way on) */
+await test('a failure\'s wait is said as it stands when it is read: the time left while it waits, and once its wait is over and a page is being written, that it tries again once the page is done', async () => {
+  await setHouse({}, { checksFrom: 0 });
+  const b = await makeBook([['Mara kept the light.']]);
+  await reset();
+  await script(Array.from({ length: 8 }, () => ({ status: 500, message: 'down for a moment' })));
+  await checker.runCheck(b.novelId);
+  const f = checker.forTests().failures.get(b.novelId);
+  assert.ok(f && f.until > Date.now(), 'a failure on record, waited out');
+  const first = checker.stateOf(b.novelId);
+  assert.match(first.words, /It tries again by itself in a minute\./);
+  /* its wait as it stands later: three minutes left of one set to ten */
+  f.until = Date.now() + 3 * 60000 + 2000;
+  assert.match(checker.stateOf(b.novelId).words, /in three minutes\./, 'the time left, read now');
+  /* the wait over while a page is being written: waiting, and true */
+  f.until = Date.now() - 1000;
+  checker.forTests().lifting.set(b.novelId, new Promise(() => {}));
+  const now = checker.stateOf(b.novelId);
+  assert.equal(now.state, 'waiting');
+  assert.match(now.words, /tries again once the page being written is done/);
+  checker.forTests().lifting.delete(b.novelId);
+  await reset();
+  await script([CK_NONE, CK_NONE]);
+  checker.tryNow(b.novelId);
+  await quietAll();
+  assert.equal(checker.forTests().failures.has(b.novelId), false, 'tried again: nothing waits');
+  await putAway(b);
+});
+
+/* (2.12.41, the review of 2.12.40: the notes' own fitting took "will" and "grace" for Will Turner and Grace Hollow — both
+ * rode whole, and another card was left out — the pattern the entries' finding was fixed for in 2.12.40) */
+await test('the notes fitted to their room ride whole only the cards the words name as a name is written: never "will" for Will Turner, never "grace" for Grace Hollow', () => {
+  const long = (who) => `${who} is the first sentence. ` + Array.from({ length: 40 }, (_, i) => `More about ${who}, line ${i}.`).join(' ');
+  const novel = { id: 'n', meta: { title: 'T' }, notes: { people: [
+    { id: 'p1', name: 'Will Turner', aka: [], about: long('Will Turner') },
+    { id: 'p2', name: 'Grace Hollow', aka: [], about: long('Grace Hollow') },
+    { id: 'p3', name: 'Mara Vell', aka: [], about: long('Mara Vell') },
+  ], places: [], lore: [], threads: [] } };
+  const rode = (focus) => { const shortIds = new Map(); prompts.notesText(novel, { forHelper: true, fit: 420, focus, shortIds }); return novel.notes.people.map((c) => (shortIds.has(c.id) ? shortIds.get(c.id) : 0)); };
+  assert.deepEqual(rode('She will go to the market at night, by grace of the tide.'), [1, 1, 1], 'none of them named: each by its first line, none left out');
+  assert.deepEqual(rode('Will Turner went to the market, and Grace watched.').slice(0, 2), [0, 0], 'named as a name is written: whole');
+});
+
+/* (2.12.41, the review of 2.12.40: no test ran the notes' check with an entry set to Never) */
+await test('the notes\' check never reads an entry set to Never: his other entries for its cards ride, its words never', async () => {
+  await setHouse();
+  const b = await makeBook([['Kaelen knelt by the gate, and Mara watched him from the wall.']], { manual: true });
+  markAllSeen(b);
+  store.change('novel', b.novelId, (x) => {
+    x.notes.people.push({ id: 'pe-k', name: 'Kaelen', aka: [], about: 'A knight of the gate.', updated: { chapterId: b.ids[0], at: 1 } });
+    x.notes.people.push({ id: 'pe-m', name: 'Mara', aka: [], about: 'A watcher on the wall.', updated: { chapterId: b.ids[0], at: 1 } });
+    x.bibliography = [
+      bib.tidyEntry(bib.newEntry({ name: 'Kaelen', kind: 'people', line: 'A knight.', rides: 'never', text: 'Kaelen is secretly the Shadow King.' })),
+      bib.tidyEntry(bib.newEntry({ name: 'Mara', kind: 'people', line: 'A watcher.', text: 'Mara keeps the night watch on the north wall.' })),
+    ];
+  }, { now: true });
+  await store.flush();
+  await reset();
+  archivist.askAudit(b.novelId);
+  await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.' }) }]);
+  await archivist.run(b.novelId);
+  const ask = (await everyRequest()).map(lastAsk).find((m) => m.includes(prompts.AUDIT_ASK)) || '';
+  assert.ok(ask, 'the check was asked');
+  assert.ok(ask.includes('north wall'), 'his entry for Mara rides');
+  assert.ok(!ask.includes('Shadow King'), 'the entry set to Never never does');
+  await putAway(b);
+});
+
 /* ------------------------------------------------------------ done */
 console.log(`\napp: ${passed} passed, ${failed} failed`);
 done(failed ? 1 : 0);

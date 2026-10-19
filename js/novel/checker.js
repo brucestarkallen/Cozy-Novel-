@@ -283,9 +283,18 @@ const fns = new Set();
 export function onChecks(fn) { fns.add(fn); return () => fns.delete(fn); }
 function tell(novelId) { for (const fn of fns) { try { fn(novelId); } catch (e) { console.error(e); } } }
 const ELSEWHERE = 'Another window or browser open on this book is checking it — what it finds shows here when it is done.';
-function setState(novelId, state, words) {
-  if (state) states.set(novelId, { state, words }); else states.delete(novelId);
+function setState(novelId, state, words, why = '') {
+  if (state) states.set(novelId, { state, words, ...(why ? { why } : {}) }); else states.delete(novelId);
   tell(novelId);
+}
+/* WHAT A FAILURE WAITS FOR, SAID AS IT IS WHEN IT IS READ (2.12.41, the review: "it tries again by itself in 10 minutes"
+ * was said for as long as the state stood — and, its wait over while a page was being written, the look it booked
+ * deferred, it still said so, with no Try again now and no Check buttons): the time left, or what it waits for now */
+function failureWords(novelId, why) {
+  const f = failures.get(novelId);
+  const left = f ? f.until - Date.now() : 0;
+  if (left > 1000) return { waitingNow: false, words: `The checker couldn’t finish just now (${why}). It tries again by itself in ${archivist.waitWords(left)}.` };
+  return { waitingNow: true, words: busyNow(novelId) ? `The checker couldn’t finish just now (${why}). It tries again once the page being written is done.` : `The checker couldn’t finish just now (${why}). It tries again now.` };
 }
 
 /* How it stands, for the bubble: off (nobody checks), trouble, checking,
@@ -295,6 +304,11 @@ export function stateOf(novelId) {
   const count = suggestions(novelId).length;
   if (!checkerConn(house)) return { state: 'off', words: 'Nobody checks the writing just now. Choose a checker in Settings → Who does what.', count };
   const s = states.get(novelId);
+  /* (a failure's wait said as it stands now — and once it is over, the look it booked on its way: waiting) */
+  if (s && s.why && (s.state === 'trouble' || s.state === 'retry')) {
+    const { waitingNow, words } = failureWords(novelId, s.why);
+    return { state: waitingNow || s.state === 'retry' ? 'waiting' : 'trouble', words, count };
+  }
   if (s && (s.state === 'trouble' || s.state === 'checking')) return { ...s, count };
   if (s && (s.state === 'retry' || s.state === 'elsewhere')) return { state: 'waiting', words: s.words, count };
   const again = automaticWait(novelId);
@@ -344,6 +358,10 @@ export function startChecking() {
   archivist.onNudge((novelId) => schedule(novelId, 6000));
 }
 
+/* THE PAGE IS BEING WRITTEN, OR IS ABOUT TO BE (2.12.41, the review): the writer at work, or a passage handed to it to be
+ * written again by itself (`lifting`) — the writer marks itself busy only once it has read the book, and a checking sent
+ * in that moment ran beside the page on its connection. One rule wherever the checker stands down for the page. */
+function busyNow(novelId) { return writerBusy(novelId) || lifting.has(novelId); }
 /* waiting out a failure, or stopped for a connection turned away: tried again now by his hand (Cozy Tavern M752-010) */
 export function stalled(novelId) {
   const f = failures.get(novelId);
@@ -445,25 +463,31 @@ function nextBatch(novelId, limit, { one = false } = {}) {
   const house = store.peek('house', 'house') || {};
   const novel = store.peek('novel', novelId);
   const from = checksFromOf(house);
-  /* what is new first — written since checking began, words changed since they were checked, a chapter he asked for —
-   * and only then the book's older pages (2.12.35; in either mode since 2.12.38): a backlog never holds up the newest page */
+  /* what is new first — written since checking began, words changed since they were checked — then a chapter he asked
+   * for, and only then the book's older pages (2.12.35; in either mode since 2.12.38; the chapter asked after what is new
+   * since 2.12.41): neither a backlog nor a chapter asked ever holds up the newest page */
   /* (words changed since they were checked: an entry for this version with a stale print — a version keeps its id as
    * its words change in place, 2.12.2. One checked as it reads now, wanted for its grade alone, is backlog: 2.12.40, the
    * audit — through 2.12.39 it went ahead of a page written now) */
+  /* (no entry for this version: new by its own time — his Rewrite the selected words on an older page is a version of
+   * its own, carrying its page's birth, and was checked last, behind the whole backlog: 2.12.41, the review) */
   const isNew = (c, p) => {
     const v = picked(p);
-    if (c.checkAll) return true;
     const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id];
     if (e) return e.sig !== sigOf(v);
-    return Number.isFinite(from) && bornOf(v) >= from;
+    return Number.isFinite(from) && Math.max(Number(v.at) || 0, Number(v.done) || 0) >= from;
   };
-  for (const older of [false, true]) for (const c of chaptersOf(novelId)) {
+  /* THREE IN TURN (2.12.41, the review — a chapter he asked for counted as new, in the book's order, and Check the whole
+   * book put a page written now fifth, behind every chapter asked, while the bubble said "the newest first"): what is
+   * new, then a chapter he asked for (Check this chapter, Check the whole book), then the book's older pages */
+  for (const tier of ['new', 'asked', 'older']) for (const c of chaptersOf(novelId)) {
+    if (tier === 'asked' && !c.checkAll) continue;
     const list = [];
     let words = 0;
     /* passages checked already, wanted for their grade alone, go in a checking of their own */
     let gradeOnly = null;
     for (const p of c.passages || []) {
-      if (!wanted(house, c, p) || (!older && !isNew(c, p))) continue;
+      if (!wanted(house, c, p) || (tier === 'new' && !isNew(c, p))) continue;
       const w = countWords(picked(p).text);
       const has = Boolean(entryFor(c, p));
       if (list.length && has !== gradeOnly) break;
@@ -484,7 +508,7 @@ function nextBatch(novelId, limit, { one = false } = {}) {
 
 export async function runCheck(novelId) {
   if (runningFor.has(novelId) || entering.has(novelId)) { schedule(novelId, 5000); return; }
-  if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+  if (busyNow(novelId)) { schedule(novelId, 4000); return; }
   const house = store.peek('house', 'house') || {};
   const selected = checkerConn(house);
   const conn = selected ? JSON.parse(JSON.stringify(selected)) : null;
@@ -509,7 +533,7 @@ export async function runCheck(novelId) {
       let lastAsked = '';
       for (let n = 0; ; n++) {
         choice.beforeAsk();
-        if (writerBusy(novelId)) { schedule(novelId, 4000); break; }
+        if (busyNow(novelId)) { schedule(novelId, 4000); break; }
         const limit = batchWords(conn, store.peek('house', 'house') || {}, store.peek('novel', novelId) || novel);
         const batch = nextBatch(novelId, limit, { one: narrowC.has(novelId) });
         if (!batch) { narrowC.delete(novelId); break; }
@@ -582,7 +606,7 @@ export async function runCheck(novelId) {
         return;
       }
       const later = retryLater(novelId, e && e.retryAfterMs);
-      setState(novelId, later.n >= 3 ? 'trouble' : 'retry', `The checker couldn’t finish just now (${why}). It tries again by itself in ${later.words}.`);
+      setState(novelId, later.n >= 3 ? 'trouble' : 'retry', `The checker couldn’t finish just now (${why}). It tries again by itself in ${later.words}.`, why);
     } finally {
       runningFor.delete(novelId);
       tell(novelId);
@@ -1501,7 +1525,7 @@ async function runDuels(novelId, conn, choice) {
   for (const d of duelsDue(novelId)) {
     choice.beforeAsk();
     if (!judgeOf(store.peek('house', 'house') || {})) return;
-    if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+    if (busyNow(novelId)) { schedule(novelId, 4000); return; }
     if (n >= 3) { schedule(novelId, 3000); return; }
     n++;
     duelTried.add(d.tryKey);
@@ -1581,7 +1605,7 @@ async function runProof(novelId, conn, choice) {
   if (wait && wait.until > Date.now()) { schedule(novelId, wait.until - Date.now() + 500); return; }
   for (let asks = 0; ; asks++) {
     choice.beforeAsk();
-    if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+    if (busyNow(novelId)) { schedule(novelId, 4000); return; }
     const limit = batchWords(conn, store.peek('house', 'house') || {}, store.peek('novel', novelId));
     const batch = proofBatch(novelId, limit);
     if (!batch) return;
@@ -1647,7 +1671,7 @@ async function proofRead(novelId, conn, batch, limit, choice) {
         if (batch.passages.length > 1) {
           for (const p of batch.passages) {
             choice.beforeAsk();
-            if (writerBusy(novelId)) { schedule(novelId, 4000); return { passing: true }; }
+            if (busyNow(novelId)) { schedule(novelId, 4000); return { passing: true }; }
             const out = await proofRead(novelId, conn, { chapterId: batch.chapterId, passages: [p] }, limit, choice);
             if (out && (out.gaveWay || out.stop || out.passing)) return out;
           }
@@ -1770,7 +1794,7 @@ async function runMarks(novelId, conn, choice) {
   if (wait && wait.until > Date.now()) { schedule(novelId, wait.until - Date.now() + 500); return; }
   for (let k = 0; k < due.length; k += MARKS_AT_ONCE) {
     choice.beforeAsk();
-    if (writerBusy(novelId)) { schedule(novelId, 4000); return; }
+    if (busyNow(novelId)) { schedule(novelId, 4000); return; }
     const out = await askMarks(novelId, conn, choice, due.slice(k, k + MARKS_AT_ONCE));
     if (out && out.gaveWay) { schedule(novelId, 20000); return; }
     if (out && out.stop) throw out.stop;
@@ -1812,7 +1836,7 @@ async function askMarks(novelId, conn, choice, list) {
       if (list.length > 1) {
         for (const x of list) {
           choice.beforeAsk();
-          if (writerBusy(novelId)) { schedule(novelId, 4000); return { passing: true }; }
+          if (busyNow(novelId)) { schedule(novelId, 4000); return { passing: true }; }
           const out = await askMarks(novelId, conn, choice, [x]);
           if (out && (out.gaveWay || out.stop || out.passing)) return out;
         }
@@ -1951,12 +1975,11 @@ function wholeDone(chapterId, sig, words, extra = {}) {
 
 /* a few chapters at a time (the rest in a moment) */
 async function runWhole(novelId, conn, choice) {
-  /* (what is written again by itself goes in first, as every fix does) */
-  const busyNow = () => writerBusy(novelId) || lifting.has(novelId);
+  /* (what is written again by itself goes in first, as every fix does: busyNow) */
   settleWhole(novelId);
   for (let n = 0; ; n++) {
     choice.beforeAsk();
-    if (busyNow()) { schedule(novelId, 4000); return; }
+    if (busyNow(novelId)) { schedule(novelId, 4000); return; }
     const due = wholeDue(novelId);
     if (!due) return;
     if (due.wait) { schedule(novelId, due.wait + 1000); return; }
@@ -2042,7 +2065,7 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
   for (let k = Math.max(0, resume); k < runs.length; k++) {
     const r = runs[k];
     choice.beforeAsk();
-    if (writerBusy(novelId) || lifting.has(novelId)) { wholePart.set(key, { pid: r.first.id, piece: r.piece === undefined ? -1 : r.piece }); schedule(novelId, 4000); return null; }
+    if (busyNow(novelId)) { wholePart.set(key, { pid: r.first.id, piece: r.piece === undefined ? -1 : r.piece }); schedule(novelId, 4000); return null; }
     setState(novelId, 'checking', `Reading ${chapterLabel(novel, chapter, { withName: false })} whole${runs.length > 1 ? ` (part ${k + 1} of ${runs.length})` : ''}, for what disagrees across it…`);
     const numbered = r.numbered || numberedText(novel, chapter, r.list);
     /* the chapter up to these words — or, for its opening, the end of the chapter before */
@@ -2416,8 +2439,10 @@ export function checkBook(novelId) {
 /* ------------------------------------------------------------ by itself */
 
 /* What he switched on to happen by itself (Settings → Who does what), each
- * from when he switched it on: the fixes go in on every passage checked while it
- * is on, written before too (2.12.2); a passage under his mark is written again
+ * from when he switched it on: the fixes go in on every passage whose fixes wait
+ * while it is on, whenever it was checked — what waited in Suggestions from before
+ * the switch goes in at the next look — written before too (2.12.2); a passage
+ * under his mark is written again
  * only when written from then on. null when off. (auto.js autoOf: his two
  * switches, and Super automatic for the fixes) */
 export { autoOf };
@@ -2565,7 +2590,7 @@ function autoAfter(novelId) {
       }
     }
   }
-  if (next && next.span && !writerBusy(novelId) && !lifting.has(novelId)) {
+  if (next && next.span && !busyNow(novelId)) {
     /* (the version keeps its id as its words change in place: tried once for these words) */
     const key = `${next.v.id}|${hashText(String(next.v.text || ''))}|${next.item.find}`;
     spanTried.add(key);
@@ -2586,7 +2611,7 @@ function autoAfter(novelId) {
       writingAgain.set(novelId, next.passageId);
       lifting.set(novelId, job);
     }
-  } else if (next && !next.span && !writerBusy(novelId) && !lifting.has(novelId)) {
+  } else if (next && !next.span && !busyNow(novelId)) {
     const liftKey = `${next.v.id}|${sigOf(next.v)}`;
     liftTried.add(liftKey);
     const job = writeAgain({ novelId, chapterId: next.chapterId, passageId: next.passageId, note: next.note, fromVersion: next.v, lift: next.lift })

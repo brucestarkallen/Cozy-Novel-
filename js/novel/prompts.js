@@ -270,7 +270,9 @@ export function notesText(novel, { forHelper = false, fit = 0, focus = '', only 
    * the ones that matter least are left out, said so (S01-G7: the notes never
    * crowd out the chapter) */
   if (!fit || estimateTokens(full) <= fit) return full;
-  const folded = focus ? foldedText(focus) : null;
+  /* (a name found as the book writes a name: one word of it only with its capital — 2.12.41, the review: "she will go
+   * to the market, by grace of the tide" had Will Turner's and Grace Hollow's cards ride whole, and another left out) */
+  const folded = focus ? foldedText(focus, { cased: true }) : null;
   const whole = (kind, c) => Boolean(c.updated && c.updated.by === 'you') || Boolean(folded && [c.name, ...(c.aka || [])].some((nm) => nm && nameInText(folded, nm, { words: kind === 'people' })));
   /* which cards rode short (shortIds, a Set to fill): one of them is never written whole from its first line */
   /* (a Map is told how each rode: 1 its first line, 2 its name, 3 left out) */

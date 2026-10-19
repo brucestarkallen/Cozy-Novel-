@@ -107,13 +107,20 @@ function toastPart() {
 function placeToast() {
   const t = $('#toast');
   if (!t) return;
+  /* (a line not showing is given no place and keeps no room: 2.12.41, the review — a confirm opened over a tall sheet
+   * and closed left room at the tall sheet's end for a line long gone) */
+  if (!t.classList.contains('on')) { for (const b of document.querySelectorAll('.sheet > .box.toastroom')) b.classList.remove('toastroom'); return; }
   const sheet = focusedSheet();
   /* (moved only when it is not already last where it belongs: placed again while it shows, a move would take the
    * keyboard off its Undo) */
   const home = sheet?.box || document.body;
-  if (t.parentElement !== home || t !== home.lastElementChild) home.append(t);
+  const moved = t.parentElement !== home;
+  if (moved || t !== home.lastElementChild) home.append(t);
   /* (a sheet it left keeps no room made for it) */
   for (const b of document.querySelectorAll('.sheet > .box.toastroom')) if (b !== home) b.classList.remove('toastroom');
+  /* (its new home watched from now on: a sheet opened under the line is placed again once its words are in it, and as
+   * it grows — 2.12.41, the review: it was placed while the sheet was still empty, and lay over its title and Close) */
+  if (moved) watchToast(true);
   if (sheet) { placeInSheet(t, sheet.box); return; }
   const { rect, feet, gutter } = toastPart();
   const x = rect.left + rect.width / 2;
@@ -136,12 +143,11 @@ function placeToast() {
 function placeInSheet(t, box) {
   for (const k of ['--toast-x', '--toast-max', '--toast-bottom']) t.style.removeProperty(k);
   const sheetEl = box.parentElement;
-  const b = box.getBoundingClientRect();
-  const s = sheetEl ? sheetEl.getBoundingClientRect() : { top: 0 };
   const pad = sheetEl ? parseFloat(getComputedStyle(sheetEl).paddingTop) || 0 : 0;
   const h = t.getBoundingClientRect().height || 44;
-  if (b.top - h - 10 >= s.top + pad) {
-    t.style.setProperty('--toast-above', `${Math.round(b.height + 10)}px`);
+  /* (where the sheet comes to rest, never where its rise has it now: its place in the layout — the rise is a transform) */
+  if (box.offsetTop - pad - h - 10 >= 0) {
+    t.style.setProperty('--toast-above', `${Math.round(box.offsetHeight + 10)}px`);
     box.classList.remove('toastroom');
   } else {
     t.style.removeProperty('--toast-above');
@@ -185,11 +191,12 @@ export function toast(words, ms = 3200, action = null) {
   if (!t) { t = h('div.toast', { id: 'toast', role: 'status', 'aria-live': 'polite' }); document.body.append(t); }
   /* its words, and its action beside them — never wrapped in under the words */
   t.replaceChildren(h('span.toastwords', words), ...(action ? [h('button.toastact', { onclick: () => { clearTimeout(toastTimer); hideToast(t); action.run(); } }, action.label)] : []));
-  placeToast();
-  watchToast(true);
+  /* (shown, then placed: only a line showing is placed) */
   t.inert = false;
   t.removeAttribute('aria-hidden');
   t.classList.add('on');
+  placeToast();
+  watchToast(true);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => hideToast(t), ms);
 }

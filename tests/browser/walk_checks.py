@@ -75,6 +75,37 @@ async def main():
             now = await pg.evaluate("(async () => { const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const n = s.peek('novel', location.hash.split('/')[2]); return sh.picked(s.peek('chapter', n.order[0]).passages[0]).text; })()")
             check('Put back the words before brings the words before the fix back', now == before[1] and now != before[0])
             check('and says so', 'The words before are back.' in await pg.inner_text('#toast'))
+            # (2.12.41, the review of 2.12.40) the checker in trouble: Try again now is the way on, the Check buttons wait,
+            # and the words say how long is left as it stands; its wait over while a page is being written, it says it
+            # tries again once the page is done — never a wait gone stale, never a sheet with no way on and no true word
+            trouble = """async ([until, writing]) => {
+              const ck = await import('/js/novel/checker.js');
+              const nid = location.hash.split('/')[2];
+              const t = ck.forTests();
+              t.failures.set(nid, { n: 3, until: Date.now() + until });
+              t.states.set(nid, { state: 'trouble', words: 'The checker couldn’t finish just now (down for a moment). It tries again by itself in ten minutes.', why: 'down for a moment' });
+              const was = t.timers.get(nid); if (was) { clearTimeout(was.t); t.timers.delete(nid); }
+              if (writing) t.lifting.set(nid, new Promise(() => {})); else t.lifting.delete(nid);
+              document.querySelector('#checkBubble').click();
+              await new Promise((r) => setTimeout(r, 300));
+              const sheet = document.querySelector('.sheet.on:not([aria-hidden="true"]) .body');
+              const said = sheet ? sheet.innerText : '';
+              const buttons = sheet ? [...sheet.querySelectorAll('button')].map((b) => b.textContent.trim()) : [];
+              return { said, buttons };
+            }"""
+            got = await pg.evaluate(trouble, [3 * 60000 + 2000, False])
+            if not ('Try again now' in got['buttons'] and 'Check this chapter' not in got['buttons'] and 'tries again by itself in three minutes' in got['said']): print('  saw:', got)
+            check('the checker in trouble: Try again now is there, the Check buttons wait', 'Try again now' in got['buttons'] and 'Check this chapter' not in got['buttons'])
+            check('and its wait is said as it stands now', 'tries again by itself in three minutes' in got['said'])
+            await pg.keyboard.press('Escape')
+            await pg.wait_for_timeout(300)
+            got = await pg.evaluate(trouble, [-1000, True])
+            if 'tries again once the page being written is done' not in got['said']: print('  saw:', got)
+            check('its wait over while a page is being written: it says it tries again once the page is done', 'tries again once the page being written is done' in got['said'] and 'in ten minutes' not in got['said'])
+            await pg.keyboard.press('Escape')
+            await pg.wait_for_timeout(300)
+            await pg.evaluate("""async () => { const ck = await import('/js/novel/checker.js'); const nid = location.hash.split('/')[2]; ck.forTests().lifting.delete(nid); ck.tryNow(nid); }""")
+            await pg.wait_for_timeout(600)
             check('no browser exceptions', not [x for x in logs if x.startswith('PAGEERROR')])
             # the ring turns while the checker waits or checks — with Ambient animation off and the phone's reduced
             # motion too, and stops only in a tab out of sight (2.12.32: "not circling, just stuck")

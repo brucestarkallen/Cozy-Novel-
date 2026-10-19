@@ -127,7 +127,8 @@ LINE_OVER = r"""(end) => {
   if (tr.top < 0 || tr.bottom > innerHeight) return ['(the line is off the screen)'];
   const view = body ? body.getBoundingClientRect() : box.getBoundingClientRect();
   const out = [];
-  for (const el of box.querySelectorAll('button, input:not([type=hidden]), textarea, select, a[href]')) {
+  /* (and the sheet's title: 2.12.41, the review — a sheet opened under the line had it over its title) */
+  for (const el of box.querySelectorAll('button, input:not([type=hidden]), textarea, select, a[href], .head h2')) {
     if (t.contains(el) || !el.getClientRects().length) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) continue;
@@ -217,8 +218,40 @@ async def size(browser, w, hgt, mobile):
     await pg.wait_for_selector('.sheet.on .box')
     await pg.wait_for_timeout(450)
     over = await pg.evaluate(LINE_OVER, False)
-    check(f'{tag} a small sheet opened while a line shows: the line lies over none of its buttons', not over, over)
+    check(f'{tag} a small sheet opened while a line shows: the line lies over none of its buttons nor its title', not over, over)
     await pg.keyboard.press('Escape')
+    await pg.wait_for_timeout(400)
+    # (2.12.41, the review) the same with a long line, and with a small sheet stacked on one already open; and a sheet
+    # a small one was closed over, with no line showing, keeps no room at its end for one
+    await line(pg, 'Put in on the page — what came after it is let go, two parts of it, and kept in Recently deleted for thirty days, with its name.')
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => { d.confirmIt('Take it out?', 'It goes to Recently deleted, for thirty days.', 'Take it out'); })")
+    await pg.wait_for_selector('.sheet.on .box')
+    await pg.wait_for_timeout(450)
+    over = await pg.evaluate(LINE_OVER, False)
+    check(f'{tag} a small sheet opened while a long line shows: the line lies over none of its buttons nor its title', not over, over)
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_timeout(400)
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => { d.openSheet('Notes kept'); })")
+    await pg.wait_for_selector('.sheet.on .box')
+    await pg.wait_for_timeout(300)
+    await line(pg, 'Put in on the page.')
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => { d.confirmIt('Take it out?', 'It goes to Recently deleted, for thirty days.', 'Take it out'); })")
+    await pg.wait_for_timeout(450)
+    over = await pg.evaluate(LINE_OVER, False)
+    check(f'{tag} a small sheet stacked on another while a line shows: the line lies over none of its buttons nor its title', not over, over)
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => d.closeAllSheets())")
+    await pg.wait_for_timeout(400)
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => d.toast('Put in on the page.', 300))")
+    await pg.wait_for_timeout(700)
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => { const s = d.openSheet('A tall one'); for (let i = 0; i < 60; i++) s.body.append(d.h('p', d.h('button.btn.small', { title: 'A button.' }, `Button ${i + 1}`))); })")
+    await pg.wait_for_timeout(400)
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => { d.confirmIt('Take it out?', 'It goes to Recently deleted, for thirty days.', 'Take it out'); })")
+    await pg.wait_for_timeout(450)
+    await pg.keyboard.press('Escape')
+    await pg.wait_for_timeout(450)
+    room = await pg.evaluate("() => [...document.querySelectorAll('.sheet.on:not([aria-hidden=true]) > .box')].map((b) => b.classList.contains('toastroom'))")
+    check(f'{tag} a sheet a small one closed over, with no line showing, keeps no room for one', room == [False], room)
+    await pg.evaluate("() => import('/js/ui/dom.js').then((d) => d.closeAllSheets())")
     await pg.wait_for_timeout(400)
     await pg.evaluate("""() => import('/js/ui/dom.js').then((d) => { const s = d.openSheet('A long one'); for (let i = 0; i < 40; i++) s.body.append(d.h('button.btn.small', { title: 'A button.' }, `Button ${i + 1}`)); })""")
     await pg.wait_for_selector('.sheet.on .box')
