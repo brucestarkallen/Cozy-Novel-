@@ -1049,3 +1049,79 @@ Browser:
 The helper's reading request is unchanged (md5 8c1953420ccbe468b7053cd5f8cfae81).
 
 Not run: a real model, a phone's own browser, the walks these parts do not reach. The premises, the precedence of his own words, the Timeline's turns and Quick add are being fixed for the next release.
+
+## 2.12.41, the audit's second part: every fix gone through again, and two windows on one book
+
+His word, 19 October 2026: "Just make sure everything perfect you must be perfectionist OK this is our last session check everything". Every fix of 2.12.40's audit, and every fix made after it, was gone through again by reviewers who had not written it, round after round. Each finding was fixed at its root and tested by running the feature. Then every save the app makes, 375 places in all, was gone through for one fault: a change laid again over another window's newer copy.
+
+**The phone's clock.**
+- **A page being written is judged stale by the phone's time.** The heartbeat of the writer and of a scene was stamped by the browser's own clock. A phone and a laptop whose clocks differ by minutes could take a live page for a dead one, or wait on a dead one (store.js `phoneNow`). The phone's time is now worked out from each answer's Date and narrowed as answers come. It never steps back, so Quick add's rows and a rename's stamps stay in the order they were made.
+
+**The checker.**
+- **Its order holds.** The newest pages are checked first, then the chapters he asked for (Check this chapter, Check the whole book), then the rest (`nextBatch`, three tiers). A page brought in from a file is never "new" by its time. His own Rewrite of selected words on such a page still is.
+- **It stands down while a page is being written again by itself**, as it does for the writer (`busyNow`). The trouble line's words are worked out as they stand when shown, never kept stale.
+- **What it counts toward letting a passage be is kept with the book.** A passage its model stayed silent on was counted in page memory. A phone's tab reloads often, so the same passage could hold the checker back again after every reload and never be set aside. Now the count is kept on the version: its checking, its proofreading, a paragraph's speech marks, a chapter read whole, two versions side by side. A stall or a refusal stops only that part of the look, and the rest goes on. The bubble says when it is asked again. At the second time it is let be: set aside in Suggestions with **Check it again**, or a chapter or pair let be until its words change.
+- **A model that sent nothing for the longest wait is asked nothing more on that connection until as long again has passed.** This holds for the helper, the checker and what is written again by itself, and the bubble says so. **Try again now**, **Check it again**, **Check this chapter** and **Check the whole book** still ask at once, and **Check this chapter** and **Check the whole book** stay on show while it waits.
+
+**The line at the bottom.** It never lies over a sheet's title either. When it moves into a sheet, it is watched there. A sheet makes room for it only while it shows, measured with the sheet at rest.
+
+**A name by its lone word.** "O'Brien" with its apostrophe, a name in a script with no capitals (Hebrew), and a name he writes all in small letters are each found as the book writes them. "will" is never Will.
+
+**The helper's stages and the Timeline.**
+- **A stall never ends the run.** A chapter's summary, its names and figures, a stretch, a scene's stretch, a summary's check, What it's about and the notes' check each wait their own time, while everything after them goes on (archivist.js `stallRule`, one rule for every stage). A stage its model stays silent on for the longest wait twice is passed by, and said so where it shows: a chapter "Not summed up" with **Read it again** under Cards, What it's about with **Write it from the book again**, the notes' check with **Check the notes against the book**. A refusal on the first try stops only that stage too and is asked again in a moment.
+- **What waits is kept with the book** (`memory.tries`), so a reload never asks it again early. The light says what waits and when, as the time passes, and never says "up to date" while anything is owed. **Try again now** is not offered while something only waits its time.
+- **An answer that lands after a name was changed everywhere takes the new name.** This covers a summary, a stretch, What it's about, the notes' check, a fix the checker offers, a scene's telling and Quick add. The book counts its renames, and each answer is carried through the ones made since it was asked. Words it quotes from a page the change never touched stay as the page has them. A fix that can no longer apply is let go and the page checked again. A rename and its Undo while a reading was out cancel. A name changed back by hand is a change like any other.
+- **Two turns telling the same thing are one, whichever side tells it.** "Emilia meets Jovan at the gate" and "Jovan meets Emilia at the gate", read at different times, show as one. Two attempts to tell the sides apart each made the Timeline show something false, so the rule of the Timeline's second round is back. Opposite deeds read in one reading stay two.
+- **Test** says a model that is only slow "gave no answer in" its time — never "Not working".
+
+**His premises, and whose words a page holds.**
+- **Only a name changed everywhere is no one's hand.** A name his partner swaps on one page ("Tom held the door" made "Jovan held the door") is his partner's change: who did it changed. Who put in each word is worked out by a word diff with no cap, so a page past 600 changes is no longer "nothing the same". For pages kept before 2.12.41 it is worked out once and kept. Names changed everywhere before 2.12.41 are marked so once when the book opens: by his partner's conversation where it still keeps the change, otherwise by the words. That work never holds the page more than 25 ms at a time.
+- **A name changed everywhere reaches his own words.** It now changes his premises on every version, his notes for writing a page again, the chapters' plans, how the book ends and his entries, all with its Undo.
+- **His small letters are changed only where they can only be the name.** "tom, mara's brother" becomes "thomas, mara's brother". A capital his keyboard put at a sentence's start is no sign either way. An everyday word that is also a name is never changed in small letters: "as the sun rose" and "the reed beds" keep theirs. Nor is a text that writes the name with its capital inside a sentence. Each is decided on the words as they stand when the change is laid.
+- **A word is a name only by the book's evidence.** That means a card or an entry names it, the book writes it with a capital inside a sentence, or it only ever opens sentences and is never written small. "Will you stay?" takes no Will out, "Time'll" is no name, and "Dr." ends no sentence. What a change took out is held against the names his premise gives, in whatever letters he typed them.
+
+**His entries.** A sentence of his entry keeps its time only with the same telling words in the same order; a, an and the are set aside. Her name for "she" keeps it where his entry calls her "she". So does a slip of the pen put right toward a word the book uses ("lighthuose" made "lighthouse"). "loves" made "loved", "is" made "was", turned round, or "he" for "she" is newer.
+
+**Quick add.**
+- **His newer word goes in by its shape, or not at all.** It goes in place of his few words where they read there, or as whole sentences only where they keep every other telling word, name, figure and "not" of his. Otherwise nothing goes in, the row says *its words for it could not go in as they were*, and **Ask again** is there. His words are never spliced.
+- **His "not" is kept.** Where his newer words say "not" to words of his ("no longer lives in Venice") and no change is listed, the change is asked for. Given, it goes in. Otherwise nothing goes in, and the row says why.
+- **"It would say both" is held only where the words leave no doubt.** That is the same one, with another place, age, count or colour. What they leave in doubt goes in, with **Undo these**.
+- **A person is found by a word of their name, past its titles.** "Mr. Darcy", "Sasuke" for Uchiha Sasuke and "Captain Venn" each find their person. A word two entries go by is asked for by full name. One found by another name is never written into as another kind ("Order" never into The Order).
+- **A title's stop ends no sentence** ("Dr. Halloway"). This holds in every split that decides a write: Quick add, his entries, the summaries' names and figures, and the notes' check.
+
+**Two windows on one book.** When a save is turned away because another window saved first, the app lays its change again over the newer copy.
+- **The fault.** About a hundred of those steps had been worked out from the older copy and written whole. Laid again, they could write over words he typed in the other window, throw away a reading paid for, or leave something false on show.
+- **Every such step now writes only where the copy still reads as it found it, and only what it changed** (shape.js `setField`/`setMeta`/`setPlan`/`setName`/`setSummary` given `from`, `relaidOn`). His own edit stays his word.
+- **A save the phone took, whose answer never came back, is never played a second time.** The phone lists the saves it took, and the app now reads that list. Before, a rename that swapped two names, laid twice, swapped them back everywhere but the pages.
+- **A rename's Undo puts back only what still reads as the rename left it.**
+
+**Docs.** README and AGENTS say all of the above. AGENTS' checker row named `holdsToNotes`, gone since 2.12.35; it is now `waitsForHim`. Three things 2.12.40 said were not quite so:
+- "What the judge said, on a grade from before the ten checks … the sheet now says so": that sheet can never be opened for such a grade. Only grades on the ten checks are shown, and such a grade is graded again by itself once the judge is on. Nothing was changed for it.
+- The fixes "go in on every passage checked while it is on": in fact they go in on every passage whose fixes wait, whenever it was checked. What waited in Suggestions goes in at the next look after the switch. The code's own comments and AGENTS say so now.
+- "One older test" was changed for "the writing may be over before the look ends". A second test had the same pattern ("a sentence to write again, with the fixes going in by themselves…"). It was put right just after that release, so 2.12.40's count was on code where that test hung on timing.
+
+**What is left, and why.**
+- **Rewrites by itself on a silent writer model.** A writer's model that stays silent on a page or a sentence written again by itself is asked again every ten minutes, never counted toward letting it be. The bubble says it with **Try again now**. Its connection, once the helper's or the checker's wait is set on it, is held.
+- **Two windows, rare races.**
+  - After a save is turned away, a change his partner or Quick add made to something other than page words (an entry, a card, a plan, the book's fields) may not be laid on the newer copy, while its card or row still says it went in.
+  - A new entry laid again where another window made one of the same name meanwhile makes two.
+  - An Undo's "n put back" counts this window's copy.
+  - The phone keeps the last 30 saves of a record, so more than 30 between a lost answer and its retry plays the save again as before.
+- **Narrow ones.**
+  - A tab hidden past three minutes of late timers is unconfirmed.
+  - Several passages refused together end that look for a second and a half before each is asked alone.
+  - Earlier Quick add rows do not count renames, so **keep mine** after one waits a round, and **Ask again** puts back his words with the old name.
+  - talk.js still splits the partner's sentences the old way, only to decide whether to ask again.
+  - An old one-page swap from before 2.12.41 can look like a rename everywhere when the book's state cannot tell them apart.
+
+Tests. App suite, the whole of it once on this code: 794 passed, 0 failed. The new ones hold the checker's order and its counts through a reload, every stage's stall and refusal, the silent model waited out, answers carried through renames, whose words a page holds, the rename's reach, his small letters, the names' evidence, his entries' times, every Quick add rule above, and 43 steps laid again over another window's copy, each staged by a real save from "another window". Each fix's guard was undone in turn and its test run, and each failed: 72, 42 and 27 for the premises, 44 and 54 for the Timeline, 113 of 116 for Quick add (the three left could not be told apart by any text the code is given), 90 for the two windows.
+
+Node: checker_edges 14, instructions 37, craft 179, personas 4, workflows 17, final_workflows 19, notes_integrity 24, branches 19, archivist_reliability 20, timeline 13, automation_integrity 15, stream_integrity 6, thinking 348 of 348, prefill_words 6, provider_edges 7, branch_imports 7, storage_integrity 12, store_removal 6, search_integrity 4, search_performance 5, textshape_fuzz 4. All passed.
+
+Python: server 89, backup_integrity 3, branch_storage passed.
+
+Browser: every walk, 1,540 checks, all passed — accessibility 56, bibliography 44, branch imports 13, branches 49, checks 54, composer drafts 27, cozy 32, dialogs 51, exports 12, main 81, more 312, notes 17, overlap 184, desk performance 21, pane performance 24, search performance 13, world performance 38, quick add 60, reading colours 47, removal 24, room backing 18, settings 26, story map 24, summaries 17, surface stability 25, timeline 35, update performance 25, viewpoint 26, worlds 185.
+
+The helper's reading request is unchanged (md5 8c1953420ccbe468b7053cd5f8cfae81).
+
+Not run: a real model, a phone's own browser, profile_performance (a profiler, with nothing to pass or fail).
