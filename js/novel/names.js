@@ -318,11 +318,15 @@ export function nameInText(folded, name, { words = true } = {}) {
   const f = typeof folded === 'string' ? foldedText(folded) : folded;
   const present = (w) => Boolean(w) && (f.loose.includes(' ' + w + ' ') || f.tight.includes(' ' + w + ' '));
   /* with the capitals kept, a lone word of the name stands only where the book writes it as a name */
+  /* (2.12.41, the review: "O'Brien" and "D'Arcy" never stood as a name, nor a name in a script with no capitals, nor
+   * one he writes in small letters himself — the apostrophe inside a name folded as nameFold folds it, a letter with no
+   * capital counted as one, and a name written all in small letters asked of the book in any letters) */
   const capitalised = (w) => {
-    if (!f.cased) return true;
+    if (!f.cased || !/\p{Lu}/u.test(String(name || ''))) return true;
+    if (f.casedFolded === undefined) f.casedFolded = f.cased.replace(/([\p{L}\p{M}])['’‘ʼ](?=\p{L})/gu, '$1');
     /* any casing after its first letter ("McAllister", "DuBois"): only the first letter has to be a capital */
     const re = new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'giu');
-    for (const m of f.cased.matchAll(re)) if (m[0][0] !== m[0][0].toLowerCase()) return true;
+    for (const m of f.casedFolded.matchAll(re)) { const c = m[0][0]; if (c !== c.toLowerCase() || c === c.toUpperCase()) return true; }
     return false;
   };
   const has = present;

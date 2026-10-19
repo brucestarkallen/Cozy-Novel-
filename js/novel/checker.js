@@ -470,12 +470,14 @@ function nextBatch(novelId, limit, { one = false } = {}) {
    * its words change in place, 2.12.2. One checked as it reads now, wanted for its grade alone, is backlog: 2.12.40, the
    * audit — through 2.12.39 it went ahead of a page written now) */
   /* (no entry for this version: new by its own time — his Rewrite the selected words on an older page is a version of
-   * its own, carrying its page's birth, and was checked last, behind the whole backlog: 2.12.41, the review) */
+   * its own, carrying its page's birth, and was checked last, behind the whole backlog: 2.12.41, the review. Never words
+   * brought in from a file: they are stamped with the moment they came in, and a book brought in after the checker was
+   * chosen had every page of it "new", ahead of the page written now — the review of 2.12.41) */
   const isNew = (c, p) => {
     const v = picked(p);
     const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id];
     if (e) return e.sig !== sigOf(v);
-    return Number.isFinite(from) && Math.max(Number(v.at) || 0, Number(v.done) || 0) >= from;
+    return Number.isFinite(from) && howOf(v) !== 'imported' && Math.max(Number(v.at) || 0, Number(v.done) || 0) >= from;
   };
   /* THREE IN TURN (2.12.41, the review — a chapter he asked for counted as new, in the book's order, and Check the whole
    * book put a page written now fifth, behind every chapter asked, while the bubble said "the newest first"): what is

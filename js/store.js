@@ -56,20 +56,34 @@ const WAIT = 15000;
 /* THE PHONE'S CLOCK (2.12.41): a heartbeat one browser writes and another judges — a page or a reply being written —
  * is kept in the phone's time, as its leases are (serve.py take_lease), so a laptop and a phone whose clocks differ by
  * more than the two minutes a heartbeat may be quiet never take a page still being written for one whose window
- * closed, nor keep one that did. Each answer from the phone says its time (its Date, to the second); the difference
- * from this page's clock is the middle of the nine newest it gave — this page's own clock until one did. */
-const heard = [];
+ * closed, nor keep one that did. Each answer from the phone says its time (its Date, to the second, written between the
+ * ask leaving and the answer coming): the difference from this page's clock lies within what every answer since allows,
+ * a span each one only narrows — so the time it gives holds still, and two things done a moment apart keep their order
+ * (2.12.41, the review: the middle of the nine newest answers moved by up to a second either way, and two rows of Quick
+ * add made a moment apart were put back in the wrong order). Begun again from the newest answer when one falls outside
+ * the span — the phone's clock set, or this page's (the review: a clock put back three minutes was off for five answers;
+ * now for none after the first). A step back of under two seconds is held where it was, so the time never runs back.
+ * This page's own clock until an answer came. */
+let spanLo = -Infinity;
+let spanHi = Infinity;
+let lastPhone = 0;
 function heardClock(res, sent, back) {
   const d = Date.parse((res && res.headers && typeof res.headers.get === 'function' && res.headers.get('Date')) || '');
   if (!Number.isFinite(d)) return;
-  /* (said to the second, rounded down, somewhere between sending and the answer) */
-  heard.push(d + 500 - (sent + back) / 2);
-  if (heard.length > 9) heard.shift();
+  /* (the phone's second, from before the ask was sent to after its answer came) */
+  const lo = d - back;
+  const hi = d + 1000 - sent;
+  const nlo = Math.max(spanLo, lo);
+  const nhi = Math.min(spanHi, hi);
+  if (nlo <= nhi) { spanLo = nlo; spanHi = nhi; } else { spanLo = lo; spanHi = hi; }
 }
 export function phoneNow() {
-  if (!heard.length) return Date.now();
-  const s = [...heard].sort((a, b) => a - b);
-  return Date.now() + Math.round(s[Math.floor(s.length / 2)]);
+  const now = Date.now();
+  if (!Number.isFinite(spanLo) || !Number.isFinite(spanHi)) return now;
+  const t = now + Math.round((spanLo + spanHi) / 2);
+  if (t < lastPhone && lastPhone - t < 2000) return lastPhone;
+  lastPhone = t;
+  return t;
 }
 async function api(method, path, { body, headers = {}, keepalive = false, wait = 0 } = {}) {
   const guarded = generation !== null && /^\/api\/store\//.test(path) && ['PUT', 'DELETE'].includes(method);
