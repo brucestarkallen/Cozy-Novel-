@@ -25,7 +25,7 @@ import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, hasMarkup as hasMarkupText } from './textshape.js';
 import { replaceMany, renameRule } from './names.js';
 import { entriesOf, entryNamed, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
-import { carriedContinuity } from './timeline.js';
+import { carriedContinuity, continuityNow } from './timeline.js';
 import { changeInPlace, putBackWords } from './inplace.js';
 
 /* ------------------------------------------------------------ reading it */
@@ -608,7 +608,8 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     const next = swap(x.version.text);
     if (next === x.version.text) continue;
     /* (what it read as before it changes on the page itself: its words, their facts) */
-    const was = { text: String(x.version.text || ''), sig: archivist.signature(x.version), codex: clone(codexNow(x.version)), continuity: x.version.continuity ? clone(x.version.continuity) : null };
+    /* (its turns only while they are of these words, as its facts — timeline.js continuityNow, 2.12.40) */
+    const was = { text: String(x.version.text || ''), sig: archivist.signature(x.version), codex: clone(codexNow(x.version)), continuity: clone(continuityNow(x.version)) };
     const made = newVersionOn(put, novelId, x, next, why, { retire: false });
     undo.passages.push(made);
     restamp.push({ x, made, next, was });

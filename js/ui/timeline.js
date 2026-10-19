@@ -38,7 +38,9 @@ function currentPassage(chapter) {
   return seen.dataset.id;
 }
 
-export function makeTimeline({ novelId, chapterId: openedChapter, current, openCard, jumpSource, readAgain, healing = () => true }) {
+/* helper: who reads what the Timeline lacks — 'on' (a helper reads it by itself), 'none' (no helper chosen), 'stopped'
+ * (its connection was turned away: nothing is read until it is put right, or he presses Try again now) */
+export function makeTimeline({ novelId, chapterId: openedChapter, current, openCard, jumpSource, readAgain, helper = () => 'on' }) {
   let chapterId = openedChapter, destroyed = false, frame = 0, lastResult = '', shown = PAGE_SIZE, onPage = null;
   let dirty = true, revision = 0, novelInput = '', projection = null;
   /* a card asked for from elsewhere (its card in the notes, its name in the bibliography): followed once its option is there (2.12.37) */
@@ -135,7 +137,8 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     if (!dirty) return;
     dirty = false;
     let changed = false;
-    const nextNovel = JSON.stringify([novel.order, ['people', 'threads'].map(kind => (novel.notes?.[kind] || []).map(({id, name, aka}) => [id, name, aka]))]);
+    /* (and what is set aside, which the Timeline counts apart: 2.12.40) */
+    const nextNovel = JSON.stringify([novel.order, ['people', 'threads'].map(kind => (novel.notes?.[kind] || []).map(({id, name, aka}) => [id, name, aka])), Object.entries(novel.memory?.aside || {}).map(([k, a]) => [k, a && a.sig])]);
     if (novelInput !== nextNovel) { novelInput = nextNovel; changed = true; }
     for (const id of novel.order || []) {
       const c = chapters[id], before = chapterInputs.get(id);
@@ -184,19 +187,27 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     retry.hidden = !unavailable;
     /* (2.12.37: the helper reads them by itself — never a task handed to him; Read the whole book again stays in the notes) */
     reread.hidden = true;
-    const passed = result.coverage.passed || 0;
-    const owed = Math.max(0, missing - passed);
-    const heals = healing();
+    /* EVERY LINE TRUE, WHATEVER THE STATE (2.12.40, the audit): a passage set aside, or passed by, is never said to be
+     * read by itself — it is not — nor is one while the helper is stopped; what he can do is said by the controls'
+     * own names (Try again now and Read it again, under Cards) */
+    const { passed = 0, aside = 0, passedFound = 0 } = result.coverage;
+    const owed = Math.max(0, missing - passed - aside);
+    const who = helper();
+    const one = (n, a, b) => (n === 1 ? a : b);
+    const stopped = 'The helper is stopped: its connection was turned away. Put it right in Settings → Connections, or press Try again now under Cards';
     setText(gapCopy, unavailable ? `${plural(unavailable, 'chapter')} could not be opened. These turns show only the chapters available here.`
-      : [owed ? `${plural(owed, 'passage')} ${owed === 1 ? 'is' : 'are'} not read for the Timeline yet — ${heals ? `the helper reads ${owed === 1 ? 'it' : 'them'} by itself, a few at a time, and ${owed === 1 ? 'its' : 'their'} turns show here as they are read.` : 'choose a helper in Settings → Connections and it reads them by itself.'}` : '',
-        passed ? `${plural(passed, 'passage')} ${passed === 1 ? 'was' : 'were'} read but not whole — the helper’s model would not read ${passed === 1 ? 'it' : 'them'} whole; what it found is shown.` : ''].filter(Boolean).join(' '));
+      : [owed ? `${plural(owed, 'passage')} ${one(owed, 'is', 'are')} not read for the Timeline yet${who === 'on' ? ` — the helper reads ${one(owed, 'it', 'them')} by itself, a few at a time, and ${one(owed, 'its', 'their')} turns show here as they are read.` : who === 'stopped' ? `. ${stopped}, and it reads ${one(owed, 'it', 'them')} by itself.` : ` — choose a helper in Settings → Connections and it reads ${one(owed, 'it', 'them')} by itself.`}` : '',
+        aside ? `${plural(aside, 'passage')} ${one(aside, 'was', 'were')} set aside — the helper’s model would not read ${one(aside, 'it', 'them')} for the notes, so ${one(aside, 'it has', 'they have')} no turns here. ${one(aside, 'Read it again', 'Read them all again')}, under Cards, has ${one(aside, 'it', 'them')} read afresh.` : '',
+        passed ? `${plural(passed, 'passage')} ${one(passed, 'was', 'were')} tried twice for the Timeline and passed by — the helper’s model would not give all of ${one(passed, 'its', 'their')} turns from ${one(passed, 'its', 'their')} own words.${passedFound ? ' What it did find is shown.' : ''} ${one(passed, 'It is', 'They are')} read again if ${one(passed, 'its', 'their')} words change.` : ''].filter(Boolean).join(' '));
     /* Rows, quotes, buttons and scroll remain still on routine saves. */
-    const signature = JSON.stringify([projection.key, total, read, waiting, unavailable, shown]);
+    const signature = JSON.stringify([projection.key, total, read, waiting, unavailable, shown, who]);
     if (signature === lastResult) return;
     lastResult = signature;
     if (!result.events.length) {
-      const title = waiting ? 'Opening your story' : kind.value || person.value ? 'No turns match this view yet' : !total ? 'The story is still ahead' : complete ? 'No turning points in these passages' : 'The timeline begins with a reading';
-      const copy = waiting ? 'The turns kept with each passage will appear here.' : kind.value || person.value ? 'Try another person, thread or kind of turn, or look at the whole book.' : !total ? 'As your story is read, its meaningful changes will gather here.' : complete ? 'The helper read these passages and found no changes to keep here.' : (healing() ? 'The helper reads the pages read before the Timeline was kept for their turns by itself, a few at a time — they gather here as they are read.' : 'Choose a helper in Settings → Connections — it reads the pages for their turns by itself.');
+      const title = waiting ? 'Opening your story' : kind.value || person.value ? 'No turns match this view yet' : !total ? 'The story is still ahead' : complete ? 'No turning points in these passages' : owed ? 'The timeline begins with a reading' : 'No turns to show yet';
+      const copy = waiting ? 'The turns kept with each passage will appear here.' : kind.value || person.value ? 'Try another person, thread or kind of turn, or look at the whole book.' : !total ? 'As your story is read, its meaningful changes will gather here.' : complete ? 'The helper read these passages and found no changes to keep here.'
+        : !owed ? 'The helper has read all it can of these passages for their turns — what it could not is said above.'
+          : who === 'on' ? 'The helper reads these passages for their turns by itself, a few at a time — they gather here as they are read.' : who === 'stopped' ? `${stopped}.` : 'Choose a helper in Settings → Connections — it reads the pages for their turns by itself.';
       results.replaceChildren(h('div.timeline-empty', h('span.timeline-flourish', { 'aria-hidden': 'true' }, '⌁'), h('h3', title), h('p', copy)));
       return;
     }

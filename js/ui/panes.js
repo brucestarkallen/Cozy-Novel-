@@ -881,8 +881,9 @@ function drawNotes() {
         else toast('This card is no longer in the notes.');
       },
       jumpSource: (chapterId, passageId, query) => { closeRight(); desk.whenOpen(chapterId, { passageId, show: { query } }); },
-      /* whether a helper reads what the Timeline lacks by itself (archivist.js timelineBackfill) */
-      healing: () => archivist.lightOf(novelId).state !== 'off',
+      /* whether a helper reads what the Timeline lacks by itself (archivist.js timelineBackfill) — none chosen, or one
+       * whose connection was turned away, never said to (2.12.40, the audit) */
+      helper: () => (archivist.lightOf(novelId).state === 'off' ? 'none' : archivist.keepingNotes(novelId) ? 'on' : 'stopped'),
       readAgain: () => {
         notesView = 'cards';
         drawSide();

@@ -165,6 +165,89 @@ async def scenario(browser):
         await pg.context.close()
 
 
+# (2.12.40, the audit: every line the Timeline shows true in every state — a passage set aside, one passed by, all of
+# them passed by, the helper stopped — and what he can do said by the controls' own names)
+async def states(browser):
+    logs = []
+    pg = await page(browser, logs, w=1440, hgt=1000, mobile=False)
+    try:
+        await new_book(pg, 'What the Timeline says')
+        ids = await pg.evaluate("""async () => {
+          const s = await import('/js/store.js');
+          const sh = await import('/js/novel/shape.js');
+          const {continuityOf} = await import('/js/novel/timeline.js');
+          const {hashText} = await import('/js/util.js');
+          const nid = location.hash.split('/')[2], cid = s.peek('novel', nid).order[0];
+          const notes = {people: [{id:'mara',name:'Mara',aka:[]},{id:'tom',name:'Tom',aka:[]}], threads: [], places: [], lore: []};
+          const ev = (q) => ({kind:'relationship',cards:[{kind:'people',name:'Mara'},{kind:'people',name:'Tom'}],text:'Mara trusts Tom with the key.',evidence:[q],stance:'fact'});
+          const read = sh.newPassage('you', 'Mara handed Tom the key.');
+          read.versions[0].continuity = continuityOf([ev('Mara handed Tom the key.')], notes, {text: read.versions[0].text});
+          const passed = sh.newPassage('you', 'Mara watched Tom go. The key was his now.');
+          const pv = passed.versions[0];
+          pv.continuity = {...continuityOf([ev('The key was his now.')], notes, {text: pv.text}), complete: false, passed: hashText(pv.text)};
+          const aside = sh.newPassage('you', 'The tide came in over the rocks.');
+          const av = aside.versions[0];
+          const owed = sh.newPassage('you', 'Tom rowed out alone.');
+          s.change('chapter', cid, (c) => { c.passages = [read, passed, aside, owed]; });
+          s.change('novel', nid, (n) => { n.notes = notes; n.memory = {...(n.memory || {}), aside: {[aside.id]: {chapterId: cid, sig: av.id + ':' + hashText(av.text), label: 'Chapter One, passage 3', why: 'its model would not read it', at: Date.now()}}}; });
+          await s.flush();
+          return {nid, cid, read: read.id, passed: passed.id, owed: owed.id};
+        }""")
+        await pg.wait_for_selector('#passages > .passage')
+        await open_timeline(pg)
+        await pg.get_by_role('button', name='Whole book', exact=True).click()
+        await pg.wait_for_function("(document.querySelector('.timeline-gaps p') || {}).textContent?.includes('set aside')")
+        gaps = await pg.inner_text('.timeline-gaps')
+        check('a passage set aside is said apart, with Read it again under Cards', '1 passage was set aside' in gaps and 'Read it again, under Cards, has it read afresh' in gaps, gaps)
+        check('a passage passed by is said so, and what it found is shown', '1 passage was tried twice for the Timeline and passed by' in gaps and 'What it did find is shown.' in gaps, gaps)
+        check('only the passage that will be read is said to be read — with no helper, choose one', '1 passage is not read for the Timeline yet — choose a helper in Settings → Connections and it reads it by itself.' in gaps and gaps.count('by itself') == 1, gaps)
+        # one set aside while the Timeline is open: counted at once, by the control's own name for more than one
+        await pg.evaluate("""async (ids) => {
+          const s = await import('/js/store.js'), sh = await import('/js/novel/shape.js'), {hashText} = await import('/js/util.js');
+          const v = sh.picked(s.peek('chapter', ids.cid).passages.find((p) => p.id === ids.owed));
+          s.change('novel', ids.nid, (n) => { n.memory.aside = {...n.memory.aside, [ids.owed]: {chapterId: ids.cid, sig: v.id + ':' + hashText(v.text), label: 'Chapter One, passage 4', why: 'its model would not read it', at: Date.now()}}; });
+          await s.flush();
+        }""", ids)
+        await pg.wait_for_function("(document.querySelector('.timeline-gaps p') || {}).textContent?.includes('2 passages were set aside')")
+        gaps = await pg.inner_text('.timeline-gaps')
+        check('a passage set aside while it is open is counted at once — Read them all again, under Cards', 'Read them all again, under Cards, has them read afresh' in gaps and 'not read for the Timeline yet' not in gaps, gaps)
+        await pg.evaluate("""async (ids) => {
+          const s = await import('/js/store.js');
+          s.change('novel', ids.nid, (n) => { const a = {...n.memory.aside}; delete a[ids.owed]; n.memory.aside = a; });
+          await s.flush();
+        }""", ids)
+        await pg.wait_for_function("(document.querySelector('.timeline-gaps p') || {}).textContent?.includes('1 passage was set aside')")
+        # the helper stopped: its connection turned away (the checker off, so nothing is asked)
+        await pg.evaluate("""async (ids) => {
+          const s = await import('/js/store.js'), a = await import('/js/novel/archivist.js');
+          const conn = {id: 'c-h', name: 'Helper', url: 'http://127.0.0.1:9/v1', model: 'stand-in', key: 'k'};
+          s.change('house', 'house', (h) => { h.connections = [...(h.connections || []).filter((c) => c.id !== 'c-h'), conn]; h.roles = {...(h.roles || {}), helper: 'c-h', checker: 'off'}; });
+          a.forTests().blocked.set(ids.nid, {conn: a.connPrint(s.peek('house', 'house').connections.find((c) => c.id === 'c-h')), words: null});
+          s.change('novel', ids.nid, (n) => { n.memory = {...n.memory}; });
+          await s.flush();
+        }""", ids)
+        await pg.wait_for_function("(document.querySelector('.timeline-gaps p') || {}).textContent?.includes('stopped')")
+        gaps = await pg.inner_text('.timeline-gaps')
+        check('the helper stopped: said so, with what to do as the screen names it — never that it reads them', 'The helper is stopped: its connection was turned away. Put it right in Settings → Connections, or press Try again now under Cards' in gaps and 'a few at a time' not in gaps, gaps)
+        # nothing left that will be read: no turns shown, and never "the helper reads them"
+        await pg.evaluate("""async (ids) => {
+          const s = await import('/js/store.js'), sh = await import('/js/novel/shape.js'), {hashText} = await import('/js/util.js');
+          s.change('chapter', ids.cid, (c) => {
+            c.passages = c.passages.filter((p) => p.id !== ids.owed);
+            const r = sh.picked(c.passages.find((p) => p.id === ids.read)); r.continuity = {...r.continuity, events: []};
+            const v = sh.picked(c.passages.find((p) => p.id === ids.passed)); v.continuity = {...v.continuity, events: []};
+          });
+          await s.flush();
+        }""", ids)
+        await pg.wait_for_function("document.querySelector('.timeline-empty h3')?.textContent === 'No turns to show yet'")
+        empty = await pg.inner_text('.timeline-empty')
+        gaps = await pg.inner_text('.timeline-gaps')
+        check('all that is left passed by or set aside: said so, never read by itself', 'The helper has read all it can of these passages for their turns' in empty and 'by itself' not in empty + gaps and 'What it did find is shown' not in gaps, [empty, gaps])
+        check('the Timeline’s states have no page exceptions', not [x for x in logs if x.startswith('PAGEERROR')], logs)
+    finally:
+        await pg.context.close()
+
+
 async def main():
     with Env():
         async with async_playwright() as p:
@@ -172,6 +255,7 @@ async def main():
             browser = await p.chromium.launch(**options)
             try:
                 await scenario(browser)
+                await states(browser)
             except Exception:
                 traceback.print_exc()
                 check('the timeline walk completes',False,traceback.format_exc()[-600:])

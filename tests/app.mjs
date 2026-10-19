@@ -13858,6 +13858,329 @@ await test('the Timeline heals by itself: turns left with the words before carri
   await putAway(c);
 });
 
+/* (2.12.40, the audit of the Timeline: its turns kept, carried, read, healed and said on screen) */
+const EMILIA = 'Emilia bit Jovan, and he did not die.';
+const EJ = [{ kind: 'people', name: 'Emilia Vermaine' }, { kind: 'people', name: 'Jovan Wessex' }];
+const turnRow = (text, quote, extra = {}) => ({ kind: 'relationship', cards: EJ, text, evidence: [quote], stance: 'fact', ...extra });
+const peopleIn = (b) => store.change('novel', b.novelId, (n) => {
+  n.notes.people.push({ id: 'pe-e', name: 'Emilia Vermaine', aka: ['Emilia'], about: 'A vampire.', updated: { at: 1 } });
+  n.notes.people.push({ id: 'pe-j', name: 'Jovan Wessex', aka: ['Jovan'], about: 'A hunter.', updated: { at: 1 } });
+}, { now: true });
+const twoTurns = (text) => ({ schema: 1, fp: util.hashText(text), complete: true, events: [
+  { id: 'tl-1', kind: 'relationship', refs: [{ id: 'pe-e', kind: 'people', name: 'Emilia Vermaine' }, { id: 'pe-j', kind: 'people', name: 'Jovan Wessex' }], text: 'Emilia turns Jovan.', evidence: ['Emilia bit Jovan'], stance: 'fact' },
+  { id: 'tl-2', kind: 'character', refs: [{ id: 'pe-j', kind: 'people', name: 'Jovan Wessex' }], text: 'Jovan lives on.', evidence: ['he did not die'], stance: 'fact' }] });
+const factOf = (text) => ({ schema: 1, fp: util.hashText(text), complete: true, facts: [{ id: 'cx-1', name: 'Emilia', kind: 'people', fact: 'Emilia is a vampire who bites.', evidence: ['Emilia bit Jovan'] }] });
+const emiliaBook = async (extra = {}) => {
+  const b = await makeBook([[{ text: EMILIA, continuity: twoTurns(EMILIA), codex: factOf(EMILIA), ...extra }, 'Rain fell on the river.']], { manual: true });
+  peopleIn(b);
+  store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+  markAllSeen(b);
+  return b;
+};
+const turnsHere = (b, i = 0) => ((picked(b.ch().passages[i]).continuity || {}).events || []).map((e) => e.text).sort();
+const factsHere = (b, i = 0) => ((bib.codexNow(picked(b.ch().passages[i])) || {}).facts || []).map((f) => f.fact).sort();
+/* the reading of a change as a model answers for a fix: nothing new happens in it */
+const changeRead = (events = [], facts = []) => ({ text: JSON.stringify({ people: [], timeline: [{ source: 'Passage 1', events }], bibliography: [{ source: 'Passage 1', facts }] }) });
+const lastAsk = (x) => String(x.body.messages.at(-1).content);
+
+await test('a change read against the words before keeps the turns of theirs that still stand — a fix, a Go on, a fix landing while it is read — turn by turn, the reading’s own where it gives the same turn; and a Go on keeps the facts of the words before', async () => {
+  await setHouse({ context: 64000 });
+  /* a fix that keeps one turn's words and takes the other's: the honest answer for a fix gives nothing */
+  const b = await emiliaBook();
+  inplace.changeInPlace({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages[0].id, next: 'Emilia bit Jovan, and he lived.', by: 'checker' });
+  await reset();
+  await script([changeRead()]);
+  await archivist.run(b.novelId);
+  assert.ok((await requests()).some((x) => lastAsk(x).includes('It used to read')), 'read as a change');
+  assert.deepEqual(turnsHere(b), ['Emilia turns Jovan.'], 'the turn whose words still stand kept; the one whose words went, not');
+  assert.deepEqual([tlmod.continuityDone(picked(b.ch().passages[0])), coverOf(b).read, archivist.timelineDue(b.novelId).length], [true, 2, 0]);
+  assert.deepEqual(factsHere(b), ['Emilia is a vampire who bites.'], 'as its fact is');
+  /* a Go on: what it adds read as a change — the reading gives the turn and the fact of the words added, and one turn
+   * again in its own words: the same turn, the reading's own stands */
+  const c = await emiliaBook({ cut: true, cutWhy: 'it reached the reply length' });
+  await reset();
+  await script([{ text: 'Then Jovan swore to hunt her down, for he was a hunter of the Order.' }]);
+  assert.equal((await writer.goOn({ novelId: c.novelId, chapterId: c.ids[0], passageId: c.ch().passages[0].id })).ok, true);
+  await quietAll();
+  await reset();
+  await script([changeRead([turnRow('Jovan turns against Emilia.', 'Jovan swore to hunt her down'), turnRow('Emilia turns Jovan with a bite.', 'Emilia bit Jovan, and he did not die')],
+    [{ name: 'Jovan', kind: 'people', fact: 'Jovan is a hunter of the Order.', evidence: 'he was a hunter of the Order' }])]);
+  await archivist.run(c.novelId);
+  assert.deepEqual(turnsHere(c), ['Emilia turns Jovan with a bite.', 'Jovan lives on.', 'Jovan turns against Emilia.']);
+  assert.deepEqual(factsHere(c), ['Emilia is a vampire who bites.', 'Jovan is a hunter of the Order.'], 'the facts of the words before the Go on stay');
+  /* a Go on, then a fix before the helper reads it: the turns and facts of the words the Go on grew from wait for it */
+  const d = await emiliaBook({ cut: true, cutWhy: 'it reached the reply length' });
+  const dpid = d.ch().passages[0].id;
+  await reset();
+  await script([{ text: 'Then Jovan swore to hunt her down.' }]);
+  await writer.goOn({ novelId: d.novelId, chapterId: d.ids[0], passageId: dpid });
+  await quietAll();
+  inplace.changeInPlace({ novelId: d.novelId, chapterId: d.ids[0], passageId: dpid, next: picked(d.ch().passages[0]).text.replace('swore', 'vowed'), by: 'checker' });
+  await reset();
+  await script([changeRead()]);
+  await archivist.run(d.novelId);
+  assert.deepEqual([turnsHere(d), factsHere(d)], [['Emilia turns Jovan.', 'Jovan lives on.'], ['Emilia is a vampire who bites.']]);
+  /* a fix put in while a change is read: what that reading found stays with the words it read, and the fix, read
+   * against them, keeps it (a passage further back: the newest read passage is read again whole) */
+  const e = await emiliaBook();
+  const at = { novelId: e.novelId, chapterId: e.ids[0], passageId: e.ch().passages[0].id };
+  inplace.changeInPlace({ ...at, next: `${EMILIA} She smiled at him.`, by: 'checker' });
+  await reset();
+  await script([{ ...changeRead([turnRow('Emilia warms to Jovan.', 'She smiled at him')]), pause: 0.8 }, changeRead()]);
+  const running = archivist.run(e.novelId);
+  for (let k = 0; k < 200 && !(await requests()).length; k++) await sleep(20);
+  inplace.changeInPlace({ ...at, next: `${EMILIA} She smiled at him, once.`, by: 'checker' });
+  await running;
+  await quietAll();
+  assert.equal((await requests()).filter((x) => lastAsk(x).includes('It used to read')).length, 2, 'the second fix read as a change against the words the first reading read');
+  assert.deepEqual([turnsHere(e), tlmod.continuityDone(picked(e.ch().passages[0]))], [['Emilia turns Jovan.', 'Emilia warms to Jovan.', 'Jovan lives on.'], true]);
+  for (const x of [b, c, d, e]) await putAway(x);
+});
+
+await test('the words before keep their turns, as their facts: the Undo of a name changed everywhere, Put back the words before and the Undo of a fix bring them back with the words — never a reading paid for to get them back', async () => {
+  await setHouse();
+  const texts = [EMILIA, 'Emilia smiled at Jovan, and Jovan smiled back.', 'Emilia left the inn alone.'];
+  const b = await makeBook([texts.map((t, i) => ({ text: t, continuity: { ...turnsOf(t, t.slice(0, 16)), events: [{ ...turnsOf(t, t.slice(0, 16)).events[0], id: 'tl-' + i }] } }))], { manual: true });
+  peopleIn(b);
+  markAllSeen(b);
+  const r = changes.makeChange(b.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } });
+  assert.equal(r.status, 'made', r.said);
+  assert.equal(changes.undoChange(b.novelId, r).ok, true);
+  assert.equal(picked(b.ch().passages[0]).text, EMILIA);
+  assert.deepEqual(b.ch().passages.map((p) => tlmod.continuityDone(picked(p))), [true, true, true], 'every passage keeps its turns');
+  assert.deepEqual(picked(b.ch().passages[0]).continuity.events[0].evidence, ['Emilia bit Jovan'], 'in the words put back');
+  assert.deepEqual([coverOf(b).read, archivist.timelineDue(b.novelId).length], [3, 0]);
+  await reset();
+  await archivist.run(b.novelId);
+  assert.equal((await everyRequest()).filter(isTurnsAsk).length, 0, 'nothing read again for them');
+  /* a fix that takes the words its turn stands on: Put back the words before (⋯), and the Undo of a fix (Apply → Undo) */
+  const c = await turnBook();
+  const at = { novelId: c.novelId, chapterId: c.ids[0], passageId: c.ch().passages[0].id };
+  inplace.changeInPlace({ ...at, next: 'Emilia kissed Jovan, and he did not die.', by: 'checker' });
+  assert.equal(picked(c.ch().passages[0]).continuity, undefined, 'its quote gone: none carried');
+  assert.equal(inplace.putBackWords(at).ok, true);
+  assert.equal(tlmod.continuityDone(picked(c.ch().passages[0])), true, 'Put back the words before: its turn back');
+  const made = inplace.changeInPlace({ ...at, next: 'Emilia kissed Jovan, and he did not die.', by: 'checker' });
+  assert.equal(inplace.putBackWords({ ...at, versionId: made.versionId, expect: made.after, before: made.before }).ok, true);
+  assert.deepEqual([tlmod.continuityDone(picked(c.ch().passages[0])), coverOf(c).read], [true, 1], 'the Undo of a fix: its turn back');
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a turn is held to its words as a fact is — straight marks, “...” for “…”, runs of spaces read as one — and kept as the page has them; a run of spaces mended to one carries it', async () => {
+  await setHouse();
+  const notes = { people: [{ id: 'pe-e', name: 'Emilia Vermaine', aka: ['Emilia'] }, { id: 'pe-j', name: 'Jovan Wessex', aka: ['Jovan'] }], threads: [] };
+  const text = '“Stay,” Emilia said — and Jovan  stayed… for good.';
+  for (const [quote, page] of [['"Stay," Emilia said — and Jovan stayed', '“Stay,” Emilia said — and Jovan  stayed'], ['Jovan stayed... for good', 'Jovan  stayed… for good']]) {
+    const c = tlmod.continuityOf([turnRow('Jovan stays with Emilia.', quote)], notes, { text });
+    assert.deepEqual([c.complete, c.events.map((e) => e.evidence)], [true, [[page]]], quote);
+    assert.equal(bib.quoteIn(text, quote), true, 'the bibliography reads it alike');
+  }
+  /* a turn kept with straight marks before: shown, at its place in the passage */
+  const b = await makeBook([[{ text, continuity: { schema: 1, fp: util.hashText(text), complete: true, events: [{ ...twoTurns(text).events[0], evidence: ['Jovan stayed... for good'] }] } }]], { manual: true });
+  peopleIn(b);
+  assert.deepEqual([coverOf(b).read, tlmod.timelineOf(b.novel(), { [b.ids[0]]: b.ch() }).events.length], [1, 1]);
+  /* a run of spaces mended to one by a fix on the page itself: the turn standing across it goes with the words */
+  const before = 'Emilia bit Jovan,  and he did not die.';
+  const turns = tlmod.continuityOf([turnRow('Emilia turns Jovan.', 'Emilia bit Jovan,  and he did not die')], notes, { text: before });
+  const m = await makeBook([[{ text: before, continuity: turns }]], { manual: true });
+  peopleIn(m);
+  inplace.changeInPlace({ novelId: m.novelId, chapterId: m.ids[0], passageId: m.ch().passages[0].id, next: EMILIA, by: 'checker' });
+  const mv = picked(m.ch().passages[0]);
+  assert.deepEqual([mv.text, tlmod.continuityDone(mv), mv.continuity.events[0].evidence], [EMILIA, true, ['Emilia bit Jovan, and he did not die']], 'mended, its turn with it, as the page has it');
+  await putAway(b);
+  await putAway(m);
+});
+
+await test('the same turn read twice — quoted or worded another way — is one row, the newer reading’s; a belief on the same words is another turn; one kept twice before shows once', async () => {
+  await setHouse();
+  /* a reading that left one sound turn, then the passage read for the Timeline alone */
+  const b = await makeBook([[{ text: EMILIA, continuity: { ...twoTurns(EMILIA), complete: false, events: [twoTurns(EMILIA).events[0]] } }]], { manual: true });
+  peopleIn(b);
+  markAllSeen(b);
+  await reset();
+  await script([{ turns: true, text: JSON.stringify({ timeline: [{ source: 'Chapter One, passage 1', events: [turnRow('Emilia turns Jovan with a bite.', 'Emilia bit Jovan, and he did not die'), turnRow('Jovan believes she spared him.', 'he did not die', { stance: 'belief', whose: 'Jovan Wessex' })] }] }) }]);
+  await archivist.run(b.novelId);
+  assert.equal((await everyRequest()).filter(isTurnsAsk).length, 1);
+  assert.deepEqual(tlmod.timelineOf(b.novel(), { [b.ids[0]]: b.ch() }).events.map((e) => e.text), ['Emilia turns Jovan with a bite.', 'Jovan believes she spared him.']);
+  assert.equal(tlmod.continuityDone(picked(b.ch().passages[0])), true);
+  /* two parts of a reading giving the same turn: once */
+  const notes = b.novel().notes;
+  const one = tlmod.continuityOf([turnRow('Emilia turns Jovan.', 'Emilia bit Jovan')], notes, { text: EMILIA });
+  const two = tlmod.continuityOf([turnRow('Emilia makes Jovan hers.', 'bit Jovan, and he')], notes, { text: EMILIA });
+  assert.equal(tlmod.mergeContinuity(one, two, EMILIA).events.length, 1);
+  /* kept twice by a merge before: shown once, and sent to the notes' check once */
+  const kept = { ...twoTurns(EMILIA), events: [twoTurns(EMILIA).events[0], { ...twoTurns(EMILIA).events[0], id: 'tl-9', text: 'Emilia turns Jovan with a bite.', evidence: ['Emilia bit Jovan, and he did not die'] }] };
+  const c = await makeBook([[{ text: EMILIA, continuity: kept }]], { manual: true });
+  peopleIn(c);
+  assert.deepEqual(tlmod.timelineOf(c.novel(), { [c.ids[0]]: c.ch() }).events.map((e) => e.text), ['Emilia turns Jovan.']);
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a passage longer than the helper’s room is read for its turns in parts — each part once, its end too — and read whole; never passed by for words the app cut; one stopped partway goes on where it stopped', async () => {
+  /* (a writer with a large room, so the chapter is no stretch; a helper of 8,000 tokens) */
+  await setHouse({ context: 200000 }, { connections: [{ ...CONN, context: 200000 }, { ...CONN, id: 'c-h', context: 8000 }], roles: { writer: 'c-w', helper: 'c-h' } });
+  const long = Array.from({ length: 260 }, (_, i) => `Emilia walked the long hall for the ${i + 1}th time and Jovan watched.`).join(' ');
+  const b = await makeBook([[long]], { manual: true });
+  peopleIn(b);
+  markAllSeen(b, { turns: false });
+  await reset();
+  for (let run = 0; run < 6 && archivist.timelineDue(b.novelId).length; run++) { await archivist.run(b.novelId); await quietAll(); }
+  const asked = (await everyRequest()).filter(isTurnsAsk).map(lastAsk);
+  assert.ok(asked.length >= 2, `${asked.length} asks`);
+  assert.equal(new Set(asked).size, asked.length, 'no part asked twice');
+  assert.ok(asked.some((t) => t.includes('260th time')), 'its end read too');
+  assert.ok(asked.every((t, i) => t.includes(`(part ${i + 1} of ${asked.length})`)), 'each part said as one');
+  assert.deepEqual([tlmod.continuityDone(picked(b.ch().passages[0])), coverOf(b).read, coverOf(b).passed], [true, 1, 0]);
+  /* its model will not read a part: tried again another run — from that part, never the ones read before it */
+  const c = await makeBook([[long]], { manual: true });
+  peopleIn(c);
+  markAllSeen(c, { turns: false });
+  await reset();
+  await script([{ turns: true, text: JSON.stringify({ timeline: [{ source: 'Chapter One, passage 1', events: [] }] }) }, { turns: true, status: 403, message: 'content flagged by moderation' }]);
+  await archivist.run(c.novelId);
+  await quietAll();
+  const first = (await everyRequest()).filter(isTurnsAsk).map(lastAsk);
+  assert.deepEqual(first.map((t) => /\(part (\d+) of/.exec(t)[1]), ['1', '2']);
+  assert.equal(tlmod.continuityDone(picked(c.ch().passages[0])), false, 'not read whole yet');
+  await reset();
+  await archivist.run(c.novelId);
+  const next = (await everyRequest()).filter(isTurnsAsk).map(lastAsk);
+  assert.ok(next[0].includes('(part 2 of'), 'goes on where it stopped');
+  for (let run = 0; run < 4 && archivist.timelineDue(c.novelId).length; run++) { await archivist.run(c.novelId); await quietAll(); }
+  assert.deepEqual([coverOf(c).read, coverOf(c).passed], [1, 0]);
+  await setHouse();
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a passage longer than the helper’s room has its facts filled in parts, as its turns are — its end read too — and is filled whole; never only the part that fitted', async () => {
+  await setHouse({ context: 200000 }, { connections: [{ ...CONN, context: 200000 }, { ...CONN, id: 'c-h', context: 16000 }], roles: { writer: 'c-w', helper: 'c-h' } });
+  const long = Array.from({ length: 600 }, (_, i) => `Emilia walked the long hall for the ${i + 1}th time and Jovan watched.`).join(' ');
+  const b = await makeBook([[long]], { manual: true });
+  peopleIn(b);
+  store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+  markAllSeen(b, { facts: false });
+  await reset();
+  const part = { bib: true, text: JSON.stringify({ bibliography: [{ source: 'Chapter One, passage 1', facts: [{ name: 'Emilia', kind: 'people', fact: 'Emilia walks the long hall.', evidence: 'Emilia walked the long hall' }] }] }) };
+  await script([part, part, part, part]);
+  for (let run = 0; run < 4 && archivist.bibDue(b.novelId).length; run++) { await archivist.run(b.novelId); await quietAll(); }
+  const asked = (await everyRequest()).filter((x) => lastAsk(x).includes('were read into the notes before the book’s bibliography was kept')).map(lastAsk);
+  assert.ok(asked.length >= 2, `${asked.length} asks`);
+  assert.equal(new Set(asked).size, asked.length, 'no part asked twice');
+  assert.ok(asked.some((t) => t.includes('600th time')), 'its end read too');
+  const k = bib.codexNow(picked(b.ch().passages[0]));
+  assert.deepEqual([k.complete, k.upTo, k.facts.map((f) => f.fact), archivist.bibDue(b.novelId).length], [true, undefined, ['Emilia walks the long hall.'], 0]);
+  await setHouse();
+  await putAway(b);
+});
+
+await test('the Timeline counts apart what will not be read by itself — a passage set aside, one passed by and whether it found anything — so it never says the helper reads them', async () => {
+  await setHouse();
+  const b = await makeBook([[EMILIA, 'Rain fell on the river.', 'Emilia smiled at Jovan.']], { manual: true });
+  peopleIn(b);
+  markAllSeen(b, { turns: false });
+  const [p1, p2, p3] = b.ch().passages;
+  /* the first passed by with a turn it found; the second set aside by the notes' reading, as its words stand */
+  store.change('chapter', b.ids[0], (ch) => { const v = picked(ch.passages[0]); v.continuity = { ...twoTurns(EMILIA), complete: false, events: [twoTurns(EMILIA).events[0]], passed: util.hashText(EMILIA) }; }, { now: true });
+  store.change('novel', b.novelId, shape.novelSteps.setAside({ [p2.id]: { chapterId: b.ids[0], sig: archivist.signature(picked(p2)), label: 'Chapter One, passage 2', why: 'its model would not read it', at: Date.now() } }), { now: true });
+  const cov = coverOf(b);
+  assert.deepEqual([cov.total, cov.read, cov.missing, cov.passed, cov.passedFound, cov.aside], [3, 0, 3, 1, 1, 1]);
+  assert.deepEqual(archivist.timelineDue(b.novelId).map((x) => x.pid), [p3.id], 'only the third is read by itself');
+  /* words changed since it was set aside: read by itself again, no longer counted as set aside */
+  store.change('chapter', b.ids[0], (ch) => { picked(ch.passages[1]).text = 'Rain fell hard on the river.'; }, { now: true });
+  assert.equal(coverOf(b).aside, undefined);
+  /* the helper stopped (its connection turned away): not keeping the notes, so the Timeline never says it reads them */
+  archivist.forTests().blocked.set(b.novelId, { conn: 'x', words: null });
+  assert.equal(archivist.keepingNotes(b.novelId), false);
+  archivist.forTests().blocked.delete(b.novelId);
+  await putAway(b);
+  void p1;
+});
+
+const isBibAsk = (x) => lastAsk(x).includes('were read into the notes before the book’s bibliography was kept');
+const isAuditAsk = (x) => lastAsk(x).includes(prompts.AUDIT_ASK);
+/* a second book whose chapter is a copy of one's, the same passage and version ids — as a branch or a copied book keeps them */
+const twinOf = async (b) => {
+  const { novel, chapter } = shape.newNovel({ title: 'Its branch' });
+  novel.auto = { about: false, style: false };
+  chapter.passages = JSON.parse(JSON.stringify(b.ch().passages));
+  novel.order = [chapter.id];
+  novel.notes = JSON.parse(JSON.stringify(b.novel().notes));
+  novel.memory = { ...(novel.memory || {}), seen: { [chapter.id]: { ...(((b.novel().memory || {}).seen || {})[b.ids[0]] || {}) } } };
+  await store.create('chapter', chapter.id, chapter);
+  await store.create('novel', novel.id, novel);
+  return { novelId: novel.id, ids: [chapter.id], ch: () => store.peek('chapter', chapter.id), novel: () => store.peek('novel', novel.id) };
+};
+
+await test('a page read for its turns or its facts alone keeps its tries on its version — on the phone through a reload, never counted from another book with the same versions — and one whose ask always stalls is passed by after two tries, What it’s about and the notes’ check read all the same; turns never carried to words they are not of', async () => {
+  globalThis.__cozyLeashQuietMs = 300;
+  try {
+    for (const what of ['turns', 'bib']) {
+      await setHouse({ context: 64000 });
+      const b = await makeBook([[EMILIA]]);
+      peopleIn(b);
+      markAllSeen(b, what === 'turns' ? { turns: false } : { facts: false });
+      if (what === 'bib') store.change('novel', b.novelId, (n) => { n.prefs = { ...(n.prefs || {}), bibAuto: true }; }, { now: true });
+      store.change('novel', b.novelId, shape.novelSteps.setMemory({ auditAsked: true }), { now: true });
+      const runs = [];
+      for (let run = 0; run < 3; run++) {
+        /* (what the leash learned let go: the silence outlasts it every time) */
+        await setHouse({ context: 64000 });
+        await reset();
+        await script([{ [what]: true, pause: 3, text: '{}' }]);
+        archivist.forTests().failures.delete(b.novelId);
+        await archivist.run(b.novelId);
+        await quietAll();
+        const r = await everyRequest();
+        runs.push([r.filter(what === 'turns' ? isTurnsAsk : isBibAsk).length, r.filter(isAuditAsk).length]);
+      }
+      assert.deepEqual(runs.map((x) => x[0]), [1, 1, 0], `${what}: stalled twice, counted, then passed by`);
+      assert.ok(runs[0][1] >= 1, `${what}: the notes’ check read in the very run it stalled`);
+      assert.deepEqual(what === 'turns' ? [archivist.timelineDue(b.novelId).length, coverOf(b).passed] : [archivist.bibDue(b.novelId).length, 1], [0, 1]);
+      await putAway(b);
+    }
+  } finally {
+    delete globalThis.__cozyLeashQuietMs;
+  }
+  /* its tries kept on the version, on the phone — a reload keeps them; a twin book with the same versions counts its own */
+  await setHouse();
+  const a = await makeBook([[EMILIA]], { manual: true });
+  peopleIn(a);
+  markAllSeen(a, { turns: false });
+  const twin = await twinOf(a);
+  await reset();
+  await script([{ turns: true, status: 403, message: 'content flagged by moderation' }]);
+  await archivist.run(a.novelId);
+  await quietAll();
+  await reset();
+  await script([{ turns: true, status: 403, message: 'content flagged by moderation' }]);
+  await archivist.run(twin.novelId);
+  await quietAll();
+  await reset();
+  await archivist.run(twin.novelId);
+  assert.equal((await everyRequest()).filter(isTurnsAsk).length, 1, 'its own second try — never passed by for the other book’s');
+  assert.deepEqual([coverOf(twin).read, coverOf(twin).passed], [1, 0]);
+  await store.flush();
+  assert.equal(((picked((await onPhone('chapter', a.ids[0])).passages[0]).tries || {}).turns || {}).n, 1, 'its try kept on the phone: a reload keeps it');
+  /* the turns of the words a Go on grew from are never carried to new words as theirs: a fix, a name changed everywhere */
+  for (const how of ['fix', 'rename']) {
+    const g = await emiliaBook({ cut: true, cutWhy: 'it reached the reply length' });
+    const gp = g.ch().passages[0].id;
+    await reset();
+    await script([{ text: 'Then Jovan swore to hunt her down.' }]);
+    await writer.goOn({ novelId: g.novelId, chapterId: g.ids[0], passageId: gp });
+    await quietAll();
+    if (how === 'fix') inplace.changeInPlace({ novelId: g.novelId, chapterId: g.ids[0], passageId: gp, next: picked(g.ch().passages[0]).text.replace('swore', 'vowed'), by: 'checker' });
+    else assert.equal(changes.makeChange(g.novelId, { rename: { from: 'Jovan', to: 'Jory' } }).status, 'made');
+    assert.equal(tlmod.continuityDone(picked(g.ch().passages[0])), false, `${how}: never said read whole — the words added are not read yet`);
+    await putAway(g);
+  }
+  await putAway(a);
+  await putAway(twin);
+});
+
 heading('the audit of 2.12.36–2.12.39 (2.12.40)');
 const notesAsk = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Update the notes'));
 
