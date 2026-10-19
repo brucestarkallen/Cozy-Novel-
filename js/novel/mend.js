@@ -19,7 +19,7 @@
  * cut short keeps its unfinished end as it is (Go on finishes it). */
 
 import * as store from '../store.js';
-import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked, writtenOf, noHand, wordsMatched, BEFORE_KEEP } from './shape.js';
+import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked, noHand, noneLetGo, wordsMatched, whoseFits, whoseNow } from './shape.js';
 import { foldVersion, bookNameWords } from './inplace.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, dropMarkup, partBlock, mendSpacing, unglueSounds } from './textshape.js';
 import { shapeTelling } from './talk.js';
@@ -27,9 +27,9 @@ import { resign } from './archivist.js';
 import { locate } from './changes.js';
 import { liftOfFaults, wholeSig } from './checker.js';
 import { hashText, countWords } from '../util.js';
-import { carriedCodex } from './bibliography.js';
+import { carriedCodex, entriesOf, entriesForNotes } from './bibliography.js';
 import { carriedContinuity } from './timeline.js';
-import { nameWordsIn, renameIn } from './names.js';
+import { nameWordsIn, renameIn, nameWordKey } from './names.js';
 
 /* 2: a plan or a draft above the page, and its check of its own work after it, come off too; a lift echoed from an old example is said again
  * 3: a web page's or code's markup left in a page (“…paid for.</code>”, his report 2.12.2) comes off; and a fix made as a
@@ -244,18 +244,24 @@ export function foldOld(novelId, chapterIds) {
  * for his cards to be held against (shape.js hisChange), out of the writer's row in the judge's grades, "my partner
  * changed its words for me" beside his premise, and someone else's words on a page of his own. When the book opens, once
  * (`memory.renamesMarked`), each such change is marked `rename`, as a name changed everywhere is marked since:
- *  - exactly, while his partner's conversation keeps the change — its words before and after for this very passage (a
- *    name the words alone cannot tell is a name, "Sir" becoming "Galahad", is told so);
- *  - else by the words: the words after are the words before with whole names swapped, the same way everywhere, and
- *    nothing else (renameSwaps — a colour changed is no name; a name his partner swapped on one page alone is no one's
- *    hand either — so whether his partner's conversation is still kept never changes what such a swap is).
+ *  - exactly, while his partner's conversation keeps the change — its words before and after for this very passage: a
+ *    name changed everywhere (op.rename) is marked, even one the words alone cannot tell is a name ("Sir" becoming
+ *    "Galahad"); any other change of his partner's kept there is his partner's, as it was (2.12.41, the review of
+ *    2.12.41: only a name changed everywhere is no one's hand — "Tom held the door" made "Jovan held the door" is who
+ *    did it, not a name);
+ *  - else by the words, only where they leave the book as a name changed everywhere leaves it: the words after are the
+ *    words before with whole names swapped, the same way everywhere, and nothing else (renameSwaps — a colour inside a
+ *    sentence is no name), every name it took out standing nowhere in the book now — on no page (two names traded
+ *    still stand on the page itself), no card, no entry of his — and every name it put in one the cards or his entries
+ *    go by now, as they were changed with it (the review of 2.12.41: a name swapped on one page alone, who did a deed,
+ *    two parts traded, or "Green light" made "Grey light", was marked). Otherwise it is his partner's change, as it was.
  * Then a hand no change left on the page accounts for comes off `hands` — his partner's once its renames are marked,
  * and his own where only the writer's words put back (Put back what was taken off: before 2.12.41 it added his hand) or
- * a change of his put back is left — only where none of it can have been let go: fewer than BEFORE_KEEP changes kept,
- * the first words still first, nothing of it in `gone`. */
+ * a change of his put back is left — only where none of it can have been let go (shape.js noneLetGo). Who put in each
+ * word on a page it marks is worked out again (`whose`: what was kept was worked out with the rename his partner's). */
 export const RENAMES_V = 1;
 const CASED_WORD = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
-const keyOfWord = (w) => String(w || '').replace(/['’]s$/i, '').replace(/['’-]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const keyOfWord = nameWordKey;
 /* the whole names swapped from some words to others, and nothing else changed — [{from, to}] as written, or null */
 export function renameSwaps(before, after, known = null) {
   const a = [...String(before || '').matchAll(CASED_WORD)].map((m) => m[0]);
@@ -282,41 +288,73 @@ export function renameSwaps(before, after, known = null) {
   const list = [...pairs].map(([from, to]) => ({ from, to }));
   return renameIn(before, list) === String(after || '') ? list : null;
 }
-/* the partner's kept changes that changed a name everywhere: "pid:vid" → [{before, after}] for each passage */
-function keptRenames(talk) {
+/* his partner's kept changes made on the pages themselves, by passage: "pid:vid" → [{before, after, rename}] — a name
+ * changed everywhere (`rename`: its op.rename), or any other of his partner's (words changed across the chapters, or on
+ * one page) */
+function keptChanges(talk) {
   const out = new Map();
+  const add = (pid, vid, before, after, rename) => {
+    const k = `${pid}:${vid}`;
+    if (!out.has(k)) out.set(k, []);
+    out.get(k).push({ before: String(before || ''), after: String(after || ''), rename });
+  };
   const turns = [...((talk && talk.turns) || []), ...((talk && talk.convs) || []).flatMap((c) => (c && c.turns) || [])];
   for (const t of turns) {
     for (const v of (t && t.versions) || []) {
       for (const c of (v && v.changes) || []) {
-        if (!c || c.status !== 'made' || !c.op || !c.op.rename || !c.undo || !Array.isArray(c.undo.passages)) continue;
-        for (const row of c.undo.passages) {
-          if (!row || !row.inPlace) continue;
-          const k = `${row.passageId}:${row.versionId}`;
-          if (!out.has(k)) out.set(k, []);
-          out.get(k).push({ before: String(row.before || ''), after: String(row.after || '') });
-        }
+        if (!c || c.status !== 'made' || !c.undo) continue;
+        const rename = Boolean(c.op && c.op.rename);
+        if (Array.isArray(c.undo.passages)) for (const row of c.undo.passages) if (row && row.inPlace) add(row.passageId, row.versionId, row.before, row.after, rename);
+        if (c.undo.what === 'words' && c.undo.passageId) add(c.undo.passageId, c.undo.versionId, c.undo.before, c.undo.after, false);
       }
     }
   }
   return out;
 }
+/* the book as it is now, by the keys of its words in any letters: every word of it (every page as it reads, every card's
+ * and entry's names — `words`), and the names its cards and his entries go by (`names`) — a name changed everywhere
+ * stands nowhere among the words, and the name it became is one of the names, the cards and entries changed with it.
+ * (An entry set to Never is a word of his, never a name the book goes by: bibliography.js entriesForNotes — 2.12.41,
+ * the review of 2.12.41.) */
+function bookNow(novel, chapters) {
+  const words = new Set();
+  const names = new Set();
+  const add = (set, t) => { for (const m of String(t || '').matchAll(CASED_WORD)) { const k = keyOfWord(m[0]); if (k) set.add(k); } };
+  for (const c of chapters) for (const p of c.passages || []) if (p.by !== 'break') add(words, (picked(p) || {}).text);
+  for (const list of Object.values((novel && novel.notes) || {})) for (const card of Array.isArray(list) ? list : []) if (card) for (const n of [card.name, ...(card.aka || [])]) { add(words, n); add(names, n); }
+  for (const e of entriesOf(novel)) for (const n of [e.name, ...(e.aka || [])]) add(words, n);
+  for (const e of entriesForNotes(novel)) for (const n of [e.name, ...(e.aka || [])]) add(names, n);
+  return { words, names };
+}
+/* by the words alone: names swapped and nothing else (renameSwaps), each name taken out standing nowhere in the book now
+ * (two names traded both still stand on the page itself) and each it became a name of its cards or his entries */
+function renamedByWords(before, after, known, now) {
+  const swaps = renameSwaps(before, after, known);
+  if (!swaps) return false;
+  const keys = (t) => [...String(t || '').matchAll(CASED_WORD)].map((m) => keyOfWord(m[0])).filter(Boolean);
+  const tos = swaps.flatMap((s) => keys(s.to));
+  if (!tos.length || tos.some((k) => !now.names.has(k))) return false;
+  return !swaps.flatMap((s) => keys(s.from)).some((k) => now.words.has(k));
+}
 /* a version's hands without his or his partner's where no change left on it accounts for it, and none of it can have
- * been let go */
+ * been let go (shape.js noneLetGo) */
 function handsLeft(v) {
   const before = Array.isArray(v && v.before) ? v.before : [];
   const hands = handsOf(v);
-  if (!before.length || before.length >= BEFORE_KEEP || String(before[0].text || '') !== writtenOf(v)) return hands;
-  return hands.filter((h) => !['you', 'partner'].includes(h) || before.some((b) => b && b.by === h && !noHand(b)) || Boolean(v.gone && v.gone[h]));
+  return hands.filter((h) => !['you', 'partner'].includes(h) || before.some((b) => b && b.by === h && !noHand(b)) || !noneLetGo(v, h));
 }
 const markStep = (pid, vid, marks) => (c) => {
   const p = (c.passages || []).find((x) => x.id === pid);
   const v = p && (p.versions || []).find((x) => x.id === vid);
   if (!v || !Array.isArray(v.before)) return false;
+  let any = false;
   for (const { i, text } of marks) {
     const b = v.before[i];
-    if (b && b.by === 'partner' && !Array.isArray(b.took) && !b.rename && String(b.text || '') === text) b.rename = true;
+    if (b && b.by === 'partner' && !Array.isArray(b.took) && !b.rename && String(b.text || '') === text) { b.rename = true; any = true; }
   }
+  /* (who put in each word, kept or worked out with the rename his partner's, worked out again — 2.12.41, the review of
+   * 2.12.41: a fix folded onto the page when the book opened kept it so for good) */
+  if (any) { delete v.whose; for (const b of v.before) if (b) delete b.whose; }
   const left = handsLeft(v);
   if (left.length !== handsOf(v).length) v.hands = left;
   return true;
@@ -329,8 +367,9 @@ export async function markRenames(novelId) {
   const talk = store.peek('talk', novelId) ?? (await store.open('talk', novelId).catch(() => undefined));
   /* (his partner's conversation not to be had just now: tried again the next time the book opens) */
   if (talk === undefined) return 0;
-  const kept = keptRenames(talk);
+  const kept = keptChanges(talk);
   const known = bookNameWords(novel);
+  let now = null;
   let marked = 0;
   for (const c of chapters) {
     for (const p of c.passages || []) {
@@ -344,7 +383,9 @@ export async function markRenames(novelId) {
           if (!b || b.by !== 'partner' || Array.isArray(b.took) || b.rename) return;
           const after = String(i + 1 < before.length ? before[i + 1].text || '' : v.text || '');
           const text = String(b.text || '');
-          if (rows.some((r) => r.before === text && r.after === after) || renameSwaps(text, after, known)) marks.push({ i, text });
+          /* (his partner's conversation's own record of this change decides; with none kept, the words) */
+          const told = rows.filter((r) => r.before === text && r.after === after);
+          if (told.length ? told.some((r) => r.rename) : renamedByWords(text, after, known, now || (now = bookNow(novel, chapters)))) marks.push({ i, text });
         });
         if (!marks.length && handsLeft(v).length === handsOf(v).length) continue;
         store.change('chapter', c.id, markStep(p.id, v.id, marks), { checkpoint: true });
@@ -354,4 +395,50 @@ export async function markRenames(novelId) {
   }
   store.change('novel', novelId, novelSteps.setMemory({ renamesMarked: RENAMES_V }), { checkpoint: true });
   return marked;
+}
+
+/* WHO PUT IN EACH WORD, KEPT ONCE ON A VERSION KEPT BEFORE 2.12.41 (2.12.41, the review of 2.12.41: worked out from the
+ * words before kept on it each time the book opened — a book of old pages took seconds of the page's time at the first
+ * check of every session). When the book opens, once (`memory.whoseKept`), after its old names changed everywhere are
+ * marked (markRenames): each version with changes kept on it and no `whose` that fits its words has it worked out
+ * (shape.js whoseNow) and kept, a chapter at a time, the page given its turn between them — only where its words still
+ * read as they were worked out from. */
+export const WHOSE_V = 1;
+const whoseStep = (rows) => (c) => {
+  let any = false;
+  for (const r of rows) {
+    const p = (c.passages || []).find((x) => x.id === r.pid);
+    const v = p && (p.versions || []).find((x) => x.id === r.vid);
+    if (!v || v.streaming || whoseFits(v) || hashText(String(v.text || '')) !== r.whose.fp) continue;
+    v.whose = r.whose;
+    any = true;
+  }
+  return any;
+};
+const whoseBusy = new Set();
+export async function keepWhose(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel || whoseBusy.has(novelId) || ((novel.memory || {}).whoseKept || 0) >= WHOSE_V || ((novel.memory || {}).renamesMarked || 0) < RENAMES_V) return 0;
+  const ids = novel.order || [];
+  if (ids.some((id) => !store.peek('chapter', id))) return 0;
+  whoseBusy.add(novelId);
+  let kept = 0;
+  try {
+    for (const id of ids) {
+      const c = store.peek('chapter', id);
+      if (!c) return kept;
+      const rows = [];
+      for (const p of c.passages || []) {
+        if (p.by === 'break') continue;
+        for (const v of p.versions || []) {
+          if (!v || v.streaming || whoseFits(v) || !((Array.isArray(v.before) && v.before.length) || v.how === 'edit' || v.how === 'selection')) continue;
+          rows.push({ pid: p.id, vid: v.id, whose: whoseNow(v, p) });
+        }
+      }
+      if (rows.length) { store.change('chapter', id, whoseStep(rows), { checkpoint: true }); kept += rows.length; }
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    if (store.peek('novel', novelId)) store.change('novel', novelId, novelSteps.setMemory({ whoseKept: WHOSE_V }), { checkpoint: true });
+  } finally { whoseBusy.delete(novelId); }
+  return kept;
 }

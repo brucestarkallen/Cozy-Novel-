@@ -558,7 +558,12 @@ const OPENERS = new Set([...TOKEN_STOP, 'A', 'An', 'He', 'It', 'We', 'Me', 'Us',
   'Whose', 'Whom', 'Very', 'Too', 'Much', 'More', 'Most', 'Less', 'Few', 'Many', 'Both', 'Either', 'Neither', 'Other', 'Another', 'Such',
   'Same', 'Own', 'Yours', 'Mine', 'Ours', 'Theirs', 'Himself', 'Herself', 'Itself', 'Myself', 'Themselves', 'Ourselves', 'Yourself'].map((w) => w.toLowerCase()));
 const ANY_WORD = /(?<![\p{L}\p{M}\p{N}'’-])\p{L}[\p{L}\p{M}'’-]*/gu;
-const wordKey = (w) => String(w || '').replace(/['’]s$/i, '').replace(/['’-]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+/* a word's key: a possessive or a contraction off its name ("Mara's", "Mara'll", "Mara'd" are Mara — 2.12.41, the review
+ * of 2.12.41: "Mara'll" was another word, and Mara was taken out of a page that still had her), accents off, small
+ * letters. A contraction of "not" stays whole ("Don't" is no "Don"). */
+const wordKey = (w) => String(w || '').replace(/['’](?:s|ll|d|re|ve|m)$/i, '').replace(/['’-]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+export const nameWordKey = wordKey;
+const NOT_CONTRACTED = /['’]t$/i;
 /* a text's words by their keys: those it writes with a capital (the first form of each) — and those of them it writes so
  * inside a sentence (`mid`) — and those it writes in small letters */
 const SENTENCE_START = /[.!?…"“”‘’'(\[—–*_\n]/;
@@ -579,31 +584,72 @@ function wordsScanned(text) {
   }
   return { small, caps, mid };
 }
-/* (known: the book's own names by their words — names.js nameWordsOf, a Map of each word to 'person' or 'thing' — 2.12.41,
- * the review of 2.12.41: a name the page also writes as a word, "Will" beside "he will stay", "Rose" beside "a rose", was
- * never a name, and his edit taking Will out of the page took nothing out. A word of a person's name, written with a
- * capital, is a name; a word of a place's, a thing's or lore's name — "Magic", "Order" — only where the page writes it
- * so inside a sentence, never for a sentence it opens.) */
-function namesScanned(s, known) {
+/* WHICH WORDS A TEXT WRITES AS NAMES (2.12.41, the review of 2.12.41). known: the book's own names by their words —
+ * names.js nameWordsOf, a Map of each word to 'person' or 'thing'; local: the names the passage's own premise gives
+ * (premiseLocal), each a person's for the page it was typed for.
+ *  - A word written with a capital inside a sentence is a name: one of the book's, or one the text never writes small
+ *    and that is no little word ("the Order" inside a sentence is the Order).
+ *  - A word only opening a sentence: never a word of a place's, a thing's or lore's name ("Order was the word", "Magic
+ *    flared" — the review of 2.12.41: they counted, against what this said); a person's name — the book's or the
+ *    premise's — where the text never writes it small, and where it does ("Will stood at the gate … he will stay") only
+ *    for the page whose own premise gives it (the review of 2.12.41: with no card yet for Will, his edit right after
+ *    the page was written took nothing out of it; with a card for Will, "Will you stay?" taken out of a page that says
+ *    "he will go" took Will out); any other word only where the text never writes it small and it is no little word
+ *    ("Tom came home.", the book's first page of him). */
+function namesScanned(s, known, local = null) {
   const out = new Set();
   for (const [k, w] of s.caps) {
-    if (k.length < 2 || /^I['’]/.test(w) || CONTRACTION.test(w)) continue;
-    const kind = known ? (known instanceof Map ? known.get(k) : known.has(k) ? 'person' : '') : '';
-    if (kind === 'person' || (kind === 'thing' && s.mid.has(k)) || (!s.small.has(k) && !OPENERS.has(k))) out.add(k);
+    if (k.length < 2 || /^I['’]/.test(w) || NOT_CONTRACTED.test(w)) continue;
+    let kind = known ? (known instanceof Map ? known.get(k) || '' : known.has(k) ? 'person' : '') : '';
+    const given = Boolean(local && local.has(k));
+    if (!kind && given) kind = 'person';
+    if (s.mid.has(k)) {
+      if (kind || (!s.small.has(k) && !OPENERS.has(k))) out.add(k);
+      continue;
+    }
+    if (kind === 'thing') continue;
+    if (kind === 'person') { if (!s.small.has(k) || given) out.add(k); continue; }
+    if (!s.small.has(k) && !OPENERS.has(k)) out.add(k);
   }
   return out;
 }
-export function nameWordsIn(text, { known = null } = {}) {
-  return namesScanned(wordsScanned(text), known);
+export function nameWordsIn(text, { known = null, local = null } = {}) {
+  return namesScanned(wordsScanned(text), known, local);
+}
+/* THE NAMES A PREMISE GIVES (2.12.41, the review of 2.12.41 — every word of a premise in any letters was "given", so a
+ * premise saying "he will go" or "as the sun rose" stopped being the book when Will or Rose the person was taken out of
+ * its page): the words it writes as names (namesScanned, with the book's names), a hyphened name's parts with it; a
+ * premise typed all in small letters (no capital letter in it) gives every word of it. Keys, a Set. */
+const withParts = (set) => { for (const k of [...set]) if (k.includes('-')) for (const part of k.split('-')) if (part) set.add(part); return set; };
+export function premiseNames(text, { known = null } = {}) {
+  const t = String(text || '');
+  if (/\p{Lu}/u.test(t)) return withParts(namesScanned(wordsScanned(t), known));
+  const out = new Set();
+  for (const m of t.matchAll(ANY_WORD)) { const k = wordKey(m[0]); if (k) out.add(k); }
+  return withParts(out);
+}
+/* the names a passage's own premise gives its page (namesScanned `local`): as the premise gives them (premiseNames) —
+ * of a premise typed all in small letters, only its words the book holds for a person's name — or null */
+export function premiseLocal(text, known = null) {
+  const t = String(text || '');
+  if (!t.trim()) return null;
+  if (/\p{Lu}/u.test(t)) { const out = premiseNames(t, { known }); return out.size ? out : null; }
+  const out = new Set();
+  for (const m of t.matchAll(ANY_WORD)) {
+    const k = wordKey(m[0]);
+    if (k && known && (known instanceof Map ? known.get(k) === 'person' : known.has(k))) out.add(k);
+  }
+  return out.size ? out : null;
 }
 /* THE NAMES A CHANGE TOOK OUT OF A PAGE (2.12.41): the names (nameWordsIn) the words before give that the words after do
  * not — sorted. A name stands in the words after in any letters ("TOM!", "tom"), but a name the words before also write
  * as a word ("Will" and "he will") only as a name, with a capital; a name joined with a hyphen stands while its parts do
  * ("Mary-Jane" written "Mary Jane", and the other way about: 2.12.41, the review of 2.12.41 — the hyphen alone taken out
- * took the name out). known: the book's names at the moment of the change (nameWordsOf), kept with it as it is made. */
-export function nameWordsGone(before, after, { known = null } = {}) {
+ * took the name out). known: the book's names at the moment of the change (nameWordsOf), and local: the names the page's
+ * own premise gives (premiseLocal) — kept with it as it is made. */
+export function nameWordsGone(before, after, { known = null, local = null } = {}) {
   const b = wordsScanned(before);
-  const was = namesScanned(b, known);
+  const was = namesScanned(b, known, local);
   if (!was.size) return [];
   const a = wordsScanned(after);
   const any = new Set([...a.caps.keys(), ...a.small]);
@@ -721,6 +767,18 @@ function renameSteps(pairs) {
     if (undone >= 0) out.splice(undone, 1); else out.push(g);
   }
   return out.map((g) => g.pairs);
+}
+/* and the name as he types it in small letters, in his own words — his premise, his notes, his entries, About this
+ * book — changed to the new one in small letters ("tom, mara's brother" becomes "thomas, mara's brother": 2.12.41, the
+ * review of 2.12.41 — his premise in small letters still named Tom). Only for a name the book never writes in small
+ * letters as a word of its own (changes.js renameOf refuses a rename of one its pages do; renameEverywhere keeps this
+ * rule off for one that his words or the cards with capitals in them do). null for a name already in small letters. */
+export function smallRenameRule(from, to) {
+  const f = String(from || '').toLowerCase();
+  const t = String(to || '').toLowerCase();
+  if (!f || f === String(from || '') || f === t) return null;
+  const re = (w) => new RegExp(`${EDGE_BEFORE}${escRe(w)}${EDGE_AFTER}`, 'gu');
+  return { re: re(f), skip: (x) => [...String(x || '').matchAll(re(t))].map((m) => [m.index, m.index + m[0].length]), to: () => t };
 }
 /* names changed in a text: pairs [{from, to}] — made together, or one change after another (renameSteps) */
 export function renameIn(text, pairs) {

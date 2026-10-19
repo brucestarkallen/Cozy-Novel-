@@ -15,7 +15,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey } from './shape.js';
+import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey, wordsElsewhere } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords, linesOf, sameLines } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
@@ -23,7 +23,7 @@ import { superOn } from './auto.js';
 import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, hasMarkup as hasMarkupText } from './textshape.js';
-import { replaceMany, renameRule } from './names.js';
+import { replaceMany, renameRule, smallRenameRule } from './names.js';
 import { entriesOf, entryFor, nameTaken, newEntry, tidyEntry, kindSaid, kindOf, KIND_ONE, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
 import { changeInPlace, putBackWords } from './inplace.js';
@@ -543,6 +543,19 @@ const askStep = (pid, vid, field, from, to) => (c) => {
   v.ask = { ...v.ask, [field]: to };
   return true;
 };
+/* (a name changed everywhere in what he asked of a version — his premise, his note: the names changed in it as it stands
+ * when the step is laid, so laid again over a newer copy his newer premise reads as the book names its people too —
+ * 2.12.41, the review of 2.12.41) */
+const askRenamedStep = (pid, vid, field, swapWords) => (c) => {
+  const p = (c.passages || []).find((x) => x.id === pid);
+  const v = p && (p.versions || []).find((x) => x.id === vid);
+  const cur = v && v.ask ? v.ask[field] : undefined;
+  if (typeof cur !== 'string' || !cur.trim()) return false;
+  const next = swapWords(cur);
+  if (next === cur) return false;
+  v.ask = { ...v.ask, [field]: next };
+  return true;
+};
 /* what a version's words fixed in place keep of it: what was asked, and
  * whether it was cut short or stopped (its Go on stays) */
 export function carried(v) {
@@ -609,17 +622,49 @@ export function groupsOf(ops) {
   return out;
 }
 
+/* the book's words but its pages, as typed: his own (each chapter's plan, what he asked of each version — his premise,
+ * his notes — his entries, his words for the book) and the cards' */
+function wordsTyped(novel) {
+  const out = [];
+  for (const id of novel.order || []) {
+    const c = store.peek('chapter', id);
+    if (!c) continue;
+    out.push(c.plan);
+    for (const p of c.passages || []) for (const v of p.versions || []) if (v && v.ask && typeof v.ask === 'object') for (const f of ['direction', 'premise', 'note']) out.push(v.ask[f]);
+  }
+  for (const e of entriesOf(novel)) out.push(e.name, ...(e.aka || []), e.line, e.text);
+  for (const k of ['brief', 'style', 'plans', 'ending']) out.push(novel[k]);
+  for (const k of ['title', 'subtitle']) out.push((novel.meta || {})[k]);
+  for (const kind of NOTE_KINDS) for (const card of (novel.notes && novel.notes[kind]) || []) if (card) out.push(card.name, ...(card.aka || []), card.about, card.ties, card.now, card.since, card.title, card.text);
+  return out.filter((t) => typeof t === 'string' && t.trim());
+}
 /* names changed everywhere: every passage on the page, chapter names, the
  * notes, the book's own words, what the helper keeps of it, and the scenes
  * (who he plays, where it starts, every telling and move — Cozy Tavern's
  * M607-8) — each text once, every rule over it as it stood */
-function renameEverywhere(novelId, novel, rules, put, why) {
+function renameEverywhere(novelId, novel, rules, put, why, pairs = []) {
   const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [], plays: [], seen: [], aside: [], summaries: [], entries: [], asks: [], plans: [], rows: [] };
   const entriesSeen = archivist.entriesPrint(novel);
   const counts = rules.map(() => 0);
   const swap = (t) => { const r = replaceMany(t, rules); r.counts.forEach((c, k) => { counts[k] += c; }); return r.text; };
   /* the same rules over what was read, checked and summed up — never counted as places changed */
   const quiet = (t) => replaceMany(t, rules).text;
+  /* HIS OWN WORDS, AS HE TYPES THEM: the name in small letters too (names.js smallRenameRule — 2.12.41, the review of
+   * 2.12.41: his premise "tom, mara's brother" stayed the book beside a page that says Thomas) — only for a name whose
+   * small letters no words of the book with capitals in them write as a word of their own (his words, the cards; a page
+   * that does refuses the rename itself, renameOf): "Rose waits on the quay as the sun rose" keeps its "rose", and so
+   * does every word of his in small letters, the name the same as a word there */
+  const capitalled = wordsTyped(novel).filter((t) => /\p{Lu}/u.test(t));
+  const smallRules = (pairs || []).map((p) => {
+    const r = p ? smallRenameRule(p.from, p.to) : null;
+    if (!r) return null;
+    const word = new RegExp(r.re.source, 'u');
+    return capitalled.some((t) => word.test(t)) ? null : r;
+  });
+  const hisRules = [...rules, ...smallRules.filter(Boolean)];
+  const hisIndex = [...rules.map((_, k) => k), ...smallRules.map((r, k) => (r ? k : -1)).filter((k) => k >= 0)];
+  const swapHis = (t) => { const r = replaceMany(t, hisRules); r.counts.forEach((c, i) => { counts[hisIndex[i]] += c; }); return r.text; };
+  const quietHis = (t) => replaceMany(t, hisRules).text;
   const printsBefore = new Map((novel.order || []).map((id) => [id, chapterPrint(store.peek('chapter', id) || { passages: [] })]));
   const restamp = [];
   /* (the pages the name never stood in: what was kept of them follows it all the same — keptFollows) */
@@ -640,13 +685,17 @@ function renameEverywhere(novelId, novel, rules, put, why) {
    * the checker's findings and the chapter's summary go with it, so nothing
    * is read, checked or summed up again, and paid for, because a name changed */
   restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore);
+  /* (EACH STEP CHANGES THE NAME IN WHAT IT IS LAID ON, AS IT STANDS — laid again over a newer copy, a save turned away
+   * and made over another window's, it changes the names in the newer words and writes nothing else over them: 2.12.41,
+   * the review of 2.12.41 — his entry, a chapter's plan, the book's own words and the cards were written whole as this
+   * window had them) */
   for (const id of novel.order || []) {
     const c = store.peek('chapter', id);
     if (!c || !c.name) continue;
     const next = swap(c.name);
     if (next === c.name) continue;
     undo.chapters.push({ chapterId: id, before: { name: c.name, nameBy: c.nameBy || '' }, after: next });
-    put('chapter', id, chapterSteps.setName(next, c.nameBy || 'you'), { now: true });
+    put('chapter', id, (ch) => { const nx = ch.name ? quiet(ch.name) : ''; if (!nx || nx === ch.name) return false; chapterSteps.setName(nx, ch.nameBy || 'you')(ch); return true; }, { now: true });
   }
   /* HIS OWN WORDS ON THE BOOK FOLLOW THE NAME (2.12.41, the review of 2.12.41 — a name changed everywhere is his word
    * for everywhere: after Tom became Thomas, his premise "Tom, Mara's brother…" still stood as the book, and the notes'
@@ -659,8 +708,11 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     const c = store.peek('chapter', id);
     if (!c) continue;
     if (typeof c.plan === 'string' && c.plan.trim()) {
-      const next = swap(c.plan);
-      if (next !== c.plan) { undo.plans.push({ chapterId: id, before: c.plan, after: next.replace(/\s+$/, '') }); put('chapter', id, chapterSteps.setPlan(next), { now: true }); }
+      const next = swapHis(c.plan);
+      if (next !== c.plan) {
+        undo.plans.push({ chapterId: id, before: c.plan, after: next.replace(/\s+$/, '') });
+        put('chapter', id, (ch) => { if (typeof ch.plan !== 'string' || !ch.plan.trim()) return false; const nx = quietHis(ch.plan); if (nx === ch.plan) return false; chapterSteps.setPlan(nx)(ch); return true; }, { now: true });
+      }
     }
     for (const p of c.passages || []) {
       if (p.by === 'break') continue;
@@ -669,42 +721,44 @@ function renameEverywhere(novelId, novel, rules, put, why) {
         for (const field of ['direction', 'premise', 'note']) {
           const was = v.ask[field];
           if (typeof was !== 'string' || !was.trim()) continue;
-          const next = swap(was);
+          const next = swapHis(was);
           if (next === was) continue;
           undo.asks.push({ chapterId: id, passageId: p.id, versionId: v.id, field, before: was, after: next });
-          put('chapter', id, askStep(p.id, v.id, field, was, next), { now: true });
+          put('chapter', id, askRenamedStep(p.id, v.id, field, quietHis), { now: true });
         }
       }
     }
   }
+  /* his entries — each renamed as it stands when the step is laid (renameEntryStep) */
   for (const e of entriesOf(novel)) {
     const before = clone(e);
-    const next = tidyEntry({ ...clone(e), name: swap(e.name), aka: (e.aka || []).map((a) => swap(a)), line: swap(e.line || ''), text: swap(e.text || '') });
-    if (JSON.stringify(next) === JSON.stringify(tidyEntry(clone(e)))) continue;
-    /* (when each sentence was written, carried to its words with the name changed; when it was saved stays) */
-    const stamps = stampsOf(e);
-    next.saidAt = Object.fromEntries(entrySentences(e).map((s) => [sentenceKey(quiet(s)), stamps.get(sentenceKey(s)) || 0]).filter(([, t]) => t));
-    next.at = e.at;
-    const after = withStamps(e, next);
-    undo.entries.push({ id: e.id, before, after: clone(after) });
-    put('novel', novelId, novelSteps.putEntry(after), { now: true });
+    for (const t of [e.name, ...(e.aka || []), e.line || '', e.text || '']) swapHis(t);
+    const after = renamedEntry(e, quietHis);
+    if (!after) continue;
+    put('novel', novelId, renameEntryStep(e.id, quietHis), { now: true });
+    const kept = put.dry ? after : entriesOf(store.peek('novel', novelId)).find((x) => x && x.id === e.id) || after;
+    undo.entries.push({ id: e.id, before, after: clone(kept) });
   }
+  const renamedCard = (card, swapWords) => {
+    const next = clone(card);
+    for (const k of ['name', 'about', 'ties', 'now', 'since']) if (typeof next[k] === 'string') next[k] = swapWords(next[k]);
+    if (Array.isArray(next.aka)) next.aka = next.aka.map((a) => swapWords(a));
+    return JSON.stringify(next) === JSON.stringify(card) ? null : next;
+  };
   for (const kind of NOTE_KINDS) {
     for (const card of (novel.notes && novel.notes[kind]) || []) {
-      const next = clone(card);
-      for (const k of ['name', 'about', 'ties', 'now', 'since']) if (typeof next[k] === 'string') next[k] = swap(next[k]);
-      if (Array.isArray(next.aka)) next.aka = next.aka.map((a) => swap(a));
-      if (JSON.stringify(next) === JSON.stringify(card)) continue;
+      const next = renamedCard(card, swap);
+      if (!next) continue;
       undo.cards.push({ kind, id: card.id, before: clone(card), after: clone(next) });
-      put('novel', novelId, novelSteps.putNote(kind, next), { now: true });
+      put('novel', novelId, (n) => { const cur = (((n.notes || {})[kind]) || []).find((c) => c && c.id === card.id); const nx = cur ? renamedCard(cur, quiet) : null; if (!nx) return false; novelSteps.putNote(kind, nx)(n); return true; }, { now: true });
     }
   }
   for (const [field, meta] of [['brief', false], ['style', false], ['plans', false], ['ending', false], ['title', true], ['subtitle', true]]) {
     const old = String((meta ? novel.meta[field] : novel[field]) || '');
-    const next = swap(old);
+    const next = swapHis(old);
     if (next === old) continue;
     undo.book.push({ field, meta, before: old, after: next });
-    put('novel', novelId, meta ? novelSteps.setMeta({ [field]: next }) : novelSteps.setField(field, next), { now: true });
+    put('novel', novelId, (n) => { const cur = String((meta ? (n.meta || {})[field] : n[field]) || ''); const nx = quietHis(cur); if (nx === cur) return false; (meta ? novelSteps.setMeta({ [field]: nx }) : novelSteps.setField(field, nx))(n); return true; }, { now: true });
   }
   for (const key of ['about', 'style']) {
     const k = novel.kept && novel.kept[key];
@@ -713,7 +767,7 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     if (next === k.text) continue;
     const after = { ...k, text: next };
     undo.kept.push({ key, before: clone(k), after: clone(after) });
-    put('novel', novelId, novelSteps.setKept(key, after), { now: true });
+    put('novel', novelId, (n) => { const cur = n.kept && n.kept[key]; const nx = cur && cur.text ? quiet(cur.text) : ''; if (!nx || nx === cur.text) return false; novelSteps.setKept(key, { ...cur, text: nx })(n); return true; }, { now: true });
   }
   for (const playId of novel.plays || []) {
     const pl = store.peek('play', playId);
@@ -733,11 +787,11 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     }
     if (!Object.keys(row.fields).length && !row.versions.length) continue;
     put('play', playId, (d) => {
-      for (const [k, f] of Object.entries(row.fields)) d[k] = f.after;
+      for (const k of Object.keys(row.fields)) { const nx = quiet(d[k]); if (nx !== String(d[k] || '')) d[k] = nx; }
       for (const x of row.versions) {
         const t = (d.turns || []).find((y) => y.id === x.turnId);
         const v = t && t.versions.find((y) => y.id === x.versionId);
-        if (v) { v.text = x.after.text; if (x.after.tell !== undefined) v.tell = x.after.tell; }
+        if (v && !v.streaming) { v.text = quiet(v.text); if (v.tell) v.tell = quiet(v.tell); }
       }
     }, { now: true });
     undo.plays.push(row);
@@ -746,7 +800,7 @@ function renameEverywhere(novelId, novel, rules, put, why) {
   if (counts.some((n) => n > 0)) keptFollows(untouched, quiet, put, undo);
   /* (the notes' check saw his entries as they read: it has seen them with the name changed — the cards changed with them —
    * so no check is owed for a name changed, as nothing is read again for it; and its Undo the same way back) */
-  if (!put.dry && undo.entries.length) undo.entriesPrint = entriesCheckFollows(novelId, entriesSeen);
+  if (!put.dry && undo.entries.length) entriesCheckFollows(novelId, entriesSeen);
   return { undo, counts };
 }
 /* WHAT WAS KEPT OF A PAGE THE NAME NEVER STOOD IN FOLLOWS IT TOO (2.12.41, round 5 — with the review of round 4: a page
@@ -801,8 +855,31 @@ const keptRowStep = (at, field, from, to) => (ch) => {
   if (print !== to.fp || JSON.stringify(v[field] || null) !== JSON.stringify(from)) return false;
   v[field] = clone(to);
 };
-/* the notes' check's print of his entries moved to the entries as they are now, when it was the print of `was` — the
- * print now, or '' when nothing moved */
+/* HIS ENTRY WITH A NAME CHANGED EVERYWHERE (`swapWords`: the rename's rules over his own words — its name, other names,
+ * line and words), each sentence keeping when it was written, carried to its words with the name changed, and when it
+ * was saved; null where no name of it changes */
+export function renamedEntry(e, swapWords) {
+  if (!e) return null;
+  const next = tidyEntry({ ...clone(e), name: swapWords(e.name), aka: (e.aka || []).map((a) => swapWords(a)), line: swapWords(e.line || ''), text: swapWords(e.text || '') });
+  if (JSON.stringify(next) === JSON.stringify(tidyEntry(clone(e)))) return null;
+  const stamps = stampsOf(e);
+  next.saidAt = Object.fromEntries(entrySentences(e).map((s) => [sentenceKey(swapWords(s)), stamps.get(sentenceKey(s)) || 0]).filter(([, t]) => t));
+  next.at = e.at;
+  return withStamps(e, next);
+}
+/* the step that changes it in his entry as the copy it is laid on has it — laid again over a newer copy (a save turned
+ * away, then made over another window's), it changes the names in his newer words and writes nothing else over them
+ * (2.12.41, the review of 2.12.41: it wrote the whole entry as this window had it) */
+export const renameEntryStep = (id, swapWords) => (n) => {
+  const cur = (Array.isArray(n.bibliography) ? n.bibliography : []).find((x) => x && x.id === id);
+  const next = renamedEntry(cur, swapWords);
+  if (!next) return false;
+  novelSteps.putEntry(next)(n);
+  return true;
+};
+/* the notes' check's print of his entries moved to the entries as they are now, when it was the print of `was` (the
+ * entries just before the change — a rename, or its Undo: what the check had not seen stays owed) — the print now, or
+ * '' when nothing moved */
 function entriesCheckFollows(novelId, was) {
   const live = store.peek('novel', novelId);
   const a = live && live.memory && live.memory.audit;
@@ -932,7 +1009,7 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
   const bad = items.findIndex((x) => x.why);
   if (bad >= 0) return bases.map((b, i) => ({ ...b, status: 'refused', said: i === bad ? items[i].why : `it goes together with ${bases[bad].label}, which could not be made: ${items[bad].why}` }));
   const why = bases.map((b) => b.why).filter(Boolean).join(' ') || undefined;
-  const { undo, counts } = names ? renameEverywhere(novelId, novel, items.map((x) => x.rule), put, why) : replaceEverywhere(novelId, novel, items, put, why);
+  const { undo, counts } = names ? renameEverywhere(novelId, novel, items.map((x) => x.rule), put, why, items.map((x) => ({ from: x.from, to: x.to }))) : replaceEverywhere(novelId, novel, items, put, why);
   if (names && counts.some((n) => n > 0)) {
     undo.renamed = items.map((x) => ({ from: x.from, to: x.to }));
     /* (counted on the book — work on its way judges by the count, never a clock; kept an hour, in the phone's time: 2.12.41) */
@@ -1068,7 +1145,7 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner
   const by = cur ? (newBy === 'you' ? 'you' : cur.by === 'partner' ? 'partner' : cur.by) : newBy;
   /* (with when each of its words was written, as the entry's one write keeps it — a sentence kept keeps its time, only
    * one new or changed takes now: shape.js withStamps, 2.12.41 — so its Undo finds it as it was left) */
-  const after = withStamps(cur, { ...tidy, at, ...(by ? { by } : {}) });
+  const after = withStamps(cur, { ...tidy, at, ...(by ? { by } : {}) }, { elsewhere: () => wordsElsewhere(novel, tidy.id) });
   put('novel', novelId, novelSteps.putEntry(after), { now: true });
   return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(after) }, before: cur ? (cur.text || cur.line || '') : '', after: after.text || after.line || '' };
 }
@@ -1448,6 +1525,10 @@ export function undoChange(novelId, change) {
     /* each place put back that still reads as the change left it; one changed since stays */
     let back = 0;
     let kept = 0;
+    /* (his entries as they stand before anything is put back: the notes' check follows the Undo only where it had seen
+     * them so — 2.12.41, the review of 2.12.41: an entry he changed after the rename was never checked once the rename
+     * was undone) */
+    const entriesWas = (u.entries || []).length ? archivist.entriesPrint(novel) : null;
     const putBack = new Set();
     /* a name changed everywhere goes back as it was read only when the notes'
      * cards go back with it: a card changed since keeps the new name, and the
@@ -1556,7 +1637,7 @@ export function undoChange(novelId, change) {
     for (const x of u.entries || []) {
       if (store.change('novel', novelId, novelSteps.entryBack(x.id, x.before, x.after), { now: true }) === false) kept++; else back++;
     }
-    if (u.entriesPrint) entriesCheckFollows(novelId, u.entriesPrint);
+    if (entriesWas !== null) entriesCheckFollows(novelId, entriesWas);
     if (!back) return { ok: false, said: 'everything it changed has been changed again since' };
     return { ok: true, said: kept ? `${back} put back; ${kept} changed since, kept as they are` : '' };
   }

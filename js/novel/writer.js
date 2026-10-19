@@ -633,7 +633,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       words: countWords(finalText),
       done: Date.now(),
       /* carried on: the words as the writer wrote them, and the words before a change in place, carry on too */
-      ...(mode === 'append' && original && finalText.startsWith(original.text) ? grownFields({ ...(versionNow(chapterId, passageId, versionId) || {}), text: original.text }, finalText.slice(original.text.length)) : {}),
+      ...(mode === 'append' && original && finalText.startsWith(original.text) ? grownFields({ ...(versionNow(chapterId, passageId, versionId) || {}), text: original.text }, finalText.slice(original.text.length), passageNow(chapterId, passageId)) : {}),
     };
     store.change('chapter', chapterId, chapterSteps.setVersion(passageId, versionId, patch), { checkpoint: true, now: true });
     /* written off the page: on show once it is whole */
@@ -1190,4 +1190,8 @@ function versionNow(chapterId, passageId, versionId) {
   const c = store.peek('chapter', chapterId);
   const p = c && (c.passages || []).find((x) => x.id === passageId);
   return p && (p.versions || []).find((x) => x.id === versionId);
+}
+function passageNow(chapterId, passageId) {
+  const c = store.peek('chapter', chapterId);
+  return (c && (c.passages || []).find((x) => x.id === passageId)) || null;
 }
