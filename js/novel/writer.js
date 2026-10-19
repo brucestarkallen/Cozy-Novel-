@@ -704,17 +704,21 @@ export async function repairStale(novelId) {
          * a laptop two minutes ahead of the phone took a page still being written there for one whose window closed) */
         const gone = here ? !tabs.has(v.tab) : store.phoneNow() - (v.beat || v.done || v.at || 0) > STALE_MS;
         if (!gone) continue;
+        /* (each only while the page still reads as it was judged gone — still being written, its heartbeat no newer, its
+         * words as they were: a page whose window came back and finished it, or wrote on, is never taken out nor said cut
+         * — 2.12.41, a step laid again over another window's newer copy: this window's older copy was judged, and a page
+         * written whole meanwhile went) */
+        const beat = v.beat || v.done || v.at || 0;
+        const text = String(v.text || '');
+        const still = (step) => (ch) => { const q = (ch.passages || []).find((x) => x.id === p.id); const w = q && (q.versions || []).find((x) => x.id === v.id); if (!w || !w.streaming || (w.beat || w.done || w.at || 0) !== beat || String(w.text || '') !== text) return false; step(ch, q); return true; };
         /* some words written again, its window closed partway: whole or not at all — the words before stay on show */
         if (v.how === 'selection' && p.versions.length > 1) {
-          const onShow = (picked(p) || {}).id === v.id;
-          store.change('chapter', cid, chapterSteps.removeVersion(p.id, v.id), { now: true });
-          if (onShow && p.versions.some((x) => x.id === v.base)) store.change('chapter', cid, chapterSteps.pick(p.id, v.base), { now: true });
-        } else if (!String(v.text || '').trim()) {
-          if (p.versions.length < 2) store.change('chapter', cid, chapterSteps.removePassage(p.id), { now: true });
-          else store.change('chapter', cid, chapterSteps.removeVersion(p.id, v.id), { now: true });
+          store.change('chapter', cid, still((ch, q) => { const onShow = (picked(q) || {}).id === v.id; chapterSteps.removeVersion(p.id, v.id)(ch); if (onShow && q.versions.some((x) => x.id === v.base)) chapterSteps.pick(p.id, v.base)(ch); }), { now: true });
+        } else if (!text.trim()) {
+          store.change('chapter', cid, still((ch, q) => { if (q.versions.length < 2) chapterSteps.removePassage(p.id)(ch); else chapterSteps.removeVersion(p.id, v.id)(ch); }), { now: true });
         } else {
-          store.change('chapter', cid, chapterSteps.setVersion(p.id, v.id, { streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true,
-            cutWhy: 'the writing stopped when its window closed' }), { now: true });
+          store.change('chapter', cid, still((ch) => chapterSteps.setVersion(p.id, v.id, { streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true,
+            cutWhy: 'the writing stopped when its window closed' })(ch)), { now: true });
         }
         fixed++;
       }
@@ -740,11 +744,19 @@ export function repairBrokenWords(novelId) {
         /* (changed since: by any hand, or by a name changed everywhere, which is no one's hand — shape.js inPlaceFields, 2.12.41) */
         if (v.how !== 'selection' || v.streaming || !v.cut || v.endCut || v.chosen || (Array.isArray(v.hands) && v.hands.length) || (Array.isArray(v.before) && v.before.length)) continue;
         if ((p.versions || []).length < 2 || !(p.versions || []).some((x) => x.id === v.base)) continue;
-        const live = store.peek('chapter', cid);
-        const lp = live && (live.passages || []).find((x) => x.id === p.id);
-        const onShow = lp && (picked(lp) || {}).id === v.id;
-        store.change('chapter', cid, chapterSteps.removeVersion(p.id, v.id), { now: true });
-        if (onShow) store.change('chapter', cid, chapterSteps.pick(p.id, v.base), { now: true });
+        /* (on the version as the copy has it: never one he changed meanwhile in another window, nor put on show himself —
+         * 2.12.41, a step laid again over another window's newer copy) */
+        const text = String(v.text || '');
+        store.change('chapter', cid, (ch) => {
+          const lp = (ch.passages || []).find((x) => x.id === p.id);
+          const w = lp && (lp.versions || []).find((x) => x.id === v.id);
+          if (!w || w.streaming || !w.cut || w.endCut || w.chosen || (Array.isArray(w.hands) && w.hands.length) || (Array.isArray(w.before) && w.before.length) || String(w.text || '') !== text) return false;
+          if (lp.versions.length < 2 || !lp.versions.some((x) => x.id === v.base)) return false;
+          const onShow = (picked(lp) || {}).id === v.id;
+          chapterSteps.removeVersion(p.id, v.id)(ch);
+          if (onShow) chapterSteps.pick(p.id, v.base)(ch);
+          return true;
+        }, { now: true });
         n++;
       }
     }
@@ -980,7 +992,8 @@ export async function rewriteSelection({ novelId, chapterId, passageId, start, e
       store.change('chapter', chapterId, chapterSteps.removeVersion(passageId, version.id), { now: true });
       if (shownWas && shownWas.id === version.id) store.change('chapter', chapterId, chapterSteps.pick(passageId, baseV.id), { now: true });
       if (once && changeInPlace({ novelId, chapterId, passageId, versionId: baseV.id, next: cur.slice(0, at) + fresh + cur.slice(at + old.length), by: 'checker', extra: auto ? { auto: true } : {} })) {
-        if (auto) store.change('chapter', chapterId, chapterSteps.setVersion(passageId, baseV.id, { spans: (Number(target.spans) || 0) + 1 }), { now: true });
+        /* (counted on the version as the copy has it, once — laid again over a copy that holds it, never twice: 2.12.41) */
+        if (auto) { const was = Number(target.spans) || 0; store.change('chapter', chapterId, (ch) => { const q = (ch.passages || []).find((x) => x.id === passageId); const w = q && (q.versions || []).find((x) => x.id === baseV.id); if (!w || (Number(w.spans) || 0) !== was) return false; w.spans = was + 1; return true; }, { now: true }); }
         await store.flush('chapter', chapterId);
         return { ...out, inPlace: true, versionId: baseV.id };
       }

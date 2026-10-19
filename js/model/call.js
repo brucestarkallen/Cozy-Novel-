@@ -61,6 +61,32 @@ export function learn(conn, fact) {
   return next;
 }
 
+/* WHAT ANOTHER WINDOW LEARNED OF THE SAME MODEL AT THE SAME ADDRESS, KEPT BESIDE WHAT THIS ONE LEARNED (2.12.41, a step
+ * laid again over another window's newer copy: the lessons this window had were set whole, and a lesson learned there
+ * meanwhile went — a refusal taught twice): the two joined as learn() joins a lesson to what was known; a lesson of
+ * another model, or of none, is this one's whole */
+export function joinLessons(cur, next) {
+  if (!next || !cur || cur.for !== next.for) return next;
+  const most = (a, b) => (Number.isFinite(a) || Number.isFinite(b) ? Math.max(Number(a) || 0, Number(b) || 0) : (a || b || null));
+  return {
+    ...next,
+    at: most(cur.at, next.at),
+    efforts: next.efforts || cur.efforts || null,
+    drop: [...new Set([...(cur.drop || []), ...(next.drop || [])])],
+    offThinks: next.offThinks === true || cur.offThinks === true,
+    noLateSystem: next.noLateSystem === true || cur.noLateSystem === true,
+    noLateVoice: next.noLateVoice === true || cur.noLateVoice === true,
+    downAt: most(cur.downAt, next.downAt),
+    prefillDownAt: most(cur.prefillDownAt, next.prefillDownAt),
+    context: next.context || cur.context || null,
+    contextGuess: next.context ? next.contextGuess === true : cur.contextGuess === true,
+    maxOut: next.maxOut || cur.maxOut || null,
+    completionField: next.completionField === true || cur.completionField === true,
+    structuredDownAt: most(cur.structuredDownAt, next.structuredDownAt),
+    quietMs: most(cur.quietMs, next.quietMs),
+  };
+}
+
 function lessonFor(detail, body) {
   const l = lessonFrom(detail, body);
   if (l.allowed) return { efforts: l.allowed };
@@ -90,8 +116,11 @@ async function repairHermesKey(conn, status) {
     const data = await res.json();
     const key = data && typeof data.key === 'string' && data.key && data.key !== conn.key ? data.key : '';
     if (!key) return false;
+    /* (with the key it took the place of and the address it is for: kept only while the connection still reads so — a
+     * key he typed, or an address he changed, meanwhile in another window stays: 2.12.41) */
+    const was = { url: conn.url, key: conn.key };
     conn.key = key;
-    for (const fn of keyKeepers) { try { fn(conn.id, key); } catch (_) { /* ignore */ } }
+    for (const fn of keyKeepers) { try { fn(conn.id, key, was); } catch (_) { /* ignore */ } }
     return true;
   } catch (_) { return false; }
 }

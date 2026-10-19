@@ -113,15 +113,24 @@ async function bringBook(b, source, deviceKnown) {
   const chapters = {};
   for (const id of existing.order || []) { const c = await store.open('chapter', id); if (c) chapters[id] = c; }
   const untouched = theirs.print && printOf(existing, chapters) === theirs.chapterPrint;
+  /* (each chapter as it was found untouched: laid only while it still reads so — words written in the moved book
+   * meanwhile in another window are never written over by the older copy: 2.12.41, a step laid again over another
+   * window's newer copy) */
+  const words = (d) => JSON.stringify([d.passages || [], d.name || '', d.nameBy || '']);
+  const foundAs = Object.fromEntries(Object.entries(chapters).map(([id, c]) => [id, words(c)]));
   if (newerHere && !newerThere && !apart && untouched) {
     /* the browser's copy is the newer one, and nothing was done to the moved book since */
     for (const id of existing.order || []) if (!b.novel.order.includes(id)) await store.remove('chapter', id).catch(() => {});
     for (const id of b.novel.order) {
       const c = b.chapters[id];
-      if (await store.open('chapter', id)) store.change('chapter', id, (d) => { d.passages = JSON.parse(JSON.stringify(c.passages)); d.name = c.name; d.nameBy = c.nameBy; }, { now: true });
+      const found = await store.open('chapter', id);
+      const was = foundAs[id] !== undefined ? foundAs[id] : found ? words(found) : '';
+      if (found) store.change('chapter', id, (d) => { if (words(d) !== was) return false; d.passages = JSON.parse(JSON.stringify(c.passages)); d.name = c.name; d.nameBy = c.nameBy; return true; }, { now: true });
       else await store.create('chapter', id, c);
     }
+    const migratedWas = JSON.stringify(theirs);
     store.change('novel', existing.id, (d) => {
+      if (JSON.stringify(d.migrated || {}) !== migratedWas) return false;
       d.order = b.novel.order.slice();
       d.migrated = { ...b.novel.migrated, chapterPrint: printOf(b.novel, b.chapters), revisions: b.revisions };
       d.meta.words = b.novel.meta.words;

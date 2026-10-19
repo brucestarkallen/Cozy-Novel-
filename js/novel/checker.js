@@ -532,7 +532,8 @@ export async function runCheck(novelId) {
       const print = archivist.connPrint(conn);
       for (const c of chaptersOf(novelId)) {
         for (const [pid, byV] of Object.entries(c.checks || {})) {
-          for (const [vid, e] of Object.entries(byV || {})) if (e && e.aside && e.conn && e.conn !== print) store.change('chapter', c.id, chapterSteps.dropCheck(pid, vid), { checkpoint: true });
+          /* (only while it is still that one set aside — a checking laid meanwhile in another window stays: 2.12.41) */
+          for (const [vid, e] of Object.entries(byV || {})) if (e && e.aside && e.conn && e.conn !== print) store.change('chapter', c.id, (ch) => { const x = ch.checks && ch.checks[pid] && ch.checks[pid][vid]; if (!x || !x.aside || x.conn !== e.conn) return false; chapterSteps.dropCheck(pid, vid)(ch); return true; }, { checkpoint: true });
         }
       }
       let lastAsked = '';
@@ -563,7 +564,9 @@ export async function runCheck(novelId) {
        * and words brought in later were checked unasked) */
       {
         const hs = store.peek('house', 'house') || {};
-        for (const c of chaptersOf(novelId)) if (c.checkAll && !(c.passages || []).some((p) => wanted(hs, c, p))) store.change('chapter', c.id, chapterSteps.checkedAll(), { checkpoint: true });
+        /* (as the copy it is laid on has the chapter: his Check this chapter there, for words this window has not seen, waits
+         * on — 2.12.41, a step laid again over another window's newer copy) */
+        for (const c of chaptersOf(novelId)) if (c.checkAll && !(c.passages || []).some((p) => wanted(hs, c, p))) store.change('chapter', c.id, (ch) => (ch.checkAll && !(ch.passages || []).some((p) => wanted(hs, ch, p)) ? chapterSteps.checkedAll()(ch) : false), { checkpoint: true });
       }
       choice.beforeAsk();
       /* every checked passage proofread once for slips alone — the ones checked before this was here too */
@@ -952,7 +955,10 @@ function holdStands(novelId, item) {
 function setAsideCheck(novelId, chapterId, a, why, conn) {
   const home = homeOf(novelId, chapterId, a.pid);
   if (!home) return;
-  store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at: Date.now(), items: [], aside: cutWords(why || 'its model would not check it', 300), conn: archivist.connPrint(conn) }), { checkpoint: true });
+  /* (only over what stood here — never over a checking of these words laid meanwhile in another window: 2.12.41) */
+  const c = store.peek('chapter', home);
+  const found = (c && c.checks && c.checks[a.pid] && c.checks[a.pid][a.vid]) || null;
+  store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at: Date.now(), items: [], aside: cutWords(why || 'its model would not check it', 300), conn: archivist.connPrint(conn) }, found), { checkpoint: true });
 }
 
 /* one checking: these passages read (a passage longer than one request
@@ -1040,7 +1046,9 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
   const gradeOnly = Boolean(batch.gradeOnly) && Boolean(judge);
   const keptOf = (a) => { const live = store.peek('chapter', chapter.id) || chapter; return (live.checks && live.checks[a.pid] && live.checks[a.pid][a.vid]) || null; };
   /* no grade will come for it: kept as checked, never asked in a loop — what it found stays */
-  const noGrade = (a) => { const old = keptOf(a); if (old && old.sig === a.sig) store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { ...old, graded: false, tries: 2 }), { checkpoint: true }); };
+  /* (each of these laid only while the copy still holds the entry it was made from — his Check it again in another window
+   * stands: 2.12.41, a step laid again over another window's newer copy, shape.js setCheck) */
+  const noGrade = (a) => { const old = keptOf(a); if (old && old.sig === a.sig) store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { ...old, graded: false, tries: 2 }, old), { checkpoint: true }); };
   for (const words of numbered) {
     choice.beforeAsk();
     const got = await archivist.askJson(conn, system, gradeOnly ? request(words, { gradesOnly: true }) : request(words), { want: gradeOnly ? (o) => Array.isArray(o.grades) : (o) => Array.isArray(o.edits), beforeAsk: choice.beforeAsk });
@@ -1144,7 +1152,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
       const items = (old.items || []).filter((x) => x.kind !== 'grade');
       if (grade.overall < judge.target) items.unshift({ id: newId('sg'), kind: 'grade', find: '', replace: null, why: '', lift: grade.lift || '', target: judge.target, grade });
       const { graded: _g, tries: _t, ...rest } = old;
-      store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { ...rest, items, grade }), { checkpoint: true });
+      store.change('chapter', chapter.id, chapterSteps.setCheck(a.pid, a.vid, { ...rest, items, grade }, old), { checkpoint: true });
     }
     await store.flush('chapter', chapter.id);
     tell(novelId);
@@ -1370,7 +1378,7 @@ export function keepGrades(novelId) {
         if (fe && fe.sig === sigOf(from) && fe.grade) grade = fe.grade;
       }
       if (!grade) continue;
-      store.change('chapter', c.id, chapterSteps.setCheck(p.id, v.id, { ...e, grade }), { now: true });
+      store.change('chapter', c.id, chapterSteps.setCheck(p.id, v.id, { ...e, grade }, e), { now: true });
       n++;
     }
   }
@@ -1669,7 +1677,7 @@ async function proofRead(novelId, conn, batch, limit, choice) {
       const v = p && picked(p);
       const e = v && v.id === a.vid && sigOf(v) === a.sig && c.checks && c.checks[a.pid] && c.checks[a.pid][a.vid];
       if (!e || e.sig !== a.sig) continue;
-      store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, ...fields(a, e, c) }), { checkpoint: true });
+      store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, ...fields(a, e, c) }, e), { checkpoint: true });
     }
   };
   for (let k = was ? was.k : 0; k < numbered.length; k++) {
@@ -1801,7 +1809,7 @@ async function runMarks(novelId, conn, choice) {
       if (a.items.length > items.length || dropped) {
         const at = (x) => (x.kind === 'grade' ? -1 : x.start !== undefined ? x.start : Infinity);
         const next = a.items.map((x) => ({ x, at: at(x) })).sort((m, n) => m.at - n.at).map(({ x: { start: _s, end: _e, ...x } }) => x);
-        store.change('chapter', c.id, chapterSteps.setCheck(p.id, v.id, { ...e, items: next }), { checkpoint: true });
+        store.change('chapter', c.id, chapterSteps.setCheck(p.id, v.id, { ...e, items: next }, e), { checkpoint: true });
       }
       const live = entryFor(store.peek('chapter', c.id) || c, p) || e;
       for (const x of live.items || []) if (x.marks && x.replace === null && !x.asked) due.push({ chapterId: c.id, pid: p.id, vid: v.id, sig: sigOf(v), item: x });
@@ -1844,7 +1852,7 @@ async function askMarks(novelId, conn, choice, list) {
     if (!e || e.sig !== x.sig || sigOf(v) !== x.sig) return;
     const left = leftTest((c.checksLeft && c.checksLeft[x.pid]) || []);
     const items = (e.items || []).map((y) => (y.id === x.item.id ? { ...y, ...fields(String(v.text || ''), y, left) } : y));
-    store.change('chapter', x.chapterId, chapterSteps.setCheck(x.pid, x.vid, { ...e, items }), { checkpoint: true });
+    store.change('chapter', x.chapterId, chapterSteps.setCheck(x.pid, x.vid, { ...e, items }, e), { checkpoint: true });
   };
   if (!got.ok) {
     if (got.leashed === 'gaveway') return { gaveWay: true };
@@ -2077,7 +2085,7 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
       /* in the order they stand, the grade's card first */
       const at = (x) => (x.kind === 'grade' ? -1 : x.start !== undefined ? x.start : (() => { const sp = x.find ? locate(a.text, x.find) : { why: 'none' }; return sp.why ? Infinity : sp.start; })());
       const items = [...(e.items || []), ...add].map((x) => ({ x, at: at(x) })).sort((m, n) => m.at - n.at).map(({ x: { start: _s, end: _e, ...x } }) => x);
-      store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, items }), { checkpoint: true });
+      store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { ...e, items }, e), { checkpoint: true });
     }
   };
   for (let k = Math.max(0, resume); k < runs.length; k++) {
@@ -2572,7 +2580,10 @@ function autoAfter(novelId) {
           }
           store.change('chapter', c.id, chapterSteps.setVersion(p.id, v.id, { settled: true }), { now: true });
           if (best.id !== v.id) {
-            store.change('chapter', c.id, chapterSteps.pick(p.id, best.id), { now: true });
+            /* (only while the try it looked at is still on show, and not put on show by his hand — the arrows in another
+             * window meanwhile are his choice: 2.12.41, a step laid again over another window's newer copy) */
+            const tried = { id: v.id, chosen: v.chosen };
+            store.change('chapter', c.id, (ch) => { const q = (ch.passages || []).find((x) => x.id === p.id); const shown = q && picked(q); if (!shown || shown.id !== tried.id || shown.chosen !== tried.chosen) return false; chapterSteps.pick(p.id, best.id)(ch); return true; }, { now: true });
             archivist.nudge(novelId);
             const now = store.peek('chapter', c.id);
             const np = now && (now.passages || []).find((x) => x.id === p.id);
@@ -2619,7 +2630,8 @@ function autoAfter(novelId) {
           if (out && out.ok) archivist.nudge(novelId);
           /* failed for a real reason: kept on the version, never tried by itself again */
           else if (out && !out.stopped && !out.yielded && !out.passing && !out.busy && !out.needsConnection) {
-            try { store.change('chapter', next.chapterId, chapterSteps.setVersion(next.passageId, next.v.id, { spanFailed: [...(next.v.spanFailed || []), next.item.find] }), { now: true }); } catch (_) { /* the chapter is gone */ }
+            /* (added to the list as the copy has it, once — never this window's older list over another's: 2.12.41) */
+            try { store.change('chapter', next.chapterId, (ch) => { const q = (ch.passages || []).find((x) => x.id === next.passageId); const w = q && (q.versions || []).find((x) => x.id === next.v.id); if (!w || (w.spanFailed || []).includes(next.item.find)) return false; w.spanFailed = [...(w.spanFailed || []), next.item.find]; return true; }, { now: true }); } catch (_) { /* the chapter is gone */ }
           }
           return out;
         })

@@ -24,7 +24,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd, goneWith, whoseGrown, whoseGrownBefore, NOTE_KINDS } from './shape.js';
+import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd, goneWith, whoseGrown, whoseGrownBefore, NOTE_KINDS, relaidOn } from './shape.js';
 import { hashText, countWords } from '../util.js';
 import { codexNow, carriedCodex, entriesForNotes } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
@@ -75,26 +75,59 @@ function find(chapterId, passageId, versionId) {
  * back on it (Put back what was taken off); retire: false when the caller
  * moves what the helper read itself (a name changed everywhere).
  * {before, after} or null when nothing changed. */
-export function changeInPlace({ novelId, chapterId, passageId, versionId, next, by, check = null, keepEnd = true, tail = false, retire = true, extra = {} }) {
-  const { ch, p, v } = find(chapterId, passageId, versionId);
+/* remake: what the change makes of words another window changed since (a name changed everywhere: the names changed in
+ * them as they stand) — else, his own edit his words, the writer's words put back only on the words they were taken
+ * off, anything else where the words it changed still stand once (inPlaceStep). */
+export function changeInPlace({ novelId, chapterId, passageId, versionId, next, by, check = null, keepEnd = true, tail = false, retire = true, extra = {}, remake = null }) {
+  const { v } = find(chapterId, passageId, versionId);
   if (!v || v.streaming) return null;
   const was = String(v.text || '');
   const after = String(next == null ? '' : next);
   if (after === was || !after.trim()) return null;
-  const e = ch.checks && ch.checks[passageId] && ch.checks[passageId][v.id];
-  const found = e && e.sig === hashText(was) ? e : null;
-  const facts = codexNow(v);
-  const turns = continuityNow(v);
   if (retire && novelId) retireIfSeen(novelId, chapterId, passageId, v.id);
-  const fields = inPlaceFields(v, after, by, { check: found, codex: facts, continuity: turns, keepEnd, tail, extra, names: namesOfBook(novelId), passage: p });
-  fields.codex = (facts && carriedCodex(facts, after)) || otherWords(v.codex, facts);
-  fields.continuity = (turns && carriedContinuity(turns, after)) || otherWords(v.continuity, turns);
-  /* a page fixed by the app is no longer one he put back as it was */
-  fields.fixesBack = undefined;
-  store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, fields), { now: true });
+  const back = Boolean(extra && extra.back);
+  const again = typeof remake === 'function' ? remake : back ? () => null : by === 'you' ? () => after : (now) => relaidOn(was, after, now);
+  store.change('chapter', chapterId, inPlaceStep({ passageId, versionId: v.id, was, after, by, at: Date.now(), keepEnd, tail, extra, names: namesOfBook(novelId), remake: again }), { now: true });
   if (check) store.change('chapter', chapterId, chapterSteps.setCheck(passageId, v.id, check), { now: true });
   if (novelId) store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
   return { before: was, after, versionId: v.id };
+}
+
+/* THE CHANGE IN PLACE, AS THE STEP THE STORE KEEPS (2.12.41, a step laid again over another window's newer copy — its
+ * save turned away, or news of a newer copy come while it waited): laid on the version as the copy it is laid on has
+ * it, never as this window had it. Where the words still read as the change found them, it goes in as it was made;
+ * where they read as it left them (or the version keeps it among its words before), it is in already, and nothing is
+ * laid twice; where another window changed them since, what `remake` makes of them goes in — a name changed everywhere
+ * changes the names in them as they stand; his own edit is his word (these are now the words: the newer ones kept with
+ * the words before, for Put back the words before); anything else only where the words it changed still stand once, a
+ * few words either side (shape.js relaidOn) — or nothing, and the app's own look takes over: the checker looks again at
+ * words it has not checked, his partner's card says the page no longer reads that way (changes.js madeGone). Through
+ * 2.12.40 the fields were worked out from this window's copy and set whole: his typing in another window was lost to a
+ * fix of the checker's, a change of his partner's or a name changed everywhere, made from the older words. */
+function inPlaceStep({ passageId, versionId, was, after, by, at, keepEnd, tail, extra, names, remake }) {
+  return (c) => {
+    const p = (c.passages || []).find((x) => x.id === passageId);
+    const v = p && (p.versions || []).find((x) => x.id === versionId);
+    if (!v || v.streaming) return false;
+    const now = String(v.text || '');
+    let to = after;
+    if (now !== was) {
+      if (now === after || (Array.isArray(v.before) && v.before.some((b) => b && b.at === at && b.by === by))) return false;
+      to = remake(now);
+      if (typeof to !== 'string' || to === now || !to.trim()) return false;
+    }
+    const e = c.checks && c.checks[passageId] && c.checks[passageId][versionId];
+    const found = e && e.sig === hashText(now) ? e : null;
+    const facts = codexNow(v);
+    const turns = continuityNow(v);
+    const fields = inPlaceFields(v, to, by, { at, check: found, codex: facts, continuity: turns, keepEnd, tail, extra, names, passage: p });
+    fields.codex = (facts && carriedCodex(facts, to)) || otherWords(v.codex, facts);
+    fields.continuity = (turns && carriedContinuity(turns, to)) || otherWords(v.continuity, turns);
+    /* a page fixed by the app is no longer one he put back as it was */
+    fields.fixesBack = undefined;
+    chapterSteps.setVersion(passageId, versionId, fields)(c);
+    return true;
+  };
 }
 
 /* The newest words before put back (his Put back the words before, or the
@@ -119,18 +152,34 @@ export function putBackWords({ novelId, chapterId, passageId, versionId = null, 
   if (before !== null && (!back || back.patch.text !== String(before))) back = { patch: { text: String(before), words: countWords(String(before)), autoBase: String(before) }, check: null, codex: null, continuity: null, by: '' };
   if (!back) return { ok: false, said: 'there are no words before to put back' };
   if (novelId && retire) retireIfSeen(novelId, chapterId, passageId, v.id);
-  const now = codexNow(v);
-  const turnsNow = continuityNow(v);
-  const to = back.patch.text;
-  back.patch.codex = (back.codex && codexNow({ text: to, codex: back.codex })) || (now && carriedCodex(now, to)) || otherWords(v.codex, now);
-  /* the turns of the words put back come back with them, as their facts (2.12.40, the audit: a name changed everywhere,
-   * undone, left every passage it touched with no turns — a paid reading of each to get them back) */
-  back.patch.continuity = (back.continuity && continuityNow({ text: to, continuity: back.continuity })) || (turnsNow && carriedContinuity(turnsNow, to)) || otherWords(v.continuity, turnsNow);
-  back.patch.fixesBack = hold ? hashText(to) : undefined;
-  store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, back.patch), { now: true });
-  if (back.check && back.check.sig === hashText(to)) store.change('chapter', chapterId, chapterSteps.setCheck(passageId, v.id, back.check), { now: true });
+  /* (worked out again on the copy the step is laid on, and laid only while the version still reads as the words found
+   * here — never the words before put back over words another window wrote since: 2.12.41, a step laid again over
+   * another window's newer copy) */
+  store.change('chapter', chapterId, backStep({ passageId, versionId: v.id, expect: String(v.text || ''), before, hold }), { now: true });
   if (novelId) store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
   return { ok: true, by: back.by, versionId: v.id };
+}
+/* the words before, put back as a step: on the version as the copy has it, while it reads as `expect` */
+function backStep({ passageId, versionId, expect, before, hold }) {
+  return (c) => {
+    const p = (c.passages || []).find((x) => x.id === passageId);
+    const v = p && (p.versions || []).find((x) => x.id === versionId);
+    if (!v || v.streaming || String(v.text || '') !== expect) return false;
+    let back = putBackFields(v);
+    if (before !== null && (!back || back.patch.text !== String(before))) back = { patch: { text: String(before), words: countWords(String(before)), autoBase: String(before) }, check: null, codex: null, continuity: null, by: '' };
+    if (!back) return false;
+    const now = codexNow(v);
+    const turnsNow = continuityNow(v);
+    const to = back.patch.text;
+    back.patch.codex = (back.codex && codexNow({ text: to, codex: back.codex })) || (now && carriedCodex(now, to)) || otherWords(v.codex, now);
+    /* the turns of the words put back come back with them, as their facts (2.12.40, the audit: a name changed everywhere,
+     * undone, left every passage it touched with no turns — a paid reading of each to get them back) */
+    back.patch.continuity = (back.continuity && continuityNow({ text: to, continuity: back.continuity })) || (turnsNow && carriedContinuity(turnsNow, to)) || otherWords(v.continuity, turnsNow);
+    back.patch.fixesBack = hold ? hashText(to) : undefined;
+    chapterSteps.setVersion(passageId, versionId, back.patch)(c);
+    if (back.check && back.check.sig === hashText(to)) chapterSteps.setCheck(passageId, versionId, back.check)(c);
+    return true;
+  };
 }
 
 /* One version's words put on the version it was made from, and the one
@@ -150,29 +199,64 @@ export function foldVersion({ novelId, chapterId, passageId, childId, targetId, 
   const was = String(target.text || '');
   const e = ch.checks && ch.checks[passageId] && ch.checks[passageId][targetId];
   const found = e && e.sig === hashText(was) ? e : null;
-  const facts = codexNow(target);
-  const turns = continuityNow(target);
-  const patch = next === was ? {} : inPlaceFields(target, next, by, { check: found, codex: facts, continuity: turns, at: child.done || child.at || Date.now(), extra: child.spanAuto ? { auto: true } : {}, names: namesOfBook(novelId), passage: p });
-  /* the words' own end and what was taken off them come with them */
-  for (const k of END_KEYS) patch[k] = child[k];
-  patch.tookOff = child.tookOff;
-  patch.tookOffTop = child.tookOffTop;
-  patch.codex = codexNow(child) || (facts && carriedCodex(facts, next)) || undefined;
-  /* (the turns of the words it takes, or of the words it had carried to them — never turns left with other words) */
-  patch.continuity = continuityNow(child) || (turns && carriedContinuity(turns, next)) || undefined;
-  const notes = [...(target.notes || []), ...(child.notes || []).filter((n) => !(target.notes || []).includes(n))];
-  if (notes.length) patch.notes = notes;
-  if (child.spanAuto || child.spans) patch.spans = (target.spans || 0) + (child.spanAuto ? 1 : 0) + (child.spans || 0);
-  if (Array.isArray(child.spanFailed) && child.spanFailed.length) patch.spanFailed = [...new Set([...(target.spanFailed || []), ...child.spanFailed])];
-  store.change('chapter', chapterId, chapterSteps.foldVersion(passageId, childId, targetId, patch), { now: true });
+  store.change('chapter', chapterId, foldStep({ passageId, childId, targetId, was, by, at: child.done || child.at || Date.now(), names: namesOfBook(novelId) }), { now: true });
   /* a fix's checking kept no grade before 2.6.3: the grade of the words it was made from goes with it (checker.js
    * keepGrades) — theirs, or the newest kept with the words before them */
   const after = store.peek('chapter', chapterId);
   const moved = after && after.checks && after.checks[passageId] && after.checks[passageId][targetId];
   const fromGrade = (found && found.grade) || [...(target.before || [])].reverse().map((b) => b && b.check && b.check.grade).find(Boolean);
-  if (moved && !moved.grade && fromGrade && moved.sig === hashText(next)) store.change('chapter', chapterId, chapterSteps.setCheck(passageId, targetId, { ...moved, grade: fromGrade }), { now: true });
+  if (moved && !moved.grade && fromGrade && moved.sig === hashText(next)) store.change('chapter', chapterId, chapterSteps.setCheck(passageId, targetId, { ...moved, grade: fromGrade }, moved), { now: true });
   if (novelId) rekeyVersion(novelId, chapterId, passageId, childId, targetId);
   return true;
+}
+/* THE FOLD AS THE STEP THE STORE KEEPS (2.12.41, a step laid again over another window's newer copy — through 2.12.40
+ * its patch was worked out from this window's copy and set whole: his edit of the page made in another window while the
+ * checker wrote a sentence of it again was written over by the old words with the new sentence). Laid on the other
+ * version as the copy has it, while it still reads as the words the one gone was made from (`was`); where they have
+ * changed since, the one gone goes all the same — never a version of old words left beside them — and its new words go
+ * in where the words they replace still stand once in the newer ones, a few words either side (shape.js relaidOn), as a
+ * sentence written again goes in when the page changed while it was written (writer.js writeSpanAgain); else nothing. */
+function foldStep({ passageId, childId, targetId, was, by, at, names }) {
+  return (c) => {
+    const p = (c.passages || []).find((x) => x.id === passageId);
+    const child = p && (p.versions || []).find((x) => x.id === childId);
+    const target = p && (p.versions || []).find((x) => x.id === targetId);
+    if (!child || !target || child.streaming || target.streaming) return false;
+    const next = String(child.text || '');
+    const now = String(target.text || '');
+    const e = c.checks && c.checks[passageId] && c.checks[passageId][targetId];
+    const found = e && e.sig === hashText(now) ? e : null;
+    const facts = codexNow(target);
+    const turns = continuityNow(target);
+    const counted = (patch) => {
+      const notes = [...(target.notes || []), ...(child.notes || []).filter((x) => !(target.notes || []).includes(x))];
+      if (notes.length) patch.notes = notes;
+      if (child.spanAuto || child.spans) patch.spans = (target.spans || 0) + (child.spanAuto ? 1 : 0) + (child.spans || 0);
+      if (Array.isArray(child.spanFailed) && child.spanFailed.length) patch.spanFailed = [...new Set([...(target.spanFailed || []), ...child.spanFailed])];
+      return patch;
+    };
+    if (now === was) {
+      const patch = next === was ? {} : inPlaceFields(target, next, by, { check: found, codex: facts, continuity: turns, at, extra: child.spanAuto ? { auto: true } : {}, names, passage: p });
+      /* the words' own end and what was taken off them come with them */
+      for (const k of END_KEYS) patch[k] = child[k];
+      patch.tookOff = child.tookOff;
+      patch.tookOffTop = child.tookOffTop;
+      patch.codex = codexNow(child) || (facts && carriedCodex(facts, next)) || undefined;
+      /* (the turns of the words it takes, or of the words it had carried to them — never turns left with other words) */
+      patch.continuity = continuityNow(child) || (turns && carriedContinuity(turns, next)) || undefined;
+      chapterSteps.foldVersion(passageId, childId, targetId, counted(patch))(c);
+      return true;
+    }
+    const to = relaidOn(was, next, now);
+    chapterSteps.removeVersion(passageId, childId)(c);
+    if (typeof to !== 'string' || to === now || !to.trim()) return true;
+    const fields = counted(inPlaceFields(target, to, by, { at, check: found, codex: facts, continuity: turns, extra: child.spanAuto ? { auto: true } : {}, names, passage: p }));
+    fields.codex = (facts && carriedCodex(facts, to)) || otherWords(target.codex, facts);
+    fields.continuity = (turns && carriedContinuity(turns, to)) || otherWords(target.continuity, turns);
+    fields.fixesBack = undefined;
+    chapterSteps.setVersion(passageId, targetId, fields)(c);
+    return true;
+  };
 }
 
 /* the words as the writer wrote them grew (Go on): its own words, and the

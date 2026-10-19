@@ -763,7 +763,7 @@ function settleChanges(novelId, turnId, versionId, text, house, before = [], see
       : { id: dry.id, op: dry.op, label: dry.label, why: dry.why, status: 'waiting', base: baseOf(novelId, op, where), ...at, ...(bulk && dry.said ? { reach: dry.said } : {}) };
   });
   const changes = out;
-  store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes: [...before, ...changes] }), { now: true });
+  store.change('talk', novelId, addChanges(turnId, versionId, changes), { now: true });
   /* an older answer's change still waiting for the same thing, written whole, is set aside by this one (M397) */
   if (wait) asideOlder(novelId, turnId, changes.filter((c) => c.status === 'waiting'));
   if (changes.some((c) => c.status === 'made')) afterChanges(novelId);
@@ -814,6 +814,36 @@ function changeAt(novelId, turnId, versionId, changeId) {
   const v = t && (t.versions || []).find((x) => x.id === versionId);
   return ((v && v.changes) || []).find((c) => c.id === changeId) || null;
 }
+/* AN ANSWER'S CHANGES, AS STEPS ON THE LIST AS THE COPY HAS IT (2.12.41, a step laid again over another window's newer copy
+ * — through 2.12.40 each was the whole list as this window had it: a change he applied, left or undid meanwhile in
+ * another window was said to wait again, to be made twice): a round's new ones added by id; one settled here laid only
+ * where it still reads as it was found, so another window's settling of it stays */
+const versionOf = (d, turnId, versionId) => { const t = (d.turns || []).find((x) => x.id === turnId); return t && (t.versions || []).find((x) => x.id === versionId); };
+const addChanges = (turnId, versionId, list) => (d) => {
+  const v = versionOf(d, turnId, versionId);
+  if (!v) return false;
+  const have = new Set((v.changes || []).map((c) => c && c.id));
+  const more = list.filter((c) => c && !have.has(c.id));
+  if (!more.length) return false;
+  v.changes = [...(v.changes || []), ...JSON.parse(JSON.stringify(more))];
+  return true;
+};
+const settleChangesStep = (turnId, versionId, before, after) => {
+  const was = new Map(before.map((c) => [c && c.id, JSON.stringify(c)]));
+  const now = after.filter((c) => c && was.get(c.id) !== JSON.stringify(c)).map((c) => JSON.parse(JSON.stringify(c)));
+  return (d) => {
+    const v = versionOf(d, turnId, versionId);
+    if (!v || !now.length) return false;
+    let any = false;
+    v.changes = (v.changes || []).map((c) => {
+      const x = c && now.find((y) => y.id === c.id);
+      if (!x || JSON.stringify(c) !== was.get(c.id)) return c;
+      any = true;
+      return JSON.parse(JSON.stringify(x));
+    });
+    return any;
+  };
+};
 function patchChange(novelId, turnId, versionId, changeId, patch) {
   store.change('talk', novelId, (d) => {
     const t = (d.turns || []).find((x) => x.id === turnId);
@@ -864,7 +894,7 @@ function supersede(novelId, turnId, versionId) {
     any = true;
     return { ...c, superseded: true };
   });
-  if (any) store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes: next }), { now: true });
+  if (any) store.change('talk', novelId, settleChangesStep(turnId, versionId, list, next), { now: true });
 }
 
 /* a newer answer's waiting change for the same thing, written whole (a passage
@@ -886,7 +916,7 @@ function asideOlder(novelId, turnId, fresh) {
       const list = v.changes || [];
       if (!list.some((c) => c.status === 'waiting' && !c.copied && targetOf(c.op, c.where) && clash(c))) continue;
       const next = list.map((c) => (c.status === 'waiting' && !c.copied && targetOf(c.op, c.where) && clash(c) ? { ...c, status: 'skipped', said: 'replaced by a newer answer’s change to the same', aside: true } : c));
-      store.change('talk', novelId, turnSteps.setVersion(t.id, v.id, { changes: next }), { now: true });
+      store.change('talk', novelId, settleChangesStep(t.id, v.id, list, next), { now: true });
     }
   }
 }
@@ -1033,7 +1063,7 @@ function settleOne(novelId, turnId, versionId, changeId, how, patch = null) {
   const c = list[i];
   /* copied from another conversation: it is that conversation's to apply or undo */
   if (c.copied) return { ok: false, said: 'that change is the conversation’s it was made in — undo or apply it there' };
-  const write = (changes) => store.change('talk', novelId, turnSteps.setVersion(turnId, versionId, { changes }), { now: true });
+  const write = (changes) => store.change('talk', novelId, settleChangesStep(turnId, versionId, list, changes), { now: true });
   /* a change made fresh on Apply keeps how it was last told to the partner — so its being applied since is news */
   const told = (x) => (x.toldAs !== undefined ? { toldAs: x.toldAs } : {});
   /* one of a group is applied, left or undone with the others of it — a
@@ -1433,6 +1463,7 @@ export async function newPlay({ novelId, chapterId, who, from = '' }) {
 export function mendScene(playId) {
   const p = store.peek('play', playId);
   if (!p || !p.after || p.after === '^') return false;
+  const after = p.after;
   const novel = store.peek('novel', p.novelId);
   if (!novel) return false;
   for (const cid of novel.order || []) {
@@ -1440,11 +1471,13 @@ export function mendScene(playId) {
     if (!c) return false;
     if ((c.passages || []).some((x) => x.id === p.after)) {
       if (cid === p.chapterId) return false;
-      store.change('play', playId, turnSteps.set({ chapterId: cid }), { now: true });
+      /* (only while the scene still goes on from the same prose — turned into prose again meanwhile in another window, it
+       * goes on from that: 2.12.41, a step laid again over another window's newer copy) */
+      store.change('play', playId, (d) => (d.after === after ? turnSteps.set({ chapterId: cid })(d) : false), { now: true });
       return true;
     }
   }
-  store.change('play', playId, turnSteps.set({ turned: null, after: null }), { now: true });
+  store.change('play', playId, (d) => (d.after === after ? turnSteps.set({ turned: null, after: null })(d) : false), { now: true });
   return true;
 }
 
@@ -1537,7 +1570,10 @@ export function editPlayTurn({ playId, turnId, text = '', tell = '' }) {
     if (!words.trim() && !line) return { ok: false, error: 'a move needs words — Remove takes it out' };
     const was = { text: v.text, tell: v.tell };
     store.change('play', playId, turnSteps.setVersion(t.id, v.id, { text: words.trim(), tell: line || undefined }), { now: true });
-    return { ok: true, undo: () => { if (store.peek('play', playId)) store.change('play', playId, turnSteps.setVersion(t.id, v.id, { text: was.text, tell: was.tell || undefined }), { now: true }); } };
+    /* (its Undo only while his move reads as this edit left it — never over his words changed again meanwhile in another
+     * window: 2.12.41, a step laid again over another window's newer copy) */
+    const left = (d) => { const x = (d.turns || []).find((y) => y.id === t.id); const w = x && (x.versions || []).find((y) => y.id === v.id); return Boolean(w) && String(w.text || '') === words.trim() && (w.tell || undefined) === (line || undefined); };
+    return { ok: true, undo: () => { if (store.peek('play', playId)) store.change('play', playId, (d) => (left(d) ? turnSteps.setVersion(t.id, v.id, { text: was.text, tell: was.tell || undefined })(d) : false), { now: true }); } };
   }
   if (!words.trim()) return { ok: false, error: 'a telling needs words — Remove takes it out' };
   /* he edits the telling as it is drawn; the choices that came with it stay with it */
@@ -1563,7 +1599,9 @@ export async function playRetry({ playId, turnId, onCut = null }) {
   const keep = next ? i + 2 : i + 1;
   const later = JSON.parse(JSON.stringify(list.slice(keep)));
   if (later.length) {
-    store.change('play', playId, turnSteps.removeFrom(later[0].id), { now: true });
+    /* (the parts it lets go, by id — a move he made meanwhile in another window, after them, stays: 2.12.41) */
+    const going = new Set(later.map((t) => t.id));
+    store.change('play', playId, (d) => { const before = (d.turns || []).length; d.turns = (d.turns || []).filter((t) => !going.has(t.id)); return d.turns.length !== before; }, { now: true });
     const after = (next || list[i]).id;
     const undo = () => store.change('play', playId, (d) => {
       d.turns = d.turns || [];
@@ -1599,10 +1637,14 @@ export async function repairStaleTurns(kind, id) {
       /* (another browser's heartbeat judged in the phone's time it was written in: writer.js repairStale, 2.12.41) */
       const gone = here ? !tabs.has(v.tab) : store.phoneNow() - (v.beat || v.at || 0) > 2 * 60 * 1000;
       if (!gone) continue;
+      /* (each only while the reply still reads as it was judged gone — still being written, its heartbeat no newer, no
+       * words come since: a reply whose window came back and finished it is never taken out nor said cut — 2.12.41, a step
+       * laid again over another window's newer copy) */
+      const beat = v.beat || v.at || 0;
+      const still = (d) => { const x = (d.turns || []).find((y) => y.id === t.id); const w = x && (x.versions || []).find((y) => y.id === v.id); return w && w.streaming && (w.beat || w.at || 0) === beat ? { x, w } : null; };
       if (!String(v.text || '').trim() && !String(v.thinking || '').trim()) {
-        if (t.versions.length < 2) store.change(kind, id, turnSteps.removeTurn(t.id), { now: true });
-        else store.change(kind, id, turnSteps.removeVersion(t.id, v.id), { now: true });
-      } else store.change(kind, id, turnSteps.setVersion(t.id, v.id, { streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'the reply stopped when its window closed' }), { now: true });
+        store.change(kind, id, (d) => { const h = still(d); if (!h || String(h.w.text || '').trim() || String(h.w.thinking || '').trim()) return false; if ((h.x.versions || []).length < 2) turnSteps.removeTurn(t.id)(d); else turnSteps.removeVersion(t.id, v.id)(d); return true; }, { now: true });
+      } else store.change(kind, id, (d) => (still(d) ? turnSteps.setVersion(t.id, v.id, { streaming: undefined, beat: undefined, tab: undefined, browser: undefined, cut: true, cutWhy: 'the reply stopped when its window closed' })(d) : false), { now: true });
       fixed++;
     }
   }
