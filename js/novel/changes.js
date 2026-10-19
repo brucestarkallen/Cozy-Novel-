@@ -26,7 +26,8 @@ import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, has
 import { replaceMany, renameRule } from './names.js';
 import { entriesOf, entryFor, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
-import { changeInPlace, putBackWords } from './inplace.js';
+import { changeInPlace, putBackWords, bookNameWords } from './inplace.js';
+import { renameSwaps } from './mend.js';
 
 /* ------------------------------------------------------------ reading it */
 
@@ -1187,7 +1188,11 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       version = newVersion({ text: next, how: 'partner', from: v.id, words: countWords(next), why: base.why || undefined, ...(v.ask ? { ask: v.ask } : {}), ...(v.closes ? { closes: true } : {}) });
       put('chapter', chapter.id, chapterSteps.addVersion(passage.id, version), { now: true });
       put('novel', novelId, novelSteps.touchWritten(at));
-    } else if (!dry && !changeInPlace({ novelId, chapterId: chapter.id, passageId: passage.id, versionId: v.id, next, by: 'partner', extra: base.why ? { why: base.why } : {} })) return refuse('the passage is being written just now');
+    } else if (!dry && !changeInPlace({ novelId, chapterId: chapter.id, passageId: passage.id, versionId: v.id, next, by: 'partner', extra: {
+      ...(base.why ? { why: base.why } : {}),
+      /* (a name swapped on this page alone, and nothing else, is no one's hand on the page, as a name changed everywhere —
+       * and as one from before 2.12.41 is marked when the book opens, mend.js markRenames: 2.12.41, the review) */
+      ...(renameSwaps(old, next, bookNameWords(novel)) ? { rename: true } : {}) } })) return refuse('the passage is being written just now');
     /* the words it replaced, where they still stand elsewhere in the book —
      * said, so the rest can be made to agree when it should (Cozy Tavern's
      * ripple, M61 v2.77; nothing else is changed by itself) */
