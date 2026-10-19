@@ -38,6 +38,8 @@ const S = {
   live: new Map(),       /* passageId -> {text, thinking} while being written */
   thinkOpen: new Set(),
   premiseOpen: new Set(),  /* passages whose premise he opened (Premise, under the page) */
+  premiseEdit: null,     /* the passage whose premise is a box, to change and resend */
+  premiseDraft: new Map(), /* passageId -> the premise as he is changing it */
   undo: null,            /* a removed passage, for a few seconds */
   insertAfter: null,     /* "Write from here": the next passage goes after this one */
   focusNext: null,       /* the box that takes the keyboard when it opens: 'edit' | 'rewrite' */
@@ -483,14 +485,32 @@ function controls(p) {
   row.append(h('button', { title: 'Say what should change; the change becomes what happens, carried through the passage', disabled: working, onclick: () => { S.rewriting = S.rewriting === p.id ? null : p.id; S.focusNext = 'rewrite'; drawPage(); } }, 'Rewrite…'));
   row.append(h('button', { title: 'Change the words yourself, on the page itself — ⋯ → Put back the words before undoes it', disabled: working, onclick: () => openEdit(p.id) }, 'Edit'));
   /* HIS PREMISE, A TAP AWAY (his word, 2.12.31: "it should have a button and be hidden, not below it — it destroys
-   * immersion"): the words he typed for this page, shown only when he presses Premise, and put away again the same way */
+   * immersion"): the words he typed for this page, shown only when he presses Premise, and put away again the same way.
+   * Edit changes them; Resend writes the page again from the box; Retry writes it again from the premise as it stands. */
   const premise = premiseOf(p);
-  const premiseLine = premise ? h('div.note.premise', { hidden: !S.premiseOpen.has(p.id) }, h('b', 'Your premise: '), premise) : null;
+  const editing = premise && S.premiseEdit === p.id;
+  const draft = editing ? (S.premiseDraft.has(p.id) ? S.premiseDraft.get(p.id) : premise) : premise;
+  const premiseBox = editing ? h('textarea.premiseedit', { rows: 3, 'aria-label': 'Your premise' }) : null;
+  if (premiseBox) {
+    premiseBox.value = draft;
+    premiseBox.addEventListener('input', () => S.premiseDraft.set(p.id, premiseBox.value));
+    if (S.focusNext === 'premise') { S.focusNext = null; setTimeout(() => premiseBox.focus(), 30); }
+  }
+  const premiseLine = premise ? h('div.note.premise', { hidden: !S.premiseOpen.has(p.id) }, h('b', 'Your premise: '), editing ? premiseBox : premise) : null;
+  const sendPremise = (words) => run(() => writer.resend({ novelId: S.novelId, chapterId: c.id, passageId: p.id, direction: words }));
+  const premiseActs = premise ? h('div.premacts', { hidden: !S.premiseOpen.has(p.id) },
+    editing
+      ? h('button', { title: 'Writes this page again from the premise in the box — a new version. The one you have stays an arrow back.', disabled: working, onclick: () => { const words = premiseBox.value.trim(); S.premiseEdit = null; S.premiseDraft.delete(p.id); sendPremise(words); } }, 'Resend')
+      : h('button', { title: 'Change the premise, then Resend to write the page again from it.', disabled: working, onclick: () => { S.premiseEdit = p.id; S.premiseDraft.set(p.id, premise); S.premiseOpen.add(p.id); S.focusNext = 'premise'; drawPage(); } }, 'Edit'),
+    editing ? h('button', { title: 'Leaves the premise as it was.', onclick: () => { S.premiseEdit = null; S.premiseDraft.delete(p.id); drawPage(); } }, 'Cancel') : null,
+    !editing ? h('button', { title: 'Writes this page again from this premise, as a new version.', disabled: working, onclick: () => sendPremise(premise) }, 'Resend') : null,
+    h('button', { title: 'Tries the same write again, from the premise as it stands — a new version.', disabled: working, onclick: () => sendPremise(premiseOf(p)) }, 'Retry')) : null;
   if (premise) {
     const btn = h('button.premisebtn', { title: 'The premise you typed for this page', 'aria-expanded': String(S.premiseOpen.has(p.id)), onclick: () => {
       const open = !S.premiseOpen.has(p.id);
-      if (open) S.premiseOpen.add(p.id); else S.premiseOpen.delete(p.id);
+      if (open) S.premiseOpen.add(p.id); else { S.premiseOpen.delete(p.id); if (S.premiseEdit === p.id) { S.premiseEdit = null; S.premiseDraft.delete(p.id); drawPage(); return; } }
       premiseLine.hidden = !open;
+      premiseActs.hidden = !open;
       btn.setAttribute('aria-expanded', String(open));
     } }, 'Premise');
     row.append(btn);
@@ -521,6 +541,7 @@ function controls(p) {
   if (bits.length) row.append(h('div.note', bits.join(' · ')));
   /* (his premise, whole, when he opened it — shape.js premiseOf) */
   if (premiseLine) row.append(premiseLine);
+  if (premiseActs) row.append(premiseActs);
   if (v.cut) row.append(h('div.note.warn', `It stopped partway${v.cutWhy ? ` (${v.cutWhy})` : ''}. ${carry ? 'Go on carries it on from the last word.' : 'Another take writes it again.'}`));
   if (v.notes && v.notes.length) row.append(h('div.note', v.notes.join(' ')));
   /* only an address on the web is ever a link (a page kept before this check, too) */
@@ -859,7 +880,7 @@ function drawEnd() {
    * very answer Write and Add as my words go by) */
   const goes = writer.closedGoesOn(n.id, c.id);
   const key = [n.id, c.id, Boolean(list.length), hasText, at, n.order.length, n.order[at + 1], next && next.name, busy(), S.making,
-    err, err && err.words, err && err.thought, err && err.stopped, err && err.needsConnection, goes && goes.number];
+    err, err && err.ask, err && err.words, err && err.thought, err && err.stopped, err && err.needsConnection, goes && goes.number];
   if (endDrawn && sameParts(endDrawn, key)) return;
   endDrawn = key;
   ui.end.textContent = '';
@@ -881,6 +902,9 @@ function drawEnd() {
       card.append(fold, h('p.say.quiet', 'Copy it, and Add as my words puts any of it in the chapter as your own.'));
     }
     card.append(h('div.row', err.needsConnection ? h('button.btn.primary.small', { onclick: () => hooks.openSettings('connections') }, 'Open Connections') : null,
+      typeof err.ask === 'string' ? h('button.btn.small', { title: 'The premise that did not come, back in the box to change.', onclick: () => { ui.direction.value = err.ask; ui.direction.dispatchEvent(new Event('input')); ui.direction.focus(); } }, 'Edit premise') : null,
+      typeof err.ask === 'string' ? h('button.btn.small', { title: 'Writes the page from whatever the box says now.', disabled: busy(), onclick: () => onWrite() }, 'Resend') : null,
+      typeof err.ask === 'string' ? h('button.btn.primary.small', { title: 'Tries the same premise again.', disabled: busy(), onclick: () => { ui.direction.value = err.ask; ui.direction.dispatchEvent(new Event('input')); onWrite(); } }, 'Retry') : null,
       err.thought ? h('button.btn.small', { title: 'Its thinking, to paste anywhere', onclick: async () => toast((await copyText(err.thought)) ? 'What it thought is copied.' : 'It could not be copied.') }, 'Copy what it thought') : null,
       h('button.btn.small', { onclick: () => { S.errors.delete(c.id); drawEnd(); } }, 'Dismiss')));
     ui.end.append(card);
@@ -1101,9 +1125,13 @@ async function onWrite() {
   const after = S.insertAfter || null;
   S.insertAfter = null;
   if (!after) await toNextIfEnded();
-  const out = await run(() => writer.writeNext({ novelId: S.novelId, chapterId: S.chapterId, direction, length: (n.prefs && n.prefs.length) || 'scene', after }));
+  const asked = S.chapterId;
+  const out = await run(() => writer.writeNext({ novelId: S.novelId, chapterId: asked, direction, length: (n.prefs && n.prefs.length) || 'scene', after }));
   if (out && out.ok) {
     if (ui.direction.value.trim() === direction) { ui.direction.value = ''; ui.direction.dispatchEvent(new Event('input')); }
+  } else if (out && !out.ok && S.errors.has(asked)) {
+    S.errors.get(asked).ask = direction;
+    if (S.chapterId === asked) drawEnd();
   }
 }
 

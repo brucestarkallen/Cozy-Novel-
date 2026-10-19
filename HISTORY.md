@@ -1184,6 +1184,13 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **Quick add.** It is the partner, and this talk is only the world: adding an entry, or changing one. It speaks first, in its own sentences, and checks there — a clash is only where a page says the opposite, not a guess or something left unsaid. Those sentences stay on the row. What holds still goes into the bibliography, with Undo. Where a page really does say the opposite, that line still waits, and the row says what came of it under the partner’s own words.
 
+## 2.12.47, Edit a premise, resend, retry
+
+**The premise under a page.** Premise still shows what you typed. **Edit** opens it as a box. **Resend** writes that page again from the box, as a new version. **Retry** writes it again from the premise as it stands. The version you have stays an arrow back.
+
+**A page that did not come.** The same three are on that card. Edit premise puts it back in the box. Resend writes from whatever the box says now. Retry tries the premise that failed.
+
+
 
 ## 2.12.45, Quick add’s ring turns, and Batman stays Batman
 

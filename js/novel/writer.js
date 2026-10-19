@@ -896,6 +896,36 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
     build: { target: { chapterId, before: passageId }, request, moment } });
 }
 
+/* The page again, from a premise — the one it was written from, or one he has
+ * changed (Edit, then Resend). A new version; the one on show stays an arrow back. */
+export async function resend({ novelId, chapterId, passageId, direction }) {
+  const text = String(direction || '').trim();
+  if (!text) return { ok: false, error: 'write the premise first' };
+  pressedWrite(novelId);
+  const stopHere = preflight(novelId);
+  if (stopHere) return stopHere;
+  const book = await bookOf(novelId);
+  if (book.error) return { ok: false, error: book.error };
+  const chapter = book.chapters[chapterId];
+  const p = chapter && chapter.passages.find((x) => x.id === passageId);
+  if (!p) return { ok: false, error: 'that passage is not there any more' };
+  const first = (p.versions || []).find((v) => v && v.ask && (v.how === 'write' || v.how === 'another'));
+  if (!first) return { ok: false, error: 'these are your own words — use Rewrite to have them written another way' };
+  const list = chapter.passages;
+  const i = list.indexOf(p);
+  const between = list.slice(i + 1).some(hasWords);
+  const length = first.ask.length || 'scene';
+  const moment = [text, momentOf(chapter, p)].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
+  const version = newVersion({ how: 'another', ask: { direction: text, length }, streaming: true });
+  store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
+  const empty = !list.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
+  const closing = superOn(house()) && !between && (!empty || length === 'chapter');
+  const request = writeRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), direction: text, length, empty,
+    firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
+  return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
+    build: { target: { chapterId, before: passageId }, request, moment } });
+}
+
 /* A rewrite of a whole passage, with his note. */
 export async function rewrite({ novelId, chapterId, passageId, note = '', fromVersion = null, lift = 0 }) {
   if (!lift) pressedWrite(novelId);
