@@ -22,7 +22,7 @@
  * nor in a name joined with a hyphen ("Mary" is not in "Mary-Jane"). */
 import { newId, nameKey, estimateTokens, hashText } from '../util.js';
 import { picked, matchCard, chapterLabel } from './shape.js';
-import { foldedText, foldName, nameInText, firstSentence, samePersonName, titlesConflict } from './names.js';
+import { foldedText, foldName, nameInText, firstSentence, samePersonName, titlesConflict, familyNameOnly } from './names.js';
 import { superActive } from './auto.js';
 
 export const ENTRY_KINDS = ['people', 'places', 'things', 'groups', 'lore'];
@@ -101,38 +101,48 @@ export function entryNamed(entries, name) {
   return { entry: null, ambiguous: byAka.length > 1 };
 }
 
+/* A NAME AS IT IS ONE ENTRY'S, without the "The" it starts with before a capital ("The Iron Covenant" is "Iron Covenant",
+ * "the girl" stays a description) — never "A" or "An" (2.12.41, the third review of Quick add: "An Lushan" is a person,
+ * and was found as the place Lushan). The page still finds a name without either (bareName). */
+const theLess = (n) => cleanName(n).replace(/^[Tt][Hh][Ee]\s+(?=\p{Lu})/u, '');
+
 /* THE ENTRY A NAME MEANS, AS THE PAGE FINDS IT (2.12.41, the review of Quick add: "Iron Covenant" and "The Iron Covenant"
  * went in as two entries for one group, though the page finds both as one): by its name or one it goes by first
- * (entryNamed); else the same without the article a name starts with ("The Iron Covenant" is "Iron Covenant", bareName —
- * never "the girl", a description in small letters); else, for a person, by the same person's name (names.js
- * samePersonName: "Emilia" for Emilia Vermaine, a rank set aside — never Mei Lin for Mei Ling, never two people). One
- * entry, or none and whether more than one answered — {entry, ambiguous} */
-export function entryFor(entries, name) {
-  const first = entryNamed(entries, name);
-  if (first.entry || first.ambiguous) return first;
+ * (entryNamed); else the same without the "The" it starts with (theLess); else, for a person, by the same person's name
+ * (names.js samePersonName: "Emilia" for Emilia Vermaine, a rank set aside — never Mei Lin for Mei Ling, never two
+ * people). The person step only where the kind asked for is a person, or none is asked (2.12.41, the third review: a
+ * group named "Kuchiki" was put into Rukia Kuchiki's entry), and never by a family's name alone (names.js
+ * familyNameOnly: the Kuchiki are a house). One entry, or none and whether more than one answered — {entry, ambiguous,
+ * by: 'name' | 'aka' | 'the' | 'person'}: a change never makes an entry found by another name another kind (changes.js
+ * makeEntry). `kind`: the kind asked for (bibliography.js kindSaid's), '' for none */
+export function entryFor(entries, name, { kind = '' } = {}) {
   const list = entries || [];
-  const one = (hits) => (hits.length === 1 ? { entry: hits[0], ambiguous: false } : { entry: null, ambiguous: hits.length > 1 });
-  const k = nameKey(bareName(name));
+  const first = entryNamed(list, name);
+  if (first.entry) return { ...first, by: nameKey(first.entry.name) === nameKey(name) ? 'name' : 'aka' };
+  if (first.ambiguous) return first;
+  const one = (hits, by) => (hits.length === 1 ? { entry: hits[0], ambiguous: false, by } : { entry: null, ambiguous: hits.length > 1 });
+  const k = nameKey(theLess(name));
   if (k) {
-    const bare = list.filter((e) => [e.name, ...(e.aka || [])].some((n) => nameKey(bareName(n)) === k));
-    if (bare.length) return one(bare);
+    const bare = list.filter((e) => [e.name, ...(e.aka || [])].some((n) => nameKey(theLess(n)) === k));
+    if (bare.length) return one(bare, 'the');
   }
-  const person = list.filter((e) => kindOf(e.kind) === 'people' && [e.name, ...(e.aka || [])].some((n) => samePersonName(n, name)));
-  return one(person);
+  if (kind && kind !== 'people') return { entry: null, ambiguous: false };
+  const person = list.filter((e) => kindOf(e.kind) === 'people' && [e.name, ...(e.aka || [])].some((n) => samePersonName(n, name) && !familyNameOnly(n, name)));
+  return one(person, 'person');
 }
 
-/* the keys a name answers to: as written, and without the article it starts with — for many names held against many at
- * once (a lorebook brought in) */
+/* the keys a name answers to: as written, and without the "The" it starts with (theLess) — for many names held against
+ * many at once (a lorebook brought in) */
 export function nameKeys(name) {
-  return [...new Set([nameKey(name), nameKey(bareName(name))])].filter(Boolean);
+  return [...new Set([nameKey(name), nameKey(theLess(name))])].filter(Boolean);
 }
 /* another entry already called this, or going by it (renaming or adding one never makes two that answer to one name) —
- * with the article a name starts with or without it, as the page finds them (2.12.41: "Iron Covenant" beside "The Iron
- * Covenant" is one name on the page) */
+ * with the "The" it starts with or without it, as one entry's name (theLess; 2.12.41: "Iron Covenant" beside "The Iron
+ * Covenant" is one name on the page — "An Lushan" beside "Lushan" is two) */
 export function nameTaken(entries, name, butId = '') {
   const k = nameKey(name);
-  const b = nameKey(bareName(name));
-  const is = (n) => nameKey(n) === k || (Boolean(b) && nameKey(bareName(n)) === b);
+  const b = nameKey(theLess(name));
+  const is = (n) => nameKey(n) === k || (Boolean(b) && nameKey(theLess(n)) === b);
   return Boolean(k) && entries.some((e) => e.id !== butId && [e.name, ...(e.aka || [])].some(is));
 }
 

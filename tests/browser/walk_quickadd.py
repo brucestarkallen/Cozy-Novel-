@@ -177,17 +177,17 @@ async def scenario(browser, w, hgt, mobile):
         check(f'{tag} Ask again puts his words back in the box', kept == 'HELDBACK Emilia has black hair.', kept)
     await pg.locator('.bibview .quickbox').fill('')
 
-    # a newer word of his on his own entry that nothing written carries: asked again and still none, it goes in in his own
-    # words, said so, with Ask again to have it written up (2.12.41, the review: this check held that it "did not go in" —
-    # the app knew the words it changes and his newer words, and left his entry saying "no family" beside "a brother", so
-    # the writer read the old fact; and "your words kept as you wrote them" is never said of words his newer word changed)
+    # a newer word of his on his own entry that nothing written carries: asked again and still none, nothing goes in for it
+    # — his entry as he wrote it — and the row says so, with Ask again (2.12.41, the third review: this check held that his
+    # own words went in in place of those it changes, "put in as you said it"; spliced in, his words were often an order —
+    # "Her eyes are Make her eyes green and cold" — so his words are never spliced in now)
     await ask(pg, 'LONE Emilia has a brother.')
     row = await pg.locator('.bibview .quickrow').last.inner_text()
     told = await pg.evaluate("(nid) => import('/js/store.js').then((s) => ((s.peek('novel', nid).bibliography || []).find((e) => e.name === 'Emilia Vermaine') || {}).text || '')", nid)
-    check(f'{tag} a newer word with nothing written for it goes in in his own words, said so, with Ask again',
-          'It changes your earlier words' in row and 'it says “Emilia has a brother.” now: put in as you said it — your partner gave no words for it.' in row
-          and 'your newer word put in as you said it — your partner gave no words for it' in row and 'your words kept as you wrote them' not in row
-          and told == 'Emilia has a brother.'
+    check(f'{tag} a newer word with nothing written for it does not go in, said so, with Ask again',
+          'It changes your earlier words' in row and 'said “She has no family of her own yet”; it did not go in — your partner gave no words for it.' in row
+          and 'One newer word of yours did not go in — your partner gave no words for it.' in row and 'as you said it' not in row
+          and told == 'She has no family of her own yet.'
           and await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').count() == 1, [row, told])
 
     # set aside: "yours went in" only where the entry put in says his words — never "not held back" unchecked

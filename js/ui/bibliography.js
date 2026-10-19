@@ -286,7 +286,10 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
     const tidy = tidyEntry(out);
     if (!tidy.name) { toast('It needs a name.'); return; }
     const all = entriesOf(store.peek('novel', novelId));
-    const clash = [tidy.name, ...tidy.aka].find((x) => nameTaken(all, x, tidy.id));
+    /* only the names he sets now — new, or changed — are held to the others (2.12.41, the third review of Quick add: two
+     * entries from before going by "The Order" and "Order" could neither be saved, though only their words changed) */
+    const had = new Set(live ? [live.name, ...(live.aka || [])].map(nameKey) : []);
+    const clash = [tidy.name, ...tidy.aka].filter((x) => !had.has(nameKey(x))).find((x) => nameTaken(all, x, tidy.id));
     if (clash) { toast(`Another entry goes by ${clash} already — give this one another name, or change that one.`, 6000); return; }
     if (!tidy.line && !tidy.text) { toast('Write what it is — in a line, or the entry.'); return; }
     const saved = { ...tidy, at: Date.now(), by: 'you' };
@@ -540,18 +543,20 @@ function quickRow(novelId, r, redraw) {
      * review: "your words kept as you wrote them" was said where his newer word had changed them) */
     const sentences = (n) => (n === 1 ? 'a sentence' : `${numberWords(n).toLowerCase()} sentences`);
     const newer = (n) => (n === 1 ? 'your newer word' : `${numberWords(n).toLowerCase()} newer words of yours`);
+    /* (his newer word is never put into his line in his own words: with no words for it that hold, his line stands, and
+     * the change says it did not go in — 2.12.41, the third review) */
     const LINE_SAID = { theirs: 'its line in place of yours', carrier: 'your newer word put into your line in its words', now: 'your newer word put into your line in its words',
-      own: 'your newer word put into your line as you said it — your partner gave no words for it', kept: 'your line kept as you wrote it', unbacked: 'its line left out — it says more than your words do' };
+      kept: 'your line kept as you wrote it', unbacked: 'its line left out — it says more than your words do' };
     const joined = (a) => {
       const j = a.joined || {};
       const parts = [];
       if (j.changed) parts.push(`${newer(j.changed)} put in place of the words ${j.changed === 1 ? 'it changes' : 'they change'}`);
-      if (j.own) parts.push(`${newer(j.own)} put in as you said ${j.own === 1 ? 'it' : 'them'} — your partner gave no words for ${j.own === 1 ? 'it' : 'them'}`);
       if (j.again) parts.push(`${sentences(j.again)} of yours said again in its words`);
       /* (a row kept from before 2.12.41 counted no words kept: said as it was) */
-      if (j.kept || (j.kept === undefined && !j.changed && !j.own && !j.again)) parts.push(j.changed || j.own || j.again ? 'your other words kept as you wrote them' : 'your words kept as you wrote them');
+      if (j.kept || (j.kept === undefined && !j.changed && !j.again)) parts.push(j.changed || j.again ? 'your other words kept as you wrote them' : 'your words kept as you wrote them');
       if (j.added) parts.push(`${sentences(j.added)} of what is new added`);
       if (j.lost) parts.push(`${sentences(j.lost)} it wrote said yours again in other words, so yours stand${j.lost === 1 ? 's' : ''} and what ${j.lost === 1 ? 'it' : 'they'} brought of your newer words did not go in`);
+      if (j.lostNot) parts.push(`${sentences(j.lostNot)} it wrote said “not” otherwise than your words do, so yours stand${j.lostNot === 1 ? 's' : ''} and what ${j.lostNot === 1 ? 'it' : 'they'} brought of your newer words did not go in`);
       if (LINE_SAID[a.line]) parts.push(LINE_SAID[a.line]);
       return ` — your entry, ${a.repaired ? 'with nothing it wrote for it' : 'put together with what it wrote'}: ${listed(parts)}${a.addedWhy ? ` (${a.addedWhy})` : ''}`;
     };
@@ -574,18 +579,20 @@ function quickRow(novelId, r, redraw) {
   if ((r.changes || []).length) {
     /* each newer word of his: where it went in, or that it did not (2.12.40, the review) */
     const notIn = ' — it did not go in: nothing it wrote carries it. Send your words again.';
-    /* (his own words put in where his partner gave none that held — said, with Ask again to have it written: 2.12.41) */
-    const asSaid = ': put in as you said it — your partner gave no words for it.';
+    /* (no words for it that hold, asked once more and still none: nothing of it went in, his words as he wrote them —
+     * never his own words spliced in: 2.12.41, the third review) */
+    const noWords = '; it did not go in — your partner gave no words for it.';
     row.append(section('It changes your earlier words', r.changes.map((x, i) => {
       const kids = [h('span', `“${x.mine}”`), ' — ', h('span', x.label), ` said “${x.was}”`];
       if (x.kind === 'about') {
         const b = book.find((y) => y.at === i);
         kids.push(!b ? ' — it still says it.'
-          : b.status === 'made' || b.status === 'kept' ? `; it says “${b.now}” now${b.own ? asSaid : '.'}`
+          : b.status === 'made' || b.status === 'kept' ? `; it says “${b.now}” now.`
             : b.status === 'undone' ? ' — put back as it was.'
-              : ` — it still says it: ${b.why}.`);
-      } else if (x.in === false) kids.push(notIn);
-      else if (x.kind === 'entry') { if (x.put) kids.push(`; it says “${x.put}” now${x.own ? asSaid : '.'}`); else if (x.in) kids.push(' — your entry says your newer word now.'); }
+              : b.noWords ? noWords
+                : ` — it still says it: ${b.why}.`);
+      } else if (x.in === false) kids.push(x.noWords ? noWords : x.waits ? ' — it did not go in: the entry it goes into waits, under Not put in.' : notIn);
+      else if (x.kind === 'entry') { if (x.put) kids.push(`; it says “${x.put}” now.`); else if (x.in) kids.push(' — your entry says your newer word now.'); }
       /* his premise is his record of what he asked for that passage: never written again — his newer word stands over it */
       else if (x.kind === 'premise') kids.push(' — your newer word stands over it.');
       else if (x.in) kids.push(' — your newer word went in as an entry.');
@@ -598,7 +605,9 @@ function quickRow(novelId, r, redraw) {
   /* (a page he said his word stands over: said as that, never as waiting — 2.12.41, the review) */
   const waiting = (r.conflicts || []).filter((x) => !x.overruled);
   const ruled = (r.conflicts || []).filter((x) => x.overruled);
-  if (ruled.length) row.append(section('Your word stands over the book', ruled.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), ` says “${x.against}”`, ' — yours goes in, as you said.'))));
+  /* (said where it went in — the entry that carries it — and where nothing of it did: never "yours goes in" for nothing,
+   * 2.12.41, the third review) */
+  if (ruled.length) row.append(section('Your word stands over the book', ruled.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), ` says “${x.against}”`, x.in ? ` — yours went into ${x.in}.` : ' — nothing of yours went in.'))));
   if (waiting.length) row.append(section('The book says otherwise — waiting for your word', waiting.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), ` says “${x.against}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null)), '.wait'));
   if ((r.cannot || []).length) row.append(section('Cannot be, by your world’s rules — waiting for your word', r.cannot.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), `: “${x.rule}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null)), '.wait'));
   if ((r.questions || []).length) row.append(section('For you to decide', r.questions.map((q) => h('li', q))));
@@ -622,10 +631,11 @@ function quickRow(novelId, r, redraw) {
   /* ASK AGAIN, on a row that held something back, or whose newer word of his did not go in — the same button a row that
    * failed has (2.12.40, the review: "send your words again" stood with no way to): his words back in the box, and what
    * was held back rides with them (prompts.js quickAddRequest) */
-  /* (and on one whose newer word went in only as he said it, or lost what it brought to a sentence of his said again —
-   * asked again, his partner writes it up: 2.12.41, the review) */
-  const short = (r.refused || []).some((x) => x && (x.held || x.lost)) || (r.held || []).length > 0 || (r.changes || []).some((x) => x.in === false || x.own)
-    || (r.again === 'failed' && aside.length > 0) || added.some((a) => a.status === 'made' && a.joined && a.joined.lost);
+  /* (and on one that lost what it brought to a sentence of his said again — 2.12.41, the review — and on every one with
+   * something under Not put in, but for what was there already: what is held back waits for Ask again, never lost —
+   * 2.12.41, the third review) */
+  const short = (r.refused || []).some((x) => x && !x.same) || (r.held || []).length > 0 || (r.changes || []).some((x) => x.in === false)
+    || (r.again === 'failed' && aside.length > 0) || added.some((a) => a.status === 'made' && a.joined && (a.joined.lost || a.joined.lostNot));
   if (short) row.append(h('div.btnrow', again()));
   return row;
 }
