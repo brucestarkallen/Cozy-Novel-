@@ -362,7 +362,7 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
   else if (auto && !can) root.append(h('p.notekey.bibdue', `The helper’s model holds too little to fill the bibliography beside the notes (it needs ${archivist.BIB_HELPER_MIN.toLocaleString()} tokens of room) — choose a helper with more room in Settings → Who does what. Your own entries are kept.`));
   const due = can && archivist.bibDue ? archivist.bibDue(novelId).length : 0;
   /* (every page it fills by itself said so — read before it was kept, read in parts, or left by a change's reading it
-   * could not vouch for, 2.12.40: never "read before the bibliography was kept" for one read since) */
+   * could not vouch for, 2.12.41: never "read before the bibliography was kept" for one read since) */
   if (due) root.append(h('p.notekey.bibdue', `${plural(due, 'page')} ${due === 1 ? 'is' : 'are'} not read for the bibliography yet — the helper reads ${due === 1 ? 'it' : 'them'} by itself, a few at a time.`));
   root.append(quickView(novelId, redraw));
   const q = filters.get(novelId) || '';
