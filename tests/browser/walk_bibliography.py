@@ -220,11 +220,12 @@ async def scenario(browser):
       turn.innerHTML = '<div class="words tprose"><p><span class="nm" data-name="Rukia">Rukia</span> ran.</p></div>';
       document.body.append(turn);
       const st = getComputedStyle(turn.querySelector('.nm'));
-      const out = [st.textDecorationStyle, st.cursor];
+      const parent = getComputedStyle(turn.querySelector('p'));
+      const out = [st.textDecorationLine, st.cursor, st.backgroundColor, st.color !== parent.color];
       turn.remove();
       return out;
     }""")
-    check('a name in a scene’s telling is marked as one in the page — dotted, and a hand to tap it', deco == ['dotted', 'pointer'], deco)
+    check('a name in a scene’s telling is marked as one in the page — the word itself in colour, a hand to tap it, no line and no wash', deco == ['none', 'pointer', 'rgba(0, 0, 0, 0)', True], deco)
 
     # a third review: what the page does with what it is given
     # a double click on a name selects the word, as anywhere, and opens nothing

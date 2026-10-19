@@ -1174,3 +1174,10 @@ Not run: a real model, a phone's own browser, profile_performance (a profiler, w
 
 **A name the notes know**, marked in the page or in a scene, is no longer only a dotted line. A wash of the room's colour sits under the word. The dotted line stays, so it still reads as something to tap.
 
+## 2.12.44, a marked name is the word itself
+
+The wash under a marked name was worse. It is gone, and so is the dotted line.
+
+A name the notes know is the word itself, in the room's colour, the way a keyword sits in a line of a tale: copper in the Academy and the Study, the tube's pink in Tokyo, and the same idea in the older rooms. Spoken words keep their own colour, and the name stays apart from them. A tap still opens its card.
+
+

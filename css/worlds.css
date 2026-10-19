@@ -23,6 +23,7 @@
   --accent-2: #ecd09a;
   --accent-ink: #1a211e;
   --accent-on-paper: #e6c182;
+  --name-mark: #e8883a;
   --secondary: #a1cfc4;
   --dlg: #edcc93;
   --select: rgba(221, 182, 111, .1);
@@ -60,6 +61,7 @@
   --accent-2: #85560f;
   --accent-ink: #fffaf0;
   --accent-on-paper: #80520e;
+  --name-mark: #b84312;
   --secondary: #286b5c;
   --dlg: #83530f;
   --select: rgba(128, 82, 14, .09);
@@ -95,6 +97,7 @@
   --accent-2: #ddcaff;
   --accent-ink: #251734;
   --accent-on-paper: #cfb4ff;
+  --name-mark: #ff7eb8;
   --secondary: #8bd8e5;
   --dlg: #9bdee7;
   --select: rgba(198, 165, 255, .1);
@@ -129,6 +132,7 @@
   --accent-2: #7751a5;
   --accent-ink: #fffbff;
   --accent-on-paper: #7148a0;
+  --name-mark: #9a2f6b;
   --secondary: #236c7b;
   --dlg: #276b79;
   --select: rgba(113, 72, 160, .08);

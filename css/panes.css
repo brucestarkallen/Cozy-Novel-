@@ -161,14 +161,18 @@
 .summary-sheet .summary-stretch > p:not(.hint) { color: var(--chrome-ink); font-size: 14px; margin: 0 0 10px; }
 
 /* the bibliography: names in the page that open their card (Tap names), the card, Notes → Bibliography */
-/* a name the notes know, marked in the page and in a scene: a wash of the room's colour, and the dotted line kept so a tap still reads as a tap */
-.prose .nm, .tprose .nm { cursor: pointer; text-decoration-line: underline; text-decoration-style: dotted; text-decoration-thickness: 1.5px; text-underline-offset: .28em;
-  text-decoration-color: color-mix(in srgb, var(--accent-on-paper, var(--accent)) 72%, transparent);
-  background-image: linear-gradient(180deg, transparent 0 54%, color-mix(in srgb, var(--accent) 34%, transparent) 54% 92%, transparent 92%);
-  border-radius: .12em; padding: 0 .06em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-.prose .nm:hover, .tprose .nm:hover { text-decoration-color: var(--accent-on-paper, var(--accent));
-  background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, transparent) 0 54%, color-mix(in srgb, var(--accent) 46%, transparent) 54% 100%); }
-.prose .nm:active, .tprose .nm:active { background-color: color-mix(in srgb, var(--accent) 24%, transparent); background-image: none; }
+/* a name the notes know, in the page or a scene: the word itself, in the room's colour, as a keyword in a tale — no line, no wash */
+.prose .nm, .tprose .nm,
+[data-tint="on"] .prose .nm, [data-tint="on"] .tprose .nm,
+[data-tint="on"] .prose .dlg .nm, [data-tint="on"] .tprose .dlg .nm {
+  cursor: pointer; color: var(--name-mark, var(--accent-on-paper, var(--accent)));
+  text-decoration: none; background: none; padding: 0; border-radius: 0; box-shadow: none; }
+.prose .nm:hover, .tprose .nm:hover,
+[data-tint="on"] .prose .dlg .nm:hover, [data-tint="on"] .tprose .dlg .nm:hover {
+  color: color-mix(in srgb, var(--name-mark, var(--accent-on-paper, var(--accent))) 72%, white); }
+.prose .nm:active, .tprose .nm:active,
+[data-tint="on"] .prose .dlg .nm:active, [data-tint="on"] .tprose .dlg .nm:active {
+  color: color-mix(in srgb, var(--name-mark, var(--accent-on-paper, var(--accent))) 78%, black); }
 @media (hover: none) { .prose .nm, .tprose .nm { -webkit-tap-highlight-color: transparent; } }
 .notes-views button { padding: 0 8px; white-space: nowrap; }
 .namesheet .namecard + .namecard { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
