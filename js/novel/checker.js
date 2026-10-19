@@ -39,7 +39,7 @@ import { findIn } from './search.js';
 import { stockIn, repeatsIn } from './stock.js';
 import { straysIn, markupAt, unmarked, speechFaults, changeSpan, uniqueAround, marksOnlyResult, speechMarks, pairWalk, spacingSlips } from './textshape.js';
 import { contextOf } from '../model/providers.js';
-import { hashText, countWords, newId, plural, estimateTokens, cutWords } from '../util.js';
+import { hashText, countWords, newId, plural, estimateTokens, cutWords, linesOf, sameLines } from '../util.js';
 
 /* ------------------------------------------------------------ who checks */
 
@@ -666,6 +666,19 @@ export function quoted(list, last = 'or') {
 }
 const clean = (s, n = 300) => String(s === undefined || s === null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
 const overlaps = (a, b) => a.start < b.end && b.start < a.end;
+/* what parts each word of some words from the next: 0 a space, 1 a line's break, 2 a paragraph's */
+const gapsOf = (t) => (linesOf(t).match(/\s+/g) || []).map((g) => (g.includes('\n\n') ? 2 : g.includes('\n') ? 1 : 0));
+/* A FIX THAT CHANGES NOTHING — its words the page's, or the page's with only a break its quote let go (the page's words are
+ * found with their white space let go, changes.js locate) — is none; one that parts a paragraph where a new speaker begins,
+ * as the check asks, is one (2.12.41, the review of Quick add: every run of white space was read as one space, so a fix that
+ * only parted a paragraph was let go) */
+function noFix(find, replace) {
+  if (find === replace || sameLines(find, replace)) return true;
+  if (linesOf(find).replace(/\s+/g, ' ') !== linesOf(replace).replace(/\s+/g, ' ')) return false;
+  const was = gapsOf(find);
+  const now = gapsOf(replace);
+  return was.length === now.length && now.every((g, i) => g <= was[i]);
+}
 
 /* the sentence around some words: from the end of the one before to the end of its own */
 function sentenceAround(text, start, end) {
@@ -1100,7 +1113,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     const spot = locate(a.text, e.find);
     if (spot.why) continue;
     const find = a.text.slice(spot.start, spot.end);
-    if (find === e.replace || find.replace(/\s+/g, ' ').trim() === e.replace.replace(/\s+/g, ' ').trim()) continue;
+    if (noFix(find, e.replace)) continue;
     /* two fixes over the same words: the first stands */
     if (a.items.some((x) => overlaps(x, spot)) || wasLeft(a, find, e.replace)) continue;
     const kind = CHECK_KINDS.includes(String(e.kind || '').toLowerCase()) ? String(e.kind).toLowerCase() : 'humanize';
@@ -1698,7 +1711,7 @@ async function proofRead(novelId, conn, batch, limit, choice) {
     const spot = locate(a.text, e.find);
     if (spot.why) continue;
     const find = a.text.slice(spot.start, spot.end);
-    if (find === e.replace || find.replace(/\s+/g, ' ').trim() === e.replace.replace(/\s+/g, ' ').trim() || !slipSize(find, e.replace)) continue;
+    if (noFix(find, e.replace) || !slipSize(find, e.replace)) continue;
     if (a.items.some((x) => overlaps(x, spot))) continue;
     a.items.push({ id: newId('sg'), kind: 'grammar', find, replace: e.replace, why: clean(e.why) || 'a slip of the hand', proof: true, start: spot.start, end: spot.end });
   }
@@ -2115,7 +2128,7 @@ async function readWhole(novelId, conn, chapter, sig, words, choice) {
       const spot = locate(a.text, e.find);
       if (spot.why) continue;
       const find = a.text.slice(spot.start, spot.end);
-      if (find === e.replace || find.replace(/\s+/g, ' ').trim() === e.replace.replace(/\s+/g, ' ').trim()) continue;
+      if (noFix(find, e.replace)) continue;
       if (a.items.some((x) => overlaps(x, spot))) continue;
       const kind = String(e.kind || '').toLowerCase() === 'seam' ? 'seam' : 'continuity';
       a.items.push({ id: newId('sg'), kind, find, replace: e.replace, why: clean(e.why), whole: true, ...saysOf(novelId, chapter.id, a.pid, kind, e.says, a.text.slice(0, spot.start)), start: spot.start, end: spot.end });

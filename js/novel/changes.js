@@ -16,7 +16,7 @@
 
 import * as store from '../store.js';
 import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith } from './shape.js';
-import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords } from '../util.js';
+import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords, linesOf, sameLines } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
 import { superOn } from './auto.js';
@@ -24,7 +24,7 @@ import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, hasMarkup as hasMarkupText } from './textshape.js';
 import { replaceMany, renameRule } from './names.js';
-import { entriesOf, entryNamed, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
+import { entriesOf, entryFor, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
 import { changeInPlace, putBackWords } from './inplace.js';
 
@@ -449,10 +449,12 @@ const text = (v) => String(v === undefined || v === null ? '' : v).replace(/\r/g
  * but a passage may well open "I'm afraid…" in a book told by its "I" */
 const hasWords = (t) => Boolean(String(t || '').trim()) && !archivist.saysNothing(t);
 const clipped = (t) => { const x = String(t || '').replace(/\s+/g, ' ').trim(); return x.length > 40 ? `${x.slice(0, 39)}…` : x; };
-/* WORDS GIVEN BACK WORD FOR WORD AS THEY STAND (its spaces let go) are no words written over — never turned away as read
- * only in short or by a first line, which asks it again for nothing (2.12.40, the review): what the change says then is
- * that they are there already */
-const sameWordsAs = (given, standing) => { const x = String(given ?? '').replace(/\s+/g, ' ').trim(); return Boolean(x) && x === String(standing ?? '').replace(/\s+/g, ' ').trim(); };
+/* WORDS GIVEN BACK WORD FOR WORD AS THEY STAND (the spaces within a line let go) are no words written over — never turned
+ * away as read only in short or by a first line, which asks it again for nothing (2.12.40, the review): what the change
+ * says then is that they are there already. Its lines and paragraphs as they stand too (util.js sameLines — 2.12.41, the
+ * review: every run of white space was read as one, so a passage's paragraphs parted or joined, and an entry put into
+ * paragraphs, were turned away as changing nothing) */
+const sameWordsAs = (given, standing) => Boolean(linesOf(given)) && sameLines(given, standing);
 /* the new words for a find: "replace" ("" takes the words out) — or "text",
  * when it wrote that instead; with neither, nothing is guessed */
 const newWords = (op) => (op.replace !== undefined ? String(op.replace) : op.text !== undefined ? String(op.text) : null);
@@ -855,7 +857,7 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner
   const entries = entriesOf(novel);
   const name = archivist.cleanName(op.entry);
   if (!name) return refuse(text(op.entry) ? `“${clipped(text(op.entry))}” is no name — name the entry as the bibliography does` : 'the entry needs a name');
-  const m = entryNamed(entries, name);
+  const m = entryFor(entries, name);
   if (m.ambiguous) return refuse(`more than one entry goes by ${name} — name it by its full name`);
   const cur = m.entry ? clone(m.entry) : null;
   /* HIS ENTRY WRITTEN WHOLE ONLY BY AN ANSWER THAT READ IT WHOLE (2.12.40, the audit — the twin of a passage it had only
@@ -1636,8 +1638,8 @@ export function changedSinceSnapshot(novelId, op, snapshot, { where = null, numb
     now = cardBase(o, current);
   } else if (scope === 'entry') {
     const name = archivist.cleanName(o.entry) || text(o.entry);
-    const old = entryNamed(snapshot.entries || [], name).entry;
-    const current = entryNamed(entriesOf(novel), name).entry;
+    const old = entryFor(snapshot.entries || [], name).entry;
+    const current = entryFor(entriesOf(novel), name).entry;
     if ((old && old.id) !== (current && current.id)) return changed;
     before = entryBase(o, old);
     now = entryBase(o, current);
@@ -1661,7 +1663,7 @@ export function baseOf(novelId, op, where = null) {
     if (o.plan !== undefined) { const c = chapterAt(novel, o.plan, { where }).chapter; return c ? hashText(String(c.plan || '')) : ''; }
     if (o.chapter !== undefined) { const c = chapterAt(novel, o.chapter, { where }).chapter; return c ? hashText(String(c.name || '')) : ''; }
     if (o.module !== undefined) { const m = moduleNamed(listModules(store.peek('house', 'house') || {}), o.module); return m ? hashText(String(m.text || '')) : ''; }
-    if (o.entry !== undefined) return entryBase(o, entryNamed(entriesOf(novel), archivist.cleanName(o.entry) || text(o.entry)).entry);
+    if (o.entry !== undefined) return entryBase(o, entryFor(entriesOf(novel), archivist.cleanName(o.entry) || text(o.entry)).entry);
   } catch (_) { /* nothing to print */ }
   return '';
 }
@@ -1699,7 +1701,7 @@ export function wordsNow(novelId, change) {
     if (o.plan !== undefined) { const x = chapterAt(novel, o.plan, { where: c.where || null }).chapter; return x ? String(x.plan || '') : ''; }
     if (o.chapter !== undefined && o.passage === undefined) { const x = chapterAt(novel, o.chapter, { where: c.where || null }).chapter; return x ? String(x.name || '') : ''; }
     if (o.note !== undefined && o.about !== undefined) { const m = matchCard((novel.notes || {})[o.note] || [], archivist.cleanName(o.name), [], { kind: o.note, near: false }); return m.card ? String(m.card.about || '') : ''; }
-    if (o.entry !== undefined && o.text !== undefined) { const e = entryNamed(entriesOf(novel), archivist.cleanName(o.entry)).entry; return e ? String(e.text || '') : ''; }
+    if (o.entry !== undefined && o.text !== undefined) { const e = entryFor(entriesOf(novel), archivist.cleanName(o.entry)).entry; return e ? String(e.text || '') : ''; }
   } catch (_) { /* nothing to show */ }
   return '';
 }
