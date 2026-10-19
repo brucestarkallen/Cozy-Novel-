@@ -33,12 +33,12 @@ import { ask } from '../model/call.js';
 import { wireOf, contextOf } from '../model/providers.js';
 import { assemble, partnerReply } from './context.js';
 import { connFor } from './writer.js';
-import { picked, passageNumbers, chapterLabel, premisesOf } from './shape.js';
+import { picked, passageNumbers, chapterLabel, premisesOf, renameCount, renamesSince } from './shape.js';
 import { quickAddRequest, quickAgainRequest, keptByHelper, PREMISE_ROOM, JSON_AGAIN, JSON_CUT } from './prompts.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { findIn } from './search.js';
-import { namesAndFigures, foldedText, foldName, nearName } from './names.js';
-import { entriesOf, entriesNamed, entryFor, entryWords, kindSaid, nameForms, makeFinder, formKey } from './bibliography.js';
+import { namesAndFigures, foldedText, foldName, nearName, stopEndsNoSentence, renameIn } from './names.js';
+import { entriesOf, entriesNamed, entryFor, otherKindSaid, entryWords, kindSaid, kindOf, nameForms, makeFinder, formKey } from './bibliography.js';
 import { makeChange, undoChange } from './changes.js';
 import * as archivist from './archivist.js';
 import { newId, estimateTokens, numberWords, truthOf } from '../util.js';
@@ -364,7 +364,9 @@ export function readAnswer(novel, chapters, obj) {
 function toSetRight(read, novel, finder, words) {
   const conflicts = read.conflicts.filter((c) => c.said !== 'conflicts');
   const moved = read.changes.filter((c) => c.said !== 'changes');
-  const about = read.changes.filter((c) => c.kind === 'about' && !nowFor(c, bookCtx(novel, c.field, finder, words)));
+  /* (What it's about: asked once more where its words for it would not go in, as putting them in judges it — bookPlacing,
+   * 2.12.41, the fourth review — but where its quote cannot be put right here at all) */
+  const about = read.changes.filter((c) => c.kind === 'about' && BOOK_FIELD[c.field] && ((p) => !p.here && (p.noWords || p.couldNot))(bookPlacing(c, novel, finder, words)));
   const dry = dryRun(read, novel, finder, words);
   const lone = read.changes.filter((c) => c.said === 'changes' && c.kind !== 'about' && !(c.kind === 'entry' ? dry.put.has(c) : read.entries.some((e) => carriesWords(answerWords(e), c.mine))));
   const changes = [...moved, ...lone.filter((c) => c.kind !== 'entry')];
@@ -568,8 +570,10 @@ function shareIn(words, set) {
  * the sun" said no to "but", and a "not" ran on past a quote into the next sentence): each governs its clause — up to a
  * stop, a comma, a colon, a semicolon, a dash, a quote, or "but" or "except" — every word that tells after it ("never feeds
  * on children": feeds, children; "no longer the heir": heir), else the one just before it ("fears nothing": fears) —
- * [{words}] in order, words [] where it governs none */
+ * [{words}] in order, words [] where it governs none. "Instead of" and "rather than" are a "not" over what follows them
+ * (2.12.41, the fourth review: "Make Corvin her brother instead of her steward" said no to nothing) */
 const NEG = /^(?:not|no|never|none|nothing|nobody|nowhere|neither|nor|cannot|without|\p{L}+n['’]t)$/u;
+const NEG_TWO = { instead: 'of', rather: 'than' };
 const PAST_NOT = new Set(('a an the to be is are was were been being am have has had do does did can could will would shall should may might must ever '
   + 'even yet still once again really truly quite very always just only any much more so too at all one of in on for with her his their its my your our '
   + 'this that these those he she it they we you i longer other such single own real true further less').split(' '));
@@ -584,18 +588,21 @@ function negsOf(t) {
     for (const w of ws) { if (NOT_ENDS.has(w)) { part = []; parts.push(part); } else part.push(w); }
     for (const p of parts) {
       p.forEach((w, i) => {
-        if (!NEG.test(w)) return;
-        const after = p.slice(i + 1).flatMap(notTells);
-        out.push({ words: after.length ? after : p.slice(0, i).flatMap(notTells).slice(-1) });
+        const two = Object.hasOwn(NEG_TWO, w) && p[i + 1] === NEG_TWO[w];
+        if (!two && !NEG.test(w)) return;
+        const after = p.slice(i + (two ? 2 : 1)).flatMap(notTells);
+        out.push({ words: after.length ? after : two ? [] : p.slice(0, i).flatMap(notTells).slice(-1) });
       });
     }
   }
   return out;
 }
 const saysNoTo = (x, w) => x.negs.some((n) => n.words.some((g) => g === w || regular(g, w)));
-/* WHETHER SOME WORDS SAY "NOT" AS THE WORDS THEY ANSWER TO DO — each "not" judged by the last word it says no to that
- * both give ("feeds on sailors, never on children" says no to children as "never feeds on children" does), as the first of
- * `refs` that gives that word has it; and a "not" of theirs to words none of `refs` gives is never theirs to say */
+/* WHETHER SOME WORDS SAY "NOT" AS THE WORDS THEY ANSWER TO DO — each "not" of theirs judged by the last word it says no
+ * to that both give ("feeds on sailors, never on children" says no to children as "never feeds on children" does), as the
+ * first of `refs` that gives that word has it, and a "not" of theirs to words none of `refs` gives is never theirs to say;
+ * a "not" of `refs` judged only where they give every word it says no to (2.12.41, the fourth review: "Emilia drinks the
+ * blood of animals" was read as taking back his "does not drink human blood" — it never says "human") */
 function negsAgree(R, refs) {
   for (const n of R.negs) {
     if (!n.words.length) continue;
@@ -606,9 +613,8 @@ function negsAgree(R, refs) {
   }
   for (const x of refs) {
     for (const n of x.negs) {
-      const given = n.words.filter((w) => keptIn(w, R.words));
-      if (!given.length) continue;
-      const k = given[given.length - 1];
+      if (!n.words.length || !n.words.every((w) => keptIn(w, R.words))) continue;
+      const k = n.words[n.words.length - 1];
       if (saysNoTo(R, k) !== saysNoTo(refs.find((y) => keptIn(k, y.words)), k)) return false;
     }
   }
@@ -642,18 +648,34 @@ function sameWords(a, b) {
   return x.size > 0 && y.size > 0 && shareIn(x, y) >= HOLD && shareIn(y, x) >= HOLD;
 }
 /* what the keep rule holds an entry of his to, in one answer: his entry's words (`entry`, with its own names, `own`, and
- * his line, `line`), his words in this Quick add (`box`), and the reader of names made once for the answer */
+ * his line, `line`), his words in this Quick add (`box`, and sentence by sentence, `said`), and the reader of names made
+ * once for the answer; whose it is (`ref`), its kind, and the words his entry calls its own one by (`pron`: "she", "he",
+ * "they" — the pronouns opening a sentence of his entry) */
 function entryCtx(cur, finder, words) {
   const read = nameReader(finder, cur);
   const prep = prepared(read);
-  return { prep, read, words: String(words || ''), box: prep(words), entry: prep([cur.name, ...(cur.aka || []), cur.line, cur.text].filter(Boolean).join('\n')),
-    own: new Set(wordsOf([cur.name, ...(cur.aka || [])].join(' '))), line: String(cur.line || '').trim() ? prep(cur.line) : null };
+  return { prep, read, words: String(words || ''), box: prep(words), said: sentencesOf(words).map(prep), entry: prep([cur.name, ...(cur.aka || []), cur.line, cur.text].filter(Boolean).join('\n')),
+    own: new Set(wordsOf([cur.name, ...(cur.aka || [])].join(' '))), line: String(cur.line || '').trim() ? prep(cur.line) : null,
+    ref: `e:${cur.id}`, kind: kindOf(cur.kind), pron: pronounsOf(String(cur.text || ''), kindOf(cur.kind)) };
 }
 /* …and What it's about, how it reads or where it's headed, as his own words a newer word of his changes */
 function bookCtx(novel, field, finder, words) {
   const read = nameReader(finder, null);
   const prep = prepared(read);
-  return { prep, read, words: String(words || ''), box: prep(words), entry: prep(String((novel && novel[BOOK_FIELD[field]]) || '')), own: new Set(), line: null };
+  return { prep, read, words: String(words || ''), box: prep(words), said: sentencesOf(words).map(prep), entry: prep(String((novel && novel[BOOK_FIELD[field]]) || '')), own: new Set(), line: null,
+    ref: '', kind: '', pron: new Set() };
+}
+/* the words an entry calls its own one by: the pronouns opening its sentences ("She keeps a raven" — she, her, hers); every
+ * one of a person's where none opens one; "it" only for what is no person (2.12.41, the fourth review: "Its eyes are
+ * green", of her raven, was read as hers) */
+const PRONOUNS = { she: ['she', 'her', 'hers', 'herself'], he: ['he', 'him', 'his', 'himself'], they: ['they', 'them', 'their', 'theirs', 'themselves'], it: ['it', 'its', 'itself'] };
+const PRONOUN_OF = Object.fromEntries(Object.entries(PRONOUNS).flatMap(([k, ws]) => ws.map((w) => [w, k])));
+function pronounsOf(text, kind) {
+  const opening = new Set();
+  for (const s of sentencesOf(text)) { const w = ((s.match(/^["“‘'(]*(\p{L}+)/u) || [])[1] || '').toLowerCase(); if (Object.hasOwn(PRONOUN_OF, w)) opening.add(PRONOUN_OF[w]); }
+  if (kind === 'people') opening.delete('it');
+  const keys = opening.size ? [...opening] : kind === 'people' ? ['she', 'he', 'they'] : ['it', 'they'];
+  return new Set(keys.flatMap((k) => PRONOUNS[k]));
 }
 /* the words some words would bring into his entry that neither the words they stand in place of (`base`), his entry, nor
  * his words in this Quick add say — a little word is no word brought; a figure is */
@@ -663,10 +685,13 @@ function unbacked(o, base, ctx) {
   for (const [v, said] of o.figures) if (!base.figures.has(v) && !ctx.entry.figures.has(v) && !ctx.box.figures.has(v)) out.push(said);
   return out;
 }
-/* what his newer word says that his entry lacks: its words, its figures — {words, figures, mine} */
+/* what his newer word says that his entry lacks: its words, its figures — {words, figures, mine}; never a word that only
+ * marks it as newer ("now", "actually": "Emilia drinks blood now" was carried by no words of its partner's without
+ * "now", found in this round's checks) */
+const NEWER = new Set(['now', 'actually', 'anymore']);
 function freshOf(c, ctx) {
   const mine = ctx.prep(c.mine);
-  return { mine, words: [...mine.says].filter((w) => !keptIn(w, ctx.entry.says)), figures: [...mine.figures.keys()].filter((v) => !ctx.entry.figures.has(v)) };
+  return { mine, words: [...mine.says].filter((w) => !NEWER.has(w) && !keptIn(w, ctx.entry.says)), figures: [...mine.figures.keys()].filter((v) => !ctx.entry.figures.has(v)) };
 }
 /* WHETHER SOME WORDS CARRY HIS NEWER WORD: words of it his entry lacks — or, where it brings none (a "not" put in or taken
  * out), all it says but the entry's own name, with "not" as his newer word has it and not as the words it changes — and
@@ -675,16 +700,25 @@ function carries(o, c, ctx) {
   if (stands(o.text, c.was)) return false;
   const f = freshOf(c, ctx);
   if (f.words.length || f.figures.length) return f.words.some((w) => keptIn(w, o.says)) || f.figures.some((v) => o.figures.has(v));
-  const all = [...f.mine.says].filter((w) => !ctx.own.has(w));
+  const all = [...f.mine.says].filter((w) => !ctx.own.has(w) && !NEWER.has(w));
   return all.length > 0 && all.every((w) => keptIn(w, o.says)) && negsAgree(o, [f.mine]) && !negsAgree(o, [ctx.prep(c.was)]);
 }
 /* whether some words put in place of the words his newer word changes keep every name and figure of those that his newer
- * word does not change — one of them let go only where his newer word brings one of its own */
+ * word does not change — one of them let go only where his newer word brings one of its own — and every "not" of them:
+ * over every word it says no to, but where his newer words say those words with no "not" (2.12.41, the fourth review: a
+ * change the app's own ask again invited put "Emilia drinks the blood of animals." in place of his "Emilia does not
+ * drink human blood.") */
 function wasKept(o, c, ctx) {
   const was = ctx.prep(c.was);
   const f = freshOf(c, ctx);
   if (!f.figures.length && [...was.figures.keys()].some((v) => !o.figures.has(v))) return false;
   if (namesLostIn(was.names, o.names).length && !namesLostIn(f.mine.names, ctx.entry.names).length) return false;
+  for (const n of was.negs) {
+    if (!n.words.length) continue;
+    if (n.words.every((w) => keptIn(w, o.words) && saysNoTo(o, w))) continue;
+    const said = [f.mine, ctx.box].some((x) => n.words.every((w) => keptIn(w, x.words)) && !n.words.some((w) => saysNoTo(x, w)));
+    if (!said) return false;
+  }
   return true;
 }
 /* HIS PARTNER'S WORDS FOR HIS NEWER WORD, IN PLACE OF THE WORDS IT CHANGES ("now" — 2.12.41, the review), where they hold
@@ -702,13 +736,16 @@ function nowFor(c, ctx) {
 
 /* his words piece by piece — each sentence with the space after it, a paragraph's break with it — so they are put back
  * together as they stood; a stop inside a closing quote or bracket ends its sentence too (2.12.41, the third review:
- * "…the Covenant: “Never again.” She is feared." was one sentence, and "She is feared." was lost) */
+ * "…the Covenant: “Never again.” She is feared." was one sentence, and "She is feared." was lost); a title's short form
+ * or an initial ends none (names.js stopEndsNoSentence — 2.12.41, the fourth review: "Dr. Halloway treats the hunters"
+ * was cut after "Dr.", and the lone "Dr." let go) */
 const SENTENCE_GAP = /(?<=[.!?…]["”’»)\]]*)\s+|[^\S\n]*\n\s*/g;
 function piecesOf(text) {
   const t = String(text || '');
   const out = [];
   let from = 0;
   for (const m of t.matchAll(SENTENCE_GAP)) {
+    if (!m[0].includes('\n') && stopEndsNoSentence(t.slice(from, m.index), t.slice(m.index + m[0].length))) continue;
     out.push({ s: t.slice(from, m.index), sep: m[0], start: from, end: m.index });
     from = m.index + m[0].length;
   }
@@ -764,24 +801,83 @@ function hisOwnFor(mine, words) {
   }
   return best || m;
 }
-/* his words put in place of some of his (a span of `text`): the stop after them stays theirs, never two, and a sentence
- * they open opens with a capital */
-function putIn(text, span, words) {
-  const before = text.slice(0, span.start);
-  const after = text.slice(span.end);
-  let w = String(words || '').trim();
-  if (/^[.!?…]/.test(after)) w = w.replace(/[.!?…]+$/, '');
-  if (!before.trim() || /[.!?…]\s*$/.test(before)) w = w.charAt(0).toUpperCase() + w.slice(1);
-  return `${before}${w}${after}`;
+/* HIS PARTNER'S WORDS FOR HIS NEWER WORD, PUT IN BY THEIR SHAPE — WHOLE SENTENCES MEET WHOLE SENTENCES (2.12.41, the
+ * fourth review: "Her eyes are green. and cold.", "Emilia has Emilia has green eyes.", "An elder vampire, Emilia is now an
+ * ally of the Covenant., mother of twins." — its words went in wherever its quote stood, whatever their size). Where the
+ * words they change stand in `text` (`span`), the same at every place they go in — his entry, his line, What it's about:
+ * - in place of those words, where they read there: within one sentence of his, never saying the words beside them a
+ *   second time ("Emilia has" and "has green eyes"), a whole sentence of their own only where those words open his ("Her
+ *   eyes are grey" → "Her eyes are green and cold."), their stop let go where his sentence goes on after them, their
+ *   capital where it goes on before them (a name keeps its own), and a stop given where those words ended his sentence;
+ * - else, where they are whole sentences, in place of the sentence of his that holds those words — only where they keep
+ *   every other word of it that tells, its names and its figures (keepsAll), and say "not" as it does;
+ * - else nowhere: null — never pasted, never doubled.
+ * {from, to, s}: the words of `text` from `from` to `to` are to stand as `s` */
+const WHOLE = /^["“‘'(]*[\p{Lu}\p{N}][\s\S]*[.!?…]["”’»)\]]*$/u;
+const STOP_END = /[.!?…]+(["”’»)\]]*)$/;
+const wordRun = (t) => (String(t || '').toLowerCase().match(/[\p{L}\p{N}]+(?:['’][\p{L}]+)*/gu) || []);
+/* whether the first word of some words is a name: one of the entry's own, a name the book knows, or one written with a
+ * capital in the middle of a sentence of his */
+function nameFirst(w, ctx) {
+  const m = /^["“‘'(]*(\p{Lu}[\p{L}'’-]*)/u.exec(w);
+  if (!m) return false;
+  const word = m[1];
+  if (ctx.own.has(word.toLowerCase().replace(/['’]s$/, ''))) return true;
+  if (ctx.read(w).refs.some((x) => foldName(w).startsWith(foldName(x.words)))) return true;
+  const mid = new RegExp(`[\\p{L}\\p{N},;:]\\s+${esc(word)}(?![\\p{L}])`, 'u');
+  return mid.test(ctx.entry.text) || mid.test(ctx.words);
 }
+function placeIn(text, span, now, ctx) {
+  const t = String(text || '');
+  const N = String(now || '').trim();
+  if (!N || !span) return null;
+  const at = piecesOf(t).filter((p) => p.s.trim() && p.end > span.start && p.start < span.end);
+  if (!at.length) return null;
+  const S0 = at[0].start + (at[0].s.length - at[0].s.trimStart().length);
+  const S1 = at[at.length - 1].end;
+  const before = t.slice(S0, span.start);
+  const after = t.slice(span.end, S1);
+  const ns = piecesOf(N).filter((p) => p.s.trim());
+  const whole = ns.length > 0 && ns.every((p) => WHOLE.test(p.s.trim()));
+  const opens = !/[\p{L}\p{N}]/u.test(before);
+  /* in place of those words */
+  if (at.length === 1 && ns.length === 1 && (!whole || opens)) {
+    let w = N;
+    const goesOn = /[\p{L}\p{N}]/u.test(after) || /^\s*[.!?…]/.test(after);
+    if (goesOn) w = w.replace(/[.!?…]+$/, '');
+    else if (!/[\p{L}\p{N}]/u.test(after)) {
+      const end = STOP_END.exec(t.slice(span.start, span.end));
+      if (end && !/[.!?…]["”’»)\]]*$/.test(w)) w = `${w}${end[0]}`;
+    }
+    if (opens) w = w.replace(/^(["“‘'(]*)(\p{Ll})/u, (_, q, x) => q + x.toUpperCase());
+    else if (!nameFirst(w, ctx)) w = w.replace(/^(["“‘'(]*)(\p{Lu})(?!\p{Lu})/u, (_, q, x) => q + x.toLowerCase());
+    const b = wordRun(before);
+    const a = wordRun(after);
+    const n = wordRun(w);
+    const said = (xs, ys) => [1, 2, 3].some((k) => xs.length >= k && ys.length >= k && xs.slice(-k).join(' ') === ys.slice(0, k).join(' '));
+    /* (one sentence of words in, one of his around them — the stop and the capital set above are the only joins: a stop
+     * inside them or his, followed by a small letter, is a short form's — "e.g. emerald", "Dr. " — never a break) */
+    if (!said(b, n) && !said(n, a)) return { from: span.start, to: span.end, s: w };
+  }
+  /* whole sentences in place of the sentence of his that holds those words */
+  if (whole) {
+    const rest = ctx.prep(`${before} ${after}`);
+    const R = ctx.prep(N);
+    if (keepsAll(R, rest) && negsAgree(R, [rest])) return { from: S0, to: S1, s: N };
+  }
+  return null;
+}
+/* a placing laid into the words it was made for */
+const laid = (text, p) => `${text.slice(0, p.from)}${p.s}${text.slice(p.to)}`;
 /* (2.12.41, the third review: no words of his are ever spliced into his entry, his line or What it's about in place of
  * the words his newer word changes — his words in Quick add are often an order ("Make her eyes green"), and the splice
  * wrote "Her eyes are Make her eyes green and cold" and "Emilia not trust the Covenant", with "as you said it" on the
  * row. Where his partner gives no words that hold, asked once more and still none, nothing is put in for that newer word:
  * the row says it did not go in, with Ask again.) */
 
-/* WHAT A SENTENCE TELLS OF EACH THING IN IT (2.12.41, the third review: an added "Emilia has green eyes." went in beside
- * his "Emilia has grey eyes." — the entry said both): the words that tell what a thing is — right before it, after
+/* WHAT A SENTENCE TELLS OF EACH THING IN IT — read where a page says otherwise, for the page's own words on what they part
+ * on (heldBy; 2.12.41, the third review — "would say both" reads slotsOf since the fourth): the words that tell what a
+ * thing is — right before it, after
  * "her", a name's "'s", "has" or "with" ("has grey eyes", "her long grey hair", "Lilith's grey eyes", "has a black
  * cloak"), or after it past "is", "are", "was", "were" ("her eyes are grey") — and a figure counted before it ("twelve
  * members"); with whose it is: a name's "'s" before it, else whom its clause names last before it, else whom its
@@ -913,35 +1009,274 @@ function valuesOf(text, own0) {
   });
   return out;
 }
-/* one more of a thing, said so: "a white raven too", "also", "another", "a second", "as well" */
-const ONE_MORE = /\b(?:too|also|another|second|third|besides)\b|\bas well\b/i;
-/* WHETHER AN ADDED SENTENCE WOULD SAY BOTH ONE OF HIS AND ANOTHER WAY OF IT: the same thing of the same one ("eyes", hers)
- * told with a word of his newer words ("green") where his sentence tells it with one they never give ("grey") — and with
- * no change listed for it, the entry would say both. Never where it tells of one more of a thing ("keeps a white raven
- * too"), where the two tell it by two doings ("sews a red cloak" beside his "wears a black cloak"), or where it tells
- * his of it too ("keeps a white raven beside her black raven") */
+/* one more of a thing, said so: "a white raven too", "also", "another", "a second", "as well", "more" */
+const ONE_MORE = /\b(?:too|also|another|second|third|besides|more)\b|\bas well\b/i;
+
+/* WHAT A SENTENCE TELLS OF ONE, WHERE ITS WORDS LEAVE NO DOUBT — all "would say both" holds back (2.12.41, the fourth
+ * review: the guesses before it held her raven's green eyes, "Its eyes are green", "drinks the blood of animals" and "is
+ * human" beside his, and let "lives in Prague", "five hundred years old" and "three brothers" in beside his "lives in
+ * Venice", "three hundred" and "two brothers"). Each slot: whose it is (`who`: '' for the entry's own one — its name, the
+ * pronoun its entry calls it by, that pronoun's "her" — else the name or word it is told of, "corvin", "raven"; never a
+ * pronoun the entry does not use for it, "its" of a person), what is told (`head`: 'live' for where one lives, 'age', the
+ * thing counted or coloured, "brothers", "eyes", "cloak"), by what (`verb`: 'has' for having it, being it, "her …";
+ * else the doing word, "wears"), and its value (`kind`, `values`): a place, a figure ("three hundred" one figure), or
+ * colour words; `more`: whether one more of a kind may be meant ("a red cloak", "black robes", a count, a place). Never
+ * what "is a …" says, nor anything else: two of those may both be true. [{who, head, verb, kind, values: Set, more}] */
+const COLOUR = new Set(('black white grey gray green blue red brown gold golden silver silvery yellow purple violet pink orange amber hazel auburn '
+  + 'blond blonde ginger crimson scarlet ebony ivory copper bronze chestnut emerald sapphire ruby jade teal azure cobalt indigo maroon rust tawny '
+  + 'sandy ashen ash').split(' '));
+const TONE = new Set(['dark', 'fair', 'pale']);
+const BODY = new Set(['eye', 'eyes', 'hair', 'skin', 'beard', 'fur', 'mane', 'scales', 'feathers']);
+const SAME_COLOUR = { gray: 'grey', blonde: 'blond', golden: 'gold', silvery: 'silver', ashen: 'ash' };
+const RESIDE = /^(?:liv(?:e|es|ed|ing)|dwell(?:s|ed|ing)?|dwelt|resid(?:e|es|ed|ing))$/;
+const PLACE_AT = new Set(['in', 'at', 'on', 'near', 'by', 'beside', 'within', 'inside', 'outside', 'under', 'beneath', 'above', 'below']);
+const PLACE_END = new Set(['and', 'with', 'where', 'who', 'which', 'that', 'since', 'for', 'until', 'while', 'when', 'but', 'or', 'as', 'now', 'again']);
+const COPULA = new Set(['is', 'are', 'was', 'were', 'remains', 'remained']);
+const HAS_FORM = new Set(['has', 'have', 'had']);
+const AGE_UNIT = { year: 1, years: 1, century: 100, centuries: 100 };
+const BEFORE_VERB = new Set([...OFTEN, 'also', 'still', 'too', 'only', 'just', 'even', 'ever']);
+const numberWord = (p) => Object.hasOwn(SMALL_NUMBER, p) || p === 'hundred' || Object.hasOwn(BIG_NUMBER, p);
+/* the figure some number words make, as figuresOf reads them: "three hundred" 300, "twenty-five" 25 — null for "one" alone */
+function figureOfWords(ws) {
+  if (ws.length === 1 && ws[0] === 'one') return null;
+  let total = 0;
+  let cur = 0;
+  for (const w of ws) {
+    if (Object.hasOwn(SMALL_NUMBER, w)) cur += SMALL_NUMBER[w];
+    else if (w === 'hundred') cur = (cur || 1) * 100;
+    else if (Object.hasOwn(BIG_NUMBER, w)) { total += (cur || 1) * BIG_NUMBER[w]; cur = 0; }
+  }
+  return total + cur || null;
+}
+/* a sentence's words for slotsOf: each with its folded word (`base`), its parts, a name's "'s" (`poss`), whether it is a
+ * word of the entry's own name (`own`), its capital, whether it opens a sentence, and a figure — a run of number words
+ * one figure ("five hundred", "twenty-five") */
+function slotTokens(text, ctx) {
+  const toks = [];
+  let opening = true;
+  for (const m of String(text || '').matchAll(/[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*|[,;:—–()"“”«».!?…]/gu)) {
+    const raw = m[0];
+    if (!/[\p{L}\p{N}]/u.test(raw)) { toks.push({ stop: true, raw, base: raw, parts: [] }); if (/[.!?…]/.test(raw)) opening = true; continue; }
+    const low = raw.toLowerCase();
+    const base = low.replace(/['’]s$/, '');
+    const parts = base.split(/[-'’]/).filter(Boolean);
+    toks.push({ raw, base, parts, poss: /['’]s$/.test(low), own: !ARTICLE.has(base) && parts.some((p) => ctx.own.has(p)), cap: /^\p{Lu}/u.test(raw), opening,
+      fig: /^\d+$/.test(base) ? Number(base) : null, num: parts.length > 0 && parts.every(numberWord), little: !/^\d+$/.test(base) && parts.every((p) => p.length < 3 || LITTLE.has(p)) });
+    opening = false;
+  }
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (!t.num) { out.push(t); continue; }
+    const run = [...t.parts];
+    let j = i + 1;
+    while (j < toks.length && (toks[j].num || (toks[j].base === 'and' && toks[j + 1] && toks[j + 1].num && /^(?:hundred|thousand|million)$/.test(run[run.length - 1])))) { if (toks[j].num) run.push(...toks[j].parts); j += 1; }
+    out.push({ ...t, raw: toks.slice(i, j).map((x) => x.raw).join(' '), base: run.join(' '), fig: figureOfWords(run), num: false, little: false });
+    i = j - 1;
+  }
+  return out;
+}
+const pronounKey = (base, ctx) => (ctx.pron.has(base) ? '' : `~${base}`);
+/* whose a word before something says it is: '' the entry's own; a name's or a word's "'s" theirs; null where none */
+function possKey(x, ctx) {
+  if (!x || x.stop) return null;
+  if (x.own) return '';
+  if (Object.hasOwn(PRONOUN_OF, x.base)) return WHOSE.has(x.base) ? pronounKey(x.base, ctx) : null;
+  return x.poss ? x.base : null;
+}
+/* whom the words before toks[i] tell of: past "also", "often" and the like, and past words set between commas ("Corvin, her
+ * steward, has…") — '' the entry's own, a name, the word it is told of, or null */
+function whoBefore(toks, i, ctx) {
+  let q = i - 1;
+  while (q >= 0 && !toks[q].stop && (BEFORE_VERB.has(toks[q].base) || /ly$/.test(toks[q].base))) q -= 1;
+  if (q >= 0 && toks[q].raw === ',') {
+    let p = q - 1;
+    while (p >= 0 && !toks[p].stop) p -= 1;
+    if (p < 0 || toks[p].raw !== ',') return null;
+    q = p - 1;
+  }
+  const x = q >= 0 ? toks[q] : null;
+  if (!x || x.stop || x.fig !== null || NEG.test(x.base)) return null;
+  if (x.own) return '';
+  if (Object.hasOwn(PRONOUN_OF, x.base)) return pronounKey(x.base, ctx);
+  if (x.little) return null;
+  return x.base;
+}
+/* the things told after toks[k] — "grey eyes and long black hair", "two brothers, Corvin and Dane", "a black cloak", "her
+ * grey eyes": [{head, colours, figure, article}], each thing the word right after its last colour or figure; colours
+ * with no thing of their own before "and" are the next thing's ("grey and green eyes": both the eyes' — read as two, its
+ * grey was lost, and "Emilia has grey and green eyes" was held beside his "grey eyes", found in this round's checks) */
+function thingsAfter(toks, k, max = 3) {
+  const out = [];
+  let q = k;
+  let pending = [];
+  while (out.length < max && toks[q] && !toks[q].stop) {
+    let article = false;
+    if (ARTICLE.has(toks[q].base)) { article = toks[q].base !== 'the'; q += 1; }
+    if (toks[q] && !toks[q].stop && WHOSE.has(toks[q].base)) q += 1;
+    const run = [];
+    while (toks[q] && !toks[q].stop && run.length < 5 && !toks[q].little && !NEG.test(toks[q].base)) { run.push(toks[q]); q += 1; }
+    let at = -1;
+    run.forEach((t, n) => { if (t.fig !== null || t.parts.some((p) => COLOUR.has(p) || TONE.has(p))) at = n; });
+    const head = at >= 0 ? run[at + 1] : null;
+    if (head && head.fig === null && !head.cap) {
+      const mods = run.slice(0, at + 1);
+      out.push({ head: head.base, colours: [...pending, ...mods].flatMap((t) => t.parts.filter((p) => COLOUR.has(p) || (TONE.has(p) && BODY.has(head.base)))).map((p) => SAME_COLOUR[p] || p),
+        figure: (mods.find((t) => t.fig !== null) || {}).fig ?? null, article });
+      pending = [];
+    } else pending = at >= 0 && at === run.length - 1 && run.every((t) => t.fig === null) ? [...pending, ...run] : [];
+    if (!toks[q] || toks[q].stop || toks[q].base !== 'and') break;
+    q += 1;
+  }
+  return out;
+}
+function slotsOf(text, ctx) {
+  const toks = slotTokens(text, ctx);
+  const out = [];
+  const put = (who, head, verb, kind, values, more) => { if (who !== null && head && values.length) out.push({ who, head, verb, kind, values: new Set(values), more }); };
+  const things = (who, verb, list) => {
+    for (const x of list) {
+      if (x.figure !== null) put(who, x.head, verb, 'figure', [x.figure], true);
+      if (x.colours.length) put(who, x.head, verb, 'colour', x.colours, x.article || /s$/.test(x.head));
+    }
+  };
+  toks.forEach((t, i) => {
+    if (t.stop) return;
+    /* "her eyes are grey", "Emilia's hair is black" */
+    if (COPULA.has(t.base)) {
+      let h = i - 1;
+      while (h >= 0 && !toks[h].stop && toks[h].parts.some((p) => COLOUR.has(p) || TONE.has(p))) h -= 1;
+      const head = toks[h];
+      let p = h - 1;
+      while (p >= 0 && !toks[p].stop && toks[p].parts.some((x) => COLOUR.has(x) || TONE.has(x))) p -= 1;
+      const owner = head && !head.stop && !head.cap && p >= 0 ? possKey(toks[p], ctx) : null;
+      if (owner !== null) {
+        const said = [];
+        for (let k = i + 1; toks[k] && !toks[k].stop && said.length < 3; k++) {
+          const x = toks[k];
+          if (PAST_TO_BE.has(x.base) || x.base === 'and') continue;
+          const cs = x.parts.filter((y) => COLOUR.has(y) || (TONE.has(y) && BODY.has(head.base)));
+          if (!cs.length) break;
+          said.push(...cs.map((y) => SAME_COLOUR[y] || y));
+        }
+        put(owner, head.base, 'has', 'colour', said, false);
+      }
+      /* "Emilia is three hundred years old" */
+      const n = toks[i + 1];
+      if (n && n.fig !== null && toks[i + 2] && Object.hasOwn(AGE_UNIT, toks[i + 2].base) && toks[i + 3] && toks[i + 3].base === 'old') put(whoBefore(toks, i, ctx), 'age', 'has', 'figure', [n.fig * AGE_UNIT[toks[i + 2].base]], false);
+      return;
+    }
+    /* "she keeps a raven with green eyes": the raven's — the word right before "with" */
+    if (t.base === 'with') {
+      const b = toks[i - 1];
+      const who = !b || b.stop ? null : b.own ? '' : Object.hasOwn(PRONOUN_OF, b.base) || b.little ? null : b.base;
+      things(who, 'has', thingsAfter(toks, i + 1));
+      return;
+    }
+    /* "her two brothers", "Emilia's grey eyes" */
+    if (WHOSE.has(t.base) || (t.poss && !t.little)) {
+      const owner = possKey(t, ctx);
+      if (owner !== null) things(owner, 'has', thingsAfter(toks, i + 1, 1));
+    }
+    if (t.little && !HAS_FORM.has(t.base)) return;
+    const who = whoBefore(toks, i, ctx);
+    if (who === null) return;
+    /* "has grey eyes and long black hair", "has two brothers" */
+    if (HAS_FORM.has(t.base)) { things(who, 'has', thingsAfter(toks, i + 1)); return; }
+    /* "lives in Venice" */
+    if (RESIDE.test(t.base) && toks[i + 1] && PLACE_AT.has(toks[i + 1].base)) {
+      const place = [];
+      for (let k = i + 2; toks[k] && !toks[k].stop && !PLACE_END.has(toks[k].base) && place.length < 4; k++) if (!toks[k].little) place.push(toks[k].base);
+      put(who, 'live', 'live', 'place', place, true);
+      return;
+    }
+    /* a doing word with a thing after it, counted or coloured: "wears a black cloak", "wears black robes", "keeps two
+     * ravens", "commands twelve thralls" */
+    const n = toks[i + 1];
+    if (n && !n.stop && (ARTICLE.has(n.base) || n.fig !== null || n.parts.some((p) => COLOUR.has(p)))) things(who, t.base, thingsAfter(toks, i + 1, 1));
+  });
+  return out;
+}
+/* WHETHER AN ADDED SENTENCE WOULD SAY BOTH ONE OF HIS AND ANOTHER WAY OF IT, beyond doubt: the same one, the same thing
+ * told the same way, another value — where she lives, her age, how many, what colour (slotsOf) — with no change listed
+ * for it, whoever's words the new value is (a count his partner worked out is one: "a third brother" gave no "three").
+ * Never one more of a kind said so ("keeps a white raven too", "also lives in Prague" — never of her eyes), a place it
+ * names with a word of his ("the new mill" for "the old mill"), one telling his value too, or one his newer words still
+ * give his value to ("Emilia has grey and green eyes") */
 function saysBoth(o, s, ctx) {
-  const vo = valuesOf(o.text, ctx.own);
-  if (!vo.length) return false;
+  const mine = slotsOf(s.text, ctx);
+  if (!mine.length) return false;
+  const theirs = slotsOf(o.text, ctx);
   const more = ONE_MORE.test(o.text);
-  for (const a of valuesOf(s.text, ctx.own)) {
-    const same = vo.filter((b) => a.owner === b.owner && (a.thing === b.thing || regular(a.thing, b.thing)));
+  for (const a of mine) {
+    const same = theirs.filter((b) => b.who === a.who && b.kind === a.kind && (b.head === a.head || regular(b.head, a.head)) && (b.verb === a.verb || regular(b.verb, a.verb)));
     for (const b of same) {
-      if (a.verb && b.verb && !(a.verb === b.verb || regular(a.verb, b.verb))) continue;
-      if (b.counted && more) continue;
-      const his = [...a.words].filter((w) => !keptIn(w, b.words));
-      const hisFigures = [...a.figures].filter((v) => !b.figures.has(v));
-      if (!his.length && !hisFigures.length) continue;
-      if (same.some((x) => x !== b && his.every((w) => keptIn(w, x.words)) && hisFigures.every((v) => x.figures.has(v)))) continue;
-      const its = [...b.words].filter((w) => !keptIn(w, a.words));
-      const itsFigures = [...b.figures].filter((v) => !a.figures.has(v));
-      const newer = its.some((w) => keptIn(w, ctx.box.says)) || itsFigures.some((v) => ctx.box.figures.has(v));
-      /* (his newer words still saying his word, as his: he wants both) */
-      const still = his.some((w) => keptIn(w, ctx.box.says) && !saysNoTo(ctx.box, w)) || hisFigures.some((v) => ctx.box.figures.has(v));
-      if (newer && !still) return true;
+      if (more && b.more && !BODY.has(b.head)) continue;
+      const his = [...a.values].filter((v) => !b.values.has(v));
+      const its = [...b.values].filter((v) => !a.values.has(v));
+      if (!his.length || !its.length) continue;
+      if (a.kind === 'place' && his.length < a.values.size) continue;
+      if (theirs.some((x) => x !== b && x.who === a.who && x.kind === a.kind && (x.head === a.head || regular(x.head, a.head)) && his.every((v) => x.values.has(v)))) continue;
+      if (his.some((v) => (a.kind === 'figure' ? ctx.box.figures.has(v) : keptIn(v, ctx.box.says) && !saysNoTo(ctx.box, v)))) continue;
+      return true;
     }
   }
   return false;
+}
+/* WHAT HIS NEWER WORDS SAY "NOT" TO, STANDING IN HIS ENTRY (2.12.41, the fourth review: "Corvin is her cousin, not her
+ * brother" left "Corvin is Emilia's brother" — and his line "Emilia's brother." — beside the cousin it added; "no longer
+ * lives in Venice" left "Emilia lives in Venice"): a sentence of his about the entry's own one, or his line, that says
+ * with no "not" every word a "not" of his newer words says no to ("not her brother", "no longer lives in Venice",
+ * "instead of her steward"), told the same way — the word before them one of those words, "is", or none ("Corvin is
+ * Emilia's younger brother", "Emilia's brother."; never "Corvin hunts vampires" for "not a vampire") — where the sentence
+ * of his newer words holding that "not" names this entry. That sentence of his newer words, or null */
+function deniedBy(s, ctx, { isLine = false } = {}) {
+  if (!ctx.ref || !ctx.said) return null;
+  for (const b of ctx.said) {
+    if (!b.negs.length || !(b.names.all.has(ctx.ref) || [...b.words].some((w) => ctx.own.has(w)))) continue;
+    for (const n of b.negs) {
+      if (!n.words.length || !n.words.every((w) => keptIn(w, s.words)) || n.words.some((w) => saysNoTo(s, w))) continue;
+      if (!isLine && subjectOfSentence(s.text, ctx) !== '') continue;
+      if (!toldSameWay(s.text, n.words, ctx)) continue;
+      return b;
+    }
+  }
+  return null;
+}
+/* whom a sentence is about: whom it opens with, past words before a comma that open it ("In winter, she…") — '' the
+ * entry's own; "Her brother Dane…", "Emilia's brother…" the brother's */
+function subjectOfSentence(text, ctx) {
+  const toks = slotTokens(text, ctx);
+  let q = 0;
+  const comma = toks.findIndex((t) => t.raw === ',');
+  if (comma > 0 && comma <= 6 && toks[0] && (PLACE_AT.has(toks[0].base) || toks[0].little || /ly$/.test(toks[0].base)) && !Object.hasOwn(PRONOUN_OF, toks[0].base) && !toks[0].own) q = comma + 1;
+  const x = toks[q];
+  if (!x || x.stop) return null;
+  if (WHOSE.has(x.base) || x.poss) return toks[q + 1] && !toks[q + 1].stop ? toks[q + 1].base : possKey(x, ctx);
+  if (x.own) return '';
+  if (Object.hasOwn(PRONOUN_OF, x.base)) return pronounKey(x.base, ctx);
+  return x.base;
+}
+/* whether a sentence tells some words the way a "not" of his newer words says no to them: going back from the last of
+ * them, the first word that is no little word, name, "'s" or a word between an article and them ("her younger brother")
+ * is one of them, "is", or none */
+function toldSameWay(text, words, ctx) {
+  const toks = slotTokens(text, ctx);
+  const last = words[words.length - 1];
+  let i = -1;
+  toks.forEach((t, k) => { if (!t.stop && (t.base === last || regular(t.base, last))) i = k; });
+  if (i < 0) return false;
+  for (let q = i - 1; q >= 0; q--) {
+    const t = toks[q];
+    if (t.stop) return true;
+    if (words.some((w) => w === t.base || regular(w, t.base))) return true;
+    if (COPULA.has(t.base) || t.base === 'be' || t.base === 'been' || t.base === 'becomes' || t.base === 'became') return true;
+    if (t.little || t.poss || t.own || t.fig !== null) continue;
+    const b = toks[q - 1];
+    if (b && !b.stop && (ARTICLE.has(b.base) || WHOSE.has(b.base) || b.poss)) continue;
+    return false;
+  }
+  return true;
 }
 /* A SENTENCE OF HIS SAID AGAIN IN OTHER WORDS (2.12.41, the review; the third review: one ordinary word his words never
  * gave — "a second raven" — read a new fact as his said again, so what it brought was lost): it holds half of what his
@@ -955,15 +1290,18 @@ function saidAgain(o, s, ctx) {
   /* (two words of his at least: one shared doing word — "keeps" — is no sentence of his said again) */
   return kept >= 2 && kept < his.length && kept / his.length >= AGAIN && unbacked(o, s, ctx).length > 0;
 }
-/* the words two sentences say "not" to otherwise — each judged as negsAgree judges it, by the last word it says no to that
- * both give */
-function notsOn(R, x) {
+/* the words two sentences say "not" to otherwise — a "not" of either judged only where the other gives every word it says
+ * no to ("does not drink blood" against "drinks blood"; never "does not drink human blood" against "drinks the blood of
+ * animals", which never says "human": 2.12.41, the fourth review), and where both tell those words the same way
+ * (toldSameWay: "fears nothing" and "fears the sun"; never "is not a vampire" against "hunts vampires" — held as saying
+ * both, found in this round's checks) */
+function notsOn(R, x, ctx) {
   const out = [];
   for (const [a, b] of [[R, x], [x, R]]) {
     for (const n of a.negs) {
-      const given = n.words.filter((w) => keptIn(w, b.words));
-      if (!given.length) continue;
-      const k = given[given.length - 1];
+      if (!n.words.length || !n.words.every((w) => keptIn(w, b.words))) continue;
+      if (!toldSameWay(R.text, n.words, ctx) || !toldSameWay(x.text, n.words, ctx)) continue;
+      const k = n.words[n.words.length - 1];
       if (saysNoTo(R, k) !== saysNoTo(x, k) && !out.includes(k)) out.push(k);
     }
   }
@@ -1009,7 +1347,8 @@ const sentencesWord = (n) => (n === 1 ? 'a sentence' : `${numberWords(n).toLower
  * The answer's words stand as it wrote them only when it read his entry whole (`seenWhole`) and gave it whole (`offered`),
  * every sentence it wrote went in, in its order, and every break of his paragraphs stands in it as he set it (2.12.41, the
  * third review: an answer in one paragraph flattened his). `adds`: what it wrote to add to his entry, his sentences left as
- * they stand. {text, whole, asWritten, why, joined, put: [{c, now, by: 'now' | 'carrier'}], unput: [c], back, both} */
+ * they stand. {text, whole, asWritten, why, joined, put: [{c, now, by: 'now' | 'carrier'}], unput: [c], gave: Set of c,
+ * back, both, foreign: [word]} */
 /* the breaks between some words' sentences, in order: 0 none, 1 a line's, 2 a paragraph's */
 function breaksOf(t) {
   const ps = piecesOf(t).filter((p) => p.s.trim());
@@ -1024,43 +1363,56 @@ function mergeEntry({ had, offered = '', adds = '', changes = [], ctx, seenWhole
   const out = pieces.map((p) => ({ ...p }));
   const placed = new Set();
   const carriers = new Set();
+  /* (the answer's sentence that took the place of each piece of his: piece -> its index) */
+  const took = new Map();
   const freed = new Set();
   const put = [];
   const unput = [];
+  /* (whether its partner gave words for one not put in — its own for it, or a sentence carrying it — so the row says
+   * which: 2.12.41, the fourth review) */
+  const gave = new Set();
+  const notIn = (c) => { unput.push(c); if (String(c.now || '').trim() || theirs.some((o) => carries(o, c, ctx))) gave.add(c); };
   for (const c of changes) {
     const span = spanOf(had, c.was);
     const at = span ? pieces.map((p, i) => i).filter((i) => pieces[i].s.trim() && pieces[i].end > span.start && pieces[i].start < span.end) : [];
-    if (!at.length) { unput.push(c); continue; }
+    if (!at.length) { notIn(c); continue; }
     const given = nowFor(c, ctx);
     /* (two of his newer words in one sentence of his: the second put right in what stands there now — its words for them,
-     * or the sentence put there carrying it with every name and figure of them kept — else not put in) */
+     * by their shape — or carried by the sentence standing where its words stood, or the answer's sentence that took their
+     * place — else not put in. That sentence was held to the keep rule when the first change put it there: every word of
+     * his outside the first change's words is kept in it, so the second is held only to carrying it — 2.12.41, the fourth
+     * review: held to wasKept as well, a figure the first change changed itself ("twelve ravens" made thirteen) said the
+     * second "did not go in" where the sentence there carried it) */
     if (at.some((i) => freed.has(i))) {
       const i = at.find((k) => freed.has(k) && out[k].s.trim());
       const sp = i === undefined ? null : spanOf(out[i].s, c.was);
-      if (sp && given) { out[i].s = putIn(out[i].s, sp, given); put.push({ c, now: out[i].s.trim(), by: 'now' }); continue; }
-      const there = i === undefined ? [...carriers].map((j) => theirs[j]) : sp ? [] : [prep(out[i].s)];
-      const by = there.find((o) => carries(o, c, ctx) && wasKept(o, c, ctx));
+      const here = sp && given ? placeIn(out[i].s, sp, given, ctx) : null;
+      if (here) { out[i].s = laid(out[i].s, here); put.push({ c, now: out[i].s.trim(), by: 'now' }); continue; }
+      const there = i === undefined ? [...new Set(at.map((k) => took.get(k)).filter((j) => j !== undefined))].map((j) => theirs[j]) : sp ? [] : [prep(out[i].s)];
+      const by = there.find((o) => carries(o, c, ctx));
       if (by) { put.push({ c, now: by.text, by: 'carrier' }); continue; }
-      unput.push(c);
+      notIn(c);
       continue;
     }
     const from = pieces[at[0]].start;
     const to = pieces[at[at.length - 1]].end;
     const whole = had.slice(from, to);
-    const rel = { start: span.start - from, end: span.end - from };
     let now = '';
     let shown = '';
     let by = 'now';
-    if (given) now = putIn(whole, rel, given).trim();
+    /* (its words for them by their shape — placeIn — else the answer's sentence that carries it) */
+    const here = given ? placeIn(had, span, given, ctx) : null;
+    if (here) now = laid(had, here).slice(from, to - (here.to - here.from) + here.s.length).trim();
     else {
       const j = carrierOf(c, theirs, ctx, whole);
       /* (no words for it that hold: his stand as he wrote them, and it is said — never his own words spliced in) */
-      if (j < 0) { unput.push(c); continue; }
+      if (j < 0) { notIn(c); continue; }
       /* (one sentence of the answer carrying two of his newer words: said once, where the first stood) */
       now = placed.has(j) ? '' : theirs[j].text;
       shown = theirs[j].text;
       placed.add(j);
       carriers.add(j);
+      for (const i of at) took.set(i, j);
       by = 'carrier';
     }
     out[at[0]].s = now;
@@ -1100,23 +1452,41 @@ function mergeEntry({ had, offered = '', adds = '', changes = [], ctx, seenWhole
   const fresh = [];
   const back = [];
   const both = [];
+  /* (what it wrote that brings none of his words, only its own: said where nothing else of it goes in — never "the entry
+   * already says that", found in this round's checks) */
+  const foreign = [];
   let lost = 0;
   let lostNot = 0;
+  /* (the sentences of his newer words that name this one: his newest word on it — 2.12.41, the fourth review's round) */
+  const about = (ctx.said || []).filter((b) => (ctx.ref && b.names.all.has(ctx.ref)) || [...b.words].some((w) => ctx.own.has(w)));
   theirs.forEach((o, j) => {
     if (placed.has(j)) return;
     if (changes.some((c) => stands(o.text, c.was))) return;
-    const brings = [...o.says].filter((w) => keptIn(w, ctx.box.says) && !keptIn(w, nowSays)).length
+    /* (a word his entry says only the other way is new as well — with a "not" where his says none, or with none where his
+     * says one: "Corvin is not a vampire" beside his "Corvin hunts vampires" brought nothing, so it was let go; "Emilia
+     * drinks blood." beside his "Her brother Dane does not drink blood." brought nothing, so it was said as "the entry
+     * already says that", found in this round's checks. Said so of the same one, told the same way, it is held as saying
+     * both — `clash` — whatever it brings; one his line already says as it does brings nothing) */
+    const his1 = [...standing, ...(ctx.line ? [ctx.line] : [])];
+    const otherWay = (w) => his1.some((s) => keptIn(w, s.says) && saysNoTo(s, w) !== saysNoTo(o, w)) && !his1.some((s) => keptIn(w, s.says) && saysNoTo(s, w) === saysNoTo(o, w));
+    const brings = [...o.says].filter((w) => keptIn(w, ctx.box.says) && (!keptIn(w, nowSays) || otherWay(w))).length
       + [...o.figures.keys()].filter((v) => ctx.box.figures.has(v) && !nowFigures.has(v)).length;
     /* one that would say both a sentence of his — or his line — and another way of it, with no change listed for it:
      * never in, whatever it brings — a thing of his told another way by his newer words ("green eyes" for his "grey"), or
-     * a "not" of his said otherwise as his newer words say it ("drinks blood" for his "does not drink blood") */
+     * a "not" of his said otherwise as his newer words say it ("drinks blood" for his "does not drink blood"): of the same
+     * one, told the same way (never "is not a vampire" against his "hunts vampires") */
     const mine = [...hisNow, ...(ctx.line ? [ctx.line] : [])];
-    const not = !negsAgree(o, [...standing, ctx.box]);
-    const clash = (not && mine.find((s) => { const ks = notsOn(o, s); return ks.length > 0 && ks.every((k) => keptIn(k, ctx.box.words) && saysNoTo(ctx.box, k) === saysNoTo(o, k)); }))
+    const notHis = !negsAgree(o, [...standing, ctx.box]);
+    const whom = subjectOfSentence(o.text, ctx);
+    const one = (s) => s === ctx.line || (whom !== null && whom === subjectOfSentence(s.text, ctx));
+    const clash = (notHis && mine.find((s) => { if (!one(s)) return false; const ks = notsOn(o, s, ctx); return ks.length > 0 && ks.every((k) => keptIn(k, ctx.box.words) && saysNoTo(ctx.box, k) === saysNoTo(o, k)); }))
       || mine.find((s) => saysBoth(o, s, ctx));
     if (clash) { both.push({ said: o.text, his: clash.text }); return; }
-    /* a sentence of his said again in words his entry and his newer words never give, or with a "not" his entry and his
-     * newer words do not say: his stands */
+    /* a sentence of his said again in words his entry and his newer words never give, or with a "not" his newer words on
+     * this one, his entry and the rest of his words do not say — judged by them in that order, so his newest word decides
+     * ("Emilia never drinks wine" beside his "Emilia keeps a cellar of wine" was read as a "not" his words never say; his
+     * "Dane never drinks wine" is never hers): his stands */
+    const not = !negsAgree(o, [...about, ...standing, ctx.box]);
     const said = standing.find((s) => saidAgain(o, s, ctx));
     if (said || not) {
       if (brings) {
@@ -1126,7 +1496,7 @@ function mergeEntry({ had, offered = '', adds = '', changes = [], ctx, seenWhole
       }
       return;
     }
-    if (!brings) return;
+    if (!brings) { for (const w of unbacked(o, prep(''), ctx)) if (!foreign.includes(w)) foreign.push(w); return; }
     fresh.push(o.text);
     placed.add(j);
     standing.push(o);
@@ -1176,7 +1546,8 @@ function mergeEntry({ had, offered = '', adds = '', changes = [], ctx, seenWhole
   count('added', fresh.length);
   count('lost', lost);
   count('lostNot', lostNot);
-  return { text: whole ? offered : text, whole, asWritten, why, joined, put: put.map(({ c, now, by }) => ({ c, now, by })), unput, back, both };
+  /* (`base`: his sentences as they go in, `more`: what it adds after them — the parts its write lays apart: putEntries) */
+  return { text: whole ? offered : text, base: whole ? offered : text0, more: whole ? '' : fresh.join(' '), whole, asWritten, why, joined, put: put.map(({ c, now, by }) => ({ c, now, by })), unput, gave, back, both, foreign };
 }
 
 /* HIS LINE, HELD TO THE SAME KEEP RULE (2.12.40, the review: "An elder vampire, mother of the twins, sworn enemy of the
@@ -1205,14 +1576,18 @@ function lineFor(cur, said, changes, ctx) {
     let l = mine;
     const by = [];
     const unput = [];
+    /* (its words for them by their shape, as in his entry: placeIn — 2.12.41, the fourth review: "An elder vampire, Emilia
+     * is now an ally of the Covenant., mother of twins.") */
     quoted.forEach((c, k) => {
       const sp = spanOf(l, c.was);
-      if (!sp || !given[k]) { unput.push(c); return; }
-      l = putIn(l, sp, given[k]);
+      const here = sp && given[k] ? placeIn(l, sp, given[k], ctx) : null;
+      if (!here) { unput.push(c); return; }
+      l = laid(l, here);
       by.push({ c, by: 'now' });
     });
-    if (!by.length) return { line: '', how: '', put: [], unput };
-    return { line: l, how: 'now', put: by.map((x) => ({ ...x, now: l })), unput };
+    const gave = new Set(unput.filter((c) => String(c.now || '').trim() || (S && carries(S, c, ctx))));
+    if (!by.length) return { line: '', how: '', put: [], unput, gave };
+    return { line: l, how: 'now', put: by.map((x) => ({ ...x, now: l })), unput, gave };
   }
   if (!S || said === mine) return { line: '', how: '', put: [], unput: [] };
   const M = ctx.prep(mine);
@@ -1222,8 +1597,11 @@ function lineFor(cur, said, changes, ctx) {
 /* AN ENTRY OF HIS WITH WHAT ONE ANSWER WROTE FOR IT (`e`, or null where it wrote none): the words to write, and what came
  * of each — the same for putting it in (putEntries) and for asking whether it can go in (dryRun), so the two never part.
  * Each newer word of his on it is put in (`put`) or not (`unput`: no words for it that hold, or words it quotes that stand
- * neither in its words nor its line). {text: null — his stands, line, lineHow, how, why, whole, asWritten, joined, put,
- * unput, back, both} */
+ * neither in its words nor its line — `gave`: those its partner gave words for, its own or a sentence carrying it); and
+ * the sentences of his, and his line, that would stand saying what his newer words say "not" to (`denied`: [{his, not}]
+ * — deniedBy); and the words of what it wrote that brought none of his, only its own (`foreign`). {text: null — his
+ * stands, base and more — that text as his sentences and what it adds after them —, line, lineHow, how, why, whole,
+ * asWritten, joined, put, unput, gave, back, both, denied, foreign} */
 function entryOp(cur, e, changes, ctx, seenWhole) {
   const had = String(cur.text || '').trim();
   const said = e ? line(e.line, 400) : '';
@@ -1231,10 +1609,10 @@ function entryOp(cur, e, changes, ctx, seenWhole) {
   const adds = e ? String(e.add || '').trim() : '';
   const mine = changes.filter((c) => c.kind === 'entry' && c.entryId === cur.id);
   const inText = mine.filter((c) => stands(had, c.was));
-  const out = { text: null, line: '', lineHow: '', how: '', why: '', whole: false, asWritten: true, joined: null, put: [], unput: [], back: [], both: [] };
+  const out = { text: null, base: null, more: '', line: '', lineHow: '', how: '', why: '', whole: false, asWritten: true, joined: null, put: [], unput: [], gave: new Set(), back: [], both: [], denied: [], foreign: [] };
   if (offered || adds || inText.length) {
     const m = mergeEntry({ had, offered, adds, changes: inText, ctx, seenWhole });
-    if (m.text !== had) out.text = m.text;
+    if (m.text !== had) { out.text = m.text; out.base = m.base; out.more = m.more; }
     out.how = m.whole ? 'whole' : 'merged';
     out.why = m.why;
     out.whole = m.whole;
@@ -1242,8 +1620,10 @@ function entryOp(cur, e, changes, ctx, seenWhole) {
     if (!m.whole) out.joined = m.joined;
     out.put = m.put;
     out.unput = m.unput;
+    out.gave = m.gave;
     out.back = m.back;
     out.both = m.both;
+    out.foreign = m.foreign;
   }
   const ln = lineFor(cur, said, mine, ctx);
   out.line = ln.line;
@@ -1252,7 +1632,17 @@ function entryOp(cur, e, changes, ctx, seenWhole) {
   /* (a newer word put in nowhere: words it quotes in neither the entry's words nor its line, or none that hold for it) */
   const nowhere = mine.filter((c) => !stands(had, c.was) && !stands(String(cur.line || ''), c.was));
   out.unput = [...new Set([...out.unput, ...ln.unput, ...nowhere])].filter((c) => !out.put.some((p) => p.c === c));
+  out.gave = new Set([...out.gave, ...(ln.gave || []), ...nowhere.filter((c) => String(c.now || '').trim())].filter((c) => out.unput.includes(c)));
   if (said && (ln.line || String(cur.line || '').trim()) !== said) out.asWritten = false;
+  /* (what would stand of his, saying what his newer words say "not" to — 2.12.41, the fourth review) */
+  if (ctx.said && ctx.said.some((b) => b.negs.length)) {
+    const lineNow = String(ln.line || cur.line || '').trim();
+    for (const s of sentencesOf(out.text !== null ? out.text : had)) {
+      const by = deniedBy(ctx.prep(s), ctx);
+      if (by) out.denied.push({ his: s, not: by.text });
+    }
+    if (lineNow) { const by = deniedBy(ctx.prep(lineNow), ctx, { isLine: true }); if (by) out.denied.push({ his: lineNow, not: by.text, line: true }); }
+  }
   return out;
 }
 
@@ -1268,10 +1658,14 @@ function entryOp(cur, e, changes, ctx, seenWhole) {
  * figure) (2.12.41, the third review: an entry for his steward, "a black cloak … his hair cropped", was held for "Emilia
  * has black hair"). A row he said his word stands over is never one (quickAdd). */
 const capsOf = (t) => [...String(t || '').matchAll(/\p{Lu}[\p{L}'’-]*/gu)].map((m) => m[0]).filter((w) => !notAName(w)).join(' ');
-/* whom a row is about: the entries and cards its words name (refs), every word of theirs written with a capital (words),
- * and those written so inside a sentence (sure: a capital opening one may be an order's "Make") */
-const subjectOf = (m, a) => ({ refs: new Set([...m.names.all, ...a.names.all]), words: new Set(wordsOf(capsOf(`${m.text}\n${a.text}`))),
-  sure: m.names.all.size + a.names.all.size + m.names.loose.length + a.names.loose.length > 0 });
+/* whom a row is about: the entries and cards his words name (refs), every word of theirs written with a capital (words),
+ * and those written so inside a sentence (sure: a capital opening one may be an order's "Make") — the page's quote only
+ * where his words name no one (2.12.41, the fourth review: a quote naming "Emilia and Corvin" held Corvin's own "Corvin
+ * has black hair." for her "Emilia has black hair") */
+function subjectOf(m, a) {
+  const x = m.names.all.size + m.names.loose.length > 0 ? m : a;
+  return { refs: new Set(x.names.all), words: new Set(wordsOf(capsOf(x.text))), sure: x.names.all.size + x.names.loose.length > 0 };
+}
 /* whether a sentence speaks of whom a row is about: it, or its entry, names them — or it cannot be told otherwise: a row
  * naming no one for sure, or a sentence and entry naming no one */
 function speaksOf(s, subject, about) {
@@ -1318,6 +1712,13 @@ function heldBy(texts, rows, prep, about = null) {
 const heldWhy = (r, againWhy) => `${r.cannot ? `it says what cannot be, by ${r.label}` : `it says what ${r.label} says otherwise`} (“${r.mine}”)${againWhy ? ` — asked to write it again without that, ${againWhy}` : ''} — it waits for your word`;
 /* (what it wrote would say both a sentence of his and another way of it: 2.12.41, the third review) */
 const bothWhy = (x, againWhy) => `it would say both — your partner listed no change for your words: your “${x.his}” and its “${x.said}”${againWhy ? ` (asked again for it, ${againWhy})` : ''}`;
+/* (his newer words say "not" to words of his that would stand: 2.12.41, the fourth review) */
+const deniedWhy = (x, againWhy) => `your newer words say “not” to your ${x.line ? 'line ' : ''}“${x.his}” — your partner listed no change for it${againWhy ? ` (asked again for it, ${againWhy})` : ''}`;
+/* the entries his words name, by the bibliography's own name finder */
+function namedIn(words, novel, finder) {
+  const all = prepared(nameReader(finder, null))(words).names.all;
+  return entriesOf(novel).filter((e) => all.has(`e:${e.id}`));
+}
 /* (what it brought of his newer words came only in sentences of his said again, or saying "not" otherwise than his words
  * do — one of his let go, or one none of his words say put in) */
 function lostWhy(j) {
@@ -1346,19 +1747,24 @@ function carriedBy(mine, added, novelId) {
 }
 const answerWords = (e) => [line(e.line, 400), String(e.text || ''), String(e.add || '')].filter(Boolean).join('\n');
 /* WHAT AN ANSWER'S ENTRIES WOULD DO TO HIS, judged as putting them in judges them (entryOp — the same entries, found by
- * the same name matching for the kind it says), nothing written: which newer words of his on an entry of his would go in
- * (`put`), and what it wrote that brings his newer words but cannot go in (`again`: [{name, said, his, why: 'again' |
- * 'not' | 'both'}]) — so the one ask again asks for those too */
+ * the same name matching for the kind it says, one of another kind found by another name never his), nothing written:
+ * which newer words of his on an entry of his would go in (`put`), and what cannot go in (`again`: [{name, said, his, why:
+ * 'again' | 'not' | 'both' | 'denied', not?, line?}]) — what it wrote that brings his newer words, and words of his that
+ * would stand saying what his newer words say "not" to, in an entry it wrote for or one his words name — so the one ask
+ * again asks for those too */
 function dryRun(read, novel, finder, words) {
   const entries = entriesOf(novel);
   const put = new Set();
   const again = [];
   const forEntry = new Map();
   for (const e of read.entries) {
-    const m = entryFor(entries, line(e.name, 200), { kind: kindSaid(e.kind) }).entry;
-    if (m && !forEntry.has(m.id)) forEntry.set(m.id, e);
+    const name = line(e.name, 200);
+    const kind = kindSaid(e.kind);
+    const found = entryFor(entries, name, { kind });
+    if (found.entry && !otherKindSaid(found, name, kind) && !forEntry.has(found.entry.id)) forEntry.set(found.entry.id, e);
   }
   for (const c of read.changes) if (c.kind === 'entry' && c.entryId && !forEntry.has(c.entryId)) forEntry.set(c.entryId, null);
+  if (negsOf(words).length) for (const e of namedIn(words, novel, finder)) if (!forEntry.has(e.id)) forEntry.set(e.id, null);
   for (const [id, e] of forEntry) {
     const cur = entries.find((x) => x.id === id);
     if (!cur) continue;
@@ -1366,6 +1772,7 @@ function dryRun(read, novel, finder, words) {
     for (const p of r.put) put.add(p.c);
     for (const x of r.back) again.push({ name: cur.name, ...x });
     for (const x of r.both) again.push({ name: cur.name, ...x, why: 'both' });
+    for (const x of r.denied) again.push({ name: cur.name, said: '', ...x, why: 'denied' });
   }
   return { put, again };
 }
@@ -1391,7 +1798,17 @@ function putEntries(novelId, entries, seen, changes, words, { got, standing = []
     const name = line(e.name, 200);
     const novel = store.peek('novel', novelId);
     const kind = kindSaid(e.kind);
-    const cur = entryFor(entriesOf(novel), name, { kind }).entry;
+    const found = entryFor(entriesOf(novel), name, { kind });
+    /* (more than one of his going by that name — two people of one given name, a lone word of a person's name that an
+     * entry of another kind goes by too: which is meant is never guessed, nor a new entry made beside them under the kind
+     * it falls back to — said, as his partner's own change says it: 2.12.41, the fourth review) */
+    if (found.ambiguous) { got.refused.push({ name, why: `more than one entry goes by ${name} — name it by its full name` }); return; }
+    /* (found by another name and written as another kind: never that entry's — said, as his partner's own change says
+     * it, and never written as a new one beside it: 2.12.41, the fourth review — the lore "Order" went into his group "The
+     * Order") */
+    const otherKind = repair ? '' : otherKindSaid(found, name, kind);
+    if (otherKind) { got.refused.push({ name, why: otherKind }); return; }
+    const cur = found.entry;
     const op = { entry: name };
     const aka = (Array.isArray(e.aka) ? e.aka : typeof e.aka === 'string' ? e.aka.split(',') : []).map((x) => line(x, 120)).filter(Boolean);
     if (aka.length) op.aka = aka;
@@ -1411,20 +1828,34 @@ function putEntries(novelId, entries, seen, changes, words, { got, standing = []
       done.add(cur.id);
       ctx = entryCtx(cur, finder, words);
       r = entryOp(cur, repair ? null : e, changes, ctx, seen.has(cur.id) && seen.get(cur.id) === String(cur.text || ''));
-      for (const c of r.unput) got.unput.push(c);
-      /* (what it wrote would say both a sentence of his and another way of it: nothing of it goes in — said, with Ask
-       * again; never both in his entry) */
+      for (const c of r.unput) { got.unput.push(c); if (r.gave.has(c)) got.gave.push(c); }
+      /* (his newer words say "not" to words of his that would stand, with no change listed for them, or what it wrote would
+       * say both a sentence of his and another way of it: nothing of it goes in — said, with Ask again; never "brother"
+       * beside "cousin", never both in his entry) */
+      if (r.denied.length) { waits({ name, why: deniedWhy(r.denied[0], againWhy), denied: true }); return; }
       if (r.both.length) { waits({ name, why: bothWhy(r.both[0], againWhy), both: true }); return; }
-      if (r.text !== null) op.text = r.text;
+      /* (what it adds after his sentences goes as a paragraph to add, laid on his entry as it stands: his words typed there
+       * meanwhile in another window stay, and it goes after them — changes.js entryStep's `more`; his sentences with his
+       * newer word put in go only while his entry reads as it was found — 2.12.41, a step laid again over another window's
+       * newer copy) */
+      if (r.text !== null) {
+        if (r.more && r.more.length <= 8000 && r.base !== null && r.base.trim()) {
+          if (r.base.trim() !== String(cur.text || '').trim()) op.text = r.base;
+          op.add = r.more;
+        } else op.text = r.text;
+      }
       if (r.line && r.line !== String(cur.line || '').trim()) op.line = r.line;
-      const nothing = op.text === undefined && op.line === undefined && !op.aka;
+      const nothing = op.text === undefined && op.add === undefined && op.line === undefined && !op.aka;
       /* (nothing of it to write, where what it brought of his newer words was in a sentence of his said again, or one that
        * said "not" otherwise than his words do: said so, never "the entry already says that") */
       if (nothing && r.joined && (r.joined.lost || r.joined.lostNot)) { got.refused.push({ name, why: lostWhy(r.joined), lost: true }); return; }
       /* (nothing to write where a newer word of his had no words that hold: its own row says it did not go in) */
       if (nothing && (repair || r.unput.length)) return;
+      /* (nothing of it to write, where what it wrote says only what his words do not — "Corvin is human" for his "Corvin is
+       * not a vampire": said so, with Ask again, never "the entry already says that") */
+      if (nothing && r.foreign.length) { got.refused.push({ name, why: `what it wrote says what your words do not (${listOf(r.foreign.slice(0, 3).map((w) => `“${w}”`))}) — nothing of it went in` }); return; }
       const before = new Set(sentencesOf(String(cur.text || '')));
-      fresh = [...(op.text !== undefined ? sentencesOf(op.text).filter((s) => !before.has(s)) : []), ...(op.line ? [op.line] : [])];
+      fresh = [...(r.text !== null ? sentencesOf(r.text).filter((s) => !before.has(s)) : []), ...(op.line ? [op.line] : [])];
     }
     const about = { refs: new Set(cur ? [`e:${cur.id}`] : []), words: new Set(wordsOf([name, ...aka, ...(cur ? [cur.name, ...(cur.aka || [])] : [])].join(' '))) };
     const on = heldBy(fresh.filter(Boolean), standing, ctx ? ctx.prep : prepared(nameReader(finder, null)), about);
@@ -1443,6 +1874,13 @@ function putEntries(novelId, entries, seen, changes, words, { got, standing = []
     const cur = entriesOf(store.peek('novel', novelId)).find((x) => x.id === c.entryId);
     if (cur) one({ name: cur.name }, { repair: true });
   }
+  /* an entry his words name that nothing it wrote is for, where his newer words say "not" to words of it that stand: said
+   * under Not put in, with Ask again — never left as though nothing were wrong (2.12.41, the fourth review) */
+  for (const cur of negsOf(words).length ? namedIn(words, store.peek('novel', novelId), finder) : []) {
+    if (done.has(cur.id)) continue;
+    const r = entryOp(cur, null, changes, entryCtx(cur, finder, words), false);
+    if (r.denied.length) got.refused.push({ name: cur.name, why: deniedWhy(r.denied[0], againWhy), denied: true });
+  }
   return got;
 }
 
@@ -1450,32 +1888,40 @@ function putEntries(novelId, entries, seen, changes, words, { got, standing = []
  * said — the earlier words stayed, and rode to the writer beside the entry that says otherwise): the earlier words found
  * where they stand and the answer's words put in their place, through the partner's own change of the book's words, with
  * Undo these — held to the keep rule as his entry's are (nowFor), and never words that say what a page says otherwise
- * (heldBy; 2.12.41, the review); with no words for it that hold, nothing is put in, and the row says so (`noWords` —
- * 2.12.41, the third review: his own words were spliced in, "Emilia rules the Sanguelis her brother"). His premises are
- * his record of what he asked for a passage: never written again — the row says his newer word stands over them. One row
- * for each change of his book's words: {at (the change's place in the row), field, label, was, now?, status: 'made' |
- * 'refused', why?, held?, noWords?, change?} */
+ * (heldBy; 2.12.41, the review), put in by their shape as in his entry (placeIn — 2.12.41, the fourth review: "Emilia
+ * rules the Sanguelis Emilia rules the Sanguelis alone., and the Covenant hunts them both."); with no words for it that
+ * hold, nothing is put in, and the row says so — that it gave none (`noWords` — 2.12.41, the third review: his own words
+ * were spliced in, "Emilia rules the Sanguelis her brother"), or that its words could not go in as they were
+ * (`couldNot`). His premises are his record of what he asked for a passage: never written again — the row says his newer
+ * word stands over them. One row for each change of his book's words: {at (the change's place in the row), field, label,
+ * was, now?, status: 'made' | 'refused', why?, held?, noWords?, couldNot?, change?} */
+const COULD_NOT = 'its words for it could not go in as they were';
+/* where a change of his book's words would go in, as mendBook puts it in — {here, text, ctx} — or why not: {why, noWords?,
+ * couldNot?} — the same for asking once more for its words (toSetRight) and for putting it in */
+function bookPlacing(c, novel, finder, words) {
+  const parts = String(c.was).split(ELLIPSIS).map((x) => x.trim()).filter((x) => /[\p{L}\p{N}]/u.test(x));
+  if (parts.length !== 1) return { why: 'it quoted those words only in part, so they cannot be put right here — change them in About this book' };
+  const text = String((novel && novel[BOOK_FIELD[c.field]]) || '');
+  const [hit] = findIn(text, parts[0], { words: true, whole: true, max: 1 });
+  if (!hit) return { why: 'those words are not there any more' };
+  const ctx = bookCtx(novel, c.field, finder, words);
+  const given = nowFor(c, ctx);
+  const here = given ? placeIn(text, { start: hit.start, end: hit.end }, given, ctx) : null;
+  if (!here) return String(c.now || '').trim() ? { why: COULD_NOT, couldNot: true } : { why: 'your partner gave no words for it', noWords: true };
+  return { here, text, ctx };
+}
 function mendBook(novelId, changes, finder, words, { standing = [], againWhy = '' } = {}) {
   const out = [];
   changes.forEach((c, at) => {
     if (c.kind !== 'about' || !BOOK_FIELD[c.field]) return;
     const base = { at, field: c.field, label: c.label, was: c.was };
-    const parts = String(c.was).split(ELLIPSIS).map((x) => x.trim()).filter((x) => /[\p{L}\p{N}]/u.test(x));
-    if (parts.length !== 1) { out.push({ ...base, status: 'refused', why: 'it quoted those words only in part, so they cannot be put right here — change them in About this book' }); return; }
-    const novel = store.peek('novel', novelId);
-    const text = String((novel && novel[BOOK_FIELD[c.field]]) || '');
-    const [hit] = findIn(text, parts[0], { words: true, whole: true, max: 1 });
-    if (!hit) { out.push({ ...base, status: 'refused', why: 'those words are not there any more' }); return; }
-    const ctx = bookCtx(novel, c.field, finder, words);
-    const given = nowFor(c, ctx);
-    if (!given) { out.push({ ...base, status: 'refused', why: 'your partner gave no words for it', noWords: true }); return; }
-    const span = { start: hit.start, end: hit.end };
-    /* (as it stands put in: the stop after the words stays theirs, never two, and a sentence they open opens with a capital) */
-    const next = putIn(text, span, given);
-    const now = next.slice(hit.start, next.length - (text.length - hit.end));
+    const p = bookPlacing(c, store.peek('novel', novelId), finder, words);
+    if (!p.here) { out.push({ ...base, status: 'refused', why: p.why, ...(p.noWords ? { noWords: true } : {}), ...(p.couldNot ? { couldNot: true } : {}) }); return; }
+    const { here, text, ctx } = p;
+    const now = here.s;
     const on = heldBy([now], standing, ctx.prep);
     if (on) { out.push({ ...base, status: 'refused', why: heldWhy(on, againWhy), held: true }); return; }
-    const ch = makeChange(novelId, { book: c.field, find: text.slice(hit.start, hit.end), replace: now, why: 'your newer word, in Quick add' });
+    const ch = makeChange(novelId, { book: c.field, find: text.slice(here.from, here.to), replace: now, why: 'your newer word, in Quick add' });
     if (ch.status === 'made') out.push({ ...base, now, status: 'made', change: ch });
     else out.push({ ...base, status: 'refused', why: line(ch.said, 300) });
   });
@@ -1504,11 +1950,14 @@ function plainAccount(r, { his = false } = {}) {
   if (held) out.push(`${many(held, 'entry waits', 'entries wait')} with what the book says otherwise.`);
   const heldBook = (r.book || []).filter((b) => b.held).map((b) => b.label);
   if (heldBook.length) out.push(`${listOf(heldBook)} wait${heldBook.length === 1 ? 's' : ''} with what the book says otherwise.`);
-  /* (his newer word with no words for it that hold: said as that — nothing of his spliced in: 2.12.41, the third review) */
+  /* (his newer word with no words for it that hold: said as that — nothing of his spliced in: 2.12.41, the third review;
+   * that its partner gave none only where it gave none, else that its words could not go in as they were: the fourth) */
   const unsaid = (r.changes || []).filter((c) => c.in === false);
   const noWords = unsaid.filter((c) => c.noWords).length;
+  const couldNot = unsaid.filter((c) => c.couldNot).length;
   if (noWords) out.push(`${many(noWords, `newer word of ${ours} did`, `newer words of ${ours} did`)} not go in — ${his ? 'you' : 'your partner'} gave no words for ${noWords === 1 ? 'it' : 'them'}.`);
-  if (unsaid.length - noWords) out.push(`${many(unsaid.length - noWords, `newer word of ${ours} did`, `newer words of ${ours} did`)} not go in.`);
+  if (couldNot) out.push(`${many(couldNot, `newer word of ${ours} did`, `newer words of ${ours} did`)} not go in — ${his ? 'your' : 'your partner’s'} words for ${couldNot === 1 ? 'it' : 'them'} could not go in as they were.`);
+  if (unsaid.length - noWords - couldNot) out.push(`${many(unsaid.length - noWords - couldNot, `newer word of ${ours} did`, `newer words of ${ours} did`)} not go in.`);
   /* (his word over a page: said where an entry carried it, and where none did — never "as you said" for nothing: 2.12.41,
    * the third review) */
   const over = (r.conflicts || []).filter((c) => c.overruled);
@@ -1554,6 +2003,35 @@ function requestFor(novelId, words, c) {
   return { request, shown: new Map(whole.map((e) => [e.id, String(e.text || '')])) };
 }
 
+/* AN ANSWER ASKED BEFORE A NAME WAS CHANGED EVERYWHERE (2.12.41, the fourth review's round — the Timeline's review, its
+ * F1 class: a Quick add sent, then Tom made Thomas everywhere while its partner answered, wrote "Tom" — a stray entry for
+ * a name the book no longer uses, his entry named back, a change of his words quoting words that stand nowhere now):
+ * every change of names made since its words were taken (`count`: shape.js renameCount, then) is made in what it would
+ * write and in the rows it shows, one change at a time, as in the book (names.js renameIn) — but for words it quotes
+ * that stand untouched in the book as it is now (`against`, `was`, `rule`, `quote`, found as the look-ups find them:
+ * stands): those are the book's own, and stay as it has them, to be found where they stand. (Never by a quote's letters
+ * inside other words, as archivist.js renamedAnswer reads the pages it asked with: "Thom" stands in "Thomas" so; nor
+ * by the old name standing inside the new one — "the clan of Oda" stands in "the clan of Oda Nobunaga", which is the
+ * quote renamed, and his "Oda" made "Takeda" there would leave "Takeda Nobunaga": a quote stays as it was only where it
+ * stands and its renamed words stand nowhere.) */
+const QUOTED = new Set(['against', 'was', 'rule', 'quote']);
+function renamedFrom(value, novelId, count) {
+  const { novel, chapters } = bookNow(novelId);
+  const since = renamesSince(novel, count);
+  if (!since.length) return value;
+  const places = placesOf(novel, chapters);
+  const standsIn = (q) => places.some((p) => stands(p.text, q));
+  const walk = (v, key) => {
+    if (typeof v === 'string') {
+      const r = renameIn(v, since);
+      return r !== v && QUOTED.has(key) && standsIn(v) && !standsIn(r) ? v : r;
+    }
+    if (Array.isArray(v)) return v.map((x) => walk(x, key));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, k)]));
+    return v;
+  };
+  return walk(value, '');
+}
 const want = (o) => isObj(o) && (Array.isArray(o.entries) || typeof o.verdict === 'string' || Array.isArray(o.conflicts));
 const wantAgain = (o) => isObj(o) && Array.isArray(o.entries);
 const CUT_TWICE = 'its answer was cut off at the reply’s length both times — give your partner’s connection a longer Longest reply (Settings → Connections)';
@@ -1591,11 +2069,21 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
   let partial = null;
   try {
     /* the entries the last request carried whole: those the request gives, and those the bibliography's own part carried
-     * whole (context.js stats.entries) — each with its words as they were then */
-    let seenNow = new Map();
+     * whole (context.js stats.entries) — each with its words as they were then, and the count of changes of names then */
+    let seenNow = { at: 0, shown: new Map() };
+    /* (how many changes of names the book had when its words were taken for the request now answered, and when he sent
+     * his words — renamedFrom; his words as the book names them now, for what is asked and judged: `said`) */
+    const sentAt = renameCount(novel0);
+    let takenAt = sentAt;
+    let said = t;
+    /* (`extra`: its own earlier answer and what is asked of it again, each with the count it was written at — `at` —
+     * carried, with his words, to the book's names as its words are taken: a request in one book's names, and the answer
+     * it gives renamed from then) */
     const build = (extra) => (c) => {
       const { novel, chapters } = bookNow(novelId);
-      const req = requestFor(novelId, t, c);
+      takenAt = renameCount(novel);
+      said = renamedFrom(t, novelId, sentAt);
+      const req = requestFor(novelId, said, c);
       const a = assemble({ house, novel, chapters, conn: c, purpose: 'partner', target: { chapterId: target }, turns: [], request: req.request, tools: false });
       const whole = new Map(req.shown);
       for (const ref of a.stats.entries || []) {
@@ -1603,10 +2091,11 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
         const e = entriesOf(novel).find((x) => x.id === String(ref).slice(2));
         if (e) whole.set(e.id, String(e.text || ''));
       }
-      seenNow = whole;
+      seenNow = { at: takenAt, shown: whole };
+      const more = extra.map((m) => ({ role: m.role, content: m.at === undefined ? m.content : renamedFrom(m.content, novelId, m.at) }));
       /* the partner's own room: his Longest reply raised to the floor a block of it needs — a block cut off is lost whole
        * (context.js partnerReply; 2.12.40, the audit: Ideas' length was sent, and both tries were cut) */
-      return { system: a.system, systemParts: a.systemParts, messages: [...a.messages, ...extra], maxTokens: partnerReply(c, 'scene', wireOf(c) === 'anthropic'), refuse: a.refuse, least: a.stats.least, seed: a.seed };
+      return { system: a.system, systemParts: a.systemParts, messages: [...a.messages, ...more], maxTokens: partnerReply(c, 'scene', wireOf(c) === 'anthropic'), refuse: a.refuse, least: a.stats.least, seed: a.seed };
     };
     const opts = { stream: true, signal: ctl.signal, leash: true, noPrefill: true, noStructured: true };
     const readOut = (o, wanted) => {
@@ -1623,7 +2112,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     /* once more, told what went wrong (as the helper is) */
     if (!obj) {
       const first = out;
-      out = await ask(conn, { ...opts, build: build([{ role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: first.cut ? JSON_CUT : JSON_AGAIN }]) });
+      out = await ask(conn, { ...opts, build: build([{ role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)', at: takenAt }, { role: 'user', content: first.cut ? JSON_CUT : JSON_AGAIN }]) });
       if (out.stopped) return stopped();
       obj = out.ok ? readOut(out, want) : null;
       if (!obj) {
@@ -1635,19 +2124,34 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     let seen = seenNow;
     let { novel, chapters } = bookNow(novelId);
     if (!novel) return { ok: false, error: 'the book was closed' };
+    /* (a name changed everywhere while it answered: carried into it, and into its words asked again with — renamedFrom) */
+    obj = renamedFrom(obj, novelId, takenAt);
+    const answeredText = renamedFrom(String(answered.text || ''), novelId, takenAt);
+    said = renamedFrom(t, novelId, sentAt);
+    let carriedTo = renameCount(novel);
     const read = readAnswer(novel, chapters, obj);
     let entries = read.entries;
     let over = read.over;
     let again = '';
     let againWhy = '';
     /* the look-ups part from how it sorted them: asked once more, with the rows as they stand, for the entries again */
-    const fix = toSetRight(read, novel, finderFor(novel), t);
+    const fix = toSetRight(read, novel, finderFor(novel), said);
     if (fix) {
-      out = await ask(conn, { ...opts, build: build([{ role: 'assistant', content: String(answered.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: quickAgainRequest(fix) }]) });
+      out = await ask(conn, { ...opts, build: build([{ role: 'assistant', content: answeredText.slice(0, 20000) || '(nothing)', at: carriedTo }, { role: 'user', content: quickAgainRequest(fix), at: carriedTo }]) });
       if (out.stopped) return stopped();
-      const obj2 = out.ok ? readOut(out, wantAgain) : null;
       ({ novel, chapters } = bookNow(novelId));
       if (!novel) return { ok: false, error: 'the book was closed' };
+      /* (and one changed while it answered again: the first answer's rows and entries, what was asked of it, and his words
+       * carry it as well) */
+      if (renamesSince(novel, carriedTo).length) {
+        for (const k of Object.keys(read)) read[k] = renamedFrom(read[k], novelId, carriedTo);
+        fix.again = renamedFrom(fix.again || [], novelId, carriedTo);
+        entries = read.entries;
+        over = read.over;
+        said = renamedFrom(t, novelId, sentAt);
+      }
+      const obj2 = out.ok ? readOut(out, wantAgain) : null;
+      if (obj2) Object.assign(obj2, renamedFrom(obj2, novelId, takenAt));
       if (obj2) {
         again = 'answered';
         seen = seenNow;
@@ -1666,8 +2170,11 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
         for (const c of second.changes) {
           if (read.changes.some((x) => foldName(x.was) === foldName(c.was))) continue;
           if (!c.mine) {
-            const was = (fix.again || []).find((x) => x.why === 'both' && (stands(x.his, c.was) || stands(c.was, x.his)));
-            c.mine = line(hisOwnFor(was ? was.said : c.now || c.was, t), 600);
+            /* (a change it lists for words of his it would have said both of, or that his newer words say "not" to: told as
+             * his words in this Quick add that ask for it — that sentence of his newer words — and held to the keep rule as
+             * every change is, his "not" with it: 2.12.41, the fourth review) */
+            const was = (fix.again || []).find((x) => (x.why === 'both' || x.why === 'denied') && (stands(x.his, c.was) || stands(c.was, x.his)));
+            c.mine = line(was && was.why === 'denied' ? was.not : hisOwnFor(was ? was.said : c.now || c.was, said), 600);
           }
           read.changes.push({ ...c, said: 'again' });
         }
@@ -1727,12 +2234,15 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     const standing = [...read.conflicts.filter((c) => !c.overruled), ...read.cannot.map((c) => ({ ...c, against: c.rule, cannot: true }))];
     const shown = { conflicts: read.conflicts, changes: read.changes, cannot: read.cannot, aside: read.aside, questions: read.questions, ...(again ? { again } : {}), ...(againWhy ? { againWhy } : {}) };
     /* (laid into as it goes: what went in before anything goes wrong is said, never "nothing" — 2.12.41, the review) */
-    const got = { added: [], refused: [], put: [], unput: [], waits: [] };
+    const got = { added: [], refused: [], put: [], unput: [], gave: [], waits: [] };
     partial = { ...shown, added: got.added, refused: got.refused };
-    putEntries(novelId, entries, seen, read.changes, t, { got, standing, againWhy });
+    /* (the entries it read whole, as they read with the names changed since: an entry a name changed everywhere changed
+     * in nothing else was read whole all the same — never "it had not read your entry whole" for a name made new) */
+    const readWhole = new Map([...seen.shown].map(([id, x]) => [id, renamedFrom(x, novelId, seen.at)]));
+    putEntries(novelId, entries, readWhole, read.changes, said, { got, standing, againWhy });
     const { added, refused, put } = got;
     for (const name of over) refused.push({ name, why: `only ${MOST_WORDS} go in from one answer — send it in a Quick add of its own` });
-    const book = mendBook(novelId, read.changes, finderFor(store.peek('novel', novelId)), t, { standing, againWhy });
+    const book = mendBook(novelId, read.changes, finderFor(store.peek('novel', novelId)), said, { standing, againWhy });
     partial.book = book;
     /* WHETHER EACH NEWER WORD OF HIS WENT IN (2.12.40, the review: one no entry carried was listed as though it had): in
      * his entry, with what stands now in place of the words it changed; not, where his partner gave no words for it that
@@ -1740,18 +2250,20 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
      * in What it's about, by its own row; else carried by an entry that went in — never by one for an entry of his that
      * did not take it */
     const unput = new Set(got.unput);
+    const gave = new Set(got.gave);
     const waiting = new Set(got.waits);
     read.changes.forEach((c, i) => {
       if (c.kind === 'about') {
         const b = book.find((x) => x.at === i);
         c.in = Boolean(b && b.status === 'made');
         if (b && b.noWords) c.noWords = true;
+        if (b && b.couldNot) c.couldNot = true;
         return;
       }
       const p = put.find((x) => x.c === c);
       if (p) { c.in = true; c.put = line(p.now, 1600); return; }
       if (waiting.has(c)) { c.in = false; c.waits = true; return; }
-      if (unput.has(c)) { c.in = false; c.noWords = true; return; }
+      if (unput.has(c)) { c.in = false; if (gave.has(c)) c.couldNot = true; else c.noWords = true; return; }
       c.in = c.kind === 'entry' ? false : Boolean(carriedBy(c.mine, added, novelId));
     });
     /* (his word over a page: where an entry that went in carries it — said so, never "it goes in" where nothing did) */

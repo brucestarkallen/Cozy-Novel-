@@ -1960,22 +1960,27 @@ const quoted = (rows, side) => rows.map((c) => `- “${c.mine}” — ${hisLabel
  * again, "now" — 2.12.41, the review: an entry's change with none was left saying what his newer word changes) */
 /* (`again`: what it wrote for an entry of his that brings his newer words but cannot go in — a sentence of his said
  * again in other words, or one saying "not" otherwise than his words do ('again', 'not'), or one that would say both a
- * sentence of his and another way of it with no change listed for it ('both') — asked for once more, so it is not left
- * to him: 2.12.41, the third review) */
+ * sentence of his and another way of it with no change listed for it ('both') — and a sentence of his, or his line, that
+ * his newer words say "not" to, with no change listed for it ('denied') — asked for once more, so it is not left to him:
+ * 2.12.41, the third and fourth reviews. Words for a change are asked for in a shape that goes in: the few words in
+ * place of his, or his whole sentence written again with every other word of it kept — 2.12.41, the fourth review) */
+const NOW_SHAPE = '("now": the words to stand in place of mine, reading on with my words around them — or my whole sentence that holds them written again, every other word of it kept)';
 export function quickAgainRequest({ conflicts = [], changes = [], aside = [], rewrite = [], again = [] }) {
   const parts = ['I looked up the words you quoted, and some of it stands otherwise than you put it.'];
   if (conflicts.length) parts.push(`These stand on a page of the book, so they wait for my word — nothing of them goes in yet:\n${quoted(conflicts, 'against')}`);
   if (changes.length) parts.push(`These stand only in my own earlier words, and no page says otherwise — they are my newer word, and they go in:\n${quoted(changes, 'was')}`);
   if (aside.length) parts.push(`The words you quoted for these stand nowhere in the book or in my own words, so they hold mine back no longer — unless a page does say otherwise; then copy that page’s words exactly into "conflicts":\n${aside.map((c) => `- “${c.mine}” — you quoted “${c.quote}”`).join('\n')}`);
-  if (rewrite.length) parts.push(`These change words of mine that you gave no new words for — write those earlier words again to say what my newer word says ("now"), to go in their place, the rest of my words around them as they stand:\n${quoted(rewrite, 'was')}`);
-  const said = again.filter((x) => x.why !== 'both');
+  if (rewrite.length) parts.push(`These change words of mine that you gave no new words for, or whose words could not go in as they were — write those earlier words again to say what my newer word says ${NOW_SHAPE}, to go in their place, the rest of my words around them as they stand:\n${quoted(rewrite, 'was')}`);
+  const said = again.filter((x) => x.why === 'again' || x.why === 'not');
   const both = again.filter((x) => x.why === 'both');
+  const denied = again.filter((x) => x.why === 'denied');
   if (said.length) parts.push(`These sentences you wrote for an entry of mine say a sentence of mine again in other words, or say “not” otherwise than my words do, so mine stands and they did not go in — give only what my words add, in sentences that never say one of mine again, with every “not” as my words have it:\n${said.map((x) => `- “${x.said}” — my entry ${x.name}${x.his ? ` says “${x.his}”` : ''}`).join('\n')}`);
-  if (both.length) parts.push(`These sentences you wrote for an entry of mine would say both — beside a sentence of mine that tells the same thing another way, with no change listed for it. Where my newer words change my sentence, list the change ("changes": my sentence copied exactly as "was", the words to go in its place as "now"); where both stand, give one sentence that says both:\n${both.map((x) => `- “${x.said}” — my entry ${x.name} says “${x.his}”`).join('\n')}`);
+  if (both.length) parts.push(`These sentences you wrote for an entry of mine would say both — beside a sentence of mine that tells the same thing another way, with no change listed for it. Where my newer words change my sentence, list the change ("changes": my sentence copied exactly as "was", the words to go in its place as "now" ${NOW_SHAPE}, every "not" of mine kept that my newer words do not take back); where both stand, give one sentence that says both:\n${both.map((x) => `- “${x.said}” — my entry ${x.name} says “${x.his}”`).join('\n')}`);
+  if (denied.length) parts.push(`My newer words say "not" to these words of mine, and you listed no change for them — list each change ("changes": my words copied exactly as "was", my newer word written into them as "now" ${NOW_SHAPE}):\n${denied.map((x) => `- “${x.his}” — my entry ${x.name}${x.line ? ', its line' : ''}; my newer words: “${x.not}”`).join('\n')}`);
   const shape = [
     '"entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "a new entry, whole", "add": "for an entry already mine: only what my words add to it"}]',
     ...(aside.length ? ['"conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}]'] : []),
-    ...(rewrite.length || both.length ? ['"changes": [{"was": "…", "now": "…"}]'] : []),
+    ...(rewrite.length || both.length || denied.length ? ['"changes": [{"was": "…", "now": "…"}]'] : []),
   ];
   parts.push(`Write the entries again for all of mine that holds now, as before — a new one whole, the way a good series bible writes it, never my words pasted; for an entry already in my bibliography only what my words add to it ("add"), every sentence of it standing as I wrote it. Answer with one JSON object and nothing else:\n{${shape.join(', ')}}`);
   return parts.join('\n\n');

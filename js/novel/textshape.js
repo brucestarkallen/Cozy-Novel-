@@ -3,6 +3,8 @@
  * book). The page drawn, the book sent out (EPUB, Markdown, text) and a book
  * brought in read a scene break and an emphasis the same way. */
 
+import { splitSentences } from './names.js';
+
 /* white space a model sends — every kind but a line break, and the marks of
  * no width at all */
 const SP = '(?:[^\\S\\n]|[\\u200b\\u200c\\u200d\\u2060])';
@@ -110,8 +112,9 @@ function tailIsNote(para) {
   if (isNote(bare)) return true;
   /* a checklist of its own: two ticks or more */
   if ((raw.match(/[✓✔☑]/g) || []).length >= 2) return true;
-  /* a paragraph of a few sentences, every one of them a note ("Want more? Let me know!") */
-  const sentences = bare.split(/(?<=[.!?…])\s+/).map((x) => x.replace(TAIL_WRAPS, '').trim()).filter(Boolean);
+  /* a paragraph of a few sentences, every one of them a note ("Want more? Let me know!") — a title's stop ending none
+   * (names.js splitSentences, 2.12.41) */
+  const sentences = splitSentences(bare).map((x) => x.replace(TAIL_WRAPS, '').trim()).filter(Boolean);
   if (sentences.length > 1 && sentences.length <= 4 && sentences.every((x) => isNote(x.replace(/([?!])\1$/, '$1')) || isNote(x + (/[?!.]$/.test(x) ? '' : '?')))) return true;
   /* a paragraph wholly in brackets, to "you", about the writing itself */
   if (/^[\s*_]*[(\[][^\n|]{3,300}[)\]][\s*_.!?]*$/.test(raw) && /\byou(?:r)?\b/i.test(raw) && /\b(?:continue|next part|next chapter|this (?:scene|passage|chapter|page)|the story so far|let me know|feel free|word count|response)\b/i.test(raw)) return true;

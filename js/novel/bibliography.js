@@ -22,7 +22,7 @@
  * nor in a name joined with a hyphen ("Mary" is not in "Mary-Jane"). */
 import { newId, nameKey, estimateTokens, hashText } from '../util.js';
 import { picked, matchCard, chapterLabel } from './shape.js';
-import { foldedText, foldName, nameInText, firstSentence, samePersonName, titlesConflict, familyNameOnly } from './names.js';
+import { foldedText, foldName, nameInText, firstSentence, samePersonName, titlesConflict, wordsOfName } from './names.js';
 import { superActive } from './auto.js';
 
 export const ENTRY_KINDS = ['people', 'places', 'things', 'groups', 'lore'];
@@ -109,12 +109,14 @@ const theLess = (n) => cleanName(n).replace(/^[Tt][Hh][Ee]\s+(?=\p{Lu})/u, '');
 /* THE ENTRY A NAME MEANS, AS THE PAGE FINDS IT (2.12.41, the review of Quick add: "Iron Covenant" and "The Iron Covenant"
  * went in as two entries for one group, though the page finds both as one): by its name or one it goes by first
  * (entryNamed); else the same without the "The" it starts with (theLess); else, for a person, by the same person's name
- * (names.js samePersonName: "Emilia" for Emilia Vermaine, a rank set aside — never Mei Lin for Mei Ling, never two
- * people). The person step only where the kind asked for is a person, or none is asked (2.12.41, the third review: a
- * group named "Kuchiki" was put into Rukia Kuchiki's entry), and never by a family's name alone (names.js
- * familyNameOnly: the Kuchiki are a house). One entry, or none and whether more than one answered — {entry, ambiguous,
- * by: 'name' | 'aka' | 'the' | 'person'}: a change never makes an entry found by another name another kind (changes.js
- * makeEntry). `kind`: the kind asked for (bibliography.js kindSaid's), '' for none */
+ * (names.js samePersonName: "Emilia" for Emilia Vermaine, "Mr. Darcy" for Fitzwilliam Darcy and "Captain Venn" for Mara
+ * Venn — a title set aside unless it says another (titlesConflict) — "Sasuke" for Uchiha Sasuke and "Kuchiki" for
+ * Kuchiki Rukia, whichever end of the name a lone word is; never Mei Lin for Mei Ling, never two people). The person step
+ * only where the kind asked for is a person, or none is asked — the kind decides: "Kuchiki" asked as a group is a group
+ * (2.12.41, the third review) — and a lone word of a name only where no entry of another kind goes by that word too
+ * ("Venn" beside the place Venn Point is more than one). One entry, or none and whether more than one answered —
+ * {entry, ambiguous, by: 'name' | 'aka' | 'the' | 'person'}: one found by another name and asked for as another kind
+ * is never that entry's to write (otherKindSaid). `kind`: the kind asked for (kindSaid's), '' for none */
 export function entryFor(entries, name, { kind = '' } = {}) {
   const list = entries || [];
   const first = entryNamed(list, name);
@@ -127,8 +129,19 @@ export function entryFor(entries, name, { kind = '' } = {}) {
     if (bare.length) return one(bare, 'the');
   }
   if (kind && kind !== 'people') return { entry: null, ambiguous: false };
-  const person = list.filter((e) => kindOf(e.kind) === 'people' && [e.name, ...(e.aka || [])].some((n) => samePersonName(n, name) && !familyNameOnly(n, name)));
+  const person = list.filter((e) => kindOf(e.kind) === 'people' && [e.name, ...(e.aka || [])].some((n) => samePersonName(n, name)));
+  /* (a lone word, past its titles, that an entry of another kind's name gives too: which is meant is not told) */
+  const lone = wordsOfName(name);
+  if (person.length && lone.length === 1 && list.some((e) => kindOf(e.kind) !== 'people' && [e.name, ...(e.aka || [])].some((n) => wordsOfName(n).includes(lone[0])))) return { entry: null, ambiguous: true };
   return one(person, 'person');
+}
+/* AN ENTRY FOUND BY ANOTHER NAME, ASKED FOR AS ANOTHER KIND, IS NOT THAT ENTRY'S TO WRITE — one it goes by, the same
+ * without its "The", a person's given name (2.12.41, the third review; the fourth: Quick add put the lore "Order" into
+ * his group "The Order"): what to say instead, '' where it is that entry's. `found`: entryFor's answer */
+export function otherKindSaid(found, name, kind) {
+  const e = found && found.entry;
+  if (!e || !kind || found.by === 'name' || kind === kindOf(e.kind)) return '';
+  return `“${name}” finds ${e.name}, a ${KIND_ONE[kindOf(e.kind)]} — its kind is changed under its own name, ${e.name}; for something else, give it a name of its own`;
 }
 
 /* the keys a name answers to: as written, and without the "The" it starts with (theLess) — for many names held against
