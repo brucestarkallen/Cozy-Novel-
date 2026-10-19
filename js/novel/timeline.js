@@ -180,6 +180,15 @@ function carriedTurn(e, t, swap) {
 export function turnStands(e, text) {
   return soundTurn(e) && e.evidence.every((q) => quoteIn(text, q));
 }
+/* the turns of words before a change that a reading of it neither carries to the new words nor gives again — their
+ * quotes stand in them no longer (a name changed everywhere since, a sentence put another way, words taken out) and
+ * the reading, asked what the change adds, does not tell them (archivist.js turnsUnvouched: read whole again, 2.12.40) */
+export function turnsLost(history, before, text) {
+  if (!before || before.schema !== TIMELINE_SCHEMA || !Array.isArray(before.events)) return [];
+  const t = String(text || '');
+  const have = (history && Array.isArray(history.events)) ? history.events : [];
+  return before.events.filter((e) => soundTurn(e) && !carriedTurn(e, t, (x) => x) && !have.some((x) => sameTurn(x, e, t)));
+}
 /* what is the reading's own, never carried: how far it was read in parts (`upTo`, `gap`) and whether it was passed by */
 const ownOnly = ({ upTo: _u, gap: _g, passed: _p, ...rest }) => rest;
 

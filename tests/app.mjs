@@ -15291,6 +15291,56 @@ await test('a passage moved to a new chapter while its change is read keeps the 
   await putAway(b);
 });
 
+/* (2.12.40, the review: a name changed everywhere between a Go on and its reading — the turns and facts kept for the words
+ * before quoted the old name, none was carried, and the passage was said read whole with them lost) */
+await test('a change whose reading cannot vouch for the rest of its passage — a name changed everywhere between a Go on and its reading — is never said read whole: it is left owed, and one ask each brings its turns and its facts back; a plain Go on asks nothing more', async () => {
+  await setHouse({ context: 64000 });
+  const b = await emiliaBook({ cut: true, cutWhy: 'it reached the reply length' });
+  const pid = b.ch().passages[0].id;
+  await reset();
+  await script([{ text: 'Then Jovan swore to hunt her down, for he was a hunter of the Order.' }]);
+  assert.equal((await writer.goOn({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid })).ok, true);
+  await quietAll();
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Emilia', to: 'Emmeline' } }).status, 'made');
+  const EM = [{ kind: 'people', name: 'Emmeline Vermaine' }, { kind: 'people', name: 'Jovan Wessex' }];
+  const row = (text, quote) => ({ kind: 'relationship', cards: EM, text, evidence: [quote], stance: 'fact' });
+  await reset();
+  /* the Go on's words read as a change, giving its own turn and fact; then the passage read whole for its facts (slow,
+   * so it is seen owed meanwhile) and for its turns */
+  await script([
+    changeRead([row('Jovan turns against Emmeline.', 'Jovan swore to hunt her down')], [{ name: 'Jovan', kind: 'people', fact: 'Jovan is a hunter of the Order.', evidence: 'he was a hunter of the Order' }]),
+    { bib: true, pause: 0.8, text: JSON.stringify({ bibliography: [{ source: 'Chapter One, passage 1', facts: [{ name: 'Emmeline', kind: 'people', fact: 'Emmeline is a vampire who bites.', evidence: 'Emmeline bit Jovan' }] }] }) },
+    { turns: true, text: JSON.stringify({ timeline: [{ source: 'Chapter One, passage 1', events: [row('Emmeline turns Jovan.', 'Emmeline bit Jovan'), { kind: 'character', cards: [{ kind: 'people', name: 'Jovan Wessex' }], text: 'Jovan lives on.', evidence: ['he did not die'], stance: 'fact' }] }] }) },
+  ]);
+  const running = archivist.run(b.novelId);
+  for (let k = 0; k < 300 && !(await everyRequest()).some(isBibAsk); k++) await sleep(20);
+  assert.ok((await requests()).some((x) => lastAsk(x).includes('It used to read')), 'read as a change');
+  assert.deepEqual([tlmod.continuityDone(picked(b.ch().passages[0])), archivist.timelineDue(b.novelId).length, coverOf(b).owed, archivist.bibDue(b.novelId).length], [false, 1, 1, 1], 'owed for its turns and its facts — never said read whole');
+  await running;
+  await quietAll();
+  const r = await everyRequest();
+  assert.deepEqual([r.filter(isTurnsAsk).length, r.filter(isBibAsk).length], [1, 1], 'one ask each');
+  assert.deepEqual([turnsHere(b), factsHere(b)], [['Emmeline turns Jovan.', 'Jovan lives on.', 'Jovan turns against Emmeline.'], ['Emmeline is a vampire who bites.', 'Jovan is a hunter of the Order.']], 'both back, and what the change\'s reading found kept');
+  assert.deepEqual([tlmod.continuityDone(picked(b.ch().passages[0])), archivist.timelineDue(b.novelId).length, archivist.bibDue(b.novelId).length], [true, 0, 0]);
+  /* a plain Go on: every turn and fact of the words before carried — read whole, nothing more asked */
+  const c = await emiliaBook({ cut: true, cutWhy: 'it reached the reply length' });
+  await reset();
+  await script([{ text: 'Then Jovan swore to hunt her down, for he was a hunter of the Order.' }]);
+  assert.equal((await writer.goOn({ novelId: c.novelId, chapterId: c.ids[0], passageId: c.ch().passages[0].id })).ok, true);
+  await quietAll();
+  await reset();
+  await script([changeRead([turnRow('Jovan turns against Emilia.', 'Jovan swore to hunt her down')], [{ name: 'Jovan', kind: 'people', fact: 'Jovan is a hunter of the Order.', evidence: 'he was a hunter of the Order' }])]);
+  await archivist.run(c.novelId);
+  await quietAll();
+  const rc = await everyRequest();
+  assert.deepEqual([rc.filter(isTurnsAsk).length, rc.filter(isBibAsk).length], [0, 0], 'a plain Go on: nothing more asked');
+  assert.deepEqual([turnsHere(c), factsHere(c)], [['Emilia turns Jovan.', 'Jovan lives on.', 'Jovan turns against Emilia.'], ['Emilia is a vampire who bites.', 'Jovan is a hunter of the Order.']]);
+  assert.deepEqual([tlmod.continuityDone(picked(c.ch().passages[0])), archivist.timelineDue(c.novelId).length, archivist.bibDue(c.novelId).length], [true, 0, 0]);
+  await setHouse();
+  await putAway(b);
+  await putAway(c);
+});
+
 heading('the audit of 2.12.36–2.12.39 (2.12.40)');
 const notesAsk = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Update the notes'));
 
