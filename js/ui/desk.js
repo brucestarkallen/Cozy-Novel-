@@ -294,6 +294,8 @@ export function drawPage({ keepScroll = true } = {}) {
   /* what he is typing on the page survives the page being drawn again */
   const editing = ui.passages.querySelector('.editbox');
   const rewriting = ui.passages.querySelector('.rewriterow input');
+  const premiseLive = ui.passages.querySelector('textarea.premiseedit');
+  if (premiseLive && S.premiseEdit) S.premiseDraft.set(S.premiseEdit, premiseLive.value);
   const kept = { edit: editing ? editing.value : null, editFocus: editing && document.activeElement === editing, editSel: editing ? [editing.selectionStart, editing.selectionEnd] : null,
     note: rewriting ? rewriting.value : null };
   const list = c.passages || [];
@@ -354,7 +356,8 @@ function drawnKey(p, { tint, nums, working, names = null, snapshot = false }) {
   const controls = sel ? [working, nums.get(p.id) || 0, v.done || v.at ? timeAgo(v.done || v.at) : '', gradeSaid(p),
     p.pick, (p.versions || []).length, ...(p.versions || []).map((x) => x.id), Boolean(v.streaming || live), cutAtEnd(v), Boolean(writer.takeOf(p)),
     v.how, v.why, ...handsOf(v), (v.before || []).length, checkpoint ? null : v.words, checkpoint ? null : v.text, v.tokensIn, v.tokensCounted, v.ask && v.ask.note,
-    v.cut, v.cutWhy, (v.notes || []).length, ...(v.notes || []), (v.sources || []).length, ...(v.sources || []).flatMap((x) => x ? [x.url, x.title] : [])] : [];
+    v.cut, v.cutWhy, (v.notes || []).length, ...(v.notes || []), (v.sources || []).length, ...(v.sources || []).flatMap((x) => x ? [x.url, x.title] : []),
+    S.premiseOpen.has(p.id), S.premiseEdit === p.id] : [];
   return { body, controls };
 }
 
@@ -494,17 +497,19 @@ function controls(p) {
   if (premiseBox) {
     premiseBox.value = draft;
     premiseBox.addEventListener('input', () => S.premiseDraft.set(p.id, premiseBox.value));
-    if (S.focusNext === 'premise') { S.focusNext = null; setTimeout(() => premiseBox.focus(), 30); }
+    if (S.focusNext === 'premise') { S.focusNext = null; setTimeout(() => premiseBox.focus({ preventScroll: true }), 30); }
   }
   const premiseLine = premise ? h('div.note.premise', { hidden: !S.premiseOpen.has(p.id) }, h('b', 'Your premise: '), editing ? premiseBox : premise) : null;
-  const sendPremise = (words) => run(() => writer.resend({ novelId: S.novelId, chapterId: c.id, passageId: p.id, direction: words }));
+  const sendPremise = (words) => run(() => writer.resend({ novelId: S.novelId, chapterId: c.id, passageId: p.id, direction: words })).then((out) => {
+    if (out && !out.ok && !out.stopped && out.error) toast(sentence(out.error), 6000);
+  });
   const premiseActs = premise ? h('div.premacts', { hidden: !S.premiseOpen.has(p.id) },
     editing
-      ? h('button', { title: 'Writes this page again from the premise in the box — a new version. The one you have stays an arrow back.', disabled: working, onclick: () => { const words = premiseBox.value.trim(); S.premiseEdit = null; S.premiseDraft.delete(p.id); sendPremise(words); } }, 'Resend')
-      : h('button', { title: 'Change the premise, then Resend to write the page again from it.', disabled: working, onclick: () => { S.premiseEdit = p.id; S.premiseDraft.set(p.id, premise); S.premiseOpen.add(p.id); S.focusNext = 'premise'; drawPage(); } }, 'Edit'),
-    editing ? h('button', { title: 'Leaves the premise as it was.', onclick: () => { S.premiseEdit = null; S.premiseDraft.delete(p.id); drawPage(); } }, 'Cancel') : null,
-    !editing ? h('button', { title: 'Writes this page again from this premise, as a new version.', disabled: working, onclick: () => sendPremise(premise) }, 'Resend') : null,
-    h('button', { title: 'Tries the same write again, from the premise as it stands — a new version.', disabled: working, onclick: () => sendPremise(premiseOf(p)) }, 'Retry')) : null;
+      ? h('button', { type: 'button', title: 'Writes this page again from the premise in the box — a new version. The one you have stays an arrow back.', disabled: working, onclick: (e) => { e.preventDefault(); e.stopPropagation(); const words = premiseBox.value.trim(); if (!words) { toast('Write the premise first.'); return; } S.premiseEdit = null; S.premiseDraft.delete(p.id); sendPremise(words); } }, 'Resend')
+      : h('button', { type: 'button', title: 'Change the premise, then Resend to write the page again from it.', disabled: working, onclick: (e) => { e.preventDefault(); e.stopPropagation(); S.premiseEdit = p.id; S.premiseDraft.set(p.id, premise); S.premiseOpen.add(p.id); S.focusNext = 'premise'; drawPage(); } }, 'Edit'),
+    editing ? h('button', { type: 'button', title: 'Leaves the premise as it was.', onclick: (e) => { e.preventDefault(); e.stopPropagation(); S.premiseEdit = null; S.premiseDraft.delete(p.id); drawPage(); } }, 'Cancel') : null,
+    !editing ? h('button', { type: 'button', title: 'Writes this page again from this premise, as a new version.', disabled: working, onclick: (e) => { e.preventDefault(); e.stopPropagation(); sendPremise(premise); } }, 'Resend') : null,
+    h('button', { type: 'button', title: 'Tries the same write again, from the premise as it stands — a new version.', disabled: working, onclick: (e) => { e.preventDefault(); e.stopPropagation(); sendPremise(premiseOf(p)); } }, 'Retry')) : null;
   if (premise) {
     const btn = h('button.premisebtn', { title: 'The premise you typed for this page', 'aria-expanded': String(S.premiseOpen.has(p.id)), onclick: () => {
       const open = !S.premiseOpen.has(p.id);
@@ -902,9 +907,9 @@ function drawEnd() {
       card.append(fold, h('p.say.quiet', 'Copy it, and Add as my words puts any of it in the chapter as your own.'));
     }
     card.append(h('div.row', err.needsConnection ? h('button.btn.primary.small', { onclick: () => hooks.openSettings('connections') }, 'Open Connections') : null,
-      typeof err.ask === 'string' ? h('button.btn.small', { title: 'The premise that did not come, back in the box to change.', onclick: () => { ui.direction.value = err.ask; ui.direction.dispatchEvent(new Event('input')); ui.direction.focus(); } }, 'Edit premise') : null,
-      typeof err.ask === 'string' ? h('button.btn.small', { title: 'Writes the page from whatever the box says now.', disabled: busy(), onclick: () => onWrite() }, 'Resend') : null,
-      typeof err.ask === 'string' ? h('button.btn.primary.small', { title: 'Tries the same premise again.', disabled: busy(), onclick: () => { ui.direction.value = err.ask; ui.direction.dispatchEvent(new Event('input')); onWrite(); } }, 'Retry') : null,
+      typeof err.ask === 'string' ? h('button.btn.small', { type: 'button', title: 'The premise that did not come, back in the box to change.', onclick: () => { ui.direction.value = err.ask; ui.direction.dispatchEvent(new Event('input')); ui.direction.focus(); } }, 'Edit premise') : null,
+      typeof err.ask === 'string' ? h('button.btn.small', { type: 'button', title: 'Writes the page from whatever the box says now.', disabled: busy(), onclick: () => onWrite() }, 'Resend') : null,
+      typeof err.ask === 'string' ? h('button.btn.primary.small', { type: 'button', title: 'Tries the same premise again.', disabled: busy(), onclick: () => { ui.direction.value = err.ask; ui.direction.dispatchEvent(new Event('input')); onWrite(); } }, 'Retry') : null,
       err.thought ? h('button.btn.small', { title: 'Its thinking, to paste anywhere', onclick: async () => toast((await copyText(err.thought)) ? 'What it thought is copied.' : 'It could not be copied.') }, 'Copy what it thought') : null,
       h('button.btn.small', { onclick: () => { S.errors.delete(c.id); drawEnd(); } }, 'Dismiss')));
     ui.end.append(card);

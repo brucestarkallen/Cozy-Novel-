@@ -1190,6 +1190,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **A page that did not come.** The same three are on that card. Edit premise puts it back in the box. Resend writes from whatever the box says now. Retry tries the premise that failed.
 
+## 2.12.48, The premise buttons answer
+
+**Edit, Resend, Retry.** They did nothing: the page was drawn again, and the drawing did not know the premise had been opened, so the box never appeared and a tap looked frozen. The page knows now. Edit opens the premise. Resend and Retry write the page again.
+
+
 
 
 ## 2.12.45, Quick add’s ring turns, and Batman stays Batman
