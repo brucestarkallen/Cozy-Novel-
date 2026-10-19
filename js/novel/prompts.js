@@ -23,7 +23,7 @@
  */
 
 import { LENGTHS, soundOf, povOf, tenseOf, hisField, NOTE_KINDS } from './shape.js';
-import { numberWords, estimateTokens, cutWords } from '../util.js';
+import { numberWords, estimateTokens, cutWords, countWords } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
 import { tellerOf, toTeller } from './teller.js';
 import { PICK_MAX, recallOn, entryWords } from './bibliography.js';
@@ -1309,14 +1309,30 @@ const LATER_TOLD = {
 export function laterTold(later, most = 1200) {
   const said = [];
   for (const w of later || []) {
-    const t = (LATER_TOLD[w && w.how] || LATER_TOLD.edit)(cutWords(String((w && w.note) || '').replace(/\s+/g, ' ').trim(), most));
+    /* (a note shown by its opening to fit beside its page says so after it: prompts.js premiseBeside, 2.12.41) */
+    const t = (LATER_TOLD[w && w.how] || LATER_TOLD.edit)(cutWords(String((w && w.note) || '').replace(/\s+/g, ' ').trim(), most)) + (w && w.cut ? ' (the rest of it is left out here to save room)' : '');
     /* (the same done twice is said once) */
     if (!said.includes(t)) said.push(t);
   }
   return said.length > 1 ? `${said.slice(0, -1).join('; ')}; then ${said[said.length - 1]}` : said[0] || '';
 }
-function premiseRule(codex, over = false) {
-  return `- My premise for a passage, shown beside its words, is my own word on the book and counts as the book: ${PREMISE_HOLDS} — goes in the notes as I gave it, even where the passage leaves it unsaid, and a later premise of mine stands over an earlier one.${over ? ' Where I say beside a premise what I did to its passage since, that is my newer word on it: where the two differ, it stands, and the premise counts only where they agree.' : ''} What it asks to happen is only what I asked for: what happened is what the passage tells.${codex ? ' The "bibliography" keeps only what a passage’s own words say.' : ''}`;
+/* WHICH OF HIS WORDS CAME AFTER THE OTHER, A PREMISE OR AN ENTRY (2.12.41, the review — his newest word wins: the two
+ * were never weighed by which was newer): said beside each where the other is newer — an entry of his written after a
+ * premise for a name it gives, a premise of his typed after an entry for a name it gives (archivist.js premisesWeighed,
+ * entriesWeighed) */
+const NEWER = ' Where I say that one of my premises and one of my bibliography’s entries came after the other, the newer one stands where the two differ.';
+function premiseRule(codex, over = false, newer = false) {
+  return `- My premise for a passage, shown beside its words, is my own word on the book and counts as the book: ${PREMISE_HOLDS} — goes in the notes as I gave it, even where the passage leaves it unsaid, and a later premise of mine stands over an earlier one.${over ? ' Where I say beside a premise what I did to its passage since, that is my newer word on it: where the two differ, it stands, and the premise counts only where they agree.' : ''}${newer ? NEWER : ''} What it asks to happen is only what I asked for: what happened is what the passage tells.${codex ? ' The "bibliography" keeps only what a passage’s own words say.' : ''}`;
+}
+const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0] || '');
+/* (a premise beside an entry of his written after it, for a name the premise gives: `entryOver`, the entries' names) */
+const entryOverOf = (x) => (Array.isArray(x && x.entryOver) ? x.entryOver.filter(Boolean) : []);
+/* (an entry beside a premise of his typed after it that names it: `premiseOver`, the premises' passages) */
+const premiseOverOf = (e) => (Array.isArray(e && e.premiseOver) ? e.premiseOver.filter(Boolean) : []);
+/* the words that say so beside an entry, in the list after his entries (entriesPart) — '' for none */
+export function entryOverWords(e) {
+  const over = premiseOverOf(e);
+  return over.length ? `${e.name}: my premise for ${andList(over)}` : '';
 }
 export const PREMISE_ROOM = 6000;
 /* a long one by its opening, said so — beside its page (notesRequest) as in the list (premisesPart): 2.12.40, the audit:
@@ -1331,7 +1347,8 @@ const premiseCut = (text, { flat = false } = {}) => {
  * said even when none of them fits (2.12.40, the audit: nothing said, the check never knew there were any) */
 export function premiseRow(x) {
   const later = laterTold(x.later);
-  return `[${x.label}] ${premiseCut(x.text, { flat: true })}${later ? ` — since then ${later}, which stands over it where they differ` : ''}`;
+  const newer = entryOverOf(x);
+  return `[${x.label}] ${premiseCut(x.text, { flat: true })}${later ? ` — since then ${later}, which stands over it where they differ` : ''}${newer.length ? ` — my bibliography’s ${newer.length === 1 ? 'entry' : 'entries'} for ${andList(newer)}, written after it, ${newer.length === 1 ? 'stands' : 'stand'} over it where they differ` : ''}`;
 }
 export function premisesHead(over = false) {
   return `My premises — what I asked the writer for, as I typed it, each by the passage it was typed for. They are my word on the book and count as the book: ${PREMISE_HOLDS} — stands, even where no passage says it, and a later premise of mine stands over an earlier one;${over ? ' what I say I did to a passage since its premise stands over the premise, which counts only where they agree;' : ''} what one asks to happen is only what I asked for, and what happened is what the passages say:`;
@@ -1369,7 +1386,10 @@ export const ENTRIES_HEAD = 'My bibliography’s entries for the names here — 
 export function entriesPart(entries, left = 0) {
   const rows = (entries || []).map(entryRow).filter((t) => String(t || '').trim());
   if (!rows.length) return left ? NONE_FIT.entry(left) : '';
-  return `${ENTRIES_HEAD}\n${fence(rows.join('\n\n'))}${leftLine('entry', left)}`;
+  /* (an entry beside a premise of his typed after it that names it, said after them — never among his words: 2.12.41) */
+  const over = (entries || []).map(entryOverWords).filter(Boolean);
+  const newer = over.length ? `\n(Where they differ, my premise typed after an entry stands over it — ${over.join('; ')}.)` : '';
+  return `${ENTRIES_HEAD}\n${fence(rows.join('\n\n'))}${newer}${leftLine('entry', left)}`;
 }
 const ENTRY_RULE = '- My bibliography’s entries, shown above, are my word on what each name means for good: a card never says the opposite of them. Where the words read say otherwise of something lasting, keep my entry’s account on the card — that is the page’s slip, not the card’s. What changes over the story (where someone is, how they stand with others, what they know now) is the passage’s.';
 /* (2.12.40, the audit: his own words — a page he wrote, or changed himself — were "the page's slip" against his entry;
@@ -1377,6 +1397,9 @@ const ENTRY_RULE = '- My bibliography’s entries, shown above, are my word on w
  * same as before wherever they are not) */
 const ENTRY_RULE_OWN = '- My bibliography’s entries, shown above, are my word on what each name means for good: a card never says the opposite of them. Where the words read say otherwise of something lasting, keep my entry’s account on the card — that is the page’s slip, not the card’s — unless they are my own words, said so above them: those are my newer word, and the card follows them. What changes over the story (where someone is, how they stand with others, what they know now) is the passage’s.';
 const OWN_WORDS = 'These are my own words — I wrote or changed them myself.\n';
+/* the rule for his entries in a reading: his own words his newer word where there are any (shape.js ownWords), and
+ * which of a premise and an entry came after the other, where that is said (NEWER) */
+const entryRule = (owned, newer) => `${owned ? ENTRY_RULE_OWN : ENTRY_RULE}${newer ? NEWER : ''}`;
 /* the Timeline's newest turns for some cards (timeline.js timelineOf rows), each with the book's words behind it */
 export function timelineRow(e) {
   const who = (e.participants || []).map((p) => p.name).filter(Boolean).join(', ');
@@ -1446,11 +1469,57 @@ export function readingFocus(c) {
 }
 /* his premise as it rides beside its page — by its opening when long, as in the list — and what he did to the passage
  * since (2.12.40); '' for words with none, and for words being replaced. archivist.js readChanges sizes the part that
- * carries it by these very words. */
+ * carries it by these very words.
+ * IN ONE ROOM (2.12.41, the review: each note was cut to 6,000 letters by itself, with no room for them all, and four
+ * long ones made a small helper's reading too big for it): `c.besideRoom` words for the premise and his notes since
+ * together — the oldest of his words cut first: the premise to its opening (its first PREMISE_LEAST words stay), then
+ * his earlier notes, the newest last of all, by its opening; what is left out said. And an entry of his written after
+ * the premise for a name it gives, said beside it (`entryOver`). */
+const PREMISE_LEAST = 40;
+const NOTE_LEAST = 12;
+const REST_LEFT = ' (the rest of it is left out here to save room)';
+/* the opening of some words, `n` words long ("…" where it is not all of them) */
+function openingOf(text, n) {
+  const t = String(text || '').trim();
+  let k = 0;
+  for (const m of t.matchAll(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu)) {
+    if (++k < n) continue;
+    const end = m.index + m[0].length;
+    return end < t.length ? `${t.slice(0, end)}…` : t;
+  }
+  return t;
+}
+function besideText(premise, later, left, newer) {
+  const told = laterTold(later, PREMISE_ROOM);
+  /* (with none of them left to tell, what he did to it since is said left out) */
+  const gone = !left ? '' : !told ? '(What I did to it since is left out here to save room.)\n' : `(${left === 1 ? 'One earlier change of mine to it is' : `${numberWords(left)} earlier changes of mine to it are`} left out here to save room.)\n`;
+  const after = newer.length ? `My bibliography’s ${newer.length === 1 ? 'entry' : 'entries'} for ${andList(newer)} ${newer.length === 1 ? 'was' : 'were'} written after this premise: where they differ, ${newer.length === 1 ? 'the entry stands' : 'the entries stand'}.\n` : '';
+  return `My premise for it, as I typed it:\n${fence(premise)}\n${told ? `Since then ${told} — my newer word on this passage: where it and the premise differ, it stands.\n` : ''}${gone}${after}`;
+}
 export function premiseBeside(c) {
   if (!premiseOn(c)) return '';
-  const told = laterTold(c.later, PREMISE_ROOM);
-  return `My premise for it, as I typed it:\n${fence(premiseCut(c.premise))}\n${told ? `Since then ${told} — my newer word on this passage: where it and the premise differ, it stands.\n` : ''}`;
+  const newer = entryOverOf(c);
+  let premise = premiseCut(c.premise);
+  let later = (c.later || []).slice();
+  let left = 0;
+  const room = Number.isFinite(c.besideRoom) ? Math.max(0, c.besideRoom) : Infinity;
+  const make = () => besideText(premise, later, left, newer);
+  let text = make();
+  const over = () => countWords(text) - room;
+  if (over() <= 0) return text;
+  /* the premise first, to its opening */
+  const pw = countWords(premise);
+  if (pw > PREMISE_LEAST) { premise = `${openingOf(c.premise, Math.max(PREMISE_LEAST, pw - over() - 12))}${REST_LEFT}`; text = make(); }
+  /* then his earlier notes, the oldest first — the newest stays */
+  while (over() > 0 && later.length > 1) { later = later.slice(1); left++; text = make(); }
+  /* then the newest, by its opening — or, past that, it too */
+  if (over() > 0 && later.length === 1) {
+    const w = later[0];
+    const nw = countWords(w.note);
+    if (w.note && nw - over() - 12 >= NOTE_LEAST) { later = [{ ...w, note: openingOf(w.note, nw - over() - 12), cut: true }]; text = make(); }
+    if (over() > 0) { later = []; left++; text = make(); }
+  }
+  return text;
 }
 export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null, plain = false, notesShown = undefined, codex = false, entries = [], entriesLeft = 0 }) {
   const parts = [];
@@ -1474,6 +1543,8 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   const over = changes.some((c) => premiseOn(c) && (c.later || []).length > 0);
   /* his own words among those read, said so — beside his entries only, where it decides which stands (2.12.40) */
   const owned = entries.length > 0 && changes.some((c) => c.his && !c.oldOnly);
+  /* which of a premise and an entry came after the other, where it is said beside them (2.12.41): told once */
+  const newer = changes.some((c) => premiseOn(c) && entryOverOf(c).length > 0) || entries.some((e) => premiseOverOf(e).length > 0);
   for (const c of changes) {
     const mine = premiseBeside(c);
     const own = owned && c.his ? OWN_WORDS : '';
@@ -1500,7 +1571,7 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   "chapterName": "a short name for ${chapterLabel}, only if it has none yet"${keptFields}
 }
 
-${noteRules(codex)}${premised ? `\n${premiseRule(codex, over)}` : ''}${entries.length ? `\n${owned ? ENTRY_RULE_OWN : ENTRY_RULE}` : ''}
+${noteRules(codex)}${premised ? `\n${premiseRule(codex, over, newer)}` : ''}${entries.length ? `\n${entryRule(owned, newer && !premised)}` : ''}
 - "timeline" traces meaningful developments in these new words: a relationship's beginning or change, a lasting personal change, or a thread set up, advanced or resolved. It is the history behind the notes, not another current account. Give one entry for EVERY source shown with new words, even when "events" is empty. Never extract events from the old words, context, or passages taken out. A passage read in parts contributes only events in the part shown here.
 ${TIMELINE_EVENT_RULES}${codex ? `
 - ${BIB_FACTS_RULE}` : ''}${keeps.length ? `
@@ -1508,13 +1579,22 @@ ${TIMELINE_EVENT_RULES}${codex ? `
   return parts.join('\n\n');
 }
 
+/* his own passages, said in the check's rule for his entries: where each stands and how it opens, the first OWN_MOST */
+const OWN_MOST = 20;
+const ownList = (own) => `${own.slice(0, OWN_MOST).join('; ')}${own.length > OWN_MOST ? `; and ${numberWords(own.length - OWN_MOST).toLowerCase()} more of mine` : ''}`;
+
 /* THE NOTES' AUDITOR (Cozy Tavern's ledger auditor, for a book): the whole
  * notes held against the book as it stands — the versions on the page — so
  * whatever the notes still hold from words since rewritten or taken out, or
  * have drifted on, is put right. His own cards keep his words. */
 export const AUDIT_ASK = 'Check every card against the book as it stands';
-export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [], premises = [], premisesLeft = 0, entries = [], entriesLeft = 0, turns = [], turnsLeft = 0 }) {
+/* (own: the passages of the book that are his own words — shape.js ownWords — each by where it stands and how it opens,
+ * said in the entries' rule: against them his entry gives way, as in a reading — 2.12.41, the review) */
+export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [], premises = [], premisesLeft = 0, entries = [], entriesLeft = 0, turns = [], turnsLeft = 0, own = [] }) {
   const parts = [];
+  /* (which of a premise and an entry came after the other, where it is said beside them; his own passages, where his entries ride) */
+  const newer = premises.some((x) => entryOverOf(x).length > 0) || entries.some((e) => premiseOverOf(e).length > 0);
+  const owns = entries.length > 0 && own.length > 0;
   parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
   if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);
   const about = aboutTheBook(novel, { plans: false, kept: 'his' });
@@ -1539,8 +1619,8 @@ export function auditRequest({ novel, bookText: text, his = [], partial = false,
 - A thread the book has resolved — by what happens after it was set up, never by the words that set it up: "open": false. One it opened that the notes miss: add it.
 - Whose and who: whose thing it is, who did a deed, who said a line — held against the passages in their order.
 - Someone or something that matters and is missing: add it, described as the book first describes them.
-${premises.length ? `- My premises count as the book, and their words as the book’s own wherever its words are to be quoted: what one says holds true for good stays on its card — never taken out or changed because no passage says it, or because a passage says otherwise; a card that lacks it gets it. What a premise only asks to happen is not the book until a passage tells it.${premises.some((x) => (x.later || []).length > 0) ? ' A premise beside which I say what I did to its passage since is not the book where the two differ: what I changed is my newer word, and the passage as it stands now is the book.' : ''}
-` : ''}${entries.length ? `- A card never says the opposite of my bibliography’s entry for its name: where it does, put the card right to my entry, my word on what the name means for good — and where a passage says otherwise, name the passage in "verdict" as the page’s slip. What changes over the story (where someone is now, how they stand, what they know) is the book’s.
+${premises.length ? `- My premises count as the book, and their words as the book’s own wherever its words are to be quoted: what one says holds true for good stays on its card — never taken out or changed because no passage says it, or because a passage says otherwise; a card that lacks it gets it. What a premise only asks to happen is not the book until a passage tells it.${premises.some((x) => (x.later || []).length > 0) ? ' A premise beside which I say what I did to its passage since is not the book where the two differ: what I changed is my newer word, and the passage as it stands now is the book.' : ''}${newer ? NEWER : ''}
+` : ''}${entries.length ? `- A card never says the opposite of my bibliography’s entry for its name: where it does, put the card right to my entry, my word on what the name means for good — and where a passage says otherwise, name the passage in "verdict" as the page’s slip${owns ? ` — unless the passage is my own words (${ownList(own)}): those are my newer word, and the card follows them` : ''}. What changes over the story (where someone is now, how they stand, what they know) is the book’s.${newer && !premises.length ? NEWER : ''}
 ` : ''}${turns.length ? `- How someone stands with the others ("ties") and where a thread stands agree with the newest turns the Timeline keeps for them — put a card right that says otherwise, unless a later passage of the book says more.
 ` : ''}${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it’s about, how it reads)' : keeps[0] === 'about' ? 'What you keep of what the book is about' : 'What you keep of how the book reads'}: where it has drifted from the book as it stands, give ${keeps.length === 2 ? '"about" or "style"' : `"${keeps[0]}"`} whole again, put right.
 ` : ''}- Cards that say the same thing: each fact belongs on one card — the person it is about, or the thing, place or thread itself. Where several cards repeat it (a limit, a rule, a name kept back, a secret), keep it on the card it belongs to and take it off the others, giving each of them whole without it. Two cards for one person, place or thing become one: give the one to keep whole, with whatever the other held that it lacks (for a person, the other's names among the others they go by), and put the other in "gone". Nothing true is lost in the folding.

@@ -727,7 +727,8 @@ export function repairBrokenWords(novelId) {
     const c = store.peek('chapter', cid);
     for (const p of (c && c.passages) || []) {
       for (const v of [...(p.versions || [])]) {
-        if (v.how !== 'selection' || v.streaming || !v.cut || v.endCut || v.chosen || (Array.isArray(v.hands) && v.hands.length)) continue;
+        /* (changed since: by any hand, or by a name changed everywhere, which is no one's hand — shape.js inPlaceFields, 2.12.41) */
+        if (v.how !== 'selection' || v.streaming || !v.cut || v.endCut || v.chosen || (Array.isArray(v.hands) && v.hands.length) || (Array.isArray(v.before) && v.before.length)) continue;
         if ((p.versions || []).length < 2 || !(p.versions || []).some((x) => x.id === v.base)) continue;
         const live = store.peek('chapter', cid);
         const lp = live && (live.passages || []).find((x) => x.id === p.id);
