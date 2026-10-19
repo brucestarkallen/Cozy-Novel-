@@ -22,7 +22,7 @@
  * nor in a name joined with a hyphen ("Mary" is not in "Mary-Jane"). */
 import { newId, nameKey, estimateTokens, hashText } from '../util.js';
 import { picked, matchCard, chapterLabel } from './shape.js';
-import { foldedText, nameInText, firstSentence, samePersonName, titlesConflict } from './names.js';
+import { foldedText, foldName, nameInText, firstSentence, samePersonName, titlesConflict, isGroupName } from './names.js';
 import { superActive } from './auto.js';
 
 export const ENTRY_KINDS = ['people', 'places', 'things', 'groups', 'lore'];
@@ -224,9 +224,14 @@ export function makeFinder(forms) {
  * Turner and the Night Market. The finder is kept for the same entries' names. */
 const namedFinders = new Map();
 export function entriesNamed(entries, text) {
+  if (!String(text || '').trim()) return [];
+  return entriesNamer(entries)(text);
+}
+/* the same, for many texts held against one list: (text) → the entries it names (2.12.41 — his premises weighed against
+ * his entries, each premise once, the finder made once) */
+export function entriesNamer(entries) {
   const list = (entries || []).filter((e) => e && cleanName(e.name));
-  const t = String(text || '');
-  if (!list.length || !t.trim()) return [];
+  if (!list.length) return () => [];
   const key = JSON.stringify(list.map((e) => [e.id, e.name, e.aka || [], e.kind]));
   let finder = namedFinders.get(key);
   if (!finder) {
@@ -234,9 +239,13 @@ export function entriesNamed(entries, text) {
     if (namedFinders.size > 16) namedFinders.clear();
     namedFinders.set(key, finder);
   }
-  const ids = new Set();
-  for (const hit of finder.find(t)) for (const ref of finder.refsOf(hit.key)) if (ref.startsWith('e:')) ids.add(ref.slice(2));
-  return list.filter((e) => ids.has(e.id));
+  return (text) => {
+    const t = String(text || '');
+    if (!t.trim()) return [];
+    const ids = new Set();
+    for (const hit of finder.find(t)) for (const ref of finder.refsOf(hit.key)) if (ref.startsWith('e:')) ids.add(ref.slice(2));
+    return list.filter((e) => ids.has(e.id));
+  };
 }
 
 /* ------------------------------------------------------------ what rides */
@@ -614,8 +623,12 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
   const placed = facts ? placesFor(entries, notes) : null;
   const placeOf = new Map();
   /* kept by the name as the book wrote it (never by the name without its article: "The Order" and "Order" are each placed as themselves) */
-  const placeFor = (name) => {
-    const k = nameKey(name);
+  /* (thing: what the book tells of a group, a place or a thing — never put on a person's card through another name the
+   * card goes by, only on one that is itself a group, by its whole name: 2.12.41, the review, as his entries are joined —
+   * cardForEntry; "Kuchiki", the clan, is never Rukia Kuchiki's) */
+  const placeFor = (name, thing = false) => {
+    const own = nameKey(name);
+    const k = thing ? `t\u0001${own}` : own;
     if (placed.has(k)) return placed.get(k);
     let at = null;
     const bare = cleanName(name).replace(/^(?:the|a|an)\s+/i, '');
@@ -624,6 +637,11 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
     if (m.entry || mb.entry) at = { entryId: (m.entry || mb.entry).id };
     if (!at) {
       for (const kind of ['people', 'places', 'lore']) {
+        if (kind === 'people' && thing) {
+          const group = (notes.people || []).filter((c) => c && nameKey(c.name) === own && isGroupName(c.name));
+          if (group.length === 1) { at = { kind, id: group[0].id }; break; }
+          continue;
+        }
         const c = matchCard(notes[kind] || [], name, [], { kind, near: true, slip: false });
         if (c.card) { at = { kind, id: c.card.id }; break; }
         if (c.ambiguous) break;
@@ -632,10 +650,13 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
     placed.set(k, at);
     return at;
   };
+  const THINGS = ['groups', 'places', 'things'];
   const itemFor = (fact) => {
+    const thing = THINGS.includes(fact.kind);
     const k = bareKey(fact.name);
-    if (placeOf.has(k)) return placeOf.get(k);
-    const at = placeFor(fact.name);
+    const pk = thing ? `t\u0001${k}` : k;
+    if (placeOf.has(pk)) return placeOf.get(pk);
+    const at = placeFor(fact.name, thing);
     let ref = '';
     if (at && at.entryId && items.has(`e:${at.entryId}`)) ref = `e:${at.entryId}`;
     else if (at && at.kind) {
@@ -649,7 +670,7 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
       ref = `n:${k}`;
       if (!items.has(ref)) items.set(ref, { ref, name: cleanName(fact.name), aka: [], kind: fact.kind, rides: 'named', line: '', text: '', entry: null, card: null, facts: [], kinds: {} });
     }
-    placeOf.set(k, ref);
+    placeOf.set(pk, ref);
     return ref;
   };
   if (facts) {
@@ -738,25 +759,79 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
  * Batwing) — a person's card so only for a person's entry. */
 const CARD_KINDS_FOR = { people: ['people', 'lore'], places: ['places', 'lore'], things: ['lore', 'places'], groups: ['lore', 'people'], lore: ['lore', 'places', 'people'] };
 const nameWords = (n) => cleanName(n).split(' ').filter((w) => /\p{L}/u.test(w)).length;
-export function cardForEntry(e, notes) {
+/* THE NOTES' CARDS BY THEIR NAMES, FOR THE JOIN (2.12.41, the review: every entry was held against every card — 1,500
+ * entries and 400 cards, half a second on the page's thread whenever a name changed, most of it in the fuller-or-shorter
+ * matching): each kind's cards by the key of their own name, by the keys of every name they go by, and by the words of
+ * those names, folded both ways (names.js foldName, and with an apostrophe inside a word kept to it). A fuller or shorter
+ * form of a name always shares a word with it (samePersonName, sameThingName), so only the cards that share one are
+ * held against an entry — the same answer as holding every card. */
+const tightFold = (n) => foldName(String(n || '').replace(/([\p{L}\p{M}])['’‘ʼ](?=\p{L})/gu, '$1'));
+/* (a name's words are asked of again and again — every card's, every entry's: kept, as names.js keeps its folds) */
+const FOLD_WORDS = new Map();
+function foldWords(n) {
+  const key = String(n || '');
+  const had = FOLD_WORDS.get(key);
+  if (had) return had;
+  const made = [...new Set([...foldName(key).split(' '), ...tightFold(key).split(' ')])].filter(Boolean);
+  if (FOLD_WORDS.size >= 8000) FOLD_WORDS.clear();
+  if (key.length <= 200) FOLD_WORDS.set(key, made);
+  return made;
+}
+function cardIndex(notes) {
+  const out = {};
+  for (const kind of ['people', 'places', 'lore']) {
+    const list = ((notes && notes[kind]) || []).filter(Boolean);
+    const byName = new Map();
+    const byAny = new Map();
+    const byWord = new Map();
+    const put = (map, k, i) => { if (!k) return; const a = map.get(k); if (!a) map.set(k, [i]); else if (a[a.length - 1] !== i) a.push(i); };
+    list.forEach((c, i) => {
+      put(byName, nameKey(c.name), i);
+      for (const n of [c.name, ...(c.aka || [])]) { put(byAny, nameKey(n), i); for (const w of foldWords(n)) put(byWord, w, i); }
+    });
+    out[kind] = { list, byName, byAny, byWord, mark: new Int32Array(list.length), gen: 0 };
+  }
+  return out;
+}
+/* the cards of one kind under any of these keys, each once, in the notes' order */
+const cardsUnder = (ix, map, keys) => {
+  const gen = ++ix.gen;
+  const at = [];
+  for (const k of keys) for (const i of map.get(k) || []) if (ix.mark[i] !== gen) { ix.mark[i] = gen; at.push(i); }
+  if (at.length > 1) at.sort((a, b) => a - b);
+  return at.map((i) => ix.list[i]);
+};
+/* (index: the notes' cards by their names, made once for many entries — entryJoins) */
+export function cardForEntry(e, notes, index = null) {
+  const ix = index || cardIndex(notes);
   const person = kindOf(e.kind) === 'people';
   const kinds = CARD_KINDS_FOR[kindOf(e.kind)] || ['lore'];
   const own = nameKey(e.name);
-  const keys = new Set([e.name, ...(e.aka || [])].map(nameKey).filter(Boolean));
+  const keys = [...new Set([e.name, ...(e.aka || [])].map(nameKey).filter(Boolean))];
   const at = (kind, c) => ({ kind, id: c.id, about: c.about || '' });
   const twoPeople = (kind, c) => kind === 'people' && (titlesConflict(e.name, c.name) || (nameWords(e.name) >= 2 && nameWords(c.name) >= 2 && !samePersonName(e.name, c.name)));
+  /* A PERSON'S CARD FOR AN ENTRY THAT IS NO PERSON (2.12.41, the review: a clan "Kuchiki" still took Rukia Kuchiki's card
+   * through her other name "Kuchiki", and a lore entry "Kurosaki" Ichigo's): only by the card's own whole name, and only
+   * a card that is itself a group (names.js isGroupName: "the harbour runners") — never through a person's other names,
+   * never a surname */
+  const forThing = (kind) => kind === 'people' && !person;
   for (const kind of kinds) {
-    const byName = ((notes && notes[kind]) || []).filter((c) => c && nameKey(c.name) === own);
+    let byName = cardsUnder(ix[kind], ix[kind].byName, [own]);
+    if (forThing(kind)) byName = byName.filter((c) => isGroupName(c.name));
     if (byName.length === 1) return at(kind, byName[0]);
     if (byName.length > 1) return null;
   }
+  let words = null;
   for (const kind of kinds) {
-    const cards = ((notes && notes[kind]) || []).filter(Boolean);
-    const named = cards.filter((c) => [c.name, ...(c.aka || [])].some((x) => keys.has(nameKey(x))));
+    if (forThing(kind)) continue;
+    const named = cardsUnder(ix[kind], ix[kind].byAny, keys);
     if (named.length > 1) return null;
     if (named.length === 1) { if (twoPeople(kind, named[0])) return null; return at(kind, named[0]); }
-    if (kind === 'people' && !person) continue;
-    const m = matchCard(cards, e.name, e.aka || [], { kind, near: true, slip: false });
+    /* (no card goes by any of its names: only those sharing a word with one are held against it — the rest never match) */
+    if (!words) words = [e.name, ...(e.aka || [])].flatMap(foldWords);
+    const near = cardsUnder(ix[kind], ix[kind].byWord, words);
+    if (!near.length) continue;
+    const m = matchCard(near, e.name, e.aka || [], { kind, near: true, slip: false });
     if (m.card && !twoPeople(kind, m.card)) return at(kind, m.card);
     if (m.ambiguous) return null;
   }
@@ -766,22 +841,60 @@ export function cardForEntry(e, notes) {
  * entry each time the bibliography was gathered — for every page, every check, every reading: 1,500 entries and 400
  * cards took 0.6 s each time). Entry id → {kind, id} or null, kept by the names and kinds of the entries and the cards. */
 const JOINS = new Map();   /* names print -> Map(entry id -> {kind, id} | null) */
+/* ONLY WHAT A CHANGE OF NAMES CAN TOUCH IS JOINED AGAIN (2.12.41, the review: any name changed — a card a reading made, a
+ * name changed everywhere — joined all 1,500 entries again). The last join is kept with the names it was made from: an
+ * entry keeps its card unless its own names changed, or a card whose names changed (before or after) answers to one of
+ * its names or shares a word with them — no other card is ever held against it (cardForEntry: by its names' keys, then
+ * by their words), and the order of the cards never decides a join. */
+let lastJoin = null;       /* {entries: Map(id -> names), cards: Map(kind:id -> names), map} */
 export function entryJoins(entries, notes) {
   const rows = [];
-  for (const e of entries || []) if (e) rows.push(`e${e.id}\u0001${e.name}\u0001${(e.aka || []).join('\u0002')}\u0001${kindOf(e.kind)}`);
-  for (const kind of ['people', 'places', 'lore']) for (const c of (notes && notes[kind]) || []) if (c) rows.push(`${kind}${c.id}\u0001${c.name}\u0001${(c.aka || []).join('\u0002')}`);
+  const entryNames = new Map();
+  const cardNames = new Map();
+  for (const e of entries || []) {
+    if (!e) continue;
+    const sig = `${e.name}\u0001${(e.aka || []).join('\u0002')}\u0001${kindOf(e.kind)}`;
+    entryNames.set(e.id, sig);
+    rows.push(`e${e.id}\u0001${sig}`);
+  }
+  for (const kind of ['people', 'places', 'lore']) {
+    for (const c of (notes && notes[kind]) || []) {
+      if (!c) continue;
+      const sig = `${c.name}\u0001${(c.aka || []).join('\u0002')}`;
+      cardNames.set(`${kind}:${c.id}`, sig);
+      rows.push(`${kind}${c.id}\u0001${sig}`);
+    }
+  }
   const print = hashText(rows.join('\u0003'));
   let map = JOINS.get(print);
   if (!map) {
     if (JOINS.size >= 8) JOINS.clear();
     map = new Map();
     JOINS.set(print, map);
+    /* (what the last join holds and no change of names can touch, kept) */
+    if (lastJoin) {
+      const keys = new Set();
+      const words = new Set();
+      const touched = (sig) => { for (const n of String(sig || '').split('\u0001').slice(0, 2).flatMap((x) => x.split('\u0002'))) { if (!n) continue; keys.add(nameKey(n)); for (const w of foldWords(n)) words.add(w); } };
+      for (const [k, sig] of cardNames) if (lastJoin.cards.get(k) !== sig) { touched(sig); touched(lastJoin.cards.get(k)); }
+      for (const [k, sig] of lastJoin.cards) if (!cardNames.has(k)) touched(sig);
+      for (const e of entries || []) {
+        if (!e || !lastJoin.map.has(e.id) || lastJoin.entries.get(e.id) !== entryNames.get(e.id)) continue;
+        const names = [e.name, ...(e.aka || [])];
+        if (names.some((n) => keys.has(nameKey(n)) || foldWords(n).some((w) => words.has(w)))) continue;
+        map.set(e.id, lastJoin.map.get(e.id));
+      }
+    }
   }
+  /* (the notes' cards by their names made once, for every entry joined now: cardIndex) */
+  let ix = null;
   for (const e of entries || []) {
     if (!e || map.has(e.id)) continue;
-    const c = cardForEntry(e, notes || {});
+    if (!ix) ix = cardIndex(notes || {});
+    const c = cardForEntry(e, notes || {}, ix);
     map.set(e.id, c ? { kind: c.kind, id: c.id } : null);
   }
+  lastJoin = { entries: entryNames, cards: cardNames, map };
   return map;
 }
 

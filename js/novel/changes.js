@@ -519,11 +519,13 @@ function chapterRange(novel, spec) {
 }
 /* the words changed on the page itself (his word, 2.12.2: only a rewrite or another take is a new version): the
  * version takes them, where it stops stays (cut short, stopped — its Go on: M511-1), the words before are kept on
- * it. retire: false where what the helper read is moved to the new words by the caller (a name changed) */
-function newVersionOn(put, novelId, x, next, why, { retire = true } = {}) {
+ * it. retire: false where what the helper read is moved to the new words by the caller (a name changed); rename: a
+ * name changed everywhere, marked so on the words before (shape.js inPlaceFields, 2.12.41: no one's hand on the page —
+ * never his partner's words on it, never a name taken out of his world) */
+function newVersionOn(put, novelId, x, next, why, { retire = true, rename = false } = {}) {
   const row = { chapterId: x.chapterId, passageId: x.passage.id, versionId: x.version.id, before: String(x.version.text || ''), after: next, inPlace: true };
   if (put.dry) return row;
-  changeInPlace({ novelId, chapterId: x.chapterId, passageId: x.passage.id, versionId: x.version.id, next, by: 'partner', retire, extra: why ? { why } : {} });
+  changeInPlace({ novelId, chapterId: x.chapterId, passageId: x.passage.id, versionId: x.version.id, next, by: 'partner', retire, extra: { ...(why ? { why } : {}), ...(rename ? { rename: true } : {}) } });
   return row;
 }
 /* what a version's words fixed in place keep of it: what was asked, and
@@ -610,7 +612,7 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     /* (what it read as before it changes on the page itself: its words, their facts) */
     /* (its turns only while they are of these words, as its facts — timeline.js continuityNow, 2.12.40) */
     const was = { text: String(x.version.text || ''), sig: archivist.signature(x.version), codex: clone(codexNow(x.version)), continuity: clone(continuityNow(x.version)) };
-    const made = newVersionOn(put, novelId, x, next, why, { retire: false });
+    const made = newVersionOn(put, novelId, x, next, why, { retire: false, rename: true });
     undo.passages.push(made);
     restamp.push({ x, made, next, was });
   }

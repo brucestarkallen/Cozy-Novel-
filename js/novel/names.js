@@ -207,9 +207,14 @@ export function isDescriptorName(name) {
 }
 
 /* Is `a` the same person as `b`? Never a near miss. */
+/* (a possessive needs an apostrophe: two names with none are never an owner and the one who is theirs — asked of every
+ * card a name could be, the join of his entries above all: 2.12.41) */
+const APOSTROPHES = /['’‘ʼ]/;
 export function samePersonName(a, b) {
-  if (ownerAndDependent(a, b)) return false;
-  if (sameOwnedDescriptor(a, b)) return true;
+  if (APOSTROPHES.test(String(a || '')) || APOSTROPHES.test(String(b || ''))) {
+    if (ownerAndDependent(a, b)) return false;
+    if (sameOwnedDescriptor(a, b)) return true;
+  }
   const A = parseName(a);
   const B = parseName(b);
   const fa = A.bare;
@@ -516,6 +521,45 @@ export function nameChange(before, after, isName = () => false) {
 export function namedMidSentence(text, word) {
   const w = String(word || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return Boolean(w) && new RegExp(`(?<![.!?…]\\s|^|["“‘(—–]|\\n)(?<![\\p{L}\\p{M}\\p{N}])${w}(?![\\p{L}\\p{M}\\p{N}])`, 'mu').test(String(text || ''));
+}
+
+/* THE NAMES A TEXT GIVES, BY THEIR WORDS (2.12.41, the review — what a change took out of a page is decided from the
+ * change itself, as it is made, never from the notes as they stand that day): every word the text writes with a capital,
+ * a possessive folded onto its name ("Mara's" is Mara) — never one it also writes in small letters ("Rain fell. The rain
+ * kept on" gives no name), a little word that opens a sentence ("The", "She", "After"), a single letter or a
+ * contraction. The words by their keys (accents off, small letters), a Set. */
+const OPENERS = new Set([...TOKEN_STOP, 'A', 'An', 'He', 'It', 'We', 'Me', 'Us', 'Him', 'Them', 'My', 'Our', 'Its', 'If', 'So', 'As', 'At',
+  'In', 'On', 'Of', 'To', 'By', 'Or', 'Nor', 'Yet', 'After', 'Before', 'Once', 'Later', 'Soon', 'Here', 'All', 'Some', 'Every', 'Each', 'No',
+  'Nobody', 'Nothing', 'Everyone', 'Everything', 'Someone', 'Something', 'Today', 'Tonight', 'Tomorrow', 'Yesterday', 'Again', 'Maybe',
+  'Perhaps', 'Please', 'Oh', 'Ah', 'Although', 'Though', 'Because', 'Since', 'While', 'Until', 'Unless', 'However', 'Meanwhile',
+  'Suddenly', 'Finally', 'Instead', 'Also', 'Never', 'Always', 'Sometimes', 'Next', 'First', 'Inside', 'Outside', 'Above', 'Below',
+  'Behind', 'Beyond', 'Into', 'Out', 'Up', 'Down', 'Over', 'Under', 'From', 'About', 'Without', 'Within', 'Through', 'Across', 'Around',
+  'Between', 'Among', 'Against', 'Toward', 'Towards', 'Upon', 'Like', 'Do', 'Does', 'Did', 'Is', 'Are', 'Was', 'Were', 'Be', 'Been',
+  'Have', 'Has', 'Had', 'Would', 'Could', 'Should', 'Must', 'Let', 'Every', 'Whatever', 'Whoever', 'Whenever', 'Wherever', 'Which',
+  'Whose', 'Whom', 'Very', 'Too', 'Much', 'More', 'Most', 'Less', 'Few', 'Many', 'Both', 'Either', 'Neither', 'Other', 'Another', 'Such',
+  'Same', 'Own', 'Yours', 'Mine', 'Ours', 'Theirs', 'Himself', 'Herself', 'Itself', 'Myself', 'Themselves', 'Ourselves', 'Yourself'].map((w) => w.toLowerCase()));
+const ANY_WORD = /(?<![\p{L}\p{M}\p{N}'’-])\p{L}[\p{L}\p{M}'’-]*/gu;
+const wordKey = (w) => String(w || '').replace(/['’]s$/i, '').replace(/['’-]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+export function nameWordsIn(text) {
+  const small = new Set();
+  const caps = new Map();
+  for (const m of String(text || '').matchAll(ANY_WORD)) {
+    const w = m[0];
+    const k = wordKey(w);
+    if (!k) continue;
+    if (/^\p{Lu}/u.test(w)) { if (!caps.has(k)) caps.set(k, w); } else small.add(k);
+  }
+  const out = new Set();
+  for (const [k, w] of caps) if (k.length >= 2 && !small.has(k) && !OPENERS.has(k) && !/^I['’]/.test(w) && !CONTRACTION.test(w)) out.add(k);
+  return out;
+}
+/* the names (nameWordsIn) the words before give that the words after do not, in any letters — sorted */
+export function nameWordsGone(before, after) {
+  const was = nameWordsIn(before);
+  if (!was.size) return [];
+  const now = new Set();
+  for (const m of String(after || '').matchAll(ANY_WORD)) now.add(wordKey(m[0]));
+  return [...was].filter((k) => !now.has(k)).sort();
 }
 
 
