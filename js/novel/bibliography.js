@@ -387,13 +387,18 @@ function looseOf(t) {
 }
 const loose = (t) => looseOf(t).s;
 /* where a quote stands on the page, read loosely ({start, end}), or null — its own words where they stand exactly */
+/* (its own words looked for first, and only when they are not there read loosely: 2.12.40, the review — the Timeline,
+ * redrawn with every save while it is open, read every quote of the book loosely first and took five times as long.
+ * Four characters with no run of spaces read loosely as four at least, so the answer is the same) */
 export function quoteAt(hay, quote) {
   const h = String(hay == null ? '' : hay);
+  const raw = String(quote == null ? '' : quote).trim();
+  const plain = raw.length >= 4 && !/\s\s/.test(raw);
+  let at = plain ? h.indexOf(raw) : -1;
+  if (at >= 0) return { start: at, end: at + raw.length };
   const q = loose(quote);
   if (q.length < 4) return null;
-  const raw = String(quote == null ? '' : quote).trim();
-  const exact = h.indexOf(raw);
-  if (exact >= 0) return { start: exact, end: exact + raw.length };
+  if (!plain) { at = h.indexOf(raw); if (at >= 0) return { start: at, end: at + raw.length }; }
   const L = looseOf(h);
   const k = L.s.indexOf(q);
   return k < 0 ? null : { start: L.at[k], end: L.at[k + q.length - 1] + 1 };
@@ -515,12 +520,15 @@ export function codexNow(v) {
 }
 
 /* A store step, replayable by identity over a newer save: laid on the
- * version read only while it is the one on show and reads as it did. */
+ * version read while it reads as it did — on show or not, as the Timeline's
+ * turns are (timeline.js continuityStep: 2.12.40, the review — a reading
+ * that landed after he flipped to another take wrote nothing, and its words
+ * were marked read with none of their facts) */
 export function codexStep(passageId, versionId, codex) {
   return (chapter) => {
     const p = (chapter.passages || []).find((x) => x.id === passageId);
-    const v = p && picked(p);
-    if (!v || v.id !== versionId || v.streaming) return false;
+    const v = p && (p.versions || []).find((x) => x.id === versionId);
+    if (!v || v.streaming) return false;
     if (hashText(v.text || '') !== codex.fp) {
       /* its words changed on the page itself while they were read (a fix put in meanwhile): the facts of the words read
        * kept with them, on the newest words before — the change is read against them next, and they stay (2.12.40) */

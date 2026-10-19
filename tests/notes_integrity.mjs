@@ -256,7 +256,12 @@ try {
     store.change('chapter', b.cid, shape.chapterSteps.addVersion(p.id, v));
     store.change('chapter', b.cid, shape.chapterSteps.setSummary({ text: 'Mara waits alone.', fp: shape.chapterPrint(b.c()), at: Date.now(), by: 'you' }));
     await running;
-    assert.equal(old.continuity, undefined); assert.equal(historyOf(b).events.length, 0);
+    /* (2.12.40, the review of the Timeline: a reading is laid on the take it read while its words stand, on show or not —
+     * a take flipped away while it was read keeps its turns for when it is shown again; it was laid on none, and its words
+     * were marked read with none of theirs. Never on the words that replaced it: the take on show has only its own) */
+    const was = b.c().passages[0].versions.find((x) => x.id === old.id);
+    assert.deepEqual([(was.continuity || {}).fp, ((was.continuity || {}).events || []).map((e) => e.text)], [hashText(text), ['Mara distrusts Tom more.']]);
+    assert.equal(historyOf(b).events.length, 0);
     assert.equal(shape.picked(b.c().passages[0]).id, v.id);
     assert.equal(historyOf(b).coverage.complete, true, 'the replacement received its own successful reading');
   });

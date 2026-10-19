@@ -176,7 +176,7 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     if (wantCard && result.cards.some((card) => card.id === wantCard)) person.value = wantCard;
     wantCard = '';
     if (person.value !== selectedCard) result = project(novel, chapters, { ...scopeArgs, kind: kind.value || undefined, cardId: person.value || undefined });
-    const { total, read, missing, complete } = result.coverage;
+    const { total, read, complete } = result.coverage;
     const scopeOrder = whole ? novel.order || [] : (novel.order || []).slice(0, chapterNumber - (through.value === '^' ? 1 : 0));
     const unavailable = [...failed].filter((id) => scopeOrder.includes(id)).length;
     const waiting = [...loading].filter((id) => scopeOrder.includes(id)).length;
@@ -190,8 +190,9 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     /* EVERY LINE TRUE, WHATEVER THE STATE (2.12.40, the audit): a passage set aside, or passed by, is never said to be
      * read by itself — it is not — nor is one while the helper is stopped; what he can do is said by the controls'
      * own names (Try again now and Read it again, under Cards) */
-    const { passed = 0, aside = 0, passedFound = 0 } = result.coverage;
-    const owed = Math.max(0, missing - passed - aside);
+    /* (owed: counted by the helper's own tests for what it reads by itself — timeline.js turnsOwed — never what is left
+     * of the count, 2.12.40, the review: a passage it held read was said to be read by itself) */
+    const { passed = 0, aside = 0, passedFound = 0, owed = 0 } = result.coverage;
     const who = helper();
     const one = (n, a, b) => (n === 1 ? a : b);
     const stopped = 'The helper is stopped: its connection was turned away. Put it right in Settings → Connections, or press Try again now under Cards';

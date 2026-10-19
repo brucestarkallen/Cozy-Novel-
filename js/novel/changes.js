@@ -597,7 +597,7 @@ export function groupsOf(ops) {
  * (who he plays, where it starts, every telling and move — Cozy Tavern's
  * M607-8) — each text once, every rule over it as it stood */
 function renameEverywhere(novelId, novel, rules, put, why) {
-  const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [], plays: [], seen: [], summaries: [] };
+  const undo = { what: 'many', passages: [], chapters: [], cards: [], book: [], kept: [], plays: [], seen: [], aside: [], summaries: [] };
   const counts = rules.map(() => 0);
   const swap = (t) => { const r = replaceMany(t, rules); r.counts.forEach((c, k) => { counts[k] += c; }); return r.text; };
   /* the same rules over what was read, checked and summed up — never counted as places changed */
@@ -699,6 +699,7 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
   };
   const swapKept = (k) => (k && typeof k.text === 'string' ? { ...clone(k), text: quiet(k.text) } : clone(k));
   const seenNow = {};
+  const asideMoved = {};
   for (const { x, made, next, was } of restamp) {
     const oldSig = was.sig;
     const to = newSigs.get(oldSig);
@@ -707,6 +708,14 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
       const map = seenNow[x.chapterId] || (seenNow[x.chapterId] = { ...(seenAll[x.chapterId] || {}) });
       map[x.passage.id] = to.sig;
       undo.seen.push({ chapterId: x.chapterId, pid: x.passage.id, from: oldSig, to: to.sig });
+    }
+    /* set aside as it was: set aside as it is now, as a mend keeps it (archivist.js resign — 2.12.40, the review: left
+     * with the words before, the Timeline said it was read by itself, which it never was, and Read it again, under
+     * Cards, took off a mark of read it no longer had, so nothing was read again) */
+    const a = (mem.aside || {})[x.passage.id];
+    if (a && a.sig === oldSig) {
+      asideMoved[x.passage.id] = { ...clone(a), sig: to.sig };
+      undo.aside.push({ pid: x.passage.id, from: oldSig, to: to.sig });
     }
     /* its reading, kept for the new version with the names in it changed */
     const r = (readings[x.passage.id] || {})[x.version.id];
@@ -745,6 +754,7 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
     }
   }
   for (const [chapterId, map] of Object.entries(seenNow)) put('novel', novelId, novelSteps.seen(chapterId, map), { now: true });
+  if (Object.keys(asideMoved).length) put('novel', novelId, novelSteps.setAside(asideMoved), { now: true });
   /* a chapter's summary that was true of it stays true of it, the name changed */
   for (const id of novel.order || []) {
     const c = store.peek('chapter', id);
@@ -1337,6 +1347,14 @@ export function undoChange(novelId, change) {
       if (map[x.pid] === x.to) map[x.pid] = x.from;
     }
     for (const [chapterId, map] of Object.entries(seenBack)) store.change('novel', novelId, novelSteps.seen(chapterId, map), { now: true });
+    /* and what was set aside as renamed is set aside as it was again, with its mark of read */
+    const asideBack = {};
+    for (const x of u.aside || []) {
+      if (!putBack.has(x.pid) || !asRead(x.pid)) continue;
+      const a = (((store.peek('novel', novelId) || {}).memory || {}).aside || {})[x.pid];
+      if (a && a.sig === x.to) asideBack[x.pid] = { ...clone(a), sig: x.from };
+    }
+    if (Object.keys(asideBack).length) store.change('novel', novelId, novelSteps.setAside(asideBack), { now: true });
     /* work on its way since the names changed is given them back as they were */
     if ((u.renamed || []).length && back) store.change('novel', novelId, novelSteps.noteRenames(u.renamed.map((x) => ({ from: x.to, to: x.from })), Date.now()), { now: true });
     for (const x of u.summaries || []) {

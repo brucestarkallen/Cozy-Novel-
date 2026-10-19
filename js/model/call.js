@@ -478,7 +478,9 @@ export const BACKOFF_MS = [3000, 8000, 20000];
  * too (opts.leash). (Tests may shorten it.) */
 export const LEASH_QUIET_MS = 3 * 60 * 1000;
 export const LEASH_ALL_MS = 15 * 60 * 1000;
-/* the longest a silent provider is waited, however often it was silent before */
+/* the longest a silent provider is waited, however often it was silent before (tests may shorten it too) — a call let
+ * go for its silence on this longest leash says so (`longest`): a stall before it is a model slow to answer, waited the
+ * longer next time; one on it, all the time it will ever be given */
 const QUIET_MOST_MS = 15 * 60 * 1000;
 const leashOf = (ms, name) => (Number(globalThis[name]) > 0 ? Number(globalThis[name]) : ms);
 /* A WORKER GIVES WAY TO HIS PAGE (Cozy Tavern M530). A provider that takes
@@ -644,6 +646,7 @@ export async function ask(conn, opts = {}) {
     let heardAt = Date.now();
     /* a provider that went silent past the leash before — a model thinking unseen — is given twice the time from then on, to a quarter of an hour (Cozy Tavern M748) */
     const quietMs = Math.max(leashOf(LEASH_QUIET_MS, '__cozyLeashQuietMs'), ((learnedFacts(conn) || {}).quietMs) || 0);
+    const quietMost = leashOf(QUIET_MOST_MS, '__cozyLeashQuietMostMs');
     const allMs = leashOf(LEASH_ALL_MS, '__cozyLeashAllMs');
     const leashTimer = leash ? setInterval(() => {
       if (leash.signal.aborted) return;
@@ -671,8 +674,8 @@ export async function ask(conn, opts = {}) {
       if (leashed && !(opts.signal && opts.signal.aborted)) {
         /* let go on its leash: a passing fault, its words (if any) kept as cut */
         const mins = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m === 1 ? 'a minute' : `${m} minutes`; };
-        out = { finish: 'error', error: leashed === 'gaveway' ? GAVE_WAY : leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer made no progress for ${mins(allMs)}`, status: 0, transport: true, leashed, midStream: Boolean(text), text, thinking };
-        if (leashed === 'quiet') learn(conn, { quietMs: Math.min(quietMs * 2, QUIET_MOST_MS) });
+        out = { finish: 'error', error: leashed === 'gaveway' ? GAVE_WAY : leashed === 'quiet' ? `its provider sent nothing for ${mins(quietMs)}` : `its answer made no progress for ${mins(allMs)}`, status: 0, transport: true, leashed, ...(leashed === 'quiet' && quietMs >= quietMost ? { longest: true } : {}), midStream: Boolean(text), text, thinking };
+        if (leashed === 'quiet') learn(conn, { quietMs: Math.min(quietMs * 2, quietMost) });
       } else if ((e && e.name === 'AbortError') || (opts.signal && opts.signal.aborted)) {
         sent.ms = Date.now() - sent.at;
         if (opts.onSent) opts.onSent(sent);
@@ -886,7 +889,7 @@ export async function ask(conn, opts = {}) {
       }
       if (opts.onSent) opts.onSent(sent);
       return { ok: false, text: '', thinking, notes, error: plainError(lastError, lastStatus, { transport: out.transport, phone: out.phone }), status: lastStatus, sent,
-        permanent: !transient && lastStatus !== 0, ...(asked > 0 ? { retryAfterMs: asked } : {}), ...(out.leashed ? { leashed: out.leashed } : {}) };
+        permanent: !transient && lastStatus !== 0, ...(asked > 0 ? { retryAfterMs: asked } : {}), ...(out.leashed ? { leashed: out.leashed } : {}), ...(out.longest ? { longest: true } : {}) };
     }
     if (opts.onSent) opts.onSent(sent);
     noteUsage(conn, out.usage, sent, text + thinking);
@@ -948,7 +951,7 @@ export async function ask(conn, opts = {}) {
     }
     if (out.finish === 'error') {
       /* broken off partway: what arrived is kept, and said to be cut */
-      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra, ...(out.leashed ? { leashed: out.leashed } : {}) };
+      return { ok: true, text, thinking, cut: true, cutBy: 'provider', finish: 'error', notes, error: plainError(out.error, out.status), usage: out.usage || null, sent, sources: out.sources || [], ...extra, ...(out.leashed ? { leashed: out.leashed } : {}), ...(out.longest ? { longest: true } : {}) };
     }
     const reason = out.reason || '';
     const blocked = BLOCKED.test(reason);

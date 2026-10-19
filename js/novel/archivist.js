@@ -31,7 +31,7 @@ import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDum
 import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
 import { fitBook, bibAutoOn, shortOf } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
-import { continuityOf, mergeContinuity, continuityStep, timelineOf, carriedContinuity, continuityDone, continuityNow, turnsOfPrint, withCarriedTurns, sameTurn } from './timeline.js';
+import { continuityOf, mergeContinuity, continuityStep, timelineOf, continuityDone, continuityNow, turnsOfPrint, withCarriedTurns, sameTurn, turnStands, turnsPassed, turnsOwed, setAsideNow } from './timeline.js';
 import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey, entriesOf, entriesForNotes, entriesNamed, entryWords, CODEX_SCHEMA, entryJoins, nameForms, makeFinder } from './bibliography.js';
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
 import { setHelperHooks } from './inplace.js';
@@ -1703,24 +1703,24 @@ export async function askJson(conn, system, request, { want, beforeAsk } = {}) {
   const room = helperRoom(conn);
   if (beforeAsk) await beforeAsk();
   const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: room }), stream: true, worker: true, patient: true });
-  if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed };
+  if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed, ...(first.longest ? { longest: true } : {}) };
   /* an answer cut off counts only when its object closed: one cut inside it holds pieces, never the answer (Cozy Tavern's M685, M737) */
   let obj = !first.cut || closesWhole(first.text) ? parseFirstObject(first.text, want) : null;
   /* a model that wrote its answer in its thinking and nothing after it: the last whole answer there is the answer (Cozy Tavern's M590) */
   if (!obj && !String(first.text || '').trim() && first.thinking && (!first.cut || closesWhole(first.thinking))) obj = parseLastObject(first.thinking, want);
   if (obj) return { ok: true, obj };
   /* let go on its leash partway: not out of room — asked again it would stall the same way */
-  if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed };
+  if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed, ...(first.longest ? { longest: true } : {}) };
   /* once more, told what went wrong — given more room when it ran out of it; never more than that */
   const cut = Boolean(first.cut);
   const more = cut ? Math.min(room * 2, Math.floor(contextOf(conn) * 0.6)) : room;
   if (beforeAsk) await beforeAsk();
   const second = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
-  if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed };
+  if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed, ...(second.longest ? { longest: true } : {}) };
   obj = !second.cut || closesWhole(second.text) ? parseFirstObject(second.text, want) : null;
   if (!obj && !String(second.text || '').trim() && second.thinking && (!second.cut || closesWhole(second.thinking))) obj = parseLastObject(second.thinking, want);
   if (obj) return { ok: true, obj };
-  if (second.leashed) return { ok: false, error: second.error, status: 0, leashed: second.leashed };
+  if (second.leashed) return { ok: false, error: second.error, status: 0, leashed: second.leashed, ...(second.longest ? { longest: true } : {}) };
   return { ok: false, error: unreadWhy(second), unreadable: true, ...(second.cut ? { cut: true } : {}) };
 }
 /* why an answer could not be used, in plain words: the provider's reason for
@@ -2365,7 +2365,7 @@ async function readChanges(novelId, conn) {
           if (rows.length !== 1) codex.complete = false;
           /* a passage further back read as a change: what its version before established that the new words still say stays */
           /* (every part of a change read in parts: 2.12.40 — only its first part carried the words before) */
-          if (c.old || c.fromChange) for (const k of codexBefore(chapter && chapter.id, c)) codex = withCarriedFacts(codex, k, source.whole);
+          if (c.old || c.fromChange) for (const k of codexBefore(novelId, chapter && chapter.id, c)) codex = withCarriedFacts(codex, k, source.whole);
           codexes.set(c.sig, mergeCodex(codexes.get(c.sig), codex));
           batchFacts.push(...codex.facts);
         }
@@ -2410,12 +2410,12 @@ async function readChanges(novelId, conn) {
         const source = { text: c.text, whole: c.whole !== undefined ? c.whole : c.text };
         const notes = store.peek('novel', novelId).notes;
         let history = rows.length ? null : continuityOf(undefined, notes, source);
-        for (const row of rows) history = mergeContinuity(history, continuityOf(row.events, notes, source), source.whole);
+        for (const row of rows) history = mergeContinuity(history, continuityOf(row.events, notes, source), source.whole, { oneReading: true });
         if (rows.length !== 1) history.complete = false;
         /* a passage read as a change — a fix, a Go on, his partner's words, his edit, words put back: the turns its words
          * before had that the new words still give stay, turn by turn, as its facts do (timeline.js withCarriedTurns —
          * 2.12.40, the audit: the answer, asked for what the change adds, took them all away) */
-        if (c.old || c.fromChange) for (const k of turnsBefore(chapter && chapter.id, c)) history = withCarriedTurns(history, k, source.whole);
+        if (c.old || c.fromChange) for (const k of turnsBefore(novelId, chapter && chapter.id, c)) history = withCarriedTurns(history, k, source.whole);
         histories.set(c.sig, mergeContinuity(histories.get(c.sig), history, source.whole));
       }
       parts.cards = mergeUndo({ cards: parts.cards }, folded.cards);
@@ -3162,9 +3162,22 @@ const oldPrint = (c) => (c && c.was ? c.was.split(SIG_SEP)[1] || '' : '') || (c 
 /* the facts the version a change replaced had for its words (the version whose words the change was read against) —
  * and, first, the facts its new words already have (carried to them with a change in place, put back with them, or
  * read before: another version picked), kept as the turns are (turnsBefore) */
-function codexBefore(chapterId, c) {
-  const ch = chapterId ? store.peek('chapter', chapterId) : null;
-  const p = ch && (ch.passages || []).find((x) => x.id === c.pid);
+/* the passage a reading read, where it stands now: moved to another chapter while it was read (A new chapter from here),
+ * there — as what it read is laid there (readChanges, movedTo: 2.12.40, the review — looked for only where it stood,
+ * the words before's turns and facts were not found, and a fix read there took them all) */
+function passageNow(novelId, chapterId, pid) {
+  const here = chapterId ? store.peek('chapter', chapterId) : null;
+  const p = here && (here.passages || []).find((x) => x.id === pid);
+  if (p) return p;
+  for (const id of ((store.peek('novel', novelId) || {}).order) || []) {
+    const other = id !== chapterId ? store.peek('chapter', id) : null;
+    const q = other && (other.passages || []).find((x) => x.id === pid);
+    if (q) return q;
+  }
+  return null;
+}
+function codexBefore(novelId, chapterId, c) {
+  const p = passageNow(novelId, chapterId, c.pid);
   if (!p) return [];
   const out = [];
   const shown = (p.versions || []).find((x) => x.id === String(c.sig || '').split(SIG_SEP)[0]);
@@ -3185,9 +3198,8 @@ function codexBefore(chapterId, c) {
  * own — carried to them with a change in place, put back with them, or read before (another version picked) — and
  * the words before's, found as their facts are (codexBefore): a version's own, of words it had or kept with the words a
  * Go on grew from, or kept with the newest words before a change in place (shape.js inPlaceFields) */
-function turnsBefore(chapterId, c) {
-  const ch = chapterId ? store.peek('chapter', chapterId) : null;
-  const p = ch && (ch.passages || []).find((x) => x.id === c.pid);
+function turnsBefore(novelId, chapterId, c) {
+  const p = passageNow(novelId, chapterId, c.pid);
   if (!p) return [];
   const out = [];
   const v = (p.versions || []).find((x) => x.id === String(c.sig || '').split(SIG_SEP)[0]);
@@ -3235,25 +3247,38 @@ function liveVersion(x) {
   const v = p && picked(p);
   return v && v.id === x.vid && !v.streaming && String(v.text || '') === x.text ? v : null;
 }
-/* A STALL ALONE (2.12.40, the audit): an ask of one passage let go for its silence was thrown as a passing fault and never
- * counted — one that always stalls was asked on every run for ever, and every run stopped there, before What it's about
- * and the notes' check. Its model is asked whether it is there at all: answering, these words are what it will not
- * read, counted as any it will not read; silent too, it is down, and waited out. */
-const faultOf = (novelId, conn, got) => (got.leashed === 'long' ? 'words' : helperFault(novelId, conn, got.leashed === 'quiet' ? { ...got, unreadable: true } : got));
+/* the version a backfill asked about while it reads as it did, on show or not — what its answer is laid on
+ * (timeline.js continuityStep, bibliography.js codexStep), and what it read before is kept with (2.12.40, the review) */
+function askedVersion(x) {
+  const p = ((store.peek('chapter', x.chapterId) || {}).passages || []).find((y) => y.id === x.pid);
+  const v = p && (p.versions || []).find((y) => y.id === x.vid);
+  return v && !v.streaming && String(v.text || '') === x.text ? v : null;
+}
+/* A STALL (2.12.40, the audit, and its review): an ask let go for its silence was thrown as a passing fault — every run
+ * stopped there, before What it's about and the notes' check, and one that always stalls was asked on every run for
+ * ever. Then a stall alone was counted once its model answered a probe — but a model only slow to answer is given a
+ * longer leash after each silence (call.js, Cozy Tavern M748: three minutes, six, twelve, then a quarter of an hour), so
+ * a page it would have read on the third was passed by after the second. Now a stall ends that reading for this run,
+ * never the run — the notes' check and What it's about are read all the same, and the page is asked again next run on
+ * the longer leash. It is counted as a try only when its leash was already the longest it is ever given; no probe is
+ * asked. An answer that made no progress at all on its words (M748's other leash) is counted, as the notes' reading
+ * counts it. */
+const stallEnds = (got) => got.leashed === 'quiet' && !got.longest;
 export function bibDue(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel || !bibAutoOn(novel)) return [];
   const seen = (novel.memory || {}).seen || {};
-  /* a passage its model would not read is not asked for again here either */
-  const aside = (novel.memory || {}).aside || {};
   const out = [];
   for (const cid of novel.order || []) {
     const c = store.peek('chapter', cid);
     if (!c) continue;
     const nums = passageNumbers(c);
     for (const p of c.passages || []) {
-      if (p.by === 'break' || aside[p.id]) continue;
+      if (p.by === 'break') continue;
       const v = picked(p);
+      /* a passage its model would not read is not asked for again here either — as its words stand (timeline.js
+       * setAsideNow, the Timeline's own test: 2.12.40, the review) */
+      if (setAsideNow(novel, p, v)) continue;
       /* (one read in parts and not to its end yet stays due: 2.12.40) */
       const k = v && codexNow(v);
       if (!v || v.streaming || !String(v.text || '').trim() || (k && !Number.isInteger(k.upTo))) continue;
@@ -3320,11 +3345,12 @@ async function bibBackfill(novelId, conn) {
     const got = await helperJson(novelId, conn, frame, bibFactsRequest({ novel: namedBook(now, house), sources: asking.map((x) => ({ source: x.source, text: x.shown })), names }),
       { want: (o) => Array.isArray(o.bibliography) });
     if (!got.ok) {
-      /* let go on its leash: never the words' fault, unless it stalled reading them (as the notes' reading: M748) — or,
-       * alone, it stalls on them while its model answers (faultOf) */
+      /* let go on its leash: a stall ends this reading for this run (stallEnds) — of several, read one at a time from
+       * then on; alone, counted only on its longest leash, or when it made no progress at all on them (M748) */
       if (got.leashed === 'gaveway') throw failed(got);
-      if (got.leashed && asking.length > 1) { bibNarrow.add(novelId); throw failed(got); }
-      const fault = await faultOf(novelId, conn, got);
+      if (got.leashed && asking.length > 1) { bibNarrow.add(novelId); return true; }
+      if (stallEnds(got)) return true;
+      const fault = got.leashed ? 'words' : await helperFault(novelId, conn, got);
       if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
       /* its model will not read them: one at a time from here, each tried twice at most */
       if (asking.length > 1) bibNarrow.add(novelId);
@@ -3350,7 +3376,7 @@ async function bibBackfill(novelId, conn) {
       else {
         /* a part read: what the parts before it found kept with it, read as far as its end */
         const out = factsTo(x, codex);
-        const had = codexNow(liveVersion(x));
+        const had = codexNow(askedVersion(x));
         if (had && Number.isInteger(had.upTo)) out.facts = mergeCodex(had, out).facts;
         lay(x, out);
         if (x.last) i++;
@@ -3370,29 +3396,31 @@ async function bibBackfill(novelId, conn) {
  * book again… I thought Super automatic makes everything autonomous and self-heals"). A passage the helper has read
  * whose words carry no complete Timeline reading — read before the Timeline was kept, its reading's answer gave none
  * for it, or its words changed on the page itself while its turns stayed with the words before (before 2.12.37) — is
- * put right by itself: the turns of its words before carried where every quote still stands (timeline.js
- * carriedContinuity, no call), else read for its turns alone, a few passages a run (prompts.js timelineRequest), once
- * the notes have nothing else to read. A passage its model will not read is tried twice, then passed by. */
+ * put right by itself: read for its turns alone, a few passages a run (prompts.js timelineRequest), once the notes have
+ * nothing else to read. A passage its model will not read is tried twice, then passed by. (Turns kept with other words
+ * are never carried to these here — 2.12.40, the review: they may be the turns of the words a Go on grew from, and the
+ * words it added were said read with none of theirs. Words changed on the page itself carry their turns as they change:
+ * inplace.js, mend.js, changes.js.) */
 export const TIMELINE_BATCHES_PER_RUN = 2;
 const tlNarrow = new Set();
 export function timelineDue(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return [];
   const seen = (novel.memory || {}).seen || {};
-  const aside = (novel.memory || {}).aside || {};
   const out = [];
   for (const cid of novel.order || []) {
     const c = store.peek('chapter', cid);
     if (!c) continue;
     const nums = passageNumbers(c);
     for (const p of c.passages || []) {
-      if (p.by === 'break' || aside[p.id]) continue;
+      if (p.by === 'break') continue;
       const v = picked(p);
-      if (!v || v.streaming || !String(v.text || '').trim() || continuityDone(v)) continue;
+      if (!v || v.streaming || !String(v.text || '').trim()) continue;
+      /* read for its turns, passed by (tried twice for these very words) or set aside as its words stand: not read
+       * here — the Timeline's own tests, so what it counts owed is what is read (timeline.js turnsOwed, 2.12.40) */
+      if (!turnsOwed(novel, p, v)) continue;
       /* not read yet: its reading gathers its turns */
       if ((seen[cid] || {})[p.id] !== signature(v)) continue;
-      /* passed by: tried twice for these very words */
-      if (v.continuity && v.continuity.passed === hashText(String(v.text))) continue;
       out.push({ chapterId: cid, pid: p.id, vid: v.id, text: String(v.text), source: `${chapterLabel(novel, c, { withName: false })}, passage ${nums.get(p.id) || '—'}` });
     }
   }
@@ -3462,15 +3490,6 @@ function factsTo(u, codex, { passedBy = false } = {}) {
   return { ...k, complete: false, upTo: u.end, ...(gap ? { gap: true } : {}) };
 }
 async function timelineBackfill(novelId, conn) {
-  /* first what needs no call: turns left with the words before, every quote still standing in the words now */
-  /* (turns left by changes in place made before 2.12.37 — never a Go on's: words a Go on adds are read as a change
-   * before they can be due, and a change in place carries only the turns of the words it changes) */
-  for (const x of timelineDue(novelId)) {
-    const p = ((store.peek('chapter', x.chapterId) || {}).passages || []).find((y) => y.id === x.pid);
-    const v = p && picked(p);
-    const carried = v && v.continuity && v.continuity.complete === true ? carriedContinuity(v.continuity, x.text) : null;
-    if (carried) store.change('chapter', x.chapterId, continuityStep(x.pid, x.vid, carried));
-  }
   const due = timelineDue(novelId);
   if (!due.length) return false;
   const house = store.peek('house', 'house') || {};
@@ -3491,7 +3510,8 @@ async function timelineBackfill(novelId, conn) {
     const unitOf = (x) => {
       const v = liveVersion(x);
       const k = continuityNow(v);
-      if (!v || (k && (k.complete === true || k.passed === k.fp))) return null;
+      /* (read, by the Timeline's own test — a reading kept whole whose turn no longer holds is read again: 2.12.40) */
+      if (!v || continuityDone(v) || turnsPassed(v)) return null;
       const at = k && Number.isInteger(k.upTo) && k.upTo > 0 && k.upTo < x.text.length ? k.upTo : 0;
       if (!at && countWords(x.text) <= words) return { ...x, at: 0, shown: x.text, whole: true, last: true, gap: false };
       const part = nextPart(x.text, words, at);
@@ -3527,10 +3547,11 @@ async function timelineBackfill(novelId, conn) {
     const got = await helperJson(novelId, conn, frame, timelineRequest({ sources: asking.map((x) => ({ source: x.source, text: x.shown })), people, threads }),
       { want: (o) => Array.isArray(o.timeline) });
     if (!got.ok) {
+      /* let go on its leash: as the bibliography's (stallEnds) */
       if (got.leashed === 'gaveway') throw failed(got);
-      if (got.leashed && asking.length > 1) { tlNarrow.add(novelId); throw failed(got); }
-      /* alone, a stall is counted once its model is found to answer (faultOf) */
-      const fault = await faultOf(novelId, conn, got);
+      if (got.leashed && asking.length > 1) { tlNarrow.add(novelId); return true; }
+      if (stallEnds(got)) return true;
+      const fault = got.leashed ? 'words' : await helperFault(novelId, conn, got);
       if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
       if (asking.length > 1) tlNarrow.add(novelId);
       else tryOnce(asking[0], 'turns', asking[0].at);
@@ -3548,13 +3569,15 @@ async function timelineBackfill(novelId, conn) {
       if (!rows.length && asking.length === 1 && answered.length === 1) rows = answered;
       if (!rows.length) { tryOnce(x, 'turns', x.at); again = true; if (!x.whole) i++; continue; }
       let history = null;
-      for (const row of rows) history = mergeContinuity(history, continuityOf(row.events, notes, { text: x.shown, whole: x.text }), x.text);
+      for (const row of rows) history = mergeContinuity(history, continuityOf(row.events, notes, { text: x.shown, whole: x.text }), x.text, { oneReading: true });
       if (rows.length !== 1) history.complete = false;
       /* the sound turns an earlier reading of these very words found — or its parts read before — stay beside what this
        * one finds, never lost to it; the same turn kept once, this reading's (timeline.js sameTurn — 2.12.40, the
        * audit: two readings of one turn were two rows) */
-      const had = continuityNow(liveVersion(x));
-      if (had) history = { ...history, events: [...had.events.filter((e) => e && !history.events.some((n) => sameTurn(n, e, x.text))), ...history.events] };
+      /* (of these words on show or not — its answer is laid on them either way: 2.12.40, the review — and only the
+       * turns that still hold in them: one that does not is why they were read again) */
+      const had = continuityNow(askedVersion(x));
+      if (had) history = { ...history, events: [...had.events.filter((e) => e && turnStands(e, x.text) && !history.events.some((n) => sameTurn(n, e, x.text))), ...history.events] };
       /* a turn it could not ground keeps the passage (or its part) due: asked once more, then passed by */
       if (!history.complete) {
         tryOnce(x, 'turns', x.at);
