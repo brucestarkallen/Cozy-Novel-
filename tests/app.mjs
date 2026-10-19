@@ -17374,6 +17374,9 @@ await test('a passage its model stays silent on past every leash is set aside af
     assert.deepEqual(tally(k), [1, 1, 1, 1, 1, 0], `run 1: ${k}`);
     assert.deepEqual([tryOf().n, Number(tryOf().next) > store.phoneNow()], [0, true], 'never counted, its wait kept on its take');
     assert.deepEqual(archivist.lightOf(b.novelId), { state: 'waiting', words: 'The helper reads Chapter Two, passage 2 again in a moment — its model was too slow to answer for it.' }, 'what waits, and when');
+    /* (and the Timeline's line the same way: its turns come with that reading — ui/timeline.js, as panes.js asks it) */
+    const cov = tlmod.timelineOf(b.novel(), { [b.ids[0]]: b.ch(0), [b.ids[1]]: b.ch(1) }).coverage;
+    assert.equal(archivist.readsByItself(cov.owed, archivist.readAgainLater(b.novelId, 'turns', cov.owedOf, { notes: true })), 'the helper’s model was too slow to answer for it, so the helper reads it again by itself in a moment', 'the Timeline says it so');
     const booked = bookedIn(b.novelId);
     assert.ok(booked >= 1000 && booked <= 2600, `the run booked for its wait: ${booked}`);
     await quietAll();
