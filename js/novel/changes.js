@@ -449,6 +449,10 @@ const text = (v) => String(v === undefined || v === null ? '' : v).replace(/\r/g
  * but a passage may well open "I'm afraid…" in a book told by its "I" */
 const hasWords = (t) => Boolean(String(t || '').trim()) && !archivist.saysNothing(t);
 const clipped = (t) => { const x = String(t || '').replace(/\s+/g, ' ').trim(); return x.length > 40 ? `${x.slice(0, 39)}…` : x; };
+/* WORDS GIVEN BACK WORD FOR WORD AS THEY STAND (its spaces let go) are no words written over — never turned away as read
+ * only in short or by a first line, which asks it again for nothing (2.12.40, the review): what the change says then is
+ * that they are there already */
+const sameWordsAs = (given, standing) => { const x = String(given ?? '').replace(/\s+/g, ' ').trim(); return Boolean(x) && x === String(standing ?? '').replace(/\s+/g, ' ').trim(); };
 /* the new words for a find: "replace" ("" takes the words out) — or "text",
  * when it wrote that instead; with neither, nothing is guessed */
 const newWords = (op) => (op.replace !== undefined ? String(op.replace) : op.text !== undefined ? String(op.text) : null);
@@ -845,7 +849,9 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner
   /* HIS ENTRY WRITTEN WHOLE ONLY BY AN ANSWER THAT READ IT WHOLE (2.12.40, the audit — the twin of a passage it had only
    * in short, and of a card it had by its first line): an entry its answer saw only by its name and line in the list is
    * never written over from that — read first (`entriesSeen`: the ids of the entries it had whole); a paragraph added to
-   * it takes nothing away */
+   * it takes nothing away. Its words given back word for word write nothing over: the entry already says that (2.12.40,
+   * the review — it was turned away as read only in short, and asked again for nothing) */
+  if (cur && op.text !== undefined && sameWordsAs(op.text, cur.text)) op = { ...op, text: undefined };
   if (cur && entriesSeen && !entriesSeen.has(cur.id) && String(cur.text || '').trim() && op.text !== undefined && archivist.cleanText(op.text, 20000)) return refuse(`it had ${cur.name}’s entry only in short, by its name and line — read it whole first with “entry: ${cur.name}”, or add a paragraph to it`);
   if (truthOf(op.remove) === true) {
     if (!cur) return refuse(`there is no ${name} in the bibliography`);
@@ -1034,6 +1040,8 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     /* a passage taken out or written anew in a chapter it only had in short is
      * never guessed at: it reads the chapter whole first (Cozy Tavern's M61 v2.80) —
      * a passage it had word for word in a chapter told partly whole is seen (seen holds its id) */
+    /* (its words given back word for word: nothing to write — said so, never as read only in short: 2.12.40) */
+    if (truthOf(op.remove) !== true && op.text !== undefined && op.find === undefined && sameWordsAs(op.text, v.text)) return refuse('it would change nothing');
     if (seen && !seen.has(chapter.id) && !seen.has(passage.id) && (truthOf(op.remove) === true || (op.text !== undefined && op.find === undefined))) return refuse(`Chapter ${numberWords(spot0.ci)} was only in short in what it had — read it whole first`);
     /* taken out of the chapter, with its Undo; what only it put in the notes goes too */
     if (truthOf(op.remove) === true) {
@@ -1194,7 +1202,9 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     /* a card it was shown only by its first line is never written whole from
      * it: who they are, or how they stand with the others, read first (the
      * twin of a passage it only had in short — Cozy Tavern's M84-4/M86) */
-    if (card && short && short.has(card.id) && ['about', 'ties'].some((k) => op[k] !== undefined && archivist.cleanText(op[k]))) return refuse(`it had ${card.name}'s card only by its first line — read it whole first with “card: ${card.name}”`);
+    /* (a field given back word for word as it stands writes nothing: 2.12.40) */
+    const writes = (k) => op[k] !== undefined && Boolean(archivist.cleanText(op[k])) && !(card && sameWordsAs(op[k], card[k]));
+    if (card && short && short.has(card.id) && ['about', 'ties'].some(writes)) return refuse(`it had ${card.name}'s card only by its first line — read it whole first with “card: ${card.name}”`);
     if (truthOf(op.remove) === true) {
       if (!card) return refuse(`there is no ${name} in the notes`);
       put('novel', novelId, novelSteps.dropNote(kind, card.id), { now: true });
@@ -1211,7 +1221,7 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     }
     for (const key of ['about', 'now', 'ties']) {
       if (key !== 'about' && kind !== 'people') continue;
-      const words = op[key] === undefined ? '' : archivist.cleanText(op[key]);
+      const words = writes(key) ? archivist.cleanText(op[key]) : '';
       if (words) next[key] = words;
     }
     /* a "now" it writes is as of the end of the book so far */

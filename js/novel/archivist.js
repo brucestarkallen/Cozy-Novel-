@@ -672,6 +672,8 @@ const NO_THREAD = /^(?:no\s+(?:new\s+)?threads?|untitled|title|tbd|todo|to\s+do)
  * of the one that stands and says less than it is not written. The auditor,
  * which folds repeats and puts drift right, is not held to it. */
 const telling = (t) => new Set(String(t || '').toLowerCase().split(/[^\p{L}\p{N}'’-]+/u).map((w) => w.replace(/['’]s$/, '')).filter((w) => w.length >= 4));
+/* (the same count for his entries in Quick add — quickadd.js, 2.12.40) */
+export const tellingWords = telling;
 /* how much of one text's telling words another holds (1 when it has none) */
 function heldIn(text, other) {
   const was = telling(text);

@@ -1772,6 +1772,9 @@ export function quickAddRequest({ words, earlier = [], premises = [], premisesLe
     /* (its own verdict, or — where the look-ups parted from it — the app's account of what came of it, 2.12.40) */
     if (r.verdict) said.push(`${r.verdictBy === 'app' ? 'What came of it' : 'You found'}: ${String(r.verdict).replace(/\s+/g, ' ').trim()}`);
     if ((r.added || []).length) said.push(`Into the bibliography: ${r.added.map((a) => a.name).join(', ')}${r.added.some((a) => a.status === 'undone') ? ' (I took some back out)' : ''}.`);
+    /* (what was held back, so asking again asks with it — 2.12.40, the review) */
+    const held = [...(r.refused || []).filter((x) => x && x.held).map((x) => x.name), ...(r.held || [])];
+    if (held.length) said.push(`Held back, as resting on what a page says otherwise: ${held.join(', ')}.`);
     if ((r.conflicts || []).length) said.push(`Against the pages: ${r.conflicts.map((c) => `“${c.mine}” — ${c.label} says “${c.against}”`).join('; ')}.`);
     if ((r.cannot || []).length) said.push(`Could not be: ${r.cannot.map((c) => `“${c.mine}” — ${c.why || c.rule}`).join('; ')}.`);
     if ((r.questions || []).length) said.push(`You asked: ${r.questions.join(' ')}`);
@@ -1804,7 +1807,10 @@ Answer with one JSON object and nothing else:
  * rows as they stand, for the entries again: a change a page says otherwise waits; words that stand only in his own
  * earlier words are his newer word and go in; words quoted from nowhere hold his back no longer, unless it quotes a
  * page exactly; his What it's about written again where it gave no words for it. */
-const quoted = (rows, side) => rows.map((c) => `- “${c.mine}” — ${c.label} says “${c[side]}”`).join('\n');
+/* (where his own words stand, said in his voice: the rows' labels are said to him on the screen — "your entry Emilia" —
+ * and went back to his partner as its own; 2.12.40, the review) */
+const hisLabel = (label) => String(label || '').replace(/^your\b/, 'my');
+const quoted = (rows, side) => rows.map((c) => `- “${c.mine}” — ${hisLabel(c.label)} says “${c[side]}”`).join('\n');
 export function quickAgainRequest({ conflicts = [], changes = [], aside = [], about = [] }) {
   const parts = ['I looked up the words you quoted, and some of it stands otherwise than you put it.'];
   if (conflicts.length) parts.push(`These stand on a page of the book, so they wait for my word — nothing of them goes in yet:\n${quoted(conflicts, 'against')}`);

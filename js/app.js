@@ -23,6 +23,7 @@ import { startChecking, busyAny as checkingAny, keepGrades } from './novel/check
 import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
 import { initBibliography } from './ui/bibliography.js';
+import { quickAny } from './novel/quickadd.js';
 import { mendBook } from './novel/mend.js';
 import { initBranches, openBranches } from './ui/branches.js';
 import { openConversation } from './novel/talk.js';
@@ -356,7 +357,8 @@ function bindChrome() {
   window.addEventListener('pagehide', () => { draftNow(); store.flushOnHide(); store.letLeasesGo(); store.quiet(); });
   window.addEventListener('pageshow', (e) => { if (e.persisted) store.recheck(); });
   window.addEventListener('beforeunload', (e) => {
-    if (writer.anyRunning() || anyTalking()) { e.preventDefault(); e.returnValue = ''; }
+    /* (and a Quick add being asked: closed mid-ask, nothing of it goes in — 2.12.40) */
+    if (writer.anyRunning() || anyTalking() || quickAny()) { e.preventDefault(); e.returnValue = ''; }
   });
   store.onStatus((s) => banner(s.offline));
   store.onUpdate(() => { A.updateWaiting = true; reloadWhenQuiet(); });
@@ -472,12 +474,13 @@ function bannerRoom() {
  * Ideas, reading or checking on its way in any book; nothing waiting to be
  * saved (the box's last words too); no sheet open (a card being edited, Edit
  * by hand, a new scene); no words typed and not yet sent — the box beside
- * the page, a rewrite note, his edit of a passage. */
+ * the page, a rewrite note, his edit of a passage. A Quick add being asked is work on its way too (2.12.40, the review:
+ * an update landed mid-ask, and the row was left being asked by a page that was gone). */
 export function quietNow() {
   const typing = document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName) && document.activeElement.value;
   const unsaved = document.querySelector('.editbox') || [...document.querySelectorAll('.rewriterow input')].some((i) => i.value.trim()) || unsentWords();
   const open = document.querySelector('.sheet.on');
-  const working = writer.anyRunning() || anyTalking() || archivist.busyAny() || checkingAny() || store.hasPending() || draftWaiting();
+  const working = writer.anyRunning() || anyTalking() || quickAny() || archivist.busyAny() || checkingAny() || store.hasPending() || draftWaiting();
   return !(working || unsaved || open || typing);
 }
 function reloadWhenQuiet() {
