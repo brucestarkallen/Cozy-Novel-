@@ -17,13 +17,17 @@
  *    back with them; what it finds in the new words set by the caller;
  *  - the bibliography: its facts carried to the new words where each still
  *    stands in them (bibliography.js carriedCodex), the facts of the words
- *    before kept with them.
+ *    before kept with them;
+ *  - the Timeline: its turns carried the same way (timeline.js
+ *    carriedContinuity, 2.12.37) — else none, and the passage is read for
+ *    them again.
  */
 
 import * as store from '../store.js';
 import { chapterSteps, novelSteps, picked, inPlaceFields, putBackFields, writtenOf, END_KEYS, sameEnd } from './shape.js';
 import { hashText, countWords } from '../util.js';
 import { codexNow, carriedCodex } from './bibliography.js';
+import { carriedContinuity } from './timeline.js';
 
 /* the helper's side, given by archivist.js as it loads (the writer changes words in place too, and never imports the helper) */
 let helper = { retire: () => {}, rekey: () => {} };
@@ -57,6 +61,7 @@ export function changeInPlace({ novelId, chapterId, passageId, versionId, next, 
   if (retire && novelId) retireIfSeen(novelId, chapterId, passageId, v.id);
   const fields = inPlaceFields(v, after, by, { check: found, codex: facts, keepEnd, tail, extra });
   fields.codex = (facts && carriedCodex(facts, after)) || undefined;
+  fields.continuity = carriedContinuity(v.continuity, after) || undefined;
   /* a page fixed by the app is no longer one he put back as it was */
   fields.fixesBack = undefined;
   store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, fields), { now: true });
@@ -90,6 +95,7 @@ export function putBackWords({ novelId, chapterId, passageId, versionId = null, 
   const now = codexNow(v);
   const to = back.patch.text;
   back.patch.codex = (back.codex && codexNow({ text: to, codex: back.codex })) || (now && carriedCodex(now, to)) || undefined;
+  back.patch.continuity = carriedContinuity(v.continuity, to) || undefined;
   back.patch.fixesBack = hold ? hashText(to) : undefined;
   store.change('chapter', chapterId, chapterSteps.setVersion(passageId, v.id, back.patch), { now: true });
   if (back.check && back.check.sig === hashText(to)) store.change('chapter', chapterId, chapterSteps.setCheck(passageId, v.id, back.check), { now: true });
@@ -121,6 +127,7 @@ export function foldVersion({ novelId, chapterId, passageId, childId, targetId, 
   patch.tookOff = child.tookOff;
   patch.tookOffTop = child.tookOffTop;
   patch.codex = codexNow(child) || (facts && carriedCodex(facts, next)) || undefined;
+  patch.continuity = carriedContinuity(child.continuity, next) || carriedContinuity(target.continuity, next) || undefined;
   const notes = [...(target.notes || []), ...(child.notes || []).filter((n) => !(target.notes || []).includes(n))];
   if (notes.length) patch.notes = notes;
   if (child.spanAuto || child.spans) patch.spans = (target.spans || 0) + (child.spanAuto ? 1 : 0) + (child.spans || 0);

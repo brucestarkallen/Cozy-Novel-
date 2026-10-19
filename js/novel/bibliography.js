@@ -589,9 +589,34 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
     }
     it.first = it.facts[0] || null;
     if (!it.line) it.line = it.card && it.card.about ? firstSentence(it.card.about) : it.facts[0] ? it.facts[0].fact : '';
+    /* HIS ENTRY AND THE NOTES' CARD FOR ONE NAME ARE ONE (2.12.37 — his report: the notes, the Timeline and the
+     * bibliography "must be connected"): a tap on the name showed his entry and the card as two who go by that name.
+     * The card his entry stands for, by a name of theirs — on the screen only: what the writer reads of it is his
+     * entry's own words (itemWords) */
+    if (it.entry && !it.card) {
+      const card = cardForEntry(it.entry, notes);
+      if (card) it.card = card;
+    }
     out.push(it);
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+/* the notes' card an entry of his stands for: {kind, id, about} — by a name of theirs, the card's kind for the entry's
+ * kind first (a group or a thing is kept among the lore), then a fuller or shorter form as the notes match one */
+const CARD_KINDS_FOR = { people: ['people', 'lore'], places: ['places', 'lore'], things: ['lore', 'places'], groups: ['lore', 'people'], lore: ['lore', 'places', 'people'] };
+export function cardForEntry(e, notes) {
+  const keys = new Set([e.name, ...(e.aka || [])].map(nameKey).filter(Boolean));
+  for (const kind of CARD_KINDS_FOR[kindOf(e.kind)] || ['lore']) {
+    const cards = (notes && notes[kind]) || [];
+    const exact = cards.filter((c) => [c.name, ...(c.aka || [])].some((x) => keys.has(nameKey(x))));
+    if (exact.length === 1) return { kind, id: exact[0].id, about: exact[0].about || '' };
+    if (exact.length > 1) return null;
+    /* a fuller or shorter form, as the notes match one ("Emilia" is Emilia Vermaine; "Bruce's Batwing" the Batwing) */
+    const m = matchCard(cards, e.name, e.aka || [], { kind, near: true, slip: false });
+    if (m.card) return { kind, id: m.card.id, about: m.card.about || '' };
+  }
+  return null;
 }
 
 /* the names a list of items answers to, for the finder: [{form, refs}] */

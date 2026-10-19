@@ -25,6 +25,7 @@ import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, hasMarkup as hasMarkupText } from './textshape.js';
 import { replaceMany, renameRule } from './names.js';
 import { entriesOf, entryNamed, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
+import { carriedContinuity } from './timeline.js';
 import { changeInPlace, putBackWords } from './inplace.js';
 
 /* ------------------------------------------------------------ reading it */
@@ -607,7 +608,7 @@ function renameEverywhere(novelId, novel, rules, put, why) {
     const next = swap(x.version.text);
     if (next === x.version.text) continue;
     /* (what it read as before it changes on the page itself: its words, their facts) */
-    const was = { text: String(x.version.text || ''), sig: archivist.signature(x.version), codex: clone(codexNow(x.version)) };
+    const was = { text: String(x.version.text || ''), sig: archivist.signature(x.version), codex: clone(codexNow(x.version)), continuity: x.version.continuity ? clone(x.version.continuity) : null };
     const made = newVersionOn(put, novelId, x, next, why, { retire: false });
     undo.passages.push(made);
     restamp.push({ x, made, next, was });
@@ -724,6 +725,16 @@ function restampRenamed(novelId, novel, restamp, quiet, put, undo, printsBefore)
         v.codex = JSON.parse(JSON.stringify(facts));
       }, { now: true });
     }
+    /* and the Timeline's turns, as the facts (timeline.js carriedContinuity, 2.12.37) */
+    const turns = carriedContinuity(was.continuity, next, quiet);
+    if (turns) {
+      put('chapter', x.chapterId, (ch) => {
+        const p = (ch.passages || []).find((y) => y.id === x.passage.id);
+        const v = p && (p.versions || []).find((y) => y.id === made.versionId);
+        if (!v || hashText(String(v.text || '')) !== turns.fp) return false;
+        v.continuity = JSON.parse(JSON.stringify(turns));
+      }, { now: true });
+    }
     /* the checker's findings on it, their words changed with it */
     const live = store.peek('chapter', x.chapterId);
     const e = live && live.checks && live.checks[x.passage.id] && live.checks[x.passage.id][x.version.id];
@@ -823,7 +834,7 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
 /* (and as the screen says it: "When there's room", "Page by page", "Never — it's only for me", 2.12.35) */
 const RIDES_SAID = { always: 'always', named: 'named', 'when named': 'named', 'when its name comes up': 'named', 'when there’s room': 'named', "when there's room": 'named', 'page by page': 'named', never: 'never', 'only for me': 'never', 'never — it’s only for me': 'never', "never — it's only for me": 'never', 'never - only for me': 'never' };
 const entryRides = (v) => RIDES_SAID[String(v || '').trim().toLowerCase().replace(/[.!]+$/, '')] || '';
-function makeEntry(novelId, novel, op, { base, refuse, put, at }) {
+function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner' }) {
   const entries = entriesOf(novel);
   const name = archivist.cleanName(op.entry);
   if (!name) return refuse(text(op.entry) ? `“${clipped(text(op.entry))}” is no name — name the entry as the bibliography does` : 'the entry needs a name');
@@ -881,13 +892,13 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at }) {
   if (cur && JSON.stringify(tidy) === JSON.stringify(tidyEntry(cur))) return refuse(twice ? 'those words are there already' : 'the entry already says that');
   if (!cur && !tidy.line && !tidy.text) return refuse('it gave nothing to write in a new entry');
   /* whose it is: an entry he wrote stays his when the partner changes it (2.12.35: it was tagged "your partner's") */
-  const by = cur ? (cur.by === 'partner' ? 'partner' : cur.by) : 'partner';
+  const by = cur ? (cur.by === 'partner' ? 'partner' : cur.by) : newBy;
   const after = { ...tidy, at, ...(by ? { by } : {}) };
   put('novel', novelId, novelSteps.putEntry(after), { now: true });
   return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(after) }, before: cur ? (cur.text || cur.line || '') : '', after: after.text || after.line || '' };
 }
 
-export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null, short = null } = {}) {
+export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null, short = null, entryBy = '' } = {}) {
   /* dry: everything looked at as it would be, nothing written — whether it would land (whyNot) */
   const put = dry ? () => {} : (...a) => store.change(...a);
   if (op && op.unreadable) return { id, op: clone(op), label: 'A changes block', why: '', status: 'refused', said: `its changes block could not be read (it began: ${op.head || '…'})` };
@@ -1147,7 +1158,8 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
   }
 
   /* an entry in his bibliography (bibliography.js): his, made at his asking */
-  if (op.entry !== undefined) return makeEntry(novelId, novel, op, { base, refuse, put, at });
+  /* (Quick add's entries are his own words for his world: a new one is his — quickadd.js `entryBy`) */
+  if (op.entry !== undefined) return makeEntry(novelId, novel, op, { base, refuse, put, at, newBy: entryBy === 'you' ? 'you' : 'partner' });
   if (op.note !== undefined && archivist.rereading(novelId)) return refuse(REREADING);
   if (op.note !== undefined) {
     const kind = op.note;

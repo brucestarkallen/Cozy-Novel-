@@ -23,7 +23,7 @@ import { sceneWords, choicesIn, nowLabelOf } from '../novel/prompts.js';
 import { superActive, superOn } from '../novel/auto.js';
 import { openBranch, branchBusy } from './branches.js';
 import { makeTimeline } from './timeline.js';
-import { bibliographyView, bibliographyPrint, pageNames, tapName } from './bibliography.js';
+import { bibliographyView, bibliographyPrint, pageNames, tapName, showForCard, bibHas } from './bibliography.js';
 
 let ui = null;
 let hooks = {};
@@ -218,6 +218,14 @@ export function showCard(kind, id) {
   ensureSide('notes');
   const n = store.peek('novel', P.novelId);
   if (n && ((n.notes && n.notes[kind]) || []).some((c) => c.id === id)) editCard(kind, id);
+}
+/* A CARD'S TURNS ON THE TIMELINE (2.12.37 — his report: the notes, the Timeline and the bibliography "must be
+ * connected"): Notes → Timeline, following that card through the whole book */
+export function showTimeline(cardId) {
+  ensureSide('notes');
+  if (notesView !== 'timeline') { notesView = 'timeline'; drawSide(); }
+  notesTimeline?.follow(cardId);
+  ui.rightBody.scrollTop = 0;
 }
 /* a turn of the conversation or of a scene, scrolled to and lit for a moment */
 export function showTurn(kind, id, turnId) {
@@ -824,14 +832,15 @@ function drawNotes() {
     let intro = ui.rightBody.querySelector('.pane-intro');
     if (!intro) intro = h('div.pane-intro', h('p.pane-kicker', 'Beside the story'), h('div.pane-title-row', h('h2', 'Your notebook'), h('span.pane-count')));
     /* drawn again while he types in its filter, or reads down the list: the box keeps his place in it, the list its place */
-    const old = ui.rightBody.querySelector('.bibview .bibfilter');
-    const typing = old && document.activeElement === old ? [old.selectionStart, old.selectionEnd] : null;
+    /* (its filter, and Quick add's box: 2.12.37) */
+    const old = ['.bibview .bibfilter', '.bibview .quickbox'].map((q) => ui.rightBody.querySelector(q)).find((x) => x && document.activeElement === x);
+    const typing = old ? [old.selectionStart, old.selectionEnd, old.classList.contains('quickbox') ? '.quickbox' : '.bibfilter'] : null;
     const top = ui.rightBody.scrollTop;
     const view = bibliographyView(novelId, { redraw: () => { bibSignature = ''; drawSide(); } });
     const count = intro.querySelector('.pane-count');
     if (count.textContent !== view.dataset.count) count.textContent = view.dataset.count || '';
     keepChildren(ui.rightBody, [intro, ui.rightBody.querySelector('.notes-views') || notesViews(), view]);
-    const box = typing && view.querySelector('.bibfilter');
+    const box = typing && view.querySelector(typing[2]);
     if (box) { box.focus({ preventScroll: true }); try { box.setSelectionRange(typing[0], typing[1]); } catch (_) { /* fine */ } }
     if (ui.rightBody.scrollTop !== top) ui.rightBody.scrollTop = top;
     return;
@@ -861,6 +870,8 @@ function drawNotes() {
         else toast('This card is no longer in the notes.');
       },
       jumpSource: (chapterId, passageId, query) => { closeRight(); desk.whenOpen(chapterId, { passageId, show: { query } }); },
+      /* whether a helper reads what the Timeline lacks by itself (archivist.js timelineBackfill) */
+      healing: () => archivist.lightOf(novelId).state !== 'off',
       readAgain: () => {
         notesView = 'cards';
         drawSide();
@@ -1181,6 +1192,13 @@ async function editCard(kind, id) {
   const draftTyped = () => { if (!done) { const t = typed(); keepCardDraft(novelId, draftKey, Object.keys(t).length ? { ...t, name: valueOf('name') } : undefined); } };
   for (const box of [...Object.values(boxes), ...(open ? [open] : [])]) box.addEventListener('input', draftTyped);
   s.body.append(h('p.say', 'The helper keeps these as the book is written; what you write here it keeps too.'));
+  /* where else it stands: its name in the bibliography, its turns on the Timeline (2.12.37) */
+  if (cur) {
+    const links = h('div.btnrow.cardlinks');
+    if (bibHas(novelId, kind, cur.id)) links.append(h('button.btn.small.quiet', { title: `What ${cur.name} means in your bibliography — your entry and what the book has told.`, onclick: () => { s.close(); showForCard(novelId, kind, cur.id); } }, 'In the bibliography'));
+    if (kind === 'people' || kind === 'threads') links.append(h('button.btn.small.quiet', { title: `The turns of ${cur.name} through the book, each with the words behind it.`, onclick: () => { s.close(); showTimeline(cur.id); } }, 'On the Timeline'));
+    if (links.childNodes.length) s.body.append(links);
+  }
   const row = h('div.btnrow', h('button.btn.primary', { onclick: () => {
     const t = typed();
     const nm = (t.name !== undefined ? t.name : c.name || '').trim();

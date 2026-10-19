@@ -26,7 +26,7 @@ test('a relationship keeps its cause, exact source and neutral direction', () =>
   assert.equal(e.text, 'Mara distrusts Tom more.'); assert.equal(e.why, 'He hid the letter.');
   assert.deepEqual(e.cards, ['mara', 'tom']); assert.deepEqual(e.evidence, [b.v.text]);
   assert.equal(e.chapterId, b.chapter.id); assert.equal(e.passageId, b.p.id); assert.equal(e.versionId, b.v.id);
-  assert.deepEqual(out.coverage, { total: 1, read: 1, missing: 0, complete: true });
+  assert.deepEqual(out.coverage, { total: 1, read: 1, missing: 0, passed: 0, complete: true });
   assert.equal(b.novel.notes.people[0].about, 'Jealous and proud.');
 });
 test('invented quotes and quotes belonging only to a different part leave a gap', () => {

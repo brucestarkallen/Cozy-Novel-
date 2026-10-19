@@ -38,9 +38,11 @@ function currentPassage(chapter) {
   return seen.dataset.id;
 }
 
-export function makeTimeline({ novelId, chapterId: openedChapter, current, openCard, jumpSource, readAgain }) {
+export function makeTimeline({ novelId, chapterId: openedChapter, current, openCard, jumpSource, readAgain, healing = () => true }) {
   let chapterId = openedChapter, destroyed = false, frame = 0, lastResult = '', shown = PAGE_SIZE, onPage = null;
   let dirty = true, revision = 0, novelInput = '', projection = null;
+  /* a card asked for from elsewhere (its card in the notes, its name in the bibliography): followed once its option is there (2.12.37) */
+  let wantCard = '';
   const chapterInputs = new Map();
   const watches = new Map(), loading = new Set(), failed = new Set();
   const el = h('section.timeline', { 'aria-label': 'Story timeline' });
@@ -168,6 +170,8 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     const selectedCard = person.value;
     let result = project(novel, chapters, { ...scopeArgs, kind: kind.value || undefined, cardId: selectedCard || undefined });
     optionsOf(person, [['', 'All cards'], ...result.cards.map((card) => [card.id, card.name + (card.kind === 'threads' ? ' · thread' : '')])]);
+    if (wantCard && result.cards.some((card) => card.id === wantCard)) person.value = wantCard;
+    wantCard = '';
     if (person.value !== selectedCard) result = project(novel, chapters, { ...scopeArgs, kind: kind.value || undefined, cardId: person.value || undefined });
     const { total, read, missing, complete } = result.coverage;
     const scopeOrder = whole ? novel.order || [] : (novel.order || []).slice(0, chapterNumber - (through.value === '^' ? 1 : 0));
@@ -178,15 +182,21 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     if (coverage.textContent !== said) coverage.textContent = said;
     gaps.hidden = !unavailable && (waiting || complete || !total);
     retry.hidden = !unavailable;
-    reread.hidden = Boolean(unavailable);
-    setText(gapCopy, unavailable ? `${plural(unavailable, 'chapter')} could not be opened. These turns show only the chapters available here.` : `${plural(missing, 'passage')} ${missing === 1 ? 'has' : 'have'} no complete timeline reading yet. Read the whole book again to include older pages.`);
+    /* (2.12.37: the helper reads them by itself — never a task handed to him; Read the whole book again stays in the notes) */
+    reread.hidden = true;
+    const passed = result.coverage.passed || 0;
+    const owed = Math.max(0, missing - passed);
+    const heals = healing();
+    setText(gapCopy, unavailable ? `${plural(unavailable, 'chapter')} could not be opened. These turns show only the chapters available here.`
+      : [owed ? `${plural(owed, 'passage')} ${owed === 1 ? 'is' : 'are'} not read for the Timeline yet — ${heals ? `the helper reads ${owed === 1 ? 'it' : 'them'} by itself, a few at a time, and ${owed === 1 ? 'its' : 'their'} turns show here as they are read.` : 'choose a helper in Settings → Connections and it reads them by itself.'}` : '',
+        passed ? `${plural(passed, 'passage')} ${passed === 1 ? 'was' : 'were'} read but not whole — the helper’s model would not read ${passed === 1 ? 'it' : 'them'} whole; what it found is shown.` : ''].filter(Boolean).join(' '));
     /* Rows, quotes, buttons and scroll remain still on routine saves. */
     const signature = JSON.stringify([projection.key, total, read, waiting, unavailable, shown]);
     if (signature === lastResult) return;
     lastResult = signature;
     if (!result.events.length) {
       const title = waiting ? 'Opening your story' : kind.value || person.value ? 'No turns match this view yet' : !total ? 'The story is still ahead' : complete ? 'No turning points in these passages' : 'The timeline begins with a reading';
-      const copy = waiting ? 'The turns kept with each passage will appear here.' : kind.value || person.value ? 'Try another person, thread or kind of turn, or look at the whole book.' : !total ? 'As your story is read, its meaningful changes will gather here.' : complete ? 'The helper read these passages and found no changes to keep here.' : 'Cards written before the timeline keep their notes. The helper adds supported turns while reading new pages, or when you choose Read the whole book again.';
+      const copy = waiting ? 'The turns kept with each passage will appear here.' : kind.value || person.value ? 'Try another person, thread or kind of turn, or look at the whole book.' : !total ? 'As your story is read, its meaningful changes will gather here.' : complete ? 'The helper read these passages and found no changes to keep here.' : (healing() ? 'The helper reads the pages read before the Timeline was kept for their turns by itself, a few at a time — they gather here as they are read.' : 'Choose a helper in Settings → Connections — it reads the pages for their turns by itself.');
       results.replaceChildren(h('div.timeline-empty', h('span.timeline-flourish', { 'aria-hidden': 'true' }, '⌁'), h('h3', title), h('p', copy)));
       return;
     }
@@ -233,6 +243,17 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
   return {
     el, novelId,
     update(nextChapter = chapterId) { if (chapterId !== nextChapter) { chapterId = nextChapter; through.value = 'current'; shown = PAGE_SIZE; } draw(); },
+    /* one card's turns, the whole book through (2.12.37: its card and its name in the bibliography lead here) */
+    follow(cardId) {
+      wantCard = cardId || '';
+      whole = true;
+      for (const b of scope.children) b.setAttribute('aria-pressed', String(b.textContent === 'Whole book'));
+      boundary.hidden = true;
+      kind.value = '';
+      shown = PAGE_SIZE;
+      lastResult = '';
+      draw();
+    },
     destroy() { destroyed = true; cancelAnimationFrame(frame); offNovel(); for (const off of watches.values()) off(); page?.removeEventListener('scroll', moved); window.removeEventListener('resize', moved); },
   };
 }

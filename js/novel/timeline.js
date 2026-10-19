@@ -77,6 +77,34 @@ export function continuityStep(passageId, versionId, continuity) {
   };
 }
 
+/* A READING CARRIED TO NEW WORDS (2.12.37 — his report: "5 passages have no complete timeline reading yet — Read the
+ * whole book again", under Super automatic): words changed on the page itself — the spaces mended on opening, a fix,
+ * a name changed everywhere, words put back — kept the bibliography's facts (bibliography.js carriedCodex) but not the
+ * Timeline's turns, whose print was of the words before: every such passage counted as never read. The turns go with
+ * the words, as the facts do — kept whole only when every quote still stands in the new words (a name changed
+ * everywhere: changed in them too, `swap`); else none, and the passage is read for them again (archivist.js
+ * timelineDue). */
+export function carriedContinuity(c, text, swap = (x) => x) {
+  if (!c || c.schema !== TIMELINE_SCHEMA || !Array.isArray(c.events)) return null;
+  const t = String(text || '');
+  const events = [];
+  for (const e of c.events) {
+    if (!e || !Array.isArray(e.evidence) || !Array.isArray(e.refs)) return null;
+    const evidence = e.evidence.map((q) => swap(String(q)));
+    if (!evidence.length || !evidence.every((q) => q.length >= 4 && t.includes(q))) return null;
+    const refs = e.refs.map((r) => ({ ...r, name: swap(String(r.name || '')) }));
+    const whose = e.whose ? { ...e.whose, ...(e.whose.name ? { name: swap(String(e.whose.name)) } : {}) } : null;
+    events.push({ ...e, refs, text: swap(String(e.text || '')), ...(e.why ? { why: swap(String(e.why)) } : {}), evidence, ...(whose ? { whose } : {}),
+      id: 'tl-' + hashText(JSON.stringify([e.kind, refs.map((r) => r.id).sort(), evidence, e.stance, (whose && whose.id) || ''])) });
+  }
+  return { ...c, fp: hashText(t), events };
+}
+/* a passage's Timeline reading stands for its words as they are, read whole */
+export function continuityDone(v) {
+  const c = v && v.continuity;
+  return Boolean(c && c.schema === TIMELINE_SCHEMA && c.fp === hashText(String(v.text || '')) && Array.isArray(c.events) && c.complete === true);
+}
+
 function sourceValid(v) {
   const c = v.continuity;
   return c && c.schema === TIMELINE_SCHEMA && c.fp === hashText(v.text || '') && Array.isArray(c.events);
@@ -89,7 +117,8 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
   const notes = novel?.notes || {};
   const cards = allCards(notes).map(({ id, name, kind }) => ({ id, name, kind }));
   const events = [];
-  const coverage = { total: 0, read: 0, missing: 0, complete: false };
+  /* passed: read for its turns and passed by — its model would not read it whole (archivist.js timelineBackfill) */
+  const coverage = { total: 0, read: 0, missing: 0, passed: 0, complete: false };
   const order = novel?.order || [];
   const end = chapterId ? order.indexOf(chapterId) : order.length - 1;
   const limit = chapterId && through && through !== '^' ? (chapters?.[chapterId]?.passages || []).findIndex(p => p.id === through) : null;
@@ -132,6 +161,7 @@ export function timelineOf(novel, chapters, { chapterId = null, through = null, 
           offset: Math.min(...e.evidence.map(q => v.text.indexOf(q))) });
       }
       if (v.continuity.complete === true && valid) coverage.read++;
+      else if (v.continuity.passed && v.continuity.passed === v.continuity.fp) coverage.passed++;
       events.push(...rows.sort((a, b) => a.offset - b.offset));
     }
   }

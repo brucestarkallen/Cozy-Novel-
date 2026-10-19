@@ -21,9 +21,11 @@ import { nowLabelOf } from '../novel/prompts.js';
 import { plural, nameKey, slug } from '../util.js';
 import * as archivist from '../novel/archivist.js';
 import { connFor } from '../novel/writer.js';
+import { quickAdd, quickBusy, stopQuick, quickLog, undoQuick, clearQuick, putBackQuick } from '../novel/quickadd.js';
 
 /* app.js: closeSide (the notes drawer on a phone), showCard (a card of the
- * notes), whenOpen (a passage, its words lit), openSearch (every place) */
+ * notes), whenOpen (a passage, its words lit), openSearch (every place),
+ * showTimeline (a card's turns), chapterNow (the chapter open) */
 let hooks = {};
 export function initBibliography(appHooks) { hooks = appHooks || {}; }
 
@@ -101,6 +103,18 @@ export function tapName(novelId, key, e) {
 }
 /* one item of the bibliography by its ref ('e:<id>' for his entry) */
 export function showRef(novelId, ref) { showRefs(novelId, [ref]); }
+/* what the bibliography holds for a card of the notes (2.12.37): his entry it stands for, or what the book told under its name */
+function refsForCard(novelId, kind, cardId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return [];
+  return bibItems(novel, chaptersOf(novel), { facts: true }).filter((it) => it.card && it.card.id === cardId && (it.entry || it.facts.length)).map((it) => it.ref);
+}
+export function bibHas(novelId, kind, cardId) { return refsForCard(novelId, kind, cardId).length > 0; }
+export function showForCard(novelId, kind, cardId) {
+  const refs = refsForCard(novelId, kind, cardId);
+  if (refs.length) showRefs(novelId, [...refs, `c:${kind}:${cardId}`]);
+  else toast('Nothing is kept in the bibliography for this card yet.');
+}
 
 function showRefs(novelId, refs, { said = '' } = {}) {
   const novel = store.peek('novel', novelId);
@@ -109,12 +123,22 @@ function showRefs(novelId, refs, { said = '' } = {}) {
   const items = bibItems(novel, chapters, { facts: true });
   const byRef = new Map(items.map((it) => [it.ref, it]));
   const rows = [];
+  const cardOf = (kind, id) => ((novel.notes || {})[kind] || []).find((c) => c.id === id) || null;
   for (const ref of refs) {
     const it = byRef.get(ref) || null;
     const m = /^c:(people|places|lore):(.+)$/.exec(ref);
-    const card = m ? ((novel.notes || {})[m[1]] || []).find((c) => c.id === m[2]) || null : null;
+    /* his entry with the notes' card it stands for (bibliography.js cardForEntry): one, never two who go by the name (2.12.37) */
+    const joined = !m && it && it.entry && it.card ? cardOf(it.card.kind, it.card.id) : null;
+    const card = m ? cardOf(m[1], m[2]) : joined;
     if (!it && !card) continue;
     rows.push({ it, card, cardKind: m ? m[1] : (it && it.card ? it.card.kind : '') });
+  }
+  /* a card shown with his entry is not shown again on its own — what the book told under the card's name goes with it */
+  for (const r of rows.filter((x) => x.it && x.it.entry && x.card)) {
+    for (const other of rows.filter((x) => x !== r && x.card && x.card.id === r.card.id && !(x.it && x.it.entry))) {
+      if (other.it && other.it.facts.length) r.it = { ...r.it, facts: [...r.it.facts, ...other.it.facts.filter((f) => !r.it.facts.some((g) => g.id === f.id))] };
+      rows.splice(rows.indexOf(other), 1);
+    }
   }
   if (!rows.length) { toast('Nothing is kept for that name just now.'); return; }
   const title = rows.length === 1 ? (rows[0].it ? rows[0].it.name : rows[0].card.name) : `${rows.length} who go by that name`;
@@ -169,6 +193,8 @@ function nameSection(novelId, novel, { it, card, cardKind }, { many, close, said
   const row = h('div.btnrow');
   row.append(h('button.btn.small', { title: entry ? 'Change your entry — the book’s facts and the notes stay as they are.' : `Write your own entry for ${name}: what it means, for the writer to read with every page while there’s room.`, onclick: () => { close(); editEntry(novelId, entry ? entry.id : null, { name, kind }); } }, entry ? 'Edit your entry' : 'Write your entry'));
   if (card && hooks.showCard) row.append(h('button.btn.small.quiet', { title: 'Opens the card in the notes, to read or edit it.', onclick: () => { close(); hooks.showCard(cardKind, card.id); } }, 'Open the card'));
+  /* its turns through the book (2.12.37) */
+  if (card && cardKind === 'people' && hooks.showTimeline) row.append(h('button.btn.small.quiet', { title: `The turns of ${card.name} through the book, each with the words behind it.`, onclick: () => { close(); hooks.showTimeline(card.id); } }, 'On the Timeline'));
   /* by the name as he tapped it ("Rukia" finds Rukia and Rukia Kuchiki), else its own */
   const asked = said || name;
   if (hooks.openSearch) row.append(h('button.btn.small.quiet', { title: `Every place ${asked} stands in the book.`, onclick: () => { close(); hooks.openSearch(asked); } }, 'Every place'));
@@ -283,6 +309,8 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
     if (!tidy.line && !tidy.text) { toast('Write what it is — in a line, or the entry.'); return; }
     const saved = { ...tidy, at: Date.now(), by: 'you' };
     store.change('novel', novelId, novelSteps.putEntry(saved), { now: true });
+    /* an entry under a card of the notes: the notes are checked against it (archivist.js auditDue, 2.12.37) */
+    archivist.nudge(novelId);
     keepEntryDraft(novelId, draftKey, undefined);
     done = true;
     s.close();
@@ -292,10 +320,11 @@ export async function editEntry(novelId, id, { name = '', kind = '' } = {}) {
     if (!(await confirmIt('Take this entry out?', `${cur.name} goes from the bibliography — what the book itself tells of it stays.`, 'Take it out', { danger: true }))) return;
     const before = entriesOf(store.peek('novel', novelId)).find((x) => x.id === cur.id);
     store.change('novel', novelId, novelSteps.dropEntry(cur.id), { now: true });
+    archivist.nudge(novelId);
     keepEntryDraft(novelId, draftKey, undefined);
     done = true;
     s.close();
-    if (before) undoToast(`${cur.name} is out of the bibliography.`, () => store.change('novel', novelId, novelSteps.entryBack(before.id, before, null), { now: true }));
+    if (before) undoToast(`${cur.name} is out of the bibliography.`, () => { store.change('novel', novelId, novelSteps.entryBack(before.id, before, null), { now: true }); archivist.nudge(novelId); });
   } }, 'Take it out'));
   s.body.append(row);
 }
@@ -313,7 +342,7 @@ export function bibliographyPrint(novelId) {
   if (!novel) return '';
   const chapters = chaptersOf(novel);
   /* (not the words he filters by: the list under the box follows them by itself) */
-  return JSON.stringify([novel.bibliography || [], novel.notes || {}, (novel.prefs || {}).bibAuto || '', (novel.prefs || {}).bibRecall || '', superActive(), lookOf().names || '', namesPrint(novel, chapters), archivist.bibDue ? archivist.bibDue(novelId).length : 0]);
+  return JSON.stringify([novel.bibliography || [], novel.notes || {}, (novel.prefs || {}).bibAuto || '', (novel.prefs || {}).bibRecall || '', superActive(), lookOf().names || '', namesPrint(novel, chapters), archivist.bibDue ? archivist.bibDue(novelId).length : 0, quickLog(novel), quickBusy(novelId)]);
 }
 
 export function bibliographyView(novelId, { redraw = () => {} } = {}) {
@@ -350,6 +379,7 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
   else if (auto && !can) root.append(h('p.notekey.bibdue', `The helper’s model holds too little to fill the bibliography beside the notes (it needs ${archivist.BIB_HELPER_MIN.toLocaleString()} tokens of room) — choose a helper with more room in Settings → Who does what. Your own entries are kept.`));
   const due = can && archivist.bibDue ? archivist.bibDue(novelId).length : 0;
   if (due) root.append(h('p.notekey.bibdue', `${plural(due, 'page')} read before the bibliography was kept — the helper fills ${due === 1 ? 'it' : 'them'} in a few at a time.`));
+  root.append(quickView(novelId, redraw));
   const q = filters.get(novelId) || '';
   if (items.length > 8 || q) {
     const input = h('input.bibfilter', { type: 'search', placeholder: 'Find a name…', 'aria-label': 'Find a name', value: q });
@@ -402,6 +432,89 @@ export function bibliographyView(novelId, { redraw = () => {} } = {}) {
   return root;
 }
 
+/* ------------------------------------------------------------ Quick add */
+
+/* QUICK ADD (2.12.37, quickadd.js): his world in his own words, held against the book first; what holds goes into the
+ * bibliography at once, with Undo; what a page contradicts, or what cannot be, is said with where it stands and waits
+ * for his word — answered in the same box. Asked of his partner's connection. */
+const quickTyped = new Map();   /* novelId -> what he typed and has not sent */
+const QUICK_SHOWN = 6;
+function quickView(novelId, redraw) {
+  const novel = store.peek('novel', novelId);
+  const log = quickLog(novel);
+  const busy = quickBusy(novelId);
+  const key = `${novelId}:quick`;
+  const box = h('section.lightcard.quickadd', { 'aria-label': 'Quick add' });
+  const head = h('div.quickhead', h('h3', 'Quick add'));
+  if (log.length && !busy) head.append(h('button.btn.quiet.small', { title: 'Lets this Quick add conversation go — what went into the bibliography stays.', onclick: () => {
+    const rows = clearQuick(novelId);
+    redraw();
+    undoToast('Quick add is cleared — your bibliography is as it was.', () => { putBackQuick(novelId, rows); redraw(); });
+  } }, 'Clear'));
+  box.append(head, h('p.notekey', 'Tell it what you want in your world — a council, a power and what it costs, a rule, a person. Your partner’s connection holds it against the book, your premises, your bibliography and the notes first: what holds goes into the bibliography at once, with Undo; what a page says otherwise, or what cannot be by your world’s rules, is said with where it stands and waits for your word — answer here.'));
+  const helper = connFor(store.peek('house', 'house') || {}, 'partner');
+  if (!helper) box.append(h('p.notekey.bibdue', 'No connection is chosen for your partner, so Quick add cannot ask — choose one in Settings → Connections.'));
+  if (log.length) {
+    const list = h('div.quicklog');
+    if (log.length > QUICK_SHOWN) list.append(h('p.notekey', `${plural(log.length - QUICK_SHOWN, 'earlier one')} kept, not shown — Clear lets them go.`));
+    for (const r of log.slice(-QUICK_SHOWN)) list.append(quickRow(novelId, r, busy, redraw));
+    box.append(list);
+  }
+  const ta = h('textarea.quickbox', { rows: 3, 'aria-label': 'What to add to your world', placeholder: log.length ? 'Answer it, or add more to your world…' : 'Sanguelis is the council of the elder vampire families…' });
+  const kept = quickTyped.has(novelId) ? quickTyped.get(novelId) : (((store.peek('draft', novelId) || {}).entries || {})[key] || '');
+  ta.value = typeof kept === 'string' ? kept : '';
+  ta.addEventListener('input', () => { quickTyped.set(novelId, ta.value); keepEntryDraft(novelId, key, ta.value.trim() ? ta.value : undefined); });
+  const send = async () => {
+    const words = ta.value.trim();
+    if (!words) { toast('Write what you want in your world first.'); return; }
+    quickTyped.delete(novelId);
+    keepEntryDraft(novelId, key, undefined);
+    ta.value = '';
+    const live = hooks.chapterNow ? hooks.chapterNow() : '';
+    const out = await quickAdd({ novelId, chapterId: live, words });
+    /* not checked: his words back in the box, as he typed them */
+    if (!out.ok && out.giveBack) { quickTyped.set(novelId, out.giveBack); keepEntryDraft(novelId, key, out.giveBack); }
+    if (!out.ok && out.error && !out.row) toast(`Quick add could not ask: ${out.error}.`, 6000);
+    redraw();
+    const made = out.ok ? (out.row.added || []).filter((a) => a.status === 'made') : [];
+    if (made.length) undoToast(`${made.map((a) => a.name).join(', ')} — in the bibliography.`, () => { const back = undoQuick(novelId, out.row.id); if (back.said.length) toast(back.said.join(' · '), 6000); redraw(); });
+  };
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!quickBusy(novelId)) send(); } });
+  const row = h('div.btnrow.quickactions');
+  if (busy) row.append(h('button.btn.small', { title: 'Stops the check — nothing goes in, and your words come back to the box.', onclick: () => stopQuick(novelId) }, 'Stop'));
+  else row.append(h('button.btn.primary.small', { title: 'Holds your words against the book, your premises, your bibliography and the notes, then puts what holds into the bibliography, with Undo.', disabled: !helper, onclick: send }, 'Check and add'));
+  box.append(ta, row);
+  return box;
+}
+/* one of his Quick adds and what came of it */
+function quickRow(novelId, r, busy, redraw) {
+  const row = h('div.quickrow', { 'data-id': r.id });
+  row.append(h('p.quick-mine', r.said));
+  const again = () => h('button.btn.small.quiet', { title: 'Puts these words back in the box, to send again.', onclick: () => { quickTyped.set(novelId, r.said); redraw(); requestAnimationFrame(() => document.querySelector('.bibview .quickbox')?.focus()); } }, 'Ask again');
+  if (r.state === 'asking' && busy) { row.append(h('p.quick-wait', h('span.ring', { 'aria-hidden': 'true' }), 'Holding it against the book…')); return row; }
+  if (r.state === 'asking' || r.state === 'stopped') { row.append(h('p.notekey', 'Not checked — it was stopped before it answered. Nothing went in.'), h('div.btnrow', again())); return row; }
+  if (r.state === 'failed') { row.append(h('p.notekey.bibdue', `Not checked — ${r.error || 'no answer came'}. Nothing went in.`), h('div.btnrow', again())); return row; }
+  if (r.verdict) row.append(h('p.quick-verdict', r.verdict));
+  const go = (x) => (x.chapterId && x.passageId && hooks.whenOpen ? h('button.link', { title: 'Go to the passage, its words lit.', onclick: () => { if (hooks.closeSide) hooks.closeSide(); hooks.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: x.against || x.rule || '' } }); } }, x.label) : h('span', x.label));
+  const section = (title, items, cls = '') => h('div.quick-sec' + cls, h('h4', title), h('ul', ...items));
+  const added = r.added || [];
+  if (added.length) {
+    const live = new Set(entriesOf(store.peek('novel', novelId)).map((e) => e.id));
+    row.append(section('Into the bibliography', added.map((a) => h('li' + (a.status === 'undone' ? '.undone' : ''),
+      a.status !== 'undone' && live.has(a.entryId) ? h('button.link', { title: `Open ${a.name}.`, onclick: () => showRef(novelId, `e:${a.entryId}`) }, a.name) : h('span', a.name),
+      a.status === 'undone' ? ' — taken back out' : a.was ? ' — your entry, added to' : ''))));
+    if (added.some((a) => a.status === 'made' && a.change)) row.append(h('div.btnrow', h('button.btn.small.quiet', { title: 'Takes what this answer put into the bibliography back out — an entry changed since stays as it is.', onclick: () => { const back = undoQuick(novelId, r.id); if (back.said.length) toast(back.said.join(' · '), 6000); else if (back.back) toast('Taken back out of the bibliography.'); redraw(); } }, 'Undo these')));
+  }
+  if ((r.refused || []).length) row.append(section('Not put in', r.refused.map((x) => h('li', h('b', x.name), ` — ${x.why}`))));
+  if ((r.changes || []).length) row.append(section('It changes your earlier words', r.changes.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', h('span', x.label), ` said “${x.was}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null))));
+  if ((r.conflicts || []).length) row.append(section('The book says otherwise — waiting for your word', r.conflicts.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), ` says “${x.against}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null)), '.wait'));
+  if ((r.cannot || []).length) row.append(section('Cannot be, by your world’s rules — waiting for your word', r.cannot.map((x) => h('li', h('span', `“${x.mine}”`), ' — ', go(x), `: “${x.rule}”`, x.why ? h('span.quick-why', ` ${x.why}`) : null)), '.wait'));
+  if ((r.questions || []).length) row.append(section('For you to decide', r.questions.map((q) => h('li', q))));
+  if (r.aside) row.append(h('p.notekey', `${plural(r.aside, 'more thing it named', 'more things it named')} quoted words that stand nowhere in the book or your own words — set aside, not counted.`));
+  if (!added.length && !(r.conflicts || []).length && !(r.cannot || []).length && !(r.changes || []).length && !(r.refused || []).length && !(r.questions || []).length) row.append(h('p.notekey', 'Nothing went in — it gave no entries.'));
+  return row;
+}
+
 async function bringLorebook(novelId, redraw) {
   const file = await pickFile('.json,application/json');
   if (!file) return;
@@ -423,8 +536,9 @@ async function bringLorebook(novelId, redraw) {
   if (!fresh.length) { toast(`Every name in it is in the bibliography already (${plural(rows.length, 'entry', 'entries')}) — nothing was added.`, 6000); return; }
   if (!(await confirmIt('Bring in this lorebook?', `${plural(fresh.length, 'entry', 'entries')} from ${file.name} go into the bibliography, each riding as the lorebook had it (always, when named, or switched off).${left ? ` ${plural(left, 'entry', 'entries')} whose names are here already ${left === 1 ? 'is' : 'are'} left out.` : ''}`, 'Bring them in'))) return;
   for (const e of fresh) store.change('novel', novelId, novelSteps.putEntry(e), { now: true });
+  archivist.nudge(novelId);
   redraw();
-  undoToast(`${plural(fresh.length, 'entry', 'entries')} brought in.`, () => { for (const e of fresh) store.change('novel', novelId, novelSteps.dropEntry(e.id), { now: true }); redraw(); });
+  undoToast(`${plural(fresh.length, 'entry', 'entries')} brought in.`, () => { for (const e of fresh) store.change('novel', novelId, novelSteps.dropEntry(e.id), { now: true }); archivist.nudge(novelId); redraw(); });
 }
 
 function takeLorebook(novelId) {

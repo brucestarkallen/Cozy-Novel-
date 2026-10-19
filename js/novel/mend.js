@@ -28,6 +28,7 @@ import { locate } from './changes.js';
 import { liftOfFaults, wholeSig } from './checker.js';
 import { hashText, countWords } from '../util.js';
 import { carriedCodex } from './bibliography.js';
+import { carriedContinuity } from './timeline.js';
 
 /* 2: a plan or a draft above the page, and its check of its own work after it, come off too; a lift echoed from an old example is said again
  * 3: a web page's or code's markup left in a page (“…paid for.</code>”, his report 2.12.2) comes off; and a fix made as a
@@ -111,6 +112,15 @@ export async function mendBook(novelId) {
           const facts = carriedCodex(vv.codex, m.text);
           if (!facts) return false;
           vv.codex = facts;
+        }, { checkpoint: true });
+        /* the Timeline's turns of them, as the facts (timeline.js carriedContinuity, 2.12.37: the helper never reads mended
+         * words again, so turns left with the words before counted the passage as never read) */
+        store.change('chapter', c.id, (ch) => {
+          const pp = (ch.passages || []).find((x) => x.id === p.id);
+          const vv = pp && (pp.versions || []).find((x) => x.id === v.id);
+          if (!vv || !vv.continuity || vv.continuity.fp !== hashText(was) || hashText(String(vv.text || '')) !== hashText(m.text)) return false;
+          const turns = carriedContinuity(vv.continuity, m.text);
+          if (turns) vv.continuity = turns; else delete vv.continuity;
         }, { checkpoint: true });
         /* and what the helper read of them */
         resign(novelId, c.id, p.id, v.id, was, m.text);

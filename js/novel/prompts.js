@@ -26,7 +26,7 @@ import { LENGTHS, soundOf, povOf, tenseOf, hisField, NOTE_KINDS } from './shape.
 import { numberWords, estimateTokens, cutWords } from '../util.js';
 import { foldedText, nameInText, firstSentence } from './names.js';
 import { tellerOf, toTeller } from './teller.js';
-import { PICK_MAX, recallOn } from './bibliography.js';
+import { PICK_MAX, recallOn, entryWords } from './bibliography.js';
 import { superActive, superOn, appliesOf } from './auto.js';
 
 /* ------------------------------------------------- the starting words */
@@ -1306,6 +1306,52 @@ export function premisesPart(list, left = 0) {
   return `My premises — what I asked the writer for, as I typed it, each by the passage it was typed for. They are my word on the book and count as the book: ${PREMISE_HOLDS} — stands, even where no passage says it, and a later premise of mine stands over an earlier one; what one asks to happen is only what I asked for, and what happened is what the passages say:\n${rows.join('\n')}${gone}`;
 }
 
+/* HIS BIBLIOGRAPHY AND THE TIMELINE, HELD WITH THE NOTES (2.12.37 — his report: "each notes like card, Timeline and
+ * bibliography must be not contradictory and connected"). The helper read a page and wrote its cards without his
+ * entries for the names in it, so a card could say what his entry says the opposite of; the notes' check held the
+ * cards to the book alone, never to his entries or to the turns the Timeline keeps. Now his entries for the names a
+ * reading or a check touches ride beside them as his word on what each name means, and the check is shown the
+ * Timeline's newest turns for the cards it checks. */
+export function entriesPart(entries, left = 0) {
+  const rows = (entries || []).map((e) => entryWords(e)).filter((t) => String(t || '').trim());
+  if (!rows.length) return '';
+  const gone = left ? `\n(${left === 1 ? 'One more entry is' : `${numberWords(left)} more entries are`} left out here to save room.)` : '';
+  return `My bibliography’s entries for the names here — my word on what each name means for good:\n${fence(rows.join('\n\n'))}${gone}`;
+}
+const ENTRY_RULE = '- My bibliography’s entries, shown above, are my word on what each name means for good: a card never says the opposite of them. Where the words read say otherwise of something lasting, keep my entry’s account on the card — that is the page’s slip, not the card’s. What changes over the story (where someone is, how they stand with others, what they know now) is the passage’s.';
+/* the Timeline's newest turns for some cards (timeline.js timelineOf rows), each with the book's words behind it */
+export function timelinePart(rows, left = 0) {
+  const lines = (rows || []).map((e) => {
+    const who = (e.participants || []).map((p) => p.name).filter(Boolean).join(', ');
+    const quote = (e.evidence || [])[0] ? ` (“${String(e.evidence[0]).replace(/\s+/g, ' ').trim()}”)` : '';
+    const whose = e.stance && e.stance !== 'fact' ? ` — ${e.whoseName ? `${e.whoseName}’s ` : ''}${e.stance}` : '';
+    return `[${e.label}] ${who}: ${String(e.text || '').replace(/\s+/g, ' ').trim()}${whose}${quote}`;
+  });
+  if (!lines.length) return '';
+  const gone = left ? `\n(${left === 1 ? 'One earlier turn is' : `${numberWords(left)} earlier turns are`} left out here to save room.)` : '';
+  return `The Timeline’s newest turns for these cards, in the book’s order, each with the book’s words behind it:\n${lines.join('\n')}${gone}`;
+}
+
+/* what a turn of the Timeline is (timeline.js continuityOf): said alike in a reading and in a reading for the Timeline alone */
+const TIMELINE_EVENT_RULES = `- Each event has "kind": "relationship", "character", or "thread"; "cards" names existing People or Threads cards, including cards added in this answer. A relationship names both people; a character event names that person; a thread event names its thread. Quote the exact supporting words from that source in "evidence". Give only what those words support, briefly, with the cause when the source gives it. Do not restate an unchanged relationship or turn a note correction into a story event.
+- "stance" is "fact", "belief", "claim", or "intention". For anything other than fact, also give "whose": the person's name, and include their People card. A thought, boast, suspicion or plan does not establish that what they think or say happened. Affection, trust, knowledge and desire can differ on each side of a relationship: never infer reciprocity.
+- Development can deepen jealousy, rivalry, cruelty, dependence or distrust, or leave a conflict unresolved. Keep the person's temperament and the book's actual consequences. Never impose warmth, reconciliation, healing, a preferred arc or a better person. A flashback establishes history at the point the book reveals it; do not move it into the present.`;
+/* THE TIMELINE READ FOR ITSELF (2.12.37 — his report: "5 passages have no complete timeline reading yet — Read the whole
+ * book again"): a passage read before the Timeline was kept, or whose reading gave no turns for it, read for its turns
+ * alone, a few at a time (archivist.js timelineBackfill) — the notes are not asked to change */
+export const TIMELINE_ASK = 'Read these passages for the Timeline alone';
+export function timelineRequest({ sources, people = [], threads = [] }) {
+  const parts = [];
+  parts.push(`The notes' cards a turn may name, as the notes name them:\nPeople: ${people.length ? people.join(', ') : '(none yet)'}\nThreads: ${threads.length ? threads.join(', ') : '(none yet)'}`);
+  parts.push(sources.map((x) => `${x.source}:\n${fence(x.text)}`).join('\n\n'));
+  parts.push(`${TIMELINE_ASK} — the notes stay as they are. Trace the meaningful developments in each passage: a relationship's beginning or change, a lasting personal change, or a thread set up, advanced or resolved. It is the history behind the notes, not another current account. Give one entry for EVERY passage shown, by its source as given, even when "events" is empty. A passage read in part contributes only events in the part shown here.
+${TIMELINE_EVENT_RULES.replace(', including cards added in this answer', '')}
+
+Answer with one JSON object and nothing else:
+{"timeline": [{"source": "${(sources[0] && sources[0].source) || 'Chapter One, passage 1'}", "events": [{"kind": "relationship", "cards": [{"kind": "people", "name": "…"}, {"kind": "people", "name": "…"}], "text": "what changed", "why": "what caused the change", "evidence": ["an exact quote from this passage"], "stance": "fact"}]}]}`);
+  return parts.join('\n\n');
+}
+
 /* the notes' rules as one reading is asked them: with the bibliography kept from the book, a lasting detail and a first description go there, with their words, and a person's card stays a short portrait */
 function noteRules(codex) {
   return NOTE_RULES.replace('{{ABOUT_RULE}}', codex ? PORTRAIT_RULE : ABOUT_RULE)
@@ -1331,13 +1377,16 @@ export function bibFactsRequest({ novel, sources, names = [] }) {
   return parts.join('\n\n');
 }
 
-export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null, plain = false, notesShown = undefined, codex = false }) {
+export function notesRequest({ novel, chapterLabel, before, changes, removed, removedChapters, at = 0, of = 0, later = true, goesOn = false, notesFit = 0, shortIds = null, plain = false, notesShown = undefined, codex = false, entries = [], entriesLeft = 0 }) {
   const parts = [];
   /* plain: the cards it names could not all ride whole beside it — they ride as the rest do (archivist.js readChanges) */
   const notes = notesShown === undefined ? notesText(novel, { forHelper: true, fit: notesFit, focus: plain ? '' : [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed, ...removedChapters].join('\n'), shortIds }) : notesShown;
   parts.push(`The notes as they stand:\n${notes ? notes : '(none yet — this is the start)'}`);
   const about = aboutTheBook(novel, { plans: false, kept: 'his' });
   if (about) parts.push(about);
+  /* his entries for the names these words give (2.12.37) */
+  const entered = entriesPart(entries, entriesLeft);
+  if (entered) parts.push(entered);
   const keeps = keptByHelper(novel);
   if (keeps.includes('about')) parts.push(keptPart(novel, 'about', KEEP_ABOUT));
   if (keeps.includes('style')) parts.push(keptPart(novel, 'style', KEEP_STYLE));
@@ -1373,11 +1422,9 @@ export function notesRequest({ novel, chapterLabel, before, changes, removed, re
   "chapterName": "a short name for ${chapterLabel}, only if it has none yet"${keptFields}
 }
 
-${noteRules(codex)}${premised ? `\n${premiseRule(codex)}` : ''}
+${noteRules(codex)}${premised ? `\n${premiseRule(codex)}` : ''}${entered ? `\n${ENTRY_RULE}` : ''}
 - "timeline" traces meaningful developments in these new words: a relationship's beginning or change, a lasting personal change, or a thread set up, advanced or resolved. It is the history behind the notes, not another current account. Give one entry for EVERY source shown with new words, even when "events" is empty. Never extract events from the old words, context, or passages taken out. A passage read in parts contributes only events in the part shown here.
-- Each event has "kind": "relationship", "character", or "thread"; "cards" names existing People or Threads cards, including cards added in this answer. A relationship names both people; a character event names that person; a thread event names its thread. Quote the exact supporting words from that source in "evidence". Give only what those words support, briefly, with the cause when the source gives it. Do not restate an unchanged relationship or turn a note correction into a story event.
-- "stance" is "fact", "belief", "claim", or "intention". For anything other than fact, also give "whose": the person's name, and include their People card. A thought, boast, suspicion or plan does not establish that what they think or say happened. Affection, trust, knowledge and desire can differ on each side of a relationship: never infer reciprocity.
-- Development can deepen jealousy, rivalry, cruelty, dependence or distrust, or leave a conflict unresolved. Keep the person's temperament and the book's actual consequences. Never impose warmth, reconciliation, healing, a preferred arc or a better person. A flashback establishes history at the point the book reveals it; do not move it into the present.${codex ? `
+${TIMELINE_EVENT_RULES}${codex ? `
 - ${BIB_FACTS_RULE}` : ''}${keeps.length ? `
 - ${keeps.length === 2 ? '"about" and "style" describe' : keeps[0] === 'about' ? '"about" describes' : '"style" describes'} the whole book, not this part alone${keeps.includes('style') ? ' — the voice the book has settled into; where this part strays from it (a slip of tense or point of view), keep the book’s settled voice' : ''}.` : ''}`);
   return parts.join('\n\n');
@@ -1388,7 +1435,7 @@ ${noteRules(codex)}${premised ? `\n${premiseRule(codex)}` : ''}
  * whatever the notes still hold from words since rewritten or taken out, or
  * have drifted on, is put right. His own cards keep his words. */
 export const AUDIT_ASK = 'Check every card against the book as it stands';
-export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [], premises = [], premisesLeft = 0 }) {
+export function auditRequest({ novel, bookText: text, his = [], partial = false, only = null, others = [], endShort = false, codex = false, mine = [], words = [], premises = [], premisesLeft = 0, entries = [], entriesLeft = 0, turns = [], turnsLeft = 0 }) {
   const parts = [];
   parts.push(`The notes as they stand${only ? ' — the cards to check this time' : ''}:\n${notesText(novel, { forHelper: true, only }) || '(none)'}`);
   if (others.length) parts.push(`The other cards, checked another time — not shown here, and never to be added again or changed now: ${others.join(', ')}.`);
@@ -1401,6 +1448,11 @@ export function auditRequest({ novel, bookText: text, his = [], partial = false,
   /* his premises, his word on the book (2.12.36) */
   const premised = premisesPart(premises, premisesLeft);
   if (premised) parts.push(premised);
+  /* his entries for the cards checked, and the Timeline's newest turns for them (2.12.37) */
+  const entered = entriesPart(entries, entriesLeft);
+  if (entered) parts.push(entered);
+  const turned = timelinePart(turns, turnsLeft);
+  if (turned) parts.push(turned);
   const one = his.length === 1;
   parts.push(`${AUDIT_ASK}, the way an editor checks a continuity bible:
 - A fact, a line someone said, a name, an event or a secret no passage says any more (it came from words since rewritten or taken out): correct the card to what the book says now, or take the card out with "gone" when nothing of it is in the book.
@@ -1410,6 +1462,8 @@ export function auditRequest({ novel, bookText: text, his = [], partial = false,
 - Whose and who: whose thing it is, who did a deed, who said a line — held against the passages in their order.
 - Someone or something that matters and is missing: add it, described as the book first describes them.
 ${premised ? `- My premises count as the book, and their words as the book’s own wherever its words are to be quoted: what one says holds true for good stays on its card — never taken out or changed because no passage says it, or because a passage says otherwise; a card that lacks it gets it. What a premise only asks to happen is not the book until a passage tells it.
+` : ''}${entered ? `- A card never says the opposite of my bibliography’s entry for its name: where it does, put the card right to my entry, my word on what the name means for good — and where a passage says otherwise, name the passage in "verdict" as the page’s slip. What changes over the story (where someone is now, how they stand, what they know) is the book’s.
+` : ''}${turned ? `- How someone stands with the others ("ties") and where a thread stands agree with the newest turns the Timeline keeps for them — put a card right that says otherwise, unless a later passage of the book says more.
 ` : ''}${keeps.length ? `- ${keeps.length === 2 ? 'What you keep of the book (what it’s about, how it reads)' : keeps[0] === 'about' ? 'What you keep of what the book is about' : 'What you keep of how the book reads'}: where it has drifted from the book as it stands, give ${keeps.length === 2 ? '"about" or "style"' : `"${keeps[0]}"`} whole again, put right.
 ` : ''}- Cards that say the same thing: each fact belongs on one card — the person it is about, or the thing, place or thread itself. Where several cards repeat it (a limit, a rule, a name kept back, a secret), keep it on the card it belongs to and take it off the others, giving each of them whole without it. Two cards for one person, place or thing become one: give the one to keep whole, with whatever the other held that it lacks (for a person, the other's names among the others they go by), and put the other in "gone". Nothing true is lost in the folding.
 - A name a person is noted as going by that isn't theirs (it is someone else's, or a slip): give their "aka" whole without it. Leave "aka" out wherever their names are right.${codex ? `
@@ -1624,6 +1678,47 @@ export function summaryAgainRequest({ novel, chapterLabel, summary, missing, str
 
 export const JSON_AGAIN = 'That answer could not be read as JSON. Answer again with only the JSON object — no other words, no code fence.';
 export const JSON_CUT = 'That answer was cut off before it finished. Answer again with only the JSON object, complete — shorter where you can — with no other words and no code fence.';
+
+/* ------------------------------------------------------------ Quick add */
+/* QUICK ADD (2.12.37 — his ask: "add world info, anything maybe not in the premise or the book yet, to the
+ * bibliography quickly, and prevent errors: check whether what I asked is possible and not contradictory"): his words
+ * for the world, held against the pages, his premises, his entries and the notes before anything goes in (quickadd.js).
+ * Asked of his partner's connection as the partner sees the book (context.js assemble, purpose 'partner', no changes
+ * block): the passages that name what he adds, his premises and his entries for those names ride with it whole. What
+ * it quotes is looked up in code — a contradiction is said only where its words stand. */
+export const QUICK_ASK = 'Hold my words against the book as it stands';
+export function quickAddRequest({ words, earlier = [], premises = [], premisesLeft = 0, entries = [], entriesLeft = 0, passages = [], passagesLeft = 0 }) {
+  const parts = [`Quick add — what I want in our world, to go into my bibliography now:\n${fence(words)}`];
+  const before = (earlier || []).map((r) => {
+    const said = [`I said: “${String(r.said || '').replace(/\s+/g, ' ').trim()}”`];
+    if (r.verdict) said.push(`You found: ${String(r.verdict).replace(/\s+/g, ' ').trim()}`);
+    if ((r.added || []).length) said.push(`Into the bibliography: ${r.added.map((a) => a.name).join(', ')}${r.added.some((a) => a.status === 'undone') ? ' (I took some back out)' : ''}.`);
+    if ((r.conflicts || []).length) said.push(`Against the pages: ${r.conflicts.map((c) => `“${c.mine}” — ${c.label} says “${c.against}”`).join('; ')}.`);
+    if ((r.cannot || []).length) said.push(`Could not be: ${r.cannot.map((c) => `“${c.mine}” — ${c.why || c.rule}`).join('; ')}.`);
+    if ((r.questions || []).length) said.push(`You asked: ${r.questions.join(' ')}`);
+    return `- ${said.join(' ')}`;
+  });
+  if (before.length) parts.push(`Earlier in Quick add — what I say now may answer it:\n${before.join('\n')}`);
+  const premised = premisesPart(premises, premisesLeft);
+  if (premised) parts.push(premised);
+  const entered = entriesPart(entries, entriesLeft);
+  if (entered) parts.push(entered);
+  if ((passages || []).length) {
+    const gone = passagesLeft ? `\n(${passagesLeft === 1 ? 'One more passage names them' : `${numberWords(passagesLeft)} more passages name them`} — left out here to save room.)` : '';
+    parts.push(`The passages of the book that name what I am adding, whole, as they stand now:\n\n${passages.map((x) => `[${x.label}]\n${fence(x.text)}`).join('\n\n')}${gone}`);
+  }
+  parts.push(`${QUICK_ASK}, my premises, my bibliography, the notes and what the book is about, the way an editor checks a series bible — before anything of it goes in:
+- "conflicts": where my words say the opposite of what a page of the book says — my words that clash ("mine"), the page’s words they contradict, copied exactly ("against"), where they stand ("where", as "Chapter One, Passage 3"), and why, in a line.
+- "changes": where my words change what my own earlier words say — a premise, an entry, a card of the notes, what the book is about — and no page says otherwise: that is my newer word, and it goes in. Say each, with my earlier words copied exactly ("was") and where they stand.
+- "cannot": where my words cannot be, by the rules of the world as the book, my premises or my entries set them — a power and its limits, a count, how rare something is, who is where and when: my words ("mine"), the rule’s words copied exactly ("rule"), where they stand, and why.
+- "questions": what my words leave open that the world needs me to decide — a line each, three at most.
+- "entries": for all of mine that holds, each name it gives meaning to — a person, a place, a thing, a group, a piece of lore (a rule of the world, a power and what it costs, a word of the world) — its own entry, whole. An entry already in my bibliography is given whole again, with what my words add or change; a new one is written whole. Only what I said and what plainly follows from it, well worded — nothing invented beyond it, nothing from "conflicts" or "cannot". Where I said earlier in Quick add that my words stand over the pages, they go in, and the pages that disagree are still named in "conflicts".
+- "verdict": a few plain sentences for me — what goes in, and what waits for my word and why.
+
+Answer with one JSON object and nothing else:
+{"verdict": "…", "conflicts": [{"mine": "…", "against": "…", "where": "…", "why": "…"}], "changes": [{"mine": "…", "was": "…", "where": "…", "why": "…"}], "cannot": [{"mine": "…", "rule": "…", "where": "…", "why": "…"}], "questions": ["…"], "entries": [{"name": "…", "aka": ["…"], "kind": "people, places, things, groups or lore", "line": "who or what it is, in a line", "text": "the entry, whole"}]}`);
+  return parts.join('\n\n');
+}
 
 /* ---------------------------------------------------- his own instructions */
 

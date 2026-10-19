@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkSig } from '../js/novel/summarycheck.js';
+import { hashText as checkHash } from '../js/util.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.COZY_AUTOMATION_PORT || 22150);
@@ -51,6 +52,8 @@ async function book(text = 'Mara tucked the blanket around the sleeping dragon.'
   /* a summary that has had its check (2.11.3): a test of readings counts readings, never the summary's one check */
   chapter.summary = { text: 'Mara tends the sleeping dragon.', fp: shape.chapterPrint(chapter), at: Date.now(), checked: { sig: checkSig('Mara tends the sleeping dragon.'), at: Date.now() } };
   novel.memory.seen[chapter.id] = Object.fromEntries(chapter.passages.map(p => [p.id, helper.signature(shape.picked(p))]));
+  /* read as the helper reads now (2.12.37): the Timeline's turns of its words kept with them — none here */
+  for (const p of chapter.passages) { const v = shape.picked(p); v.continuity = { schema: 1, fp: checkHash(v.text || ''), events: [], complete: true }; }
   await store.create('chapter', chapter.id, chapter);
   await store.create('novel', novel.id, novel);
   const b = { id: novel.id, cid: chapter.id, n: () => store.peek('novel', novel.id), c: () => store.peek('chapter', chapter.id) };
@@ -86,7 +89,8 @@ try {
     if (!locks) Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
     try { await Promise.all([helper.run(b.id), helper.run(b.id), helper.run(b.id)]); }
     finally { if (!locks) { if (descriptor) Object.defineProperty(navigator, 'locks', descriptor); else delete navigator.locks; } }
-    assert.equal((await requests()).length, 1, 'one reading owns the helper even while its lease is being obtained');
+    /* (the notes' readings: a page read with no turns is read for them by itself after, 2.12.37) */
+    assert.equal((await requests()).filter((x) => !String(x.body.messages.at(-1).content || '').includes('Read these passages for the Timeline alone')).length, 1, 'one reading owns the helper even while its lease is being obtained');
     assert.equal(b.n().notes.people.filter(card => card.name === 'Mara').length, 1);
     assert.equal(helper.pendingWork(b.id), false);
   });

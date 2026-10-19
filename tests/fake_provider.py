@@ -38,6 +38,23 @@ def answer_for(body):
         rows = last_user.split("Entries it doesn’t have:", 1)[-1].split("\n\nName the ones", 1)[0]
         want = [int(m.group(1)) for m in re.finditer(r"^(\d+)\. .*PICKME", rows, re.M)] if "PICKME" in asked else []
         return json.dumps({"entries": want})
+    if "Read these passages for the Timeline alone" in last_user:
+        # the Timeline read for itself (2.12.37): an honest reading of every passage shown, with no turns in it
+        return json.dumps({"timeline": [{"source": x, "events": []} for x in re.findall(r"^(Chapter [^\n]+?, passage \d+):$", last_user, re.M)]})
+    if "Hold my words against the book as it stands" in last_user:
+        # Quick add (2.12.37): each "X is ..." sentence of his words an entry; black hair where a page gives silver, a
+        # conflict quoting the page's own sentence
+        said = last_user.split('to go into my bibliography now:\n"""\n', 1)[-1].split('\n"""', 1)[0]
+        entries, conflicts = [], []
+        for sentence in re.split(r"(?<=[.!?])\s+", said):
+            m = re.match(r"^(?:The )?([A-Z][\w’' -]+?) is (.+?)[.!?]?$", sentence.strip())
+            if m:
+                entries.append({"name": m.group(1).strip(), "kind": "groups" if "council" in m.group(2) else "lore", "line": sentence.strip(), "text": sentence.strip()})
+        if "black hair" in said:
+            page = re.search(r"[^.\n\"]*silver hair[^.\n\"]*", last_user.split("The passages of the book that name", 1)[-1])
+            if page:
+                conflicts.append({"mine": "black hair", "against": page.group(0).strip(), "where": "Chapter One, Passage 1", "why": "the page gives silver"})
+        return json.dumps({"verdict": f"{len(entries)} go in; {len(conflicts)} wait for your word.", "conflicts": conflicts, "entries": entries})
     if "Add the quotation marks each spoken line is missing" in last_user:
         # the marks' mender (2.12.34): a speech opened while one is still open is closed before the space in front of it
         out = []
@@ -139,6 +156,9 @@ def answer_for(body):
             "lore": [{"name": "The bottle", "about": "Green glass gone milky, a curl of paper inside that smells of tar and oranges."}],
             "threads": [{"name": "Who sent the letter?", "about": "A letter in a bottle washed up at dawn; nobody knows who wrote it.", "open": True}],
             "chapterName": "The Bottle",
+            # an honest reading of the Timeline for every passage shown with new words: no turns (2.12.37 — a reading that
+            # gives none for a passage has it read for its turns alone after)
+            "timeline": [{"source": x, "events": []} for x in dict.fromkeys(re.findall(r"^(Passage \d+)$", last_user, re.M))],
             # a version that says SECOND TAKE has a note of its own (each version its own notes)
             **({"lore": [{"name": "The bottle", "about": "Green glass gone milky, a curl of paper inside that smells of tar and oranges."}, {"name": "The second take", "about": "Only this version holds it."}]} if "SECOND TAKE" in last_user.split("The notes as they stand:")[-1].split('New in')[-1] else {}),
         }})

@@ -44,6 +44,8 @@ async function book(texts = ['Mara waits at the gate.']) {
   novel.memory.seen[chapter.id] = Object.fromEntries(chapter.passages.map(p => [p.id, helper.signature(shape.picked(p))]));
   /* read as the helper reads now (2.12): the bibliography's facts for its words kept with it — none here */
   for (const p of chapter.passages) { const v = shape.picked(p); v.codex = { schema: 1, fp: hashText(v.text || ''), facts: [], complete: true }; }
+  /* (2.12.37) and the Timeline's turns of its words — none here: a passage read with none is read for them by itself */
+  for (const p of chapter.passages) { const v = shape.picked(p); v.continuity = { schema: 1, fp: hashText(v.text || ''), events: [], complete: true }; }
   novel.notes.people.push(shape.newCard('people', { name: 'Mara', about: 'The keeper.', now: 'At the gate.' }));
   await store.create('chapter', chapter.id, chapter);
   await store.create('novel', novel.id, novel);
@@ -205,25 +207,44 @@ try {
     assert.equal(shape.picked(saved.passages[0]).continuity.events.length, 1, 'evidence is durable on its source version');
     historyOf(b); historyOf(b); assert.equal((await requests()).length, 2, 'opening the view asks nothing');
   });
-  await test('bad or omitted timeline data leaves an honest gap without asking the helper again', async () => {
+  /* (2.12.37 — his word: the Timeline heals by itself, never "Read the whole book again" handed to him. Through 2.12.36 a
+   * missing history was never asked for again; now the passage is read for its turns alone — never the notes again —
+   * twice at most, then passed by and said so) */
+  const isTurnsAsk = (x) => String(x.body.messages.at(-1).content || '').includes('Read these passages for the Timeline alone');
+  /* a book whose pages the Timeline never read (the fixture's are read as the helper reads now) */
+  const beforeTimeline = (b) => store.change('chapter', b.cid, (c) => { for (const p of c.passages) delete shape.picked(p).continuity; });
+  await test('bad or omitted timeline data leaves an honest gap — then the passage is read for its turns alone, twice at most, and the notes never again', async () => {
     for (const timeline of [undefined, null, 'unsupported', [{ source: 'another source', events: [] }]]) {
       const b = await book(); store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
-      await script([{ text: JSON.stringify({ people: [{ name: 'Mara', now: 'At the gate.' }], ...(timeline !== undefined ? { timeline } : {}) }) }]);
+      beforeTimeline(b);
+      /* (its turns asked for alone, and answered with nothing for it, twice) */
+      await script([{ text: JSON.stringify({ people: [{ name: 'Mara', now: 'At the gate.' }], ...(timeline !== undefined ? { timeline } : {}) }) }, { turns: true, text: '{"timeline": []}' }, { turns: true, text: '{"timeline": []}' }]);
       await helper.run(b.id);
-      assert.equal(historyOf(b).coverage.complete, false); assert.equal((await requests()).length, 1);
-      await helper.run(b.id); assert.equal((await requests()).length, 1, 'missing history alone never starts another paid call');
+      const once = await requests();
+      assert.equal(once.filter((x) => !isTurnsAsk(x)).length, 1, 'the notes read once');
+      assert.equal(once.filter(isTurnsAsk).length, 1, 'then its turns asked for alone');
+      await helper.run(b.id); await helper.run(b.id); await helper.run(b.id);
+      const all = await requests();
+      assert.equal(all.filter((x) => !isTurnsAsk(x)).length, 1, 'never the notes again for it');
+      assert.equal(all.filter(isTurnsAsk).length, 2, 'twice at most, then passed by');
+      assert.deepEqual([historyOf(b).coverage.complete, historyOf(b).coverage.passed], [false, 1], 'an honest gap, said as passed by');
     }
   });
-  await test('valid evidence survives beside false quotes but that source stays incomplete', async () => {
+  await test('valid evidence survives beside false quotes; the source, left incomplete, is read for its turns alone after, and the sound turn is kept', async () => {
     const text = 'Mara distrusted Tom after he hid the letter.', b = await book([text]), pid = b.c().passages[0].id;
     store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
     await script([{ text: JSON.stringify({ people: [{ name: 'Tom', about: 'A guarded messenger.' }], timeline: [{ source: pid, events: [event(text), event('Mara forgave Tom.')] }] }) }]);
     await helper.run(b.id);
-    assert.equal(historyOf(b).events.length, 1); assert.equal(historyOf(b).coverage.complete, false);
-    assert.equal((await requests()).length, 1);
+    /* (2.12.37: the source left incomplete by the reading is read for its turns alone — the notes never again — and the
+     * sound turn the reading found stays beside what that finds: here nothing more, so the one) */
+    assert.equal(historyOf(b).events.length, 1); assert.equal(historyOf(b).coverage.complete, true);
+    assert.equal((await requests()).filter((x) => !isTurnsAsk(x)).length, 1);
+    assert.equal((await requests()).filter(isTurnsAsk).length, 1);
   });
   await test('a delayed history cannot attach to words changed during the reading', async () => {
-    const text = 'Mara distrusted Tom after he hid the letter.', b = await book([text]), p = b.c().passages[0], old = shape.picked(p);
+    const text = 'Mara distrusted Tom after he hid the letter.', b = await book([text]);
+    beforeTimeline(b);
+    const p = b.c().passages[0], old = shape.picked(p);
     store.change('novel', b.id, shape.novelSteps.seen(b.cid, {}));
     await script([
       { text: JSON.stringify({ people: [{ name: 'Tom', about: 'A guarded messenger.' }], timeline: [{ source: p.id, events: [event(text)] }] }), pause: 0.3 },
@@ -259,6 +280,7 @@ try {
   });
   await test('Read the whole book again backfills history without adding a new worker', async () => {
     const text = 'Mara distrusted Tom after he hid the letter.', b = await book([text]), pid = b.c().passages[0].id;
+    beforeTimeline(b);
     store.change('chapter', b.cid, c => { c.summary.by = 'you'; });
     assert.equal(historyOf(b).coverage.complete, false);
     await script([{ text: JSON.stringify({ people: [{ name: 'Mara', about: 'The keeper.' }, { name: 'Tom', about: 'A messenger.' }], timeline: [{ source: pid, events: [event(text)] }] }) }]);

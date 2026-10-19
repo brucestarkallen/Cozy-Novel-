@@ -10,7 +10,7 @@ import { h, $, icon, toast, hintToast, menu, closeMenu, closeAllSheets, afterBac
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
 import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound, whenOpen } from './ui/desk.js';
-import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn, showCard, notesLight } from './ui/panes.js';
+import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn, showCard, showTimeline, notesLight } from './ui/panes.js';
 import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
 import { applyLook, DEFAULT_LOOK, resolveLook, mergeLook } from './ui/look.js';
@@ -345,7 +345,7 @@ function bindChrome() {
   initChecks($('#checkBubble'), { openSettings });
   initSearch({ currentNovel: () => A.novelId, goChapter, goBook, openBook: (id) => openBook(id, { onGone: () => toShelf() }) });
   /* the bibliography's cards go where the rest of the book goes: a passage, a card of the notes, every place a name stands */
-  initBibliography({ closeSide: () => closeRight(), showCard, whenOpen, openSearch: (query) => openSearch({ query }) });
+  initBibliography({ closeSide: () => closeRight(), showCard, whenOpen, openSearch: (query) => openSearch({ query }), showTimeline, chapterNow: () => A.chapterId || '' });
   $('#partnerBtn').addEventListener('click', () => showSide('partner', { soon: true }));
   $('#moreBtn').addEventListener('click', (e) => moreMenu(e.currentTarget));
   /* a phone puts a hidden page away without warning: what waits is saved now */
