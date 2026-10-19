@@ -197,19 +197,30 @@ export function nameForms(entries, cards = {}) {
  * its name, a name it also goes by, a person's own name alone (nameForms: as a name is found in the page) — so a fact
  * given again under "Emilia Vermaine" or "Em" is hers as under "Emilia" (withCarriedFacts, factsLost: 2.12.40, the
  * review). (cards: the notes' cards by kind, as nameForms takes them) */
+/* A NAME TWO SHARE IS NEVER THE SAME ONE (2.12.41, round 5 — the review: "Emilia", the name of Emilia Vermaine and of
+ * Emilia Hart, was each of them, so a fact of one's given again under the other's full name passed as given again):
+ * two names are one only when each is found as one only — his entry and the card it stands for are one (entryJoins) —
+ * and that is the same one */
 export function sameNameOf(entries, cards = {}) {
   /* (the book's names gathered only when two names are not the same name already: a fact given again word for word under
    * another name is rare, and a book may hold thousands of entries) */
   let refs = null;
-  const refsOf = (n) => {
-    if (!refs) refs = new Map(nameForms(entries, cards).map((f) => [formKey(f.form), f.refs]));
+  let one = null;
+  const whoOf = (n) => {
+    if (!refs) {
+      refs = new Map(nameForms(entries, cards).map((f) => [formKey(f.form), f.refs]));
+      const joins = entryJoins(entries, cards);
+      one = (r) => { if (!r.startsWith('e:')) return r; const c = joins.get(r.slice(2)); return c ? `c:${c.kind}:${c.id}` : r; };
+    }
     const c = cleanName(n);
-    return [...new Set([c, bareName(n), c.replace(/^(?:the|a|an)\s+/i, '')].flatMap((x) => refs.get(formKey(x.normalize('NFC'))) || []))];
+    return [...new Set([c, bareName(n), c.replace(/^(?:the|a|an)\s+/i, '')].flatMap((x) => refs.get(formKey(x.normalize('NFC'))) || []).map(one))];
   };
   return (a, b) => {
     if (nameKey(a) === nameKey(b)) return true;
-    const ra = refsOf(a);
-    return ra.length > 0 && refsOf(b).some((r) => ra.includes(r));
+    const wa = whoOf(a);
+    if (wa.length !== 1) return false;
+    const wb = whoOf(b);
+    return wb.length === 1 && wb[0] === wa[0];
   };
 }
 

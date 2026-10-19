@@ -17,7 +17,7 @@ import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
 import { renameIn } from './names.js';
@@ -326,7 +326,8 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   const thoughtOf = (t) => joinThought(thoughtBefore, t);
   if (running.has(novelId) || !conn) { undo(); return preflight(novelId) || { ok: false, error: 'the writer could not start' }; }
   const ctl = new AbortController();
-  const job = { kind: how, chapterId, passageId, versionId, ctl, at: Date.now(), conn: connName(conn), auto: Boolean(auto) };
+  /* (`renames`: how many changes of names the book had when its words were taken for the request — renamesSince) */
+  const job = { kind: how, chapterId, passageId, versionId, ctl, at: Date.now(), conn: connName(conn), auto: Boolean(auto), renames: renameCount(store.peek('novel', novelId)) };
   /* (a fix by itself: his switch or Super automatic; a passage under his mark: his switch — auto.js autoOf) */
   const autoKind = auto ? (how === 'selection' ? 'fix' : 'lift') : '';
   const autoFrom = autoKind ? autoOf(h)[autoKind] : null;
@@ -385,6 +386,7 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
   /* what this page is handed, as the book stands at the moment it is asked — with what the pick named (bibpick.js) */
   const assembleFor = (c, picks) => {
     const { novel, chapters } = bookNow(novelId);
+    job.renames = renameCount(novel);
     return assemble({ house: h, novel, chapters, conn: c, purpose, target: build.target, request: build.request, length, play: build.play, moment: build.moment || '', picks });
   };
   try {
@@ -415,6 +417,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
       stream: true,
       signal: ctl.signal,
       noStructured: carryOn,
+      /* (a page written again by itself — the checker's lift, a few words mended by themselves: nobody is there to press
+       * Stop, so the relay waits ten minutes on a silent provider, as it did, never his page's sixteen — call.js) */
+      background: Boolean(job.auto),
       onText: (s) => {
         if (!ownsPage()) { job.gone = true; ctl.abort(); return; }
         if (!automaticAllowed()) return;
@@ -535,7 +540,9 @@ async function runVersion({ novelId, chapterId, passageId, versionId, base = '',
     /* a name changed everywhere while this was written: the page reads it as
      * the book does now (Cozy Tavern's M730 — work begun before the change is
      * given it when it lands) */
-    const renamedSince = ((((store.peek('novel', novelId) || {}).memory || {}).renames) || []).filter((x) => x.at >= job.at);
+    /* (those made after the book's words were taken for it, in whichever browser — counted on the book, never judged by
+     * a clock: 2.12.41, round 5; one change after another, an Undo undoing — names.js renameIn) */
+    const renamedSince = renamesSince(store.peek('novel', novelId), job.renames);
     if (renamedSince.length && String(finalText).trim()) {
       const named = renameIn(finalText, renamedSince);
       if (named !== finalText) { finalText = named; notes.push(`A name was changed everywhere while this was written — it reads ${renamedSince.map((x) => x.to).join(', ')} here too.`); }

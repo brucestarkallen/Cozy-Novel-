@@ -26,7 +26,7 @@ import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writer.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows, plural } from '../util.js';
-import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps } from './shape.js';
+import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps, renameCount, renamesSince } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
 import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, entryOverWords, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook, BESIDE_FLOOR } from './prompts.js';
 import { fitBook, bibAutoOn, shortOf } from './context.js';
@@ -80,6 +80,14 @@ export function helperState(novelId) { return !connFor(store.peek('house', 'hous
 export const HELPER_STOPPED = 'The helper is stopped: its connection was turned away. Put it right in Settings → Connections, or press Try again now under Cards';
 /* the light while the notes' check is owed and booked next (a round of groups going on, a card carried to the next) */
 export const AUDIT_NEXT = 'The helper checks the notes against the book in a moment.';
+/* WHAT IS PROMISED "IN A MOMENT" WAITS FOR A PAGE BEING WRITTEN (2.12.41, round 5 — the run stands down while the writer
+ * is at work, writerBusy): said so while it is, as the light is read — the same words otherwise */
+export const PAGE_DONE = 'once the page being written is done';
+const GAVE_WAY_LIGHT = 'The helper made way for your page on its connection — it reads on in a moment.';
+const MOMENT_WORDS = new Map([
+  [AUDIT_NEXT, `The helper checks the notes against the book ${PAGE_DONE}.`],
+  [GAVE_WAY_LIGHT, `The helper made way for your page on its connection — it reads on ${PAGE_DONE}.`],
+]);
 /* the bibliography's line for the pages it fills by itself and has not yet (ui/bibliography.js), as the helper stands —
  * '' when there are none, or no helper chosen with the room to fill it (that is said apart) */
 export function bibOwedLine(novelId) {
@@ -97,11 +105,19 @@ export function lightOf(novelId) {
   /* no helper chosen is said whatever was last seen */
   if (!connFor(store.peek('house', 'house') || {}, 'helper')) return { state: 'off', words: 'No helper is chosen, so the notes are not being kept. Choose one in Settings → Connections (it can be the same as the writer).' };
   const l = lights.get(novelId);
-  /* reading, waiting after a failure, or turned away: said as it is */
+  const busy = writerBusy(novelId);
+  /* a failure's wait, said as it stands when it is read (failureWords): red while the wait after a third runs, amber
+   * once it is over — it tries again then, or once the page being written is done */
+  if (l && l.why && (l.state === 'waiting' || l.state === 'trouble')) {
+    const f = failures.get(novelId);
+    return { ...l, state: f && f.until - Date.now() > 1000 ? l.state : 'waiting', words: failureWords(novelId, l.why) };
+  }
+  if (l && l.state === 'waiting' && busy && MOMENT_WORDS.has(l.words)) return { ...l, words: MOMENT_WORDS.get(l.words) };
+  /* reading, waiting, or turned away: said as it is */
   if (l && (l.state === 'reading' || l.state === 'waiting' || l.state === 'trouble')) return l;
   /* green only when nothing is left unread */
   const novel = store.peek('novel', novelId);
-  if (pendingWork(novelId)) return { state: 'waiting', words: rebuildingNow(novel) ? 'Reading the whole book again — until it is done, the writer and the rest go on with the notes as they were.' : 'The helper reads the newest words in a moment.' };
+  if (pendingWork(novelId)) return { state: 'waiting', words: rebuildingNow(novel) ? 'Reading the whole book again — until it is done, the writer and the rest go on with the notes as they were.' : `The helper reads the newest words ${busy ? PAGE_DONE : 'in a moment'}.` };
   /* nor while a passage is owed that waits its time — what waits and when, said as it stands now (2.12.41: it said "The
    * notes are up to date.") */
   const waits = whatWaits(novelId);
@@ -113,9 +129,19 @@ export function lightOf(novelId) {
 function tellLight(novelId) {
   for (const fn of lightFns) { try { fn(novelId, lights.get(novelId)); } catch (e) { console.error(e); } }
 }
-function setLight(novelId, state, words) {
-  lights.set(novelId, { state, words, at: Date.now() });
+function setLight(novelId, state, words, { why = '' } = {}) {
+  lights.set(novelId, { state, words, at: Date.now(), ...(why ? { why } : {}) });
   tellLight(novelId);
+}
+/* WHAT A FAILURE WAITS FOR, SAID AS IT IS WHEN IT IS READ (2.12.41, round 5 — the review: "It tries again by itself in a
+ * minute" was said for as long as the light stood, and once its wait was over while a page was being written — the run
+ * standing down for it — it still said so, with no Try again now; as the checker's, checker.js failureWords): the time
+ * left, or what it waits for now */
+function failureWords(novelId, why) {
+  const f = failures.get(novelId);
+  const left = f ? f.until - Date.now() : 0;
+  if (left > 1000) return `The helper couldn’t finish just now (${why}). It tries again by itself in ${waitWords(left)}.`;
+  return writerBusy(novelId) ? `The helper couldn’t finish just now (${why}). It tries again once the page being written is done.` : `The helper couldn’t finish just now (${why}). It tries again now.`;
 }
 
 /* ----------------------------------------------------------- scheduling */
@@ -2027,7 +2053,7 @@ export async function run(novelId) {
       }
       /* it made way for his page on its connection: it reads on once the page has gone */
       if (e && e.gaveWay) {
-        setLight(novelId, 'waiting', 'The helper made way for your page on its connection — it reads on in a moment.');
+        setLight(novelId, 'waiting', GAVE_WAY_LIGHT);
         nudge(novelId, 20000);
         return;
       }
@@ -2044,7 +2070,8 @@ export async function run(novelId) {
         return;
       }
       const later = retryLater(novelId, e && e.retryAfterMs);
-      setLight(novelId, later.n >= 3 ? 'trouble' : 'waiting', `The helper couldn’t finish just now (${why}). It tries again by itself in ${later.words}.`);
+      /* (its words worked out as the light is read — failureWords: the time left, or what it waits for once that is over) */
+      setLight(novelId, later.n >= 3 ? 'trouble' : 'waiting', failureWords(novelId, why), { why });
     } finally {
       runningFor.delete(novelId);
       helperPrints.delete(novelId);
@@ -2227,6 +2254,10 @@ async function readChanges(novelId, conn) {
     if (settleNow(novelId)) tellLight(novelId);
     const novel = store.peek('novel', novelId);
     if (!novel) return;
+    /* how many changes of names the book had as its words are taken for these readings: a name changed after it, in
+     * whichever browser, is one its answers are given when they land (renamesSince — 2.12.41, round 5: judged by the
+     * renaming browser's clock against this one's, and from the moment each was asked, not when its words were taken) */
+    const renamesSeen = renameCount(novel);
     const house = store.peek('house', 'house') || {};
     /* a whole chapter taken out comes first */
     const removedChapters = (novel.memory && novel.memory.removed) || [];
@@ -2442,13 +2473,18 @@ async function readChanges(novelId, conn) {
       });
       let got;
       const gen = ((now.memory || {}).reread || 0);
-      const askedAt = Date.now();
       readingNow.add(novelId);
       try { got = await helperJson(novelId, conn, helperFrame(house, now), request, { want: notesShape }); }
       catch (e) { takeBackParts(); throw e; }
       finally { readingNow.delete(novelId); }
+      /* the whole book began to be read again (or that was undone) while it was asked: its answer belongs to notes no longer there */
+      if ((((store.peek('novel', novelId) || {}).memory || {}).reread || 0) !== gen) break;
+      /* another browser has the book now: what this one began of a passage is taken back, and it stops */
+      try { await mustHold('helper', novelId); } catch (e) { takeBackParts(); throw e; }
       /* a name changed everywhere while it was asked: its answer is given the new name, so no card is made under the old one (Cozy Tavern's M730) */
-      const renamedSince = ((((store.peek('novel', novelId) || {}).memory || {}).renames) || []).filter((x) => x.at >= askedAt);
+      /* (as the book stands once nothing more is awaited: every rename after its words were taken, one change after
+       * another — names.js renameIn) */
+      const renamedSince = renamesSince(store.peek('novel', novelId), renamesSeen);
       /* A NAME CHANGED EVERYWHERE WHILE IT WAS READ (2.12.40, the review: the passage was marked read under its new words
        * and nothing the reading found for the Timeline or the bibliography was laid — looked for by the words' new mark —
        * and its quotes, given the new name, were held to the words as they were read, so one with the name never stood):
@@ -2457,10 +2493,6 @@ async function readChanges(novelId, conn) {
       const asGiven = got && got.ok ? got.obj : null;
       const renamed = renamedSince.length ? (t) => renameIn(t, renamedSince) : null;
       if (got && got.ok && renamedSince.length) got = { ...got, obj: renameAll(got.obj, renamedSince) };
-      /* the whole book began to be read again (or that was undone) while it was asked: its answer belongs to notes no longer there */
-      if ((((store.peek('novel', novelId) || {}).memory || {}).reread || 0) !== gen) break;
-      /* another browser has the book now: what this one began of a passage is taken back, and it stops */
-      try { await mustHold('helper', novelId); } catch (e) { takeBackParts(); throw e; }
       if (!got.ok) {
         /* a passage its model will not read is set aside, never asked forever */
         const giveUp = (e) => { takeBackParts(); return e; };
@@ -2506,6 +2538,14 @@ async function readChanges(novelId, conn) {
       const wordsAfter = lastAt >= 0 && liveList.slice(lastAt + 1).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
       const askGoesOn = goesOn || (wordsAfter && B.items.some((c) => c.old || c.fromChange));
       const liveChapter = chapter ? store.peek('chapter', chapter.id) || chapter : null;
+      /* WHICH ANSWER EACH PASSAGE TAKES, settled before its rows are (2.12.41, round 5 — the review of round 4: every
+       * passage's rows were taken as given, and whether the name changed in its words was decided only in the done loop, so
+       * a passage of the same reading the name never stood in kept the old name in what its turns and facts say): words
+       * read that the change of names reaches keep the answer as it was given of them (asGiven) — its quotes stand in
+       * them — and are carried through the change with them (readSig, `through`); every other passage takes the answer
+       * renamed (got.obj): its words hold none of the names, so only what its rows say changes, never a quote */
+      const renamedIn = (c) => Boolean(renamed) && renamed(wholeOf(c)) !== wholeOf(c);
+      const answerOf = (c) => (renamedIn(c) ? asGiven : got.obj);
       /* what each source establishes for the bibliography (bibliography.js), held to its own words — gathered first, so
        * a shorter "who they are" may leave to it what it keeps (factsByCard) */
       const batchFacts = [];
@@ -2518,8 +2558,9 @@ async function readChanges(novelId, conn) {
         for (const c of B.items) {
           if (c.oldOnly) continue;
           const source = { text: c.text, whole: c.whole !== undefined ? c.whole : c.text };
-          /* (as it was given, of the words as they were read — a name changed everywhere since: asGiven) */
-          const rows = Array.isArray(asGiven.bibliography) ? asGiven.bibliography.filter((r) => r && c.source && (said(r) === sourceKey(c.source) || r.source === c.pid)) : [];
+          /* (as it was given, of the words as they were read, where a name changed everywhere since stands in them: answerOf) */
+          const given = answerOf(c);
+          const rows = Array.isArray(given.bibliography) ? given.bibliography.filter((r) => r && c.source && (said(r) === sourceKey(c.source) || r.source === c.pid)) : [];
           let codex = rows.length ? null : codexOf(undefined, source);
           for (const row of rows) codex = mergeCodex(codex, codexOf(row.facts, source));
           if (rows.length !== 1) codex.complete = false;
@@ -2527,8 +2568,8 @@ async function readChanges(novelId, conn) {
           /* (every part of a change read in parts: 2.12.40 — only its first part carried the words before) */
           if (c.old || c.fromChange) for (const k of codexBefore(novelId, chapter && chapter.id, c)) codex = withCarriedFacts(codex, k, source.whole, { same: sameName });
           codexes.set(c.sig, mergeCodex(codexes.get(c.sig), codex));
-          /* (beside the notes as they stand now: by the names they have now) */
-          batchFacts.push(...(renamed ? codex.facts.map((f) => ({ ...f, name: renamed(f.name), fact: renamed(f.fact), evidence: (f.evidence || []).map((q) => renamed(String(q))) })) : codex.facts));
+          /* (beside the notes as they stand now: by the names they have now — those taken as given, renamed here) */
+          batchFacts.push(...(renamedIn(c) ? codex.facts.map((f) => ({ ...f, name: renamed(f.name), fact: renamed(f.fact), evidence: (f.evidence || []).map((q) => renamed(String(q))) })) : codex.facts));
         }
       }
       const folded = foldNotes(latest.notes, got.obj, {
@@ -2564,8 +2605,9 @@ async function readChanges(novelId, conn) {
       /* Source labels belong to the words in this request, not to a name
        * guessed from the answer. Gather long passages until all their parts
        * are read. A missing list is a gap, never "nothing happened". */
-      /* (a name changed everywhere while it was read: each turn as it was given, of the words as they were read — its cards
-       * found by the names they have now, as the notes have them: asGiven) */
+      /* (a name changed everywhere while it was read, in the words read: each turn as it was given, of the words as they
+       * were read — its cards found by the names they have now, as the notes have them: asGiven; the other passages', the
+       * answer renamed: answerOf) */
       const namedTimeline = Array.isArray(got.obj.timeline) ? got.obj.timeline : [];
       const givenTimeline = Array.isArray(asGiven.timeline) ? asGiven.timeline : namedTimeline;
       const eventsOf = (row, i) => {
@@ -2579,11 +2621,12 @@ async function readChanges(novelId, conn) {
       for (const c of B.items) {
         if (c.oldOnly) continue;
         const said = (r) => String(r.source || '').trim().replace(/[.\s]+$/, '').toLowerCase();
-        const rows = givenTimeline.map((r, i) => [r, i]).filter(([r]) => r && c.source && (said(r) === c.source.toLowerCase() || r.source === c.pid));
+        const timeline = renamedIn(c) ? givenTimeline : namedTimeline;
+        const rows = timeline.map((r, i) => [r, i]).filter(([r]) => r && c.source && (said(r) === c.source.toLowerCase() || r.source === c.pid));
         const source = { text: c.text, whole: c.whole !== undefined ? c.whole : c.text };
         const notes = store.peek('novel', novelId).notes;
         let history = rows.length ? null : continuityOf(undefined, notes, source);
-        for (const [row, i] of rows) history = mergeContinuity(history, continuityOf(eventsOf(row, i), notes, source), source.whole, { oneReading: true });
+        for (const [row, i] of rows) history = mergeContinuity(history, continuityOf(renamedIn(c) ? eventsOf(row, i) : row.events, notes, source), source.whole, { oneReading: true });
         if (rows.length !== 1) history.complete = false;
         /* a passage read as a change — a fix, a Go on, his partner's words, his edit, words put back: the turns its words
          * before had that the new words still give stay, turn by turn, as its facts do (timeline.js withCarriedTurns —
@@ -2911,7 +2954,7 @@ async function stretchUp(novelId, conn) {
         /* (asked again by itself: a refusal the next run, an answer that made no progress once as long again has passed) */
         if (n < 2 && slow) {
           const cid = c.id;
-          lookIn(novelId, 'stretch:' + key, slow, (ms) => `The helper sums up part of ${label} again ${inWhile(ms)} — its model was too slow to answer for it.`, () => {
+          lookIn(novelId, 'stretch:' + key, slow, (ms, busy) => `The helper sums up part of ${label} again ${inWhile(ms, busy)} — its model was too slow to answer for it.`, () => {
             const n2 = store.peek('novel', novelId);
             const ch = store.peek('chapter', cid);
             const at = n2 ? (n2.order || []).indexOf(cid) : -1;
@@ -3228,7 +3271,7 @@ async function sceneStretchUp(novelId, conn) {
         const n = (sceneTried.get(key) || 0) + 1;
         sceneTried.set(key, n);
         if (n < 2 && slow) {
-          lookIn(novelId, 'scene:' + key, slow, (ms) => `The helper sums up part of ${label} again ${inWhile(ms)} — its model was too slow to answer for it.`, () => {
+          lookIn(novelId, 'scene:' + key, slow, (ms, busy) => `The helper sums up part of ${label} again ${inWhile(ms, busy)} — its model was too slow to answer for it.`, () => {
             const d = store.peek('play', pid);
             return Boolean(d) && stretchPlan(sceneChapter(d)).stretches.some((s) => s.fp === st.fp && !s.text);
           });
@@ -3383,7 +3426,7 @@ async function checkSummaries(novelId, conn) {
       done++;
       /* (asked again by itself — a refusal the next run, an answer that made no progress once as long again has passed;
        * tried twice, passed by with its mark the next run) */
-      if (n < 2 && slow) lookIn(novelId, 'check:' + key, slow, (ms) => `The helper checks the summary of ${what} again ${inWhile(ms)} — its model was too slow to answer for it.`, () => summaryChecksDue(novelId).some((x) => checkKey(x) === key));
+      if (n < 2 && slow) lookIn(novelId, 'check:' + key, slow, (ms, busy) => `The helper checks the summary of ${what} again ${inWhile(ms, busy)} — its model was too slow to answer for it.`, () => summaryChecksDue(novelId).some((x) => checkKey(x) === key));
       else owed = true;
       continue;
     }
@@ -3620,19 +3663,21 @@ export function readAgainLater(novelId, what, refs = null) {
     n++;
     at = Math.min(at, next);
   }
-  return n ? { n, ms: Math.max(0, at - now) } : null;
+  /* (and whether a page being written holds the run back: what comes "in a moment" waits for it — PAGE_DONE) */
+  return n ? { n, ms: Math.max(0, at - now), busy: writerBusy(novelId) } : null;
 }
-const inWhile = (ms) => (ms <= 15000 ? 'in a moment' : `in ${waitWords(ms)}`);
+const inWhile = (ms, busy = false) => (ms <= 15000 ? (busy ? PAGE_DONE : 'in a moment') : `in ${waitWords(ms)}`);
 /* (when the first of `n` is asked again) */
-const firstIn = (n, ms) => (n === 1 ? inWhile(ms) : `, the first ${inWhile(ms)}`);
+const firstIn = (n, ms, busy = false) => (n === 1 ? inWhile(ms, busy) : `, the first ${inWhile(ms, busy)}`);
 /* HOW THE PAGES NOT READ YET ARE READ, in his words — by itself, a few at a time, or again by itself once their wait is
  * over: one telling for the Timeline's line and the bibliography's (`n` of them not read yet, `later` what
  * readAgainLater says of them) */
 export function readsByItself(n, later) {
   const it = n === 1 ? 'it' : 'them';
   if (!later) return `the helper reads ${it} by itself, a few at a time`;
-  if (later.n >= n) return `the helper’s model was too slow to answer for ${it}, so the helper reads ${it} again by itself${n === 1 ? ' ' : ''}${firstIn(n, later.ms)}`;
-  return `the helper reads ${it} by itself, a few at a time (${later.n === 1 ? `the one its model was too slow to answer for, again ${inWhile(later.ms)}` : `the ${later.n} its model was too slow to answer for again${firstIn(later.n, later.ms)}`})`;
+  const busy = Boolean(later.busy);
+  if (later.n >= n) return `the helper’s model was too slow to answer for ${it}, so the helper reads ${it} again by itself${n === 1 ? ' ' : ''}${firstIn(n, later.ms, busy)}`;
+  return `the helper reads ${it} by itself, a few at a time (${later.n === 1 ? `the one its model was too slow to answer for, again ${inWhile(later.ms, busy)}` : `the ${later.n} its model was too slow to answer for again${firstIn(later.n, later.ms, busy)}`})`;
 }
 /* WHAT WAITS ITS TIME, for the light and for the run to book itself: {ms (until the soonest), words} — the Timeline's
  * and the bibliography's passages asked again once their wait is over, and the other looks booked (lookIn) — or null */
@@ -3646,11 +3691,12 @@ function whatWaits(novelId) {
   const other = [...(looks.get(novelId) || new Map()).values()].filter((l) => lookLive(l, now)).sort((a, b) => a.at - b.at);
   if (!turns && !facts && !other.length) return null;
   const said = [];
+  const busy = writerBusy(novelId);
   const n = (turns ? turns.n : 0) + (facts ? facts.n : 0);
   const soon = Math.min(turns ? turns.ms : Infinity, facts ? facts.ms : Infinity);
   const what = [turns ? `${plural(turns.n, 'passage')} for the Timeline` : '', facts ? `${plural(facts.n, 'page')} for the bibliography` : ''].filter(Boolean).join(' and ');
-  if (what) said.push(`The helper reads ${what} again${n === 1 ? ' ' : ''}${firstIn(n, soon)} — its model was too slow to answer for ${n === 1 ? 'it' : 'them'}.`);
-  for (const l of other) said.push(l.say(l.at - now));
+  if (what) said.push(`The helper reads ${what} again${n === 1 ? ' ' : ''}${firstIn(n, soon, busy)} — its model was too slow to answer for ${n === 1 ? 'it' : 'them'}.`);
+  for (const l of other) said.push(l.say(l.at - now, busy));
   return { ms: Math.max(0, Math.min(soon, other.length ? other[0].at - now : Infinity)), words: said.join(' ') };
 }
 const triesDone = (x, what) => store.change('chapter', x.chapterId, triedStep(x.pid, x.vid, what, hashText(x.text), 0));

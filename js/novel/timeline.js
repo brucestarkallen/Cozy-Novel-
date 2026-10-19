@@ -57,28 +57,101 @@ function saysSame(a, b) {
 }
 /* WHO DOES IT (2.12.40, the review: the cards are compared as a set and their names left out of what is said, so
  * "Emilia betrays Jovan." and "Jovan betrays Emilia." on one sentence were one turn, and a reading giving one side took
- * the other away): a turn between people is told from the side named first — the card whose name stands first in what
- * it says, of two of its cards named in it. With fewer named it cannot be told ("She betrays Jovan." is his name
- * first, and hers the deed; "Emilia betrays him.", "Jovan betrays her."): never the same as another then — only the
- * same turn word for word is (its mark). Two turns are the same only told from the same side. */
+ * the other away). DECIDED ONLY WHERE BOTH TELLINGS PLAINLY SAY IT (2.12.41, round 5 — the review of round 4: the side
+ * was guessed from where a name first stood in any telling, and one that named fewer than two was never the same as
+ * another, so the same turn told in the passive, by a pronoun, a possessive, a name it goes by, two acting together or a
+ * group's card was kept twice — and an opposite deed told in the passive, after a possessive, or after a phrase whose
+ * words a name shares, "At the gate," for "Mara of the Gate", still folded). A telling plainly says who acts when it
+ * opens — after a short phrase that names none of them and ends at a comma — with one card's name (all of it, its first
+ * word, or a name it goes by, written as the name is written) and names another after: told in the active, the first;
+ * in the passive ("Jovan was betrayed by Emilia"), the one after "by"; after a possessive ("Emilia's brother Jovan
+ * betrays her"), the one the possessive names. Two acting together, a pronoun, a possessive of anything else, a passive
+ * with no one after "by", or an agent said in another tongue's word for "by", say nothing plain. Two tellings both plain
+ * and from different sides are two turns; everywhere else the rule before stands — the same cards and the same thing
+ * said (a duplicate is the worse fault). (No field is added to what the reading is asked for.) */
 /* (a name's own words — never a particle it shares with every sentence: "Mara of the Gate" is found by Mara and Gate) */
 const PARTICLES = new Set(['the', 'of', 'and', 'de', 'la', 'le', 'du', 'van', 'von', 'der', 'den', 'da', 'di', 'del', 'dos', 'das', 'el', 'al', 'bin', 'ibn']);
-const nameWords = (n) => String(n || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2 && !PARTICLES.has(w));
+const nameWords = (n) => String(n || '').split(/[^\p{L}\p{M}\p{N}'’-]+/u).filter((w) => w.length >= 2 && !PARTICLES.has(w.toLowerCase()));
 const escRe = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-function subjectOf(e) {
-  const t = String(e.text || '').toLowerCase();
-  const at = (Array.isArray(e.refs) ? e.refs : []).map((r) => {
-    const found = nameWords(r && r.name).map((w) => t.search(new RegExp(`(?<![\\p{L}\\p{N}])${escRe(w)}(?![\\p{L}\\p{N}])`, 'u'))).filter((i) => i >= 0);
-    return { id: r && r.id, at: found.length ? Math.min(...found) : -1 };
-  }).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at);
-  return at.length >= 2 && at[0].at < at[1].at ? at[0].id : null;
+/* written as the name is written: a name with a capital letter is found only with it ("the gate" is no "Gate"); one in
+ * small letters, or in a script with no capitals, in any letters */
+const capitalised = (w) => { const c = String(w || '').charAt(0); return c !== c.toLowerCase(); };
+const nameAt = (t, form, at) => new RegExp(`^${escRe(form)}(?![\\p{L}\\p{M}\\p{N}])`, capitalised(form) ? 'u' : 'iu').test(t.slice(at));
+/* the names a card goes by as a turn keeps them (resolve: its name, and `aka`) */
+const akaOf = (r) => (r && Array.isArray(r.aka) ? r.aka.filter((x) => typeof x === 'string' && x.trim()) : []);
+/* how a card opens a telling at `at`: all of its name, its first word, or a name it goes by — the length of the longest
+ * standing there, 0 for none */
+function opensAs(t, at, r) {
+  let best = 0;
+  for (const f of [r && r.name, nameWords(r && r.name)[0], ...akaOf(r)]) {
+    const form = String(f || '').trim();
+    if (form && nameAt(t, form, at)) best = Math.max(best, form.length);
+  }
+  return best;
+}
+/* where a card is named in a telling from `at` on — any word of its name or a name it goes by, written as it is
+ * written — or -1 */
+function namedFrom(t, at, r) {
+  let first = -1;
+  for (const f of [...nameWords(r && r.name), ...akaOf(r)]) {
+    const form = String(f || '').trim();
+    if (!form) continue;
+    const re = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])${escRe(form)}(?![\\p{L}\\p{M}\\p{N}])`, capitalised(form) ? 'gu' : 'giu');
+    re.lastIndex = at;
+    const m = re.exec(t);
+    if (m && (first < 0 || m.index < first)) first = m.index;
+  }
+  return first;
+}
+const BE = /^\s+(?:is|was|were|are|am|be|been|being|gets|got|get|has\s+been|have\s+been|had\s+been|is\s+being|was\s+being|were\s+being)\s+/iu;
+/* another tongue's word for "by" just before the one named after: a passive this rule cannot read — nothing plain */
+const AGENT = /(?:^|[\s,])(?:by|por|par|von|vom|da|dal|dalla|door|av|af|przez|tarafından|от)\s+(?:the\s+|la\s+|le\s+|el\s+|il\s+|der\s+|die\s+|das\s+|de\s+)?$/iu;
+export function doerOf(e) {
+  const refs = (Array.isArray(e && e.refs) ? e.refs : []).filter((r) => r && r.kind === 'people');
+  if (!e || e.kind !== 'relationship' || refs.length < 2) return null;
+  let t = String(e.text || '').trim();
+  /* a short phrase before it that names none of them ("At the gate,", "That night,") */
+  const lead = /^([^,]{1,60}),\s+/u.exec(t);
+  if (lead && lead[1].split(/\s+/).length <= 6 && !refs.some((r) => namedFrom(lead[1], 0, r) >= 0)) t = t.slice(lead[0].length);
+  /* the card it opens with (the longest form standing there) */
+  let opener = null;
+  let len = 0;
+  for (const r of refs) { const n = opensAs(t, 0, r); if (n > len) { len = n; opener = r; } }
+  if (!opener) return null;
+  const others = refs.filter((r) => r.id !== opener.id);
+  const rest = t.slice(len);
+  /* a possessive: the one it names right after one word of what is theirs — "Emilia's brother Jovan" — acts */
+  const own = /^['’]s?\s+[\p{L}\p{M}'’-]+\s+/u.exec(rest);
+  if (/^['’]s?(?![\p{L}\p{M}])/u.test(rest)) {
+    if (!own) return null;
+    const at = len + own[0].length;
+    const by = others.find((r) => opensAs(t, at, r) > 0);
+    return by ? by.id : null;
+  }
+  /* two acting together, or a list: no one side */
+  if (/^\s*(?:,|&|and\b|or\b|with\b|together\b)/iu.test(rest)) return null;
+  /* the passive: the one after "by" acts — no one there, nothing plain */
+  const be = BE.exec(rest);
+  if (be) {
+    const m = /^((?:[\p{L}\p{M}'’-]+\s+){1,2}?)by\s+(?:the\s+)?/iu.exec(rest.slice(be[0].length));
+    if (!m) return null;
+    const at = len + be[0].length + m[0].length;
+    const by = others.find((r) => opensAs(t, at, r) > 0);
+    return by ? by.id : null;
+  }
+  /* the active: another named after it — never as one "by" whom it is done */
+  const after = others.map((r) => namedFrom(t, len, r)).filter((i) => i >= 0);
+  if (!after.length) return null;
+  if (AGENT.test(t.slice(len, Math.min(...after)))) return null;
+  return opener.id;
 }
 export function sameTurn(a, b, text = '') {
   if (!a || !b) return false;
   /* (word for word the same turn — its kind, cards, words quoted, stance, whose and what it says, its mark: one) */
   if (a.id && a.id === b.id) return true;
   if (a.kind !== b.kind || cardsKey(a) !== cardsKey(b) || voiceOf(a) !== voiceOf(b) || !saysSame(a, b)) return false;
-  if (a.kind === 'relationship') { const s = subjectOf(a); if (!s || s !== subjectOf(b)) return false; }
+  /* (told plainly by both, from different sides: two) */
+  if (a.kind === 'relationship') { const da = doerOf(a), db = doerOf(b); if (da && db && da !== db) return false; }
   const qa = Array.isArray(a.evidence) ? a.evidence : [], qb = Array.isArray(b.evidence) ? b.evidence : [];
   const t = String(text || '');
   const sa = t ? qa.map((q) => quoteAt(t, q)).filter(Boolean) : [], sb = t ? qb.map((q) => quoteAt(t, q)).filter(Boolean) : [];
@@ -94,11 +167,15 @@ const turnId = (kind, refs, quotes, stance, whose, text) => 'tl-' + hashText(JSO
  * unresolved; a card folded into another can still be found by its alias. */
 /* (a card is found by its name however long he made it — 2.12.40, the review: a name past 120 letters was refused here,
  * so a thread he named so was never named in a turn but by another name it goes by) */
+/* (with the names it goes by as the card has them, `aka` — what tells a turn that opens with one of them from its side:
+ * doerOf, 2.12.41, round 5) */
 function resolve(notes, ref) {
   if (!ref || typeof ref !== 'object' || !NOTE_KINDS.includes(ref.kind)) return null;
   const cards = cardsIn(notes, ref.kind);
   const card = cards.find(c => ref.id && c.id === ref.id) || matchCard(cards, typeof ref.name === 'string' ? ref.name.trim() : '', [], { kind: ref.kind, near: false }).card;
-  return card ? { id: card.id, kind: ref.kind, name: card.name } : null;
+  if (!card) return null;
+  const aka = (Array.isArray(card.aka) ? card.aka : []).filter((x) => typeof x === 'string' && x.trim() && x.trim().length <= 120).slice(0, 12);
+  return { id: card.id, kind: ref.kind, name: card.name, ...(aka.length ? { aka } : {}) };
 }
 
 /* A response for ONE explicitly named source. Quotes must be found both
@@ -200,8 +277,10 @@ function carriedTurn(e, t, swap) {
   if (!soundTurn(e)) return null;
   const evidence = [...new Set(e.evidence.map((q) => quoteSpan(t, swap(String(q)))))];
   if (!evidence.length || !evidence.every(quoteKept)) return null;
-  const refs = e.refs.map((r) => ({ ...r, name: swap(String((r && r.name) || '')) }));
-  const whose = e.whose ? { ...e.whose, ...(e.whose.name ? { name: swap(String(e.whose.name)) } : {}) } : null;
+  /* (and the names they go by, as the change makes them) */
+  const named = (r) => ({ ...r, name: swap(String((r && r.name) || '')), ...(Array.isArray(r && r.aka) ? { aka: r.aka.map((x) => swap(String(x))) } : {}) });
+  const refs = e.refs.map(named);
+  const whose = e.whose ? { ...e.whose, ...(e.whose.name ? { name: swap(String(e.whose.name)) } : {}), ...(Array.isArray(e.whose.aka) ? { aka: e.whose.aka.map((x) => swap(String(x))) } : {}) } : null;
   const text = swap(String(e.text || ''));
   return { ...e, refs, text, ...(e.why ? { why: swap(String(e.why)) } : {}), evidence, ...(whose ? { whose } : {}), id: turnId(e.kind, refs, evidence, e.stance, whose && whose.id, text) };
 }

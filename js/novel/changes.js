@@ -879,7 +879,8 @@ export function makeTogether(novelId, ops, { ids = [], dry = false } = {}) {
   const { undo, counts } = names ? renameEverywhere(novelId, novel, items.map((x) => x.rule), put, why) : replaceEverywhere(novelId, novel, items, put, why);
   if (names && counts.some((n) => n > 0)) {
     undo.renamed = items.map((x) => ({ from: x.from, to: x.to }));
-    put('novel', novelId, novelSteps.noteRenames(undo.renamed, at));
+    /* (counted on the book — work on its way judges by the count, never a clock; kept an hour, in the phone's time: 2.12.41) */
+    put('novel', novelId, novelSteps.noteRenames(undo.renamed, store.phoneNow()));
   }
   const missing = (i) => (names ? `“${items[i].from}” does not stand anywhere in the book` : 'those words stand nowhere in those chapters');
   if (!counts.some((n) => n > 0)) return bases.map((b, i) => ({ ...b, status: 'refused', said: missing(i) }));
@@ -1446,7 +1447,7 @@ export function undoChange(novelId, change) {
     }
     if (Object.keys(asideBack).length) store.change('novel', novelId, novelSteps.setAside(asideBack), { now: true });
     /* work on its way since the names changed is given them back as they were */
-    if ((u.renamed || []).length && back) store.change('novel', novelId, novelSteps.noteRenames(u.renamed.map((x) => ({ from: x.to, to: x.from })), Date.now()), { now: true });
+    if ((u.renamed || []).length && back) store.change('novel', novelId, novelSteps.noteRenames(u.renamed.map((x) => ({ from: x.to, to: x.from })), store.phoneNow()), { now: true });
     for (const x of u.summaries || []) {
       const c = store.peek('chapter', x.chapterId);
       if (!c || JSON.stringify(c.summary || null) !== JSON.stringify(x.after)) continue;

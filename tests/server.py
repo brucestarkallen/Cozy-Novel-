@@ -450,6 +450,20 @@ def run_relay_wait():
             out, took = call(**named)
             check("%s: its own wait (COZYNOVEL_RELAY_TIMEOUT), the line let go and said so" % label,
                   "dropped partway through" in out and "Late words" not in out and 1.7 < took < 2.9, (round(took, 1), out[-200:]))
+        # (2.12.41, round 5: a wait past what a socket can be given — 1e10 seconds — came back as a transport error: the
+        # relay waits a day at most, whatever it is told)
+        out, took = call(timeout=1e10)
+        check("a wait past any sane length is waited a day at most — the call goes through, its words after the silence",
+              "Late words" in out and "transport" not in out, (round(took, 1), out[-200:]))
+        srv.terminate()
+        try:
+            srv.wait(timeout=5)
+        except Exception:
+            srv.kill()
+        srv = start(home, port=port, extra_env={"COZYNOVEL_RELAY_TIMEOUT": "1e10"})
+        out, took = call()
+        check("COZYNOVEL_RELAY_TIMEOUT past any sane length: a day at most — a call told nothing goes through",
+              "Late words" in out and "transport" not in out, (round(took, 1), out[-200:]))
     finally:
         silent.shutdown()
         if srv:

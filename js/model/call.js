@@ -487,10 +487,15 @@ const leashOf = (ms, name) => (Number(globalThis[name]) > 0 ? Number(globalThis[
  * minutes for a word when told nothing, so the leashes of twelve minutes and of a quarter of an hour never let a call
  * go — the relay dropped the line first, as a passing fault, waited out and asked again, the longest leash never
  * reached and a model that stays silent asked for ever, every run stopping before the notes' check. Every call now
- * tells the relay how long to wait, in seconds: a minute past its own leash — or, his page and his Test, which have
- * no leash but his Stop, a minute past the longest any silent provider is waited. */
-const relayWait = (ms) => Math.ceil(ms / 1000) + 60;
-const unleashedWait = () => relayWait(leashOf(QUIET_MOST_MS, '__cozyLeashQuietMostMs'));
+ * tells the relay how long to wait, in seconds: three minutes past its own leash (2.12.41, round 5 — a minute was the
+ * margin, and a tab hidden for five minutes runs its timers once a minute, so its leash could be heard late and the
+ * relay let go first) — or, his page, which has no leash but his Stop, a minute past the longest any silent provider
+ * is waited. The app's own pages, written again by themselves, have no Stop to wait for: the relay waits ten minutes
+ * for them, as it did (2.12.41, round 5 — they waited the page's sixteen, the helper and the checker standing down all
+ * the while); and Test, which only asks whether the connection answers, is leashed as a worker is. */
+const relayWait = (ms) => Math.ceil(ms / 1000) + 180;
+const unleashedWait = () => Math.ceil(leashOf(QUIET_MOST_MS, '__cozyLeashQuietMostMs') / 1000) + 60;
+export const BACKGROUND_WAIT_S = 600;
 /* A WORKER GIVES WAY TO HIS PAGE (Cozy Tavern M530). A provider that takes
  * one request at a time on a connection refuses a page sent while the
  * helper or the checker is asking on the same one ("slow down", "busy") —
@@ -534,6 +539,8 @@ function sleep(ms, signal) {
  *   opts.stream      words as they come (default true)
  *   opts.worker      a helper's call: no prefill, no penalties or stop words
  *   opts.patient     a helper may wait out "slow down" and try again
+ *   opts.leash       let go on a worker's leash though it is no worker's (Ideas, Test)
+ *   opts.background  a page the app writes again by itself — no Stop of his to wait for (BACKGROUND_WAIT_S)
  *   opts.signal      his Stop
  *   opts.onText / opts.onThinking   the words as they arrive
  *   opts.onSent(rec) where the request went and its body, word for word
@@ -668,7 +675,7 @@ export async function ask(conn, opts = {}) {
       const res = await fetch('/api/call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream, timeout: leash ? relayWait(quietMs) : relayWait(quietMost) }),
+        body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream, timeout: leash ? relayWait(quietMs) : opts.background ? BACKGROUND_WAIT_S : unleashedWait() }),
         signal: lineSignal,
       });
       heardAt = Date.now();
@@ -1168,7 +1175,8 @@ export async function measureSpeed(conn, { now = () => (typeof performance !== '
     words += t;
     if (thinking) thought += t.length;
   };
-  const out = await ask(conn, { build: () => ({ messages: [{ role: 'user', content: SPEED_ASK }], maxTokens: SPEED_MAX_TOKENS }), stream: true, noStructured: true, noSearch: true,
+  /* (on a worker's leash: Test has no Stop, and only asks whether the connection answers — 2.12.41, round 5) */
+  const out = await ask(conn, { build: () => ({ messages: [{ role: 'user', content: SPEED_ASK }], maxTokens: SPEED_MAX_TOKENS }), stream: true, noStructured: true, noSearch: true, leash: true,
     onText: (t) => mark(t, false), onThinking: (t) => mark(t, true) });
   if (!out.ok) return null;
   const totalMs = now() - t0;
@@ -1184,7 +1192,9 @@ export async function measureSpeed(conn, { now = () => (typeof performance !== '
 
 export async function tryConnection(conn, { speed = true } = {}) {
   const level = conn && conn.thinking ? String(conn.thinking) : '';
-  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: false, worker: false, noStructured: true, noSearch: true });
+  /* (on a worker's leash: Test has no Stop — 2.12.41, round 5: a silent provider held it for up to three asks of sixteen
+   * minutes each) */
+  const go = (c) => ask(c, { build: () => ({ messages: [{ role: 'user', content: 'Answer with one word: ready.' }], maxTokens: 2000 }), stream: false, worker: false, noStructured: true, noSearch: true, leash: true });
   const first = await go(conn);
   if (!first.ok) return { ok: false, words: `Not working — ${first.error}` };
   const answered = String(first.text || '').trim();
@@ -1220,7 +1230,9 @@ export async function tryConnection(conn, { speed = true } = {}) {
  * fresh yes lifts an old refusal (clearDown). Returns {ok, words, clearDown}. */
 async function rawCall(req) {
   try {
-    const res = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream: false, timeout: unleashedWait() }) });
+    /* (Test's: a minute past a worker's quiet leash — it only asks whether the prefill is taken, and has no Stop; no leash
+     * of the app's runs beside it, so the relay's wait is the leash) */
+    const res = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: req.url, headers: req.headers, body: req.body, stream: false, timeout: Math.ceil(leashOf(LEASH_QUIET_MS, '__cozyLeashQuietMs') / 1000) + 60 }) });
     if (!res.ok) return { ok: false, status: 0, detail: `the phone’s server answered ${res.status}` };
     let data = null;
     try { data = await res.json(); } catch (_) { return { ok: false, status: 0, detail: 'the answer could not be read' }; }
