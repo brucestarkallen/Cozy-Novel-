@@ -329,6 +329,10 @@ async def size(browser, w, hgt, mobile):
     await H.panes_call(pg, 'showSide', ['notes'])
     await frames(pg)
     docked = await pg.evaluate("document.querySelector('#sidePane').classList.contains('dock')")
+    if not docked:
+        # (a narrow screen: the notes came as a drawer over the page — closed again, as the page's full screen starts from the page)
+        await pg.click('#sideClose')
+        await pg.wait_for_timeout(400)
     for n, (item, leave) in enumerate((('Full screen', '.fullexit'), ('Reading mode', '.readexit'))):
         await pg.click('#moreBtn')
         await pg.locator('.menu-pop button').filter(has_text=item).first.click()
