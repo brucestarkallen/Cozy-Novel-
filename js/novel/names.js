@@ -609,15 +609,29 @@ function modalHere(t, end) {
     const next = NEXT_WORD.exec(t);
     if (next && SUBJECTS.has(next[0].toLowerCase())) return true;
   }
+  /* (the sentence's own end — never the stop after a title's short form or an initial: "Will Dr. Halloway come?" asks) */
   SENTENCE_STOP.lastIndex = end;
-  const stop = SENTENCE_STOP.exec(t);
-  return Boolean(stop) && stop[0] === '?';
+  for (let stop = SENTENCE_STOP.exec(t); stop; stop = SENTENCE_STOP.exec(t)) {
+    if (stop[0] === '.' && stopEndsNoneAt(t, stop.index)) continue;
+    return stop[0] === '?';
+  }
+  return false;
 }
 /* a text's words by their keys: those it writes with a capital (the first form of each) — those of them it writes so
  * inside a sentence (`mid`), those it writes so opening a sentence as the word itself, never only as its possessive or a
  * contraction (`openBare`), and of those the ones it writes there as no modal (`openAsName`) — and those it writes in
  * small letters */
 const SENTENCE_START = /[.!?…"“”‘’'(\[—–*_\n]/;
+/* WHETHER THE WORD AT `at` OPENS A SENTENCE: nothing but spaces before it, or a stop, a quote, a dash or a bracket — never
+ * a stop that ends no sentence, after a title's short form or an initial ("Dr. Will Turner waits": Will is inside its
+ * sentence; "J. Hale" — stopEndsNoneAt, as every split of words into sentences reads them: 2.12.41, round 5b) */
+function opensAt(t, at) {
+  let i = at - 1;
+  while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
+  if (i < 0) return true;
+  if (!SENTENCE_START.test(t[i])) return false;
+  return !(t[i] === '.' && stopEndsNoneAt(t, i));
+}
 function wordsScanned(text) {
   const t = String(text || '');
   const small = new Set();
@@ -630,10 +644,10 @@ function wordsScanned(text) {
     const k = wordKey(w);
     if (!k) continue;
     if (!/^\p{Lu}/u.test(w)) { small.add(k); continue; }
+    /* (a title's short form, its stop ending no sentence — "Dr." of "Dr. Will Turner" — is no name of anyone's) */
+    if (t[m.index + w.length] === '.' && stopEndsNoneAt(t, m.index + w.length)) continue;
     if (!caps.has(k)) caps.set(k, w);
-    let i = m.index - 1;
-    while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
-    if (i >= 0 && !SENTENCE_START.test(t[i])) { mid.add(k); continue; }
+    if (!opensAt(t, m.index)) { mid.add(k); continue; }
     if (SUFFIXED.test(w)) continue;
     openBare.add(k);
     if (!modalHere(t, m.index + w.length)) openAsName.add(k);
@@ -732,11 +746,11 @@ function textRead(text) {
     const c0 = w.charCodeAt(0);
     let flag = IN_SMALL;
     if (c0 < 128 ? c0 >= 65 && c0 <= 90 : /^\p{Lu}/u.test(w)) {
-      /* (a quote before it opens it, as a quote does; a dash typed as hyphens is looked past) */
-      let i = s - 1;
-      while (i >= 0 && t[i] === '-') i--;
-      while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
-      const inside = i >= 0 && !SENTENCE_START.test(t[i]);
+      /* (a quote before it opens it, as a quote does; a dash typed as hyphens is looked past; a title's stop opens none:
+       * opensAt) */
+      let j = s;
+      while (j > 0 && t[j - 1] === '-') j--;
+      const inside = !opensAt(t, j);
       /* (typed all in small letters: no capital inside a sentence before another letter — "I" alone is no sign) */
       if (inside && w.length > 1 && /\p{L}/u.test(w[1])) small = false;
       flag = inside ? INSIDE : SUFFIXED.test(w) ? 0 : OPENING;
@@ -867,14 +881,11 @@ export function nameRe(name) {
 /* whether a text writes a name with its capital inside a sentence — as written or in capitals (there he writes the name
  * with its capital, and its small letters are a word of his: "Tom met Mara at the gate, and mara’s brother waved."). A
  * capital opening a sentence is no sign: a phone keyboard puts it there ("Mara opens the door. tom sees mara and
- * smiles." writes Mara small — round 5b, as namesScanned reads a capital only inside a sentence) */
+ * smiles." writes Mara small — round 5b, as namesScanned reads a capital only inside a sentence); after a title's stop
+ * the name is inside its sentence ("Mr. Mara Venn", opensAt) */
 export function nameWritten(text, name) {
   const t = String(text || '');
-  for (const m of t.matchAll(nameRe(name))) {
-    let i = m.index - 1;
-    while (i >= 0 && (t[i] === ' ' || t[i] === '\t')) i--;
-    if (i >= 0 && !SENTENCE_START.test(t[i])) return true;
-  }
+  for (const m of t.matchAll(nameRe(name))) if (!opensAt(t, m.index)) return true;
   return false;
 }
 /* Several changes of one text made in one pass over it as it stood — each

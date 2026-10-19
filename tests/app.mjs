@@ -14234,6 +14234,14 @@ await test('a name his edit takes out of a page is told by the book’s names as
   assert.deepEqual(await run('Mara keeps the lamps lit, in order to bring Tom home.', 'The Order met at dusk. Mara kept the lamps lit.', 'Mara kept the lamps lit.', [['lo-o', 'The Order', 'lore'], ['pe-m', 'Mara']]), { took: ['order'], stands: true }, '“in order to”');
   /* a word opening a sentence that the book writes in small letters elsewhere is no name, on the page nor in the premise */
   assert.deepEqual(await run('Silence keeps the hall, and Mara waits.', 'Silence fell over the hall. Mara waited.', 'Mara waited.', [['pe-m', 'Mara', 'people', 'She loves the silence of the harbour.']]), { took: [], stands: true }, '“Silence”, a word of a card’s');
+  /* (round 5b) a title's stop opens no sentence, as every split of words into sentences reads it (names.js
+   * stopEndsNoSentence): "Dr. Will Turner" has Will inside his sentence — a name of the page, "Dr." none — and "Will
+   * Dr. Halloway come?" asks, its own stop at the question mark */
+  assert.deepEqual(await run('Will, the healer, waits at the gate.', 'Dr. Will Turner waits at the gate. Mara said he will stay.', 'Mara said he will stay.'), { took: ['turner', 'will'], stands: false }, '“Dr. Will Turner”');
+  assert.deepEqual(await run(WILL_LOST, '“Will Dr. Halloway come?” Mara asked. He said he will.', 'Mara asked. He said he will.', [['pe-w', 'Will'], ['pe-m', 'Mara']]), { took: ['halloway'], stands: true }, '“Will Dr. Halloway come?”');
+  /* and what the book writes of a word: "Halloway" after "Dr." is written inside a sentence */
+  const told = namesjs.bookEvidence(['Dr. Halloway treats the hunters. Mr. Venn waits.']);
+  assert.deepEqual([told.mid('halloway'), told.open('halloway'), told.mid('venn'), told.open('venn')], [true, false, true, false]);
 });
 
 await test('a page is his own words where most of the words on it now are his own hand’s — his words his partner wrote over are his no longer, his own written over his partner’s are — however many changes went, a Go on and a name changed everywhere', () => {
@@ -14514,6 +14522,8 @@ await test('his entry is weighed against his premise by when each of its words w
   const kn = { bibliography: [keep], notes: { people: [], places: [], lore: [], threads: [] } };
   shape.novelSteps.putEntry({ ...keep, text: 'It stands on the cliff. It is old.', at: 5000 })(kn);
   assert.deepEqual([...shape.stampsOf(kn.bibliography[0]).values()].map((t) => (t === 1000 ? 'old' : 'new')), ['old', 'old'], '“it” for the Keep');
+  /* (round 5b) a title's stop parts no sentence: "Dr. Halloway treats the hunters." is one, and only it is newer */
+  assert.deepEqual(timed('Dr. Halloway treats the hunters. She is kind.', 'Dr. Halloway treats the hunters in secret. She is kind.'), ['new', 'old'], '“Dr. Halloway”');
   /* a slip of the pen: what it was no word of the book, what it is a word the book uses */
   assert.deepEqual(timed('She keeps the lighthuose. She is strong.', 'She keeps the lighthouse. She is strong.', card('He rows out to the lighthouse.')), ['old', 'old'], 'a slip mended');
   assert.deepEqual(timed('She keeps the lighthuose.', 'She keeps the lighthouse.'), ['new'], 'a book that never says “lighthouse”: no slip');
@@ -14677,11 +14687,12 @@ await test('a name changed everywhere changes its small letters in his words onl
   /* (round 5b) only a capital inside a sentence says he writes the name with its capital in those words: the keyboard's
    * capital opening a sentence is none — "Mara opens the door. tom sees mara" is his name typed small — and where he
    * writes "Mara" inside a sentence, "mara’s" beside it is his word */
-  const k = await makeBook([[page('Mara opened the door and smiled at Tom.', 'Mara opens the door. tom sees mara and smiles.'), page('Tom met Mara at the gate.', 'Tom met Mara at the gate, and mara’s brother waved.')]], { manual: true });
+  const k = await makeBook([[page('Mara opened the door and smiled at Tom.', 'Mara opens the door. tom sees mara and smiles.'), page('Tom met Mara at the gate.', 'Tom met Mara at the gate, and mara’s brother waved.'), page('Mara waited at the gate.', 'Dr. Mara waits at the gate, and mara’s brother waves.')]], { manual: true });
   markAllSeen(k);
   people(k, [['pe-t', 'Tom'], ['pe-m', 'Mara']]);
   assert.equal(changes.makeChange(k.novelId, { rename: { from: 'Mara', to: 'Marla' } }).status, 'made');
-  assert.deepEqual(k.ch().passages.map((p) => shape.premiseOf(p)), ['Marla opens the door. tom sees marla and smiles.', 'Tom met Marla at the gate, and mara’s brother waved.']);
+  /* (and after a title's stop the name is inside its sentence — no keyboard's capital: "Dr. Mara") */
+  assert.deepEqual(k.ch().passages.map((p) => shape.premiseOf(p)), ['Marla opens the door. tom sees marla and smiles.', 'Tom met Marla at the gate, and mara’s brother waved.', 'Dr. Marla waits at the gate, and mara’s brother waves.']);
   await putAway(k);
   /* an everyday word that is also a given name: his premise typed all in small letters, and the title, keep it */
   const r = await makeBook([[page('Rose waited on the quay. The tide came in.', 'Rose waits on the quay for the ships.'), page('Mara walked out at dawn.', 'mara walks out to the quay as the sun rose.')]], { manual: true, title: 'the rose of the north' });
