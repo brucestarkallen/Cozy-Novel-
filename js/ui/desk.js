@@ -1103,6 +1103,7 @@ async function run(fn) {
     }
   } else if (out && out.ok) {
     archivist.nudge(novelId);
+    if (out.chapterName && here()) toast(`The chapter is named “${out.chapterName}”.`);
   }
   drawComposer();
   return out;

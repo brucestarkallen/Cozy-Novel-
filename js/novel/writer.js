@@ -20,7 +20,7 @@ import { superOn, autoOf } from './auto.js';
 import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
-import { renameIn } from './names.js';
+import { renameIn, firstSentence } from './names.js';
 import { changeInPlace, foldVersion, grownFields } from './inplace.js';
 
 /* -------------------------------------------------------------- roles */
@@ -810,8 +810,10 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
   const closing = superOn(house()) && !between && (!empty || length === 'chapter');
   const request = writeRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), direction, length, empty,
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords(chapter) } : null });
-  return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length, closing,
+  const out = await runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length, closing,
     build: { target: { chapterId, before: passage.id }, request, moment } });
+  const chapterName = out && out.ok ? nameOpening(chapterId, passage.id, direction) : '';
+  return chapterName ? { ...out, chapterName } : out;
 }
 
 /* What wakes a rule for a passage written again or carried on: his note for
@@ -922,8 +924,33 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
   const closing = superOn(house()) && !between && (!empty || length === 'chapter');
   const request = writeRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), direction: text, length, empty,
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
-  return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
+  const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
     build: { target: { chapterId, before: passageId }, request, moment } });
+  const chapterName = out && out.ok ? nameOpening(chapterId, passageId, text) : '';
+  return chapterName ? { ...out, chapterName } : out;
+}
+
+/* The premise that opens a chapter names it. A later page does not, and a name
+ * he typed (or cleared) stays. The name is the premise's first sentence, short
+ * enough for the heading. '' when nothing was changed. */
+function nameOpening(chapterId, passageId, premise) {
+  const text = String(premise || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const chapter = store.peek('chapter', chapterId);
+  if (!chapter || chapter.nameBy === 'you') return '';
+  const list = chapter.passages || [];
+  const i = list.findIndex((p) => p.id === passageId);
+  if (i < 0) return '';
+  if (list.slice(0, i).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim())) return '';
+  let name = firstSentence(text).replace(/\s+/g, ' ').trim().replace(/[.!?…]+$/, '').trim();
+  if (name.length > 80) {
+    const room = name.slice(0, 80);
+    const sp = room.search(/\s\S*$/);
+    name = (sp > 40 ? room.slice(0, sp) : room).trim();
+  }
+  if (!name || name === (chapter.name || '')) return '';
+  store.change('chapter', chapterId, chapterSteps.setName(name, 'helper'), { now: true });
+  return name;
 }
 
 /* A rewrite of a whole passage, with his note. */

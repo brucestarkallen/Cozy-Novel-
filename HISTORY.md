@@ -1194,6 +1194,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **Edit, Resend, Retry.** They did nothing: the page was drawn again, and the drawing did not know the premise had been opened, so the box never appeared and a tap looked frozen. The page knows now. Edit opens the premise. Resend and Retry write the page again.
 
+## 2.12.49, The opening premise names the chapter
+
+**The name at the top.** It was given once, and left there. Editing the premise that starts the chapter, then Resend, now names the chapter from that premise. A later page does not. A name you typed yourself stays until you change it.
+
+
 
 
 

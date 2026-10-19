@@ -219,6 +219,35 @@ await test('Resend writes the page again from a changed premise; Retry writes it
   await putAway(b);
 });
 
+await test('the premise that opens a chapter names it, and editing that premise renames it — a name he typed stays, and a later page does not rename it', async () => {
+  const b = await makeBook([[]]);
+  await script([{ text: 'Mara struck a match.' }]);
+  const wrote = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.' });
+  assert.equal(wrote.ok, true, wrote.error);
+  assert.equal(b.ch().name, 'She lights the lamp');
+  assert.equal(b.ch().nameBy, 'helper');
+  assert.equal(wrote.chapterName, 'She lights the lamp');
+  const pid = b.ch().passages[0].id;
+  await reset();
+  await script([{ text: 'The night went on.' }]);
+  const later = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'The storm takes the roof.' });
+  assert.equal(later.ok, true, later.error);
+  assert.equal(b.ch().name, 'She lights the lamp', 'a later page leaves the name');
+  await reset();
+  await script([{ text: 'Mara burned the letter.' }]);
+  const sent = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: 'She burns the letter instead.' });
+  assert.equal(sent.ok, true, sent.error);
+  assert.equal(b.ch().name, 'She burns the letter instead');
+  store.change('chapter', b.ids[0], shape.chapterSteps.setName('My own name', 'you'), { now: true });
+  await reset();
+  await script([{ text: 'Again.' }]);
+  const kept = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: 'A wholly different night on the coast.' });
+  assert.equal(kept.ok, true, kept.error);
+  assert.equal(b.ch().name, 'My own name', 'a name he typed is left as he typed it');
+  assert.equal(b.ch().nameBy, 'you');
+  await putAway(b);
+});
+
 await test('Write sends his own words first, the book, and his request last — all above it as system', async () => {
   const b = await makeBook([['The lamp was cold.']]);
   await script([{ text: 'Mara struck a match.' }]);
