@@ -24,7 +24,7 @@ import { listModules, moduleSteps } from './modules.js';
 import * as archivist from './archivist.js';
 import { joinSoftWraps, mendMarks, dropGluedStrays, dropMarkup, mendSpacing, hasMarkup as hasMarkupText } from './textshape.js';
 import { replaceMany, renameRule, smallRenameRule } from './names.js';
-import { entriesOf, entryFor, nameTaken, newEntry, tidyEntry, kindSaid, kindOf, KIND_ONE, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
+import { entriesOf, entryFor, otherKindSaid, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
 import { changeInPlace, putBackWords } from './inplace.js';
 
@@ -1138,7 +1138,8 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner
   /* AN ENTRY FOUND BY ANOTHER NAME IS NEVER MADE ANOTHER KIND (2.12.41, the third review): one it goes by, the same without
    * its "The", a person's given name — another kind asked for is said, never written, and nothing of the change is made:
    * two kinds of one name may be two things */
-  if (cur && asked && m.by !== 'name' && asked !== kindOf(cur.kind)) return refuse(`“${name}” finds ${cur.name}, a ${KIND_ONE[kindOf(cur.kind)]} — its kind is changed under its own name, ${cur.name}; for something else, give it a name of its own`);
+  const otherKind = otherKindSaid(m, name, asked);
+  if (otherKind) return refuse(otherKind);
   /* HIS ENTRY WRITTEN WHOLE ONLY BY AN ANSWER THAT READ IT WHOLE (2.12.40, the audit — the twin of a passage it had only
    * in short, and of a card it had by its first line): an entry its answer saw only by its name and line in the list is
    * never written over from that — read first (`entriesSeen`: the ids of the entries it had whole); a paragraph added to

@@ -25,7 +25,7 @@
  */
 
 import { newId, countWords, hashText, numberWords, nameKey } from '../util.js';
-import { samePersonName, plainName, sameThingName, isDescriptorName, nameInText, nearName, nameWordsGone, foldName, premiseLocal } from './names.js';
+import { samePersonName, plainName, sameThingName, isDescriptorName, nameInText, nearName, nameWordsGone, foldName, premiseLocal, splitSentences } from './names.js';
 
 export const COVERS = ['ember', 'moss', 'dusk', 'rose', 'ink', 'sea', 'wine', 'gold'];
 /* how much a Write writes. A size is asked as a range (around x to y words):
@@ -865,13 +865,18 @@ export function chapterPrint(chapter) {
  * the time of the save. When it rides, its kind and its names change no time. An entry kept before has its `at` for
  * each. */
 const SENTENCE_GAP = /(?<=[.!?…]["”’)\]]*)\s+|\s*\n+\s*/u;
+/* (never parted after a title's short form or an initial: "Dr. Halloway treats the hunters." is one sentence — names.js
+ * splitSentences, 2.12.41, the fourth review of Quick add) */
 export function entrySentences(e) {
   const out = [];
   const line = String((e && e.line) || '').replace(/\s+/g, ' ').trim();
   if (line) out.push(line);
-  for (const s of String((e && e.text) || '').split(SENTENCE_GAP)) if (s && s.trim()) out.push(s.trim());
+  for (const s of splitSentences(String((e && e.text) || ''), SENTENCE_GAP)) if (s && s.trim()) out.push(s.trim());
   return out;
 }
+/* a sentence as it was parted before a title's stop ended none ("Dr." and "Halloway treats the hunters.") — so a time
+ * kept under those parts is still found */
+const partedBefore = (s) => String(s || '').split(/(?<=[.!?…]["”’)\]]*)\s+/u).map((x) => x.trim()).filter(Boolean);
 export const sentenceKey = (s) => hashText(foldName(s));
 /* THE SAME WORDS IN THE SAME ORDER, APART FROM GRAMMAR (2.12.41, the review of 2.12.41: a sentence kept its time when its
  * words were the same in any order — "Mara hates Tom" turned round to "Tom hates Mara", "He loves her" to "She loves
@@ -937,7 +942,10 @@ export function stampsOf(e) {
   const at = Number(e.at) || 0;
   for (const s of entrySentences(e)) {
     const k = sentenceKey(s);
-    if (!out.has(k)) out.set(k, kept && Number.isFinite(kept[k]) ? kept[k] : at);
+    if (out.has(k)) continue;
+    if (kept && Number.isFinite(kept[k])) { out.set(k, kept[k]); continue; }
+    const before = kept ? partedBefore(s).map((x) => kept[sentenceKey(x)]).filter(Number.isFinite) : [];
+    out.set(k, before.length ? Math.max(...before) : at);
   }
   return out;
 }

@@ -15400,10 +15400,12 @@ await test('Quick add: his line is held to the keep rule — what his newer word
       entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire and mother of three.', text: EMILIA_TEXT }] },
     { entries: [] }] });
   assert.equal(one.e.line, EMILIA_LINE, 'never the answer’s line that lost the rest of his');
-  assert.deepEqual(one.row.changes.map((c) => [c.in, c.noWords, c.put]), [[false, true, undefined]]);
+  /* (2.12.41, the fourth review: this held "your partner gave no words for it" — but its line carried his newer word and
+   * could not go in as it was, losing the rest of his: said as that now, "gave no words" only where it gave none) */
+  assert.deepEqual(one.row.changes.map((c) => [c.in, c.couldNot, c.noWords, c.put]), [[false, true, undefined, undefined]]);
   assert.deepEqual(one.row.added, [], 'nothing of it to write');
   assert.equal(one.asks, 2, 'asked once more for words for it');
-  assert.ok(one.row.verdictBy === 'app' && one.row.verdict.includes('One newer word of yours did not go in — your partner gave no words for it.'), one.row.verdict);
+  assert.ok(one.row.verdictBy === 'app' && one.row.verdict.includes('One newer word of yours did not go in — your partner’s words for it could not go in as they were.'), one.row.verdict);
   /* its words for them ("now"), where they hold: in place of those words, the rest of his line as it stands */
   const two = await quickOn({ words: 'Emilia is the mother of three.', answers: [
     { verdict: 'Three children now.', changes: [{ mine: 'Emilia is the mother of three', was: 'mother of the twins', now: 'mother of three', where: 'your entry Emilia Vermaine', why: 'newer' }],
@@ -15504,10 +15506,12 @@ await test('Quick add: his “not” stays with what it says no to — “no vam
   /* nor one added that says yes where his says no */
   const one2 = await quickOn({ text: 'Emilia is no vampire.', words: 'Emilia keeps a raven. She walks at dusk.', answers: [{ verdict: 'In.', entries: [{ name: 'Emilia Vermaine', add: 'Emilia, a vampire, keeps a raven. She walks at dusk.' }] }] });
   assert.equal(one2.e.text, 'Emilia is no vampire.\n\nShe walks at dusk.');
-  /* his newer word puts a "not" in: the sentence that says it, in its words, stands in place of his */
-  const two = await quickOn({ text: 'Emilia is a vampire. She keeps a raven.', words: 'Emilia is not a vampire; she only looks like one.', answers: [
+  /* his newer word puts a "not" in: the sentence that says it, in its words, stands in place of his. (2.12.41, the fourth
+   * review: his line here was "An elder vampire, …", which his "not a vampire" says no to as well — left standing, the
+   * entry said both, and that is held now and asked for (the "his own not" test); a line that says nothing of it here) */
+  const two = await quickOn({ line: 'The elder of her house.', text: 'Emilia is a vampire. She keeps a raven.', words: 'Emilia is not a vampire; she only looks like one.', answers: [
     { verdict: 'Not a vampire now.', changes: [{ mine: 'Emilia is not a vampire', was: 'Emilia is a vampire', where: 'your entry Emilia Vermaine', why: 'newer' }],
-      entries: [{ name: 'Emilia Vermaine', kind: 'people', line: EMILIA_LINE, text: 'Emilia is no vampire; she only looks like one. She keeps a raven.' }] }] });
+      entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'The elder of her house.', text: 'Emilia is no vampire; she only looks like one. She keeps a raven.' }] }] });
   assert.equal(two.e.text, 'Emilia is no vampire; she only looks like one. She keeps a raven.');
   assert.deepEqual([two.row.changes[0].own, two.asks, two.row.added[0].how, two.row.verdictBy], [undefined, 1, 'whole', 'partner'], 'carried in its words: nothing asked again, its verdict');
   /* two newer words of his in one sentence of his: its words for one go in; the other, with none asked again, does not —
@@ -15717,12 +15721,15 @@ await test('Quick add and his partner find an entry for the kind it is asked as:
   };
   const textOf = (b, n) => (bib.entriesOf(b.novel()).find((e) => e.name === n) || {}).text;
   const kindOf = (b, n) => (bib.entriesOf(b.novel()).find((e) => e.name === n) || {}).kind;
-  /* his partner's own changes: a family's name alone is no one of his; a given name is, where no kind or a person is asked */
+  /* his partner's own changes: asked as a group, a word of a person's name is a group of its own — the kind decides.
+   * (2.12.41, the fourth review: this held that a family's name alone, asked with no kind, found no one — "Kuchiki" a new
+   * entry. That word-position rule lost "Mr. Darcy", "Captain Venn" and "Sasuke"; asked with no kind, a lone word of a
+   * person's name finds that person now, where no entry of another kind goes by it — the next test) */
   const a = await book();
   assert.equal(changes.makeChange(a.novelId, { entry: 'Vale', kind: 'groups', add: 'The Vales smuggle salt.' }).status, 'made');
-  assert.equal(changes.makeChange(a.novelId, { entry: 'Kuchiki', add: 'The Kuchiki keep the old ways.' }).status, 'made');
-  assert.deepEqual([textOf(a, 'Raven Vale'), textOf(a, 'Rukia Kuchiki'), kindOf(a, 'Vale'), textOf(a, 'Kuchiki')],
-    ['Raven Vale steals from the rich.', 'Rukia Kuchiki serves in the Thirteenth Division.', 'groups', 'The Kuchiki keep the old ways.'], 'never into a person of his by a family’s name alone');
+  assert.equal(changes.makeChange(a.novelId, { entry: 'Kuchiki', kind: 'groups', add: 'The Kuchiki keep the old ways.' }).status, 'made');
+  assert.deepEqual([textOf(a, 'Raven Vale'), textOf(a, 'Rukia Kuchiki'), kindOf(a, 'Vale'), textOf(a, 'Kuchiki'), kindOf(a, 'Kuchiki')],
+    ['Raven Vale steals from the rich.', 'Rukia Kuchiki serves in the Thirteenth Division.', 'groups', 'The Kuchiki keep the old ways.', 'groups'], 'asked as a group: never into a person of his');
   assert.equal(changes.makeChange(a.novelId, { entry: 'Raven', add: 'She is quick.' }).status, 'made');
   assert.equal(textOf(a, 'Raven Vale'), 'Raven Vale steals from the rich.\n\nShe is quick.', 'a person by her given name');
   /* found by another name, another kind asked for: never made — two kinds of one name may be two things */
@@ -15787,7 +15794,9 @@ await test('Quick add: his words are never spliced into his entry, his line or W
   const CROW = { mine: 'Emilia keeps a crow, not a raven', was: 'Emilia keeps a raven called Tock', where: 'your entry Emilia Vermaine', why: 'newer' };
   const three = await quickOn({ text: 'Emilia keeps a raven called Tock. She walks the wall at dusk.', words: 'Emilia keeps a crow, not a raven.', answers: [{ verdict: 'A crow.', changes: [CROW], entries: [] }, { entries: [], changes: [{ was: CROW.was, now: 'Emilia keeps a crow.' }] }] });
   assert.equal(three.e.text, 'Emilia keeps a raven called Tock. She walks the wall at dusk.', '“Tock” never let go');
-  assert.deepEqual(three.row.changes.map((c) => [c.in, c.noWords]), [[false, true]]);
+  /* (2.12.41, the fourth review: this held "your partner gave no words for it" — it gave words, which let "Tock" go: said
+   * as words that could not go in as they were) */
+  assert.deepEqual(three.row.changes.map((c) => [c.in, c.couldNot, c.noWords]), [[false, true, undefined]]);
   /* What it's about the same */
   const c = await makeBook([['Jovan woke in the dark.']], { brief: 'A novice hunter is turned. Emilia rules the Sanguelis alone.', manual: true });
   markAllSeen(c);
@@ -16005,6 +16014,492 @@ await test('Quick add: a row’s time never steps back before one it gave, thoug
     globalThis.fetch = before;
     await settle();
   }
+  await putAway(b);
+});
+
+/* ------------------------------------------- the fourth review of Quick add (2.12.41) */
+/* a change his partner lists for his own earlier words, as its answer gives it */
+const CHANGE = (was, now, { mine = 'Make her eyes green', where = 'your entry Emilia Vermaine' } = {}) => ({ mine, was, ...(now === undefined ? {} : { now }), where, why: 'your newer word' });
+/* a Quick add on a book holding his entries as given: [name, kind, words] of each after, and the row */
+const quickAmong = async ({ entries, words, answers, book = 'The alley was quiet.' }) => {
+  const b = await makeBook([[book]], { manual: true });
+  markAllSeen(b);
+  putEntries(b, entries.map((e) => ({ kind: 'people', line: 'Of the book.', by: 'you', ...e })));
+  await reset();
+  await script(answers.map((a) => ({ text: typeof a === 'string' ? a : JSON.stringify(a) })));
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words });
+  assert.equal(out.ok, true, out.error);
+  return { b, row: out.row, es: bib.entriesOf(b.novel()).map((e) => [e.name, e.kind, e.text]), asks: (await quickBodies()).length };
+};
+
+await test('Quick add: its words for his newer word go in by their shape — in place of his few words where they read there, their stop let go where his sentence goes on; a whole sentence in place of his that holds them, only where it keeps every other word of it; else nothing goes in, never pasted nor said twice — his entry, his line and What it’s about alike (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  /* a few words of its own that end with a stop, where his sentence goes on after them */
+  const one = await quickOn({ text: 'Her eyes are grey and cold. She keeps a raven.', words: 'Make her eyes green.', answers: [{ verdict: 'Green.', changes: [CHANGE('Her eyes are grey', 'Her eyes are green.')], entries: [] }] });
+  assert.deepEqual([one.e.text, one.row.changes.map((c) => [c.in, c.put]), one.asks], ['Her eyes are green and cold. She keeps a raven.', [[true, 'Her eyes are green and cold.']], 1], 'never “Her eyes are green. and cold.”');
+  /* a capital where they open his sentence, none inside it but a name's, and his stop where they ended it */
+  const shaped = [];
+  for (const [text, words, was, now, mine, want] of [
+    ['Her eyes are grey and cold.', 'Make her eyes green.', 'Her eyes are grey', 'her eyes are green', 'Make her eyes green', 'Her eyes are green and cold.'],
+    ['Her eyes are grey and cold.', 'Make her eyes green.', 'grey', 'Green', 'Make her eyes green', 'Her eyes are green and cold.'],
+    ['Emilia rules with her brother.', 'Emilia rules with Corvin now.', 'her brother', 'Corvin', 'Emilia rules with Corvin now', 'Emilia rules with Corvin.'],
+    ['Emilia has grey eyes.', 'Emilia has green eyes now.', 'grey eyes.', 'green eyes', 'Emilia has green eyes now', 'Emilia has green eyes.'],
+    /* (a short form's stop in his sentence, a small letter after it, is no break: never held for it) */
+    ['Emilia keeps pets, e.g. a raven and a cat.', 'Make her cat a hound.', 'a cat', 'a hound', 'Make her cat a hound', 'Emilia keeps pets, e.g. a raven and a hound.'],
+    /* (quoted with a slip, found as the sentence that holds it: his stop given back where its words end his sentence) */
+    ['Emilia keeps her mother’s ring. She walks at dusk.', 'Emilia keeps her mother’s dagger now.', 'Emilia keeps her mothers ring', 'Emilia keeps her mother’s dagger', 'Emilia keeps her mother’s dagger now', 'Emilia keeps her mother’s dagger. She walks at dusk.']]) {
+    const x = await quickOn({ text, words, answers: [{ verdict: 'In.', changes: [CHANGE(was, now, { mine })], entries: [] }] });
+    assert.deepEqual([x.e.text, x.row.changes.map((c) => c.in)], [want, [true]], `${was} → ${now}`);
+    shaped.push(x);
+  }
+  /* a whole sentence for a few words of his: in place of his sentence that holds them, which it keeps whole */
+  const SAID = { mine: 'Emilia has green eyes now' };
+  const two = await quickOn({ text: 'Emilia has grey eyes. She keeps a raven.', words: 'Emilia has green eyes now.', answers: [{ verdict: 'Green.', changes: [CHANGE('grey eyes', 'Emilia has green eyes.', SAID)], entries: [] }] });
+  assert.deepEqual([two.e.text, two.row.changes.map((c) => [c.in, c.put])], ['Emilia has green eyes. She keeps a raven.', [[true, 'Emilia has green eyes.']]], 'never “Emilia has Emilia has green eyes.”');
+  /* words that would say the words beside them twice, or a whole sentence losing the rest of his: nothing goes in — asked
+   * once more, in a shape that goes in, and said on the row as its words that could not go in as they were */
+  const three = await quickOn({ text: 'Emilia has grey eyes.', words: 'Emilia has green eyes now.', answers: [{ verdict: 'Green.', changes: [CHANGE('grey eyes', 'has green eyes', SAID)], entries: [] }, { entries: [] }] });
+  assert.deepEqual([three.e.text, three.row.changes.map((c) => [c.in, c.couldNot, c.noWords]), three.asks], ['Emilia has grey eyes.', [[false, true, undefined]], 2], 'never “Emilia has has green eyes.”');
+  assert.ok(three.row.verdict.includes('One newer word of yours did not go in — your partner’s words for it could not go in as they were.'), three.row.verdict);
+  const again = (await askedAgain()).at(-1);
+  assert.ok(again.includes('or whose words could not go in as they were') && again.includes('my whole sentence that holds them written again, every other word of it kept') && again.includes('- “Emilia has green eyes now” — my entry Emilia Vermaine says “grey eyes”'), again);
+  const four = await quickOn({ text: 'Emilia has grey eyes and a cruel smile.', words: 'Emilia has green eyes now.', answers: [{ verdict: 'Green.', changes: [CHANGE('grey eyes', 'Emilia has green eyes.', SAID)], entries: [] }, { entries: [] }] });
+  assert.deepEqual([four.e.text, four.row.changes.map((c) => [c.in, c.couldNot])], ['Emilia has grey eyes and a cruel smile.', [[false, true]]], 'a whole sentence that would lose “a cruel smile”');
+  const four2 = await quickOn({ text: 'Emilia does not fear the sun and has grey eyes.', words: 'Emilia has green eyes now.', answers: [{ verdict: 'Green.', changes: [CHANGE('grey eyes', 'Emilia does fear the sun and has green eyes.', SAID)], entries: [] }, { entries: [] }] });
+  assert.deepEqual([four2.e.text, four2.row.changes.map((c) => [c.in, c.couldNot])], ['Emilia does not fear the sun and has grey eyes.', [[false, true]]], 'a whole sentence that lets his “not” go');
+  /* his line: the same */
+  const LINE = 'An elder vampire, sworn enemy of the Covenant, mother of twins.';
+  const ALLY = { mine: 'Emilia is now an ally of the Covenant' };
+  const five = await quickOn({ line: LINE, text: 'Emilia keeps a raven.', words: 'Emilia is now an ally of the Covenant.', answers: [{ verdict: 'An ally.', changes: [CHANGE('sworn enemy of the Covenant', 'now an ally of the Covenant', ALLY)], entries: [] }] });
+  assert.deepEqual([five.e.line, five.row.changes.map((c) => c.in)], ['An elder vampire, now an ally of the Covenant, mother of twins.', [true]]);
+  const six = await quickOn({ line: LINE, text: 'Emilia keeps a raven.', words: 'Emilia is now an ally of the Covenant.', answers: [{ verdict: 'An ally.', changes: [CHANGE('sworn enemy of the Covenant', 'Emilia is now an ally of the Covenant.', ALLY)], entries: [] }, { entries: [] }] });
+  assert.deepEqual([six.e.line, six.row.changes.map((c) => [c.in, c.couldNot]), six.asks], [LINE, [[false, true]], 2], 'never “An elder vampire, Emilia is now an ally of the Covenant., mother of twins.”');
+  /* What it’s about: the same, and its words held to the keep rule */
+  const ABOUT = 'A novice hunter is turned. Emilia rules the Sanguelis with her brother, and the Covenant hunts them both.';
+  const about = async (now) => {
+    const c = await makeBook([['Jovan woke in the dark.']], { brief: ABOUT, manual: true });
+    markAllSeen(c);
+    await reset();
+    await script([{ text: JSON.stringify({ verdict: 'Alone.', changes: [CHANGE('with her brother', now, { mine: 'Emilia rules the Sanguelis alone now', where: 'What it’s about' })], entries: [] }) }, { text: JSON.stringify({ entries: [] }) }]);
+    const out = await quickadd.quickAdd({ novelId: c.novelId, words: 'Emilia rules the Sanguelis alone now.' });
+    assert.equal(out.ok, true, out.error);
+    return { c, row: out.row, brief: c.novel().brief, asks: (await quickBodies()).length };
+  };
+  const seven = await about('alone.');
+  assert.deepEqual([seven.brief, seven.row.book.map((x) => x.status), seven.asks], ['A novice hunter is turned. Emilia rules the Sanguelis alone, and the Covenant hunts them both.', ['made'], 1], 'its stop let go where his sentence goes on');
+  const eight = await about('Emilia rules the Sanguelis alone.');
+  assert.deepEqual([eight.brief, eight.row.book.map((x) => [x.status, x.couldNot, x.why]), eight.row.changes.map((x) => [x.in, x.couldNot]), eight.asks],
+    [ABOUT, [['refused', true, 'its words for it could not go in as they were']], [[false, true]], 2], 'never “…Emilia rules the Sanguelis Emilia rules the Sanguelis alone., and…”');
+  const nine = await about('alone and feared by all');
+  assert.deepEqual([nine.brief, nine.row.book.map((x) => [x.status, x.couldNot])], [ABOUT, [['refused', true]]], '“feared by all”: words his never say');
+  /* two newer words of his in one sentence of his, the second carried by what the first put in its place: it went in —
+   * though the figure of his it quotes is one the first changed */
+  const ten = await quickOn({ text: 'Emilia keeps twelve ravens.', words: 'Emilia keeps thirteen ravens. She keeps them gladly.', answers: [{ verdict: 'In.', changes: [
+    CHANGE('twelve ravens', 'thirteen ravens gladly', { mine: 'Emilia keeps thirteen ravens' }), CHANGE('keeps twelve ravens', undefined, { mine: 'She keeps them gladly' })], entries: [] }] });
+  assert.deepEqual([ten.e.text, ten.row.changes.map((c) => c.in), ten.asks], ['Emilia keeps thirteen ravens gladly.', [true, true], 1]);
+  /* …and where the answer's sentence that carries the first took the place of both his sentences, the second carried by it */
+  const ten2 = await quickOn({ text: 'Emilia keeps twelve ravens. They roost in the tower.', words: 'Emilia keeps thirteen ravens now. They roost in the cellar.', answers: [{ verdict: 'In.', changes: [
+    CHANGE('Emilia keeps twelve ravens. They roost in the tower.', undefined, { mine: 'Emilia keeps thirteen ravens now' }), CHANGE('They roost in the tower.', undefined, { mine: 'They roost in the cellar' })],
+  entries: [{ name: 'Emilia Vermaine', add: 'Emilia keeps thirteen ravens, and they roost in the cellar.' }] }] });
+  assert.deepEqual([ten2.e.text, ten2.row.changes.map((c) => c.in), ten2.asks], ['Emilia keeps thirteen ravens, and they roost in the cellar.', [true, true], 1]);
+  /* the second one's words by their shape too, in what the first put there; and one the words there do not carry: not in */
+  const ten3 = await quickOn({ text: 'Her eyes are grey and her hair is black.', words: 'Make her eyes green and her hair red.', answers: [{ verdict: 'In.', changes: [
+    CHANGE('grey', 'green'), CHANGE('her hair is black', 'her hair is red.', { mine: 'her hair red' })], entries: [] }] });
+  assert.deepEqual([ten3.e.text, ten3.row.changes.map((c) => c.in)], ['Her eyes are green and her hair is red.', [true, true]]);
+  const ten4 = await quickOn({ text: 'Emilia keeps twelve ravens.', words: 'Emilia keeps thirteen ravens. She keeps them gladly.', answers: [{ verdict: 'In.', changes: [
+    CHANGE('twelve ravens', 'thirteen ravens', { mine: 'Emilia keeps thirteen ravens' }), CHANGE('keeps twelve ravens', undefined, { mine: 'She keeps them gladly' })], entries: [] }, { entries: [] }] });
+  assert.deepEqual([ten4.e.text, ten4.row.changes.map((c) => [c.in, Boolean(c.noWords)])], ['Emilia keeps thirteen ravens.', [[true, false], [false, true]]]);
+  /* words it quotes standing only in his entry's name, with words of its own for them: said as words that could not go in */
+  const eleven = await quickOn({ text: 'Emilia keeps a raven.', book: 'The alley was quiet.', words: 'Her family name is Vane now.', answers: [{ verdict: 'Vane.', changes: [CHANGE('Vermaine', 'Vane', { mine: 'Her family name is Vane now' })], entries: [] }, { entries: [] }] });
+  assert.deepEqual([eleven.e.name, eleven.e.text, eleven.row.changes.map((c) => [c.in, c.couldNot, c.noWords])], ['Emilia Vermaine', 'Emilia keeps a raven.', [[false, true, undefined]]]);
+  for (const x of [one, ...shaped, two, three, four, four2, five, six, ten, ten2, ten3, ten4, eleven]) await putAway(x.b);
+  for (const x of [seven, eight, nine]) await putAway(x.c);
+});
+
+await test('Quick add holds what it adds as saying both only where the words leave no doubt — the same one, the same thing told the same way, another place, figure or colour, no change listed, whoever counted it — and trusts its partner with the rest (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const add = (text, words, sentence) => quickOn({ text, words, answers: [{ verdict: 'It goes in.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: sentence }] }, { entries: [] }] });
+  const BOTH = (his, its) => [2, [[true, `it would say both — your partner listed no change for your words: your “${his}” and its “${its}”`]]];
+  const held = (x) => [x.asks, x.row.refused.map((r) => [Boolean(r.both), r.why])];
+  /* where she lives, her age in words ("three hundred" one figure), a count his partner worked out ("a third brother"
+   * gives no "three"): held, asked once more, his entry as he wrote it */
+  const one = await add('Emilia lives in Venice. She keeps a raven.', 'Emilia lives in Prague now.', 'Emilia lives in Prague.');
+  assert.deepEqual([one.e.text, ...held(one)], ['Emilia lives in Venice. She keeps a raven.', ...BOTH('Emilia lives in Venice.', 'Emilia lives in Prague.')]);
+  const two = await add('Emilia is three hundred years old. She keeps a raven.', 'Emilia is five hundred years old.', 'Emilia is five hundred years old.');
+  assert.deepEqual([two.e.text, ...held(two)], ['Emilia is three hundred years old. She keeps a raven.', ...BOTH('Emilia is three hundred years old.', 'Emilia is five hundred years old.')]);
+  const three = await add('Emilia has two brothers, Corvin and Dane. She keeps a raven.', 'Emilia has a third brother, Elric.', 'Emilia has three brothers: Corvin, Dane and Elric.');
+  assert.deepEqual([three.e.text, ...held(three)], ['Emilia has two brothers, Corvin and Dane. She keeps a raven.', ...BOTH('Emilia has two brothers, Corvin and Dane.', 'Emilia has three brothers: Corvin, Dane and Elric.')]);
+  assert.ok((await askedAgain()).at(-1).includes('- “Emilia has three brothers: Corvin, Dane and Elric.” — my entry Emilia Vermaine says “Emilia has two brothers, Corvin and Dane.”'));
+  const four = await add('Emilia keeps three ravens.', 'Emilia keeps two ravens now.', 'Emilia keeps two ravens.');
+  assert.deepEqual([four.e.text, ...held(four)], ['Emilia keeps three ravens.', ...BOTH('Emilia keeps three ravens.', 'Emilia keeps two ravens.')]);
+  /* a "not" of his said otherwise, as his newer words say it: held, whatever else of his it tells less of */
+  const NOT2 = 'Emilia does not drink blood, and she does not fear human hunters.';
+  const five = await add(NOT2, 'Emilia drinks blood.', 'Emilia drinks blood and fears hunters.');
+  assert.deepEqual([five.e.text, ...held(five)], [NOT2, ...BOTH(NOT2, 'Emilia drinks blood and fears hunters.')]);
+  /* what its words leave in doubt goes in, said on the row with Undo: "is human" beside "is a vampire", her raven's eyes,
+   * blood "of animals" beside his "not human", a count beside a colour, another thing of hers, a place named with a word of
+   * his */
+  const goes = [
+    ['Emilia is a vampire. She keeps a raven.', 'Emilia is human.', 'Emilia is human.'],
+    ['Emilia has grey eyes. She walks the wall at dusk.', 'Emilia keeps a raven with green eyes.', 'She keeps a raven with green eyes.'],
+    ['Emilia has grey eyes. She walks the wall at dusk.', 'Emilia keeps a raven named Tock with green eyes.', 'She keeps a raven named Tock. Its eyes are green.'],
+    ['Emilia does not drink human blood. She keeps a raven.', 'Emilia drinks the blood of animals.', 'Emilia drinks the blood of animals.'],
+    ['Emilia keeps black ravens.', 'Emilia keeps two ravens.', 'Emilia keeps two ravens.'],
+    ['Emilia has grey eyes.', 'Emilia has black hair.', 'Emilia has black hair.'],
+    ['Emilia lives in the old mill.', 'Emilia lives in the mill by the river.', 'Emilia lives in the mill by the river.'],
+    ['Emilia has grey eyes and a cruel smile.', 'Emilia has grey and green eyes.', 'Emilia has grey and green eyes.'],
+    ['Emilia keeps two ravens.', 'Emilia keeps two ravens at home and three ravens in the tower.', 'Emilia keeps three ravens in the tower.'],
+    ['Emilia has grey eyes and a cruel smile.', 'One of Emilia’s eyes is green now.', 'Emilia has grey and green eyes.'],
+    /* (a "not" of another one's in her entry is not hers: "Her brother Dane does not drink blood" — and words his entry
+     * says only under that "not" are new words of hers, "dusk" or none) */
+    ['Emilia keeps a raven. Her brother Dane does not drink blood.', 'Emilia drinks blood at dusk.', 'Emilia drinks blood at dusk.'],
+    ['Emilia keeps a raven. Her brother Dane does not drink blood.', 'Emilia drinks blood.', 'Emilia drinks blood.'],
+    ['Emilia has grey eyes. It is said she never sleeps.', 'Emilia keeps a raven named Tock with green eyes.', 'She keeps a raven named Tock. Its eyes are green.']];
+  const went = [];
+  for (const [text, words, sentence] of goes) {
+    const x = await add(text, words, sentence);
+    assert.deepEqual([x.e.text, x.asks, x.row.refused, x.row.added.map((a) => a.status)], [`${text}\n\n${sentence}`, 1, [], ['made']], sentence);
+    went.push(x);
+  }
+  /* what it adds telling less of his than his does: never "both" — here it brings nothing, so nothing goes in */
+  const less = await add('Emilia has grey and green eyes.', 'Emilia has green eyes.', 'Emilia has green eyes.');
+  assert.deepEqual(less.row.refused.map((r) => [Boolean(r.both), Boolean(r.same)]), [[false, true]]);
+  /* …and where his entry says them as it does, besides another's "not" to them: the entry already says that */
+  const WINE = 'Emilia drinks wine at dinner. Her brother Dane does not drink wine.';
+  const same = await add(WINE, 'Emilia drinks wine.', 'Emilia drinks wine.');
+  assert.deepEqual([same.e.text, same.row.refused.map((r) => [Boolean(r.both), Boolean(r.same)])], [WINE, [[false, true]]]);
+  for (const x of [one, two, three, four, five, less, same, ...went]) await putAway(x.b);
+});
+
+await test('Quick add: where his newer words say “not” to words of his — “not her brother”, “no longer lives in Venice”, “instead of her steward” — and the answer lists no change for them, it is asked for that change: given, it goes in in their place; still none, nothing of it goes in beside them, said why, with Ask again (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const CORVIN = { name: 'Corvin', line: 'Emilia’s brother.', text: 'Corvin is Emilia’s brother. He keeps the keys.' };
+  const COUSIN = 'Actually, Corvin is her cousin, not her brother.';
+  const one = await quickOn({ ...CORVIN, words: COUSIN, answers: [{ verdict: 'Cousin.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is Emilia’s cousin.' }] }, { entries: [] }] });
+  assert.deepEqual([one.e.text, one.e.line, one.asks, one.row.refused.map((r) => [r.name, Boolean(r.denied), r.why]), one.row.verdictBy],
+    [CORVIN.text, CORVIN.line, 2, [['Corvin', true, 'your newer words say “not” to your “Corvin is Emilia’s brother.” — your partner listed no change for it']], 'app'], 'never “brother” beside “cousin”');
+  const again = (await askedAgain()).at(-1);
+  assert.ok(again.includes('My newer words say "not" to these words of mine, and you listed no change for them') && again.includes(`- “Corvin is Emilia’s brother.” — my entry Corvin; my newer words: “${COUSIN}”`)
+    && again.includes(`- “Emilia’s brother.” — my entry Corvin, its line; my newer words: “${COUSIN}”`) && again.includes('"changes": [{"was": "…", "now": "…"}]'), again);
+  /* asked, it lists the changes: in their place, his entry's words and his line, as his newer word */
+  const two = await quickOn({ ...CORVIN, words: COUSIN, answers: [{ verdict: 'Cousin.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is Emilia’s cousin.' }] },
+    { entries: [], changes: [{ was: 'Corvin is Emilia’s brother.', now: 'Corvin is Emilia’s cousin.' }, { was: 'Emilia’s brother.', now: 'Emilia’s cousin.' }] }] });
+  assert.deepEqual([two.e.text, two.e.line, two.row.refused, two.row.changes.map((c) => [c.mine, c.in])], ['Corvin is Emilia’s cousin. He keeps the keys.', 'Emilia’s cousin.', [], [[COUSIN, true], [COUSIN, true]]]);
+  /* "no longer", "instead of": the same */
+  const three = await quickOn({ text: 'Emilia lives in Venice. She keeps a raven.', words: 'Emilia no longer lives in Venice; she lives in Prague.', answers: [{ verdict: 'Prague.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'Emilia lives in Prague.' }] }, { entries: [] }] });
+  assert.deepEqual([three.e.text, three.row.refused.map((r) => [Boolean(r.denied), r.why])], ['Emilia lives in Venice. She keeps a raven.', [[true, 'your newer words say “not” to your “Emilia lives in Venice.” — your partner listed no change for it']]]);
+  const STEWARD = { name: 'Corvin', line: 'Emilia’s steward.', text: 'Corvin is Emilia’s steward. He keeps the keys of the house.' };
+  const four = await quickOn({ ...STEWARD, words: 'Make Corvin her brother instead of her steward.', answers: [{ verdict: 'Brother.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is Emilia’s brother.' }] }, { entries: [] }] });
+  assert.deepEqual([four.e.text, four.e.line, four.row.refused.map((r) => Boolean(r.denied))], [STEWARD.text, STEWARD.line, [true]]);
+  /* an entry his words name that nothing it wrote is for: said under Not put in — never as though nothing were wrong */
+  const five = await quickOn({ ...CORVIN, words: COUSIN, answers: [{ verdict: 'Noted.', entries: [] }, { entries: [] }] });
+  assert.deepEqual([five.e.text, five.asks, five.row.refused.map((r) => [r.name, Boolean(r.denied)])], [CORVIN.text, 2, [['Corvin', true]]]);
+  /* a "not" of his newer words to what no sentence of his tells, to what his tells another way ("hunts vampires" for "not
+   * a vampire"), or to another one's ("Her brother Dane is a vampire"): nothing held */
+  const six = await quickOn({ ...CORVIN, words: 'Corvin keeps the keys, not the ledgers.', answers: [{ verdict: 'In.', entries: [{ name: 'Corvin', kind: 'people', add: 'He never keeps the ledgers.' }] }] });
+  assert.deepEqual([six.e.text, six.row.refused], [`${CORVIN.text}\n\nHe never keeps the ledgers.`, []]);
+  const seven = await quickOn({ name: 'Corvin', line: 'A hunter.', text: 'Corvin hunts vampires.', words: 'Corvin is not a vampire; he is human.', answers: [{ verdict: 'In.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is human.' }] }] });
+  assert.deepEqual([seven.e.text, seven.row.refused], ['Corvin hunts vampires.\n\nCorvin is human.', []]);
+  const eight = await quickOn({ line: 'The elder of her house.', text: 'Emilia keeps a raven. Her brother Dane is a vampire.', words: 'Emilia is not a vampire; she is human.', answers: [{ verdict: 'In.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'Emilia is human.' }] }] });
+  assert.deepEqual([eight.e.text, eight.row.refused], ['Emilia keeps a raven. Her brother Dane is a vampire.\n\nEmilia is human.', []]);
+  /* nor one to words of his his sentence gives only some of ("not her younger brother"), one his sentence says "not" to as
+   * well, or one about another his words name */
+  const KEYS = { verdict: 'In.', entries: [{ name: 'Corvin', kind: 'people', add: 'He keeps the old keys.' }] };
+  const nine = await quickOn({ ...CORVIN, words: 'Corvin is not her younger brother; he keeps the old keys.', answers: [KEYS] });
+  const ten = await quickOn({ ...CORVIN, line: 'Her kin.', text: 'Corvin is not Emilia’s brother. He keeps the keys.', words: 'Corvin is not her brother; he keeps the old keys.', answers: [KEYS] });
+  const eleven = await quickOn({ ...CORVIN, words: 'Dane is not her brother. Corvin keeps the old keys.', answers: [KEYS] });
+  assert.deepEqual([nine, ten, eleven].map((x) => [x.row.refused, x.row.added.map((a) => a.status), x.e.text.includes('old keys')]), [[[], ['made'], true], [[], ['made'], true], [[], ['made'], true]]);
+  /* his sentence telling it with a word between ("Emilia’s younger brother"): the same as "Emilia’s brother" */
+  const twelve = await quickOn({ ...CORVIN, line: 'Her kin.', text: 'Corvin is Emilia’s younger brother. He keeps the keys.', words: COUSIN, answers: [{ verdict: 'Cousin.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is Emilia’s cousin.' }] }, { entries: [] }] });
+  assert.deepEqual([twelve.e.text, twelve.row.refused.map((r) => [Boolean(r.denied), r.why])], ['Corvin is Emilia’s younger brother. He keeps the keys.', [[true, 'your newer words say “not” to your “Corvin is Emilia’s younger brother.” — your partner listed no change for it']]]);
+  /* the change it lists, asked, told as the sentence of his newer words that says "not" — never another of them */
+  const twelve2 = await quickOn({ ...CORVIN, line: 'Her kin.', words: 'Corvin is Emilia’s steward now. Corvin is her cousin, not her brother.', answers: [{ verdict: 'In.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is Emilia’s steward.' }] },
+    { entries: [], changes: [{ was: 'Corvin is Emilia’s brother.', now: 'Corvin is Emilia’s cousin.' }] }] });
+  assert.deepEqual([twelve2.e.text, twelve2.row.changes.map((c) => [c.mine, c.in])], ['Corvin is Emilia’s cousin. He keeps the keys.\n\nCorvin is Emilia’s steward.', [['Corvin is her cousin, not her brother.', true]]]);
+  /* a "not" of his newer words about this one, beside a sentence of his telling those words another way: it goes in, as
+   * new — never held as saying both, nor let go as nothing new; one about another his words name never goes into hers */
+  const thirteen = await quickOn({ name: 'Corvin', line: 'A hunter.', text: 'Corvin hunts vampires.', words: 'Corvin is not a vampire.', answers: [{ verdict: 'In.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is not a vampire.' }] }] });
+  assert.deepEqual([thirteen.e.text, thirteen.row.refused, thirteen.asks], ['Corvin hunts vampires.\n\nCorvin is not a vampire.', [], 1]);
+  const fourteen = await quickOn({ line: 'The elder of her house.', text: 'Emilia keeps a cellar of wine.', words: 'Emilia never drinks wine.', answers: [{ verdict: 'In.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'Emilia never drinks wine.' }] }] });
+  assert.deepEqual([fourteen.e.text, fourteen.row.refused, fourteen.asks], ['Emilia keeps a cellar of wine.\n\nEmilia never drinks wine.', [], 1]);
+  const fifteen = await quickOn({ line: 'The elder of her house.', text: 'Emilia keeps a cellar of wine.', words: 'Dane never drinks wine. Emilia keeps a raven.', answers: [{ verdict: 'In.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'Emilia never drinks wine. She keeps a raven.' }] }, { entries: [] }] });
+  assert.equal(fifteen.e.text, 'Emilia keeps a cellar of wine.\n\nShe keeps a raven.', 'Dane’s “never” is not hers');
+  /* what it wrote that brings none of his words, only its own: said so, with Ask again — never "the entry already says that" */
+  const sixteen = await quickOn({ name: 'Corvin', line: 'A hunter.', text: 'Corvin hunts vampires.', words: 'Corvin is not a vampire.', answers: [{ verdict: 'In.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is human.' }] }] });
+  assert.deepEqual([sixteen.e.text, sixteen.row.refused], ['Corvin hunts vampires.', [{ name: 'Corvin', why: 'what it wrote says what your words do not (“human”) — nothing of it went in' }]]);
+  /* a "not" his entry says already brings nothing: never said twice */
+  const seventeen = await quickOn({ name: 'Corvin', line: 'A hunter.', text: 'Corvin is not a vampire, and he hunts them.', words: 'Corvin is not a vampire.', answers: [{ verdict: 'In.', entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin is not a vampire.' }] }] });
+  assert.deepEqual([seventeen.e.text, seventeen.row.refused.map((r) => Boolean(r.same))], ['Corvin is not a vampire, and he hunts them.', [true]]);
+  for (const x of [one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, twelve2, thirteen, fourteen, fifteen, sixteen, seventeen]) await putAway(x.b);
+});
+
+await test('Quick add: a change of his words that the app’s own ask invited is held to the keep rule as every change is — his “not” with it: “does not drink human blood” never stands as words without its “not”, nor “Dr. Halloway” as “the doctor” (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const HIS = 'Emilia does not drink human blood. She lives in Venice.';
+  /* held as saying both, asked once more: the change for where she lives goes in; the one letting his "not" go does not */
+  const one = await quickOn({ text: HIS, words: 'Emilia lives in Prague now. She drinks the blood of animals.', answers: [
+    { verdict: 'In.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'Emilia lives in Prague. She drinks the blood of animals.' }] },
+    { entries: [], changes: [{ was: 'She lives in Venice.', now: 'She lives in Prague.' }, { was: 'Emilia does not drink human blood.', now: 'Emilia drinks the blood of animals.' }] }] });
+  assert.equal(one.e.text, 'Emilia does not drink human blood. She lives in Prague.\n\nShe drinks the blood of animals.');
+  assert.deepEqual([one.asks, one.row.changes.map((c) => [c.in, c.couldNot])], [2, [[true, undefined], [false, true]]]);
+  /* and as its first answer gives it */
+  const two = await quickOn({ text: HIS, words: 'Emilia drinks the blood of animals.', answers: [{ verdict: 'In.', changes: [CHANGE('Emilia does not drink human blood.', 'Emilia drinks the blood of animals.', { mine: 'Emilia drinks the blood of animals' })], entries: [] }, { entries: [] }] });
+  assert.deepEqual([two.e.text, two.row.changes.map((c) => [c.in, c.couldNot])], [HIS, [[false, true]]]);
+  /* a "not" his newer words take back goes, as they say */
+  const three = await quickOn({ text: 'Emilia does not drink blood. She keeps a raven.', words: 'Emilia drinks blood.', answers: [{ verdict: 'In.', changes: [CHANGE('Emilia does not drink blood.', 'Emilia drinks blood.', { mine: 'Emilia drinks blood' })], entries: [] }] });
+  assert.deepEqual([three.e.text, three.row.changes.map((c) => c.in), three.asks], ['Emilia drinks blood. She keeps a raven.', [true], 1]);
+  /* …and "now" in his words is no word its words must carry */
+  const four = await quickOn({ text: 'Emilia does not drink blood. She keeps a raven.', words: 'Emilia drinks blood now.', answers: [{ verdict: 'In.', changes: [CHANGE('Emilia does not drink blood.', 'Emilia drinks blood.', { mine: 'Emilia drinks blood now' })], entries: [] }] });
+  assert.deepEqual([four.e.text, four.row.changes.map((c) => c.in), four.asks], ['Emilia drinks blood. She keeps a raven.', [true], 1]);
+  /* a name of his after a title's short form is a name the keep rule holds, the short form opening his sentence too:
+   * "Dr. Halloway" never let go for "the doctor" */
+  const DOCTOR = 'Emilia keeps a raven. Dr. Halloway treats her.';
+  const five = await quickOn({ text: DOCTOR, words: 'The doctor treats her now.', answers: [{ verdict: 'In.', changes: [CHANGE('Dr. Halloway treats her.', 'The doctor treats her.', { mine: 'The doctor treats her now' })], entries: [] }, { entries: [] }] });
+  assert.deepEqual([five.e.text, five.row.changes.map((c) => [c.in, c.couldNot])], [DOCTOR, [[false, true]]]);
+  for (const x of [one, two, three, four, five]) await putAway(x.b);
+});
+
+await test('Quick add: what a page says otherwise is about whom his words name — a quote naming two never holds the other’s own entry (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const b = await makeBook([['Emilia and Corvin walked the wall at dusk. Her silver hair caught the light; his was cropped short.']], { manual: true });
+  markAllSeen(b);
+  putEntries(b, [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder vampire.', text: 'Emilia keeps a raven.', by: 'you' }, { name: 'Corvin', kind: 'people', line: 'Her steward.', text: 'Corvin keeps the keys.', by: 'you' }]);
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Her black hair waits; his goes in.', conflicts: [{ mine: 'Emilia has black hair', against: 'Emilia and Corvin walked the wall at dusk. Her silver hair caught the light', where: 'Chapter One, Passage 1', why: 'the page gives silver' }],
+    entries: [{ name: 'Corvin', kind: 'people', add: 'Corvin has black hair.' }, { name: 'Emilia Vermaine', kind: 'people', add: 'Emilia has black hair.' }] }) }]);
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'Emilia has black hair. Corvin has black hair too.' });
+  const es = bib.entriesOf(b.novel());
+  assert.deepEqual([es.find((e) => e.name === 'Corvin').text, es.find((e) => e.name === 'Emilia Vermaine').text, out.row.refused.map((x) => [x.name, Boolean(x.held)])],
+    ['Corvin keeps the keys.\n\nCorvin has black hair.', 'Emilia keeps a raven.', [['Emilia Vermaine', true]]]);
+  await putAway(b);
+});
+
+await test('Quick add, his partner’s change and what it reads find a person by the name the book calls them — a title set aside (“Mr. Darcy”, “Captain Venn”, “Dr. Halloway”), a given name after the family’s (“Sasuke”, “Rukia”) — the kind asked decides a lone word (“Kuchiki” asked as a group is a group), and one another kind’s entry goes by too is never guessed (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const HIS = [
+    { name: 'Fitzwilliam Darcy', line: 'A proud gentleman.', text: 'Fitzwilliam Darcy owns Pemberley.' },
+    { name: 'Mara Venn', line: 'The keeper.', text: 'Mara Venn keeps the light at Crane Point.' },
+    { name: 'Ruth Halloway', line: 'The town doctor.', text: 'Ruth Halloway keeps the surgery on Mill Lane.' },
+    { name: 'Uchiha Sasuke', line: 'The last of his clan.', text: 'Uchiha Sasuke trains alone.' },
+    { name: 'Kuchiki Rukia', line: 'A soul reaper.', text: 'Kuchiki Rukia serves in the Thirteenth Division.' }];
+  const one = await quickAmong({ entries: HIS, words: 'Mr. Darcy owes ten thousand pounds to Wickham. Captain Venn commands the Harrow. Dr. Halloway treats the hunters in secret. Sasuke leads Team Seven. Rukia is sworn to Ichigo.', answers: [{ verdict: 'In.', entries: [
+    { name: 'Mr. Darcy', kind: 'people', add: 'Mr. Darcy owes ten thousand pounds to Wickham.' },
+    { name: 'Captain Venn', kind: 'people', add: 'Captain Venn commands the Harrow.' },
+    { name: 'Dr. Halloway', kind: 'people', add: 'Dr. Halloway treats the hunters in secret.' },
+    { name: 'Sasuke', kind: 'people', add: 'Sasuke leads Team Seven.' },
+    { name: 'Rukia', add: 'Rukia is sworn to Ichigo.' }] }] });
+  assert.deepEqual(one.es.map(([n, , t]) => [n, t]), [
+    ['Fitzwilliam Darcy', 'Fitzwilliam Darcy owns Pemberley.\n\nMr. Darcy owes ten thousand pounds to Wickham.'],
+    ['Mara Venn', 'Mara Venn keeps the light at Crane Point.\n\nCaptain Venn commands the Harrow.'],
+    ['Ruth Halloway', 'Ruth Halloway keeps the surgery on Mill Lane.\n\nDr. Halloway treats the hunters in secret.'],
+    ['Uchiha Sasuke', 'Uchiha Sasuke trains alone.\n\nSasuke leads Team Seven.'],
+    ['Kuchiki Rukia', 'Kuchiki Rukia serves in the Thirteenth Division.\n\nRukia is sworn to Ichigo.']], 'each into his own entry — never a second entry for one, and “Dr.” never let go');
+  /* his partner reading them by "entry:", and its own change: the same */
+  const b = one.b;
+  await reset();
+  await script([{ text: '<read>["entry: Mr. Darcy", "entry: Captain Venn", "entry: Dr. Halloway", "entry: Sasuke", "entry: Rukia"]</read>' }, { text: 'Done.' }]);
+  await talk.partnerSay({ novelId: b.novelId, chapterId: b.ids[0], text: 'Who owes Wickham?' });
+  const read = (await requests()).map((x) => String(x.body.messages.at(-1).content || '')).find((m) => m.includes('The entry “')) || '';
+  assert.ok(HIS.every((e) => read.includes(`The entry “${e.name}”`)) && !read.includes('there is no entry by that name'), read.slice(0, 800));
+  assert.deepEqual(['Mr. Darcy', 'Captain Venn', 'Dr. Halloway', 'Sasuke'].map((n) => changes.makeChange(b.novelId, { entry: n, kind: 'people', add: `${n} was seen at the inn.` }).status), ['made', 'made', 'made', 'made']);
+  assert.deepEqual(bib.entriesOf(b.novel()).map((e) => [e.name, e.text.endsWith('was seen at the inn.')]), HIS.map((e, i) => [e.name, i < 4]), 'into his, never new ones');
+  /* "Kuchiki": asked as a group, a group of its own; asked with no kind, the one of his who goes by it */
+  const two = await quickAmong({ entries: [HIS[4]], words: 'The Kuchiki are one of the four great noble houses.', answers: [{ verdict: 'In.', entries: [{ name: 'Kuchiki', kind: 'groups', line: 'A noble house.', text: 'The Kuchiki are one of the four great noble houses.' }] }] });
+  assert.deepEqual(two.es, [['Kuchiki Rukia', 'people', 'Kuchiki Rukia serves in the Thirteenth Division.'], ['Kuchiki', 'groups', 'The Kuchiki are one of the four great noble houses.']]);
+  const three = await quickAmong({ entries: [HIS[4]], words: 'Rukia keeps a sketchbook.', answers: [{ verdict: 'In.', entries: [{ name: 'Kuchiki', add: 'She keeps a sketchbook.' }] }] });
+  assert.deepEqual(three.es, [['Kuchiki Rukia', 'people', 'Kuchiki Rukia serves in the Thirteenth Division.\n\nShe keeps a sketchbook.']]);
+  /* a lone word an entry of another kind goes by too, or two of his by one given name: which is meant is never guessed,
+   * nor a new entry made beside them */
+  const four = await quickAmong({ entries: [HIS[1], { name: 'Venn Point', kind: 'places', line: 'A headland.', text: 'Venn Point juts into the sea.' }], words: 'Venn sails at dawn.', answers: [{ verdict: 'In.', entries: [{ name: 'Venn', add: 'Venn sails at dawn.' }] }] });
+  assert.deepEqual([four.es.map((e) => e[0]), four.row.refused], [['Mara Venn', 'Venn Point'], [{ name: 'Venn', why: 'more than one entry goes by Venn — name it by its full name' }]]);
+  const five = await quickAmong({ entries: [HIS[1], { name: 'Mara Hart', line: 'The fishwife.', text: 'Mara Hart sells fish.' }], words: 'Mara is afraid of the sea.', answers: [{ verdict: 'In.', entries: [{ name: 'Mara', add: 'Mara is afraid of the sea.' }] }] });
+  assert.deepEqual([five.es.map((e) => e[0]), five.row.refused.map((x) => x.why)], [['Mara Venn', 'Mara Hart'], ['more than one entry goes by Mara — name it by its full name']]);
+  for (const x of [one, two, three, four, five]) await putAway(x.b);
+});
+
+await test('Quick add passes the kind its answer gives: the lore “Order” never goes into his group “The Order” (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const one = await quickAmong({ entries: [{ name: 'The Order', kind: 'groups', line: 'A secret society.', text: 'The Order is a secret society that meets at dawn.' }], words: 'Order is the first law of the world, opposed to Chaos.',
+    answers: [{ verdict: 'In.', entries: [{ name: 'Order', kind: 'lore', line: 'The first law of the world.', text: 'Order is the first law of the world, opposed to Chaos.' }] }] });
+  assert.deepEqual([one.es, one.row.refused], [[['The Order', 'groups', 'The Order is a secret society that meets at dawn.']],
+    [{ name: 'Order', why: '“Order” finds The Order, a group — its kind is changed under its own name, The Order; for something else, give it a name of its own' }]]);
+  await putAway(one.b);
+});
+
+await test('Quick add: a name changed everywhere while its partner answers is carried into what it writes and the rows it shows — never a stray entry for the old name, never his entry named back, never a change of his words lost — and into what it is asked, his words and its own answer with them; words it quotes from the book stand where they stand, and his entry it read whole was read whole (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const WORDS = 'Tom limps now and hides in the cellar. Elsa nurses Tom. The Old Mill stands.';
+  const fresh = async () => {
+    const b = await makeBook([['Tom came home from the war.', 'The Old Mill burned down in spring.']], { manual: true });
+    markAllSeen(b);
+    putEntries(b, [{ name: 'Tom', kind: 'people', line: 'Mara’s brother.', text: 'Tom walks straight.', by: 'you' }]);
+    await reset();
+    return b;
+  };
+  /* made while its first answer is on the way */
+  const b = await fresh();
+  await script([{ pause: 1.5, text: JSON.stringify({ verdict: 'Tom limps now; the mill waits for your word.',
+    conflicts: [{ mine: 'The Old Mill stands', against: 'The Old Mill burned down in spring', where: 'Chapter One, Passage 2', why: 'it burned' }],
+    changes: [{ mine: 'Tom limps now', was: 'Tom walks straight', now: 'Tom limps', where: 'your entry Tom', why: 'newer' }],
+    entries: [{ name: 'Tom', kind: 'people', add: 'Tom hides in the cellar.' }, { name: 'Elsa', kind: 'people', line: 'Tom’s nurse.', text: 'Elsa nurses Tom.' }] }) }]);
+  const asking = quickadd.quickAdd({ novelId: b.novelId, words: WORDS });
+  for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(b.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  const out = await asking;
+  assert.equal(out.ok, true, out.error);
+  const es = bib.entriesOf(b.novel());
+  assert.deepEqual(es.map((e) => [e.name, e.line, e.text]), [['Thomas', 'Mara’s brother.', 'Thomas limps.\n\nThomas hides in the cellar.'], ['Elsa', 'Thomas’s nurse.', 'Elsa nurses Thomas.']], 'never a stray "Tom"');
+  const row = out.row;
+  assert.deepEqual([row.said, row.verdict, row.changes.map((c) => [c.mine, c.was, c.in, c.put]), row.conflicts.map((c) => [c.mine, c.against, c.label])],
+    [WORDS, 'Thomas limps now; the mill waits for your word.', [['Thomas limps now', 'Thomas walks straight', true, 'Thomas limps.']], [['The Old Mill stands', 'The Old Mill burned down in spring', 'Chapter One, Passage 2']]], 'his words as he typed them; its rows in the book’s names');
+  await putAway(b);
+  /* made while it is asked once more: what came of its first answer carries it as well */
+  const c = await fresh();
+  putEntries(c, [{ name: 'Tom', kind: 'people', line: 'Mara’s brother.', text: 'Tom has grey eyes.', by: 'you' }]);
+  await script([{ text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Tom', kind: 'people', add: 'Tom has green eyes.' }, { name: 'Elsa', kind: 'people', line: 'Tom’s nurse.', text: 'Elsa nurses Tom.' }] }) },
+    { pause: 1.5, text: JSON.stringify({ entries: [], changes: [{ was: 'Tom has grey eyes.', now: 'Tom has green eyes.' }] }) }]);
+  const asking2 = quickadd.quickAdd({ novelId: c.novelId, words: 'Tom has green eyes. Elsa nurses Tom.' });
+  for (let i = 0; i < 300 && !(await askedAgain()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(c.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  const out2 = await asking2;
+  assert.equal(out2.ok, true, out2.error);
+  assert.deepEqual(bib.entriesOf(c.novel()).map((e) => [e.name, e.text]), [['Thomas', 'Thomas has green eyes.'], ['Elsa', 'Elsa nurses Thomas.']]);
+  assert.deepEqual([out2.row.again, out2.row.changes.map((x) => [x.was, x.in])], ['answered', [['Thomas has grey eyes.', true]]]);
+  await putAway(c);
+  /* made while its first answer is on the way, and then asked once more: asked in the book's names — its own answer and
+   * his words with them — and his words judged so: his "not her brother" holds Thomas's entry as it held Tom's */
+  const d = await fresh();
+  putEntries(d, [{ name: 'Tom', kind: 'people', line: 'Her kin.', text: 'Tom is Emilia’s brother. He keeps the keys.', by: 'you' }]);
+  await script([{ pause: 1.5, text: JSON.stringify({ verdict: 'Cousin.', entries: [{ name: 'Tom', kind: 'people', add: 'Tom is Emilia’s cousin.' }] }) }, { text: JSON.stringify({ entries: [] }) }]);
+  const asking3 = quickadd.quickAdd({ novelId: d.novelId, words: 'Tom is her cousin, not her brother.' });
+  for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(d.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  const out3 = await asking3;
+  assert.equal(out3.ok, true, out3.error);
+  assert.deepEqual([bib.entriesOf(d.novel()).map((e) => [e.name, e.text]), out3.row.refused.map((r) => [r.name, Boolean(r.denied)])],
+    [[['Thomas', 'Thomas is Emilia’s brother. He keeps the keys.']], [['Thomas', true]]], 'never “cousin” beside “brother”');
+  const second = (await quickBodies()).at(-1).body.messages;
+  assert.ok(!/\bTom\b/.test(String(second.at(-2).content)) && !/\bTom\b/.test(String(second.at(-1).content)) && String(second.at(-1).content).includes('Thomas is Emilia’s brother.'), JSON.stringify(second.slice(-2)).slice(0, 600));
+  await putAway(d);
+  /* a new name holding the old one ("Thom" in "Thomas"): its words carried all the same, never read as the book's */
+  const e = await makeBook([['Thom came home.']], { manual: true });
+  markAllSeen(e);
+  putEntries(e, [{ name: 'Thom', kind: 'people', line: 'Mara’s brother.', text: 'Thom keeps the keys.', by: 'you' }]);
+  await reset();
+  await script([{ pause: 1.5, text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Thom', kind: 'people', add: 'Thom limps.' }] }) }]);
+  const asking4 = quickadd.quickAdd({ novelId: e.novelId, words: 'Thom limps.' });
+  for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(e.novelId, { rename: { from: 'Thom', to: 'Thomas' } }).status, 'made');
+  const out4 = await asking4;
+  assert.equal(out4.ok, true, out4.error);
+  assert.deepEqual(bib.entriesOf(e.novel()).map((x) => [x.name, x.text]), [['Thomas', 'Thomas keeps the keys.\n\nThomas limps.']]);
+  await putAway(e);
+  /* a new name holding the old one whole ("Oda" in "Oda Nobunaga"): a quote of his words is renamed where its words
+   * stand renamed — his "the clan of Oda" made "the clan of Takeda", never "the clan of Takeda Nobunaga" */
+  const f = await makeBook([['Oda rode out at dawn.']], { manual: true });
+  markAllSeen(f);
+  putEntries(f, [{ name: 'Mara', kind: 'people', line: 'A retainer.', text: 'Mara serves the clan of Oda.', by: 'you' }]);
+  await reset();
+  await script([{ pause: 1.5, text: JSON.stringify({ verdict: 'In.', changes: [{ mine: 'Mara serves the clan of Takeda now', was: 'the clan of Oda', now: 'the clan of Takeda', where: 'your entry Mara', why: 'newer' }], entries: [] }) }, { text: JSON.stringify({ entries: [] }) }]);
+  const asking5 = quickadd.quickAdd({ novelId: f.novelId, words: 'Mara serves the clan of Takeda now.' });
+  for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(f.novelId, { rename: { from: 'Oda', to: 'Oda Nobunaga' } }).status, 'made');
+  const out5 = await asking5;
+  assert.equal(out5.ok, true, out5.error);
+  assert.deepEqual([bib.entriesOf(f.novel()).map((x) => x.text), out5.row.changes.map((c) => [c.was, c.in])], [['Mara serves the clan of Takeda.'], [['the clan of Oda Nobunaga', true]]]);
+  await putAway(f);
+  /* a quote of the book that stands untouched in it as it is now — the old name typed again, by hand, where the change
+   * had made it new — stays as it stands, and is found there */
+  const g = await fresh();
+  await script([{ pause: 1.5, text: JSON.stringify({ verdict: 'It waits for your word.', conflicts: [{ mine: 'Tom died in the war', against: 'Tom came home from the war', where: 'Chapter One, Passage 1', why: 'he came home' }], entries: [] }) }, { text: JSON.stringify({ entries: [] }) }]);
+  const asking6 = quickadd.quickAdd({ novelId: g.novelId, words: 'Tom died in the war.' });
+  for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(g.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  assert.equal(writer.saveEdit({ novelId: g.novelId, chapterId: g.ids[0], passageId: g.ch(0).passages[0].id, text: 'Tom came home from the war.' }), true);
+  const out6 = await asking6;
+  assert.equal(out6.ok, true, out6.error);
+  assert.deepEqual(out6.row.conflicts.map((c) => [c.mine, c.against, c.label]), [['Thomas died in the war', 'Tom came home from the war', 'Chapter One, Passage 1']]);
+  await putAway(g);
+  /* his entry it read whole, changed since by the name alone: read whole all the same — what it gave written whole as
+   * it gave it, never "it had not read your entry whole" */
+  const h = await fresh();
+  await script([{ pause: 1.5, text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Tom', kind: 'people', text: 'Tom walks straight. Tom keeps bees.' }] }) }, { text: JSON.stringify({ entries: [] }) }]);
+  const asking7 = quickadd.quickAdd({ novelId: h.novelId, words: 'Tom keeps bees.' });
+  for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(h.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  const out7 = await asking7;
+  assert.equal(out7.ok, true, out7.error);
+  assert.deepEqual([bib.entriesOf(h.novel()).map((x) => [x.name, x.text]), JSON.stringify(out7.row).includes('had not read')], [[['Thomas', 'Thomas walks straight. Thomas keeps bees.']], false]);
+  await putAway(h);
+  /* made as he sends his words, before they are taken: asked in the book's names, his words with them — the row keeps
+   * them as he typed them */
+  const k = await fresh();
+  await script([{ text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Thomas', kind: 'people', add: 'Thomas keeps bees.' }] }) }, { text: JSON.stringify({ entries: [] }) }]);
+  const asking8 = quickadd.quickAdd({ novelId: k.novelId, words: 'Tom keeps bees.' });
+  assert.equal(changes.makeChange(k.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  const out8 = await asking8;
+  assert.equal(out8.ok, true, out8.error);
+  const sent8 = String((await quickBodies())[0].body.messages.at(-1).content);
+  assert.ok(sent8.includes('Thomas keeps bees.') && !/\bTom\b/.test(sent8), sent8.slice(-600));
+  assert.deepEqual([bib.entriesOf(k.novel()).map((x) => [x.name, x.text]), out8.row.said], [[['Thomas', 'Thomas walks straight.\n\nThomas keeps bees.']], 'Tom keeps bees.']);
+  await putAway(k);
+  /* made while an answer it could not read is on the way: asked for it again with that answer in the book's names */
+  const m = await fresh();
+  await script([{ pause: 1.5, text: 'Tom keeps bees, so his entry gains a line.' }, { text: JSON.stringify({ verdict: 'In.', entries: [{ name: 'Thomas', kind: 'people', add: 'Thomas keeps bees.' }] }) }, { text: JSON.stringify({ entries: [] }) }]);
+  const asking9 = quickadd.quickAdd({ novelId: m.novelId, words: 'Tom keeps bees.' });
+  for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+  assert.equal(changes.makeChange(m.novelId, { rename: { from: 'Tom', to: 'Thomas' } }).status, 'made');
+  const out9 = await asking9;
+  assert.equal(out9.ok, true, out9.error);
+  const retry = (await quickBodies())[1].body.messages;
+  assert.equal(String(retry.at(-2).content), 'Thomas keeps bees, so his entry gains a line.');
+  assert.ok(!/\bTom\b/.test(String(retry.at(-3).content)), String(retry.at(-3).content).slice(-600));
+  assert.deepEqual(bib.entriesOf(m.novel()).map((x) => [x.name, x.text]), [['Thomas', 'Thomas walks straight.\n\nThomas keeps bees.']]);
+  await putAway(m);
+});
+
+await test('a title’s short form or an initial ends no sentence wherever sentences decide what is written — his entry’s, its times, what is new of a card, the names a summary keeps, a note at a page’s end (2.12.41, the fourth review)', async () => {
+  /* his entry's sentences, and a time kept under the parts it was cut into before */
+  const t0 = Date.now() - 3600000;
+  const old = { name: 'Ruth Halloway', kind: 'people', line: 'The town doctor.', text: 'Dr. Halloway treats the hunters. She keeps the surgery.', at: Date.now(),
+    saidAt: Object.fromEntries(['The town doctor.', 'Dr.', 'Halloway treats the hunters.', 'She keeps the surgery.'].map((s) => [shape.sentenceKey(s), t0])) };
+  assert.deepEqual(shape.entrySentences(old), ['The town doctor.', 'Dr. Halloway treats the hunters.', 'She keeps the surgery.']);
+  /* (an initial ends none — "J. Hale" — but "I." ends one, unless another initial follows it) */
+  assert.deepEqual(shape.entrySentences({ text: 'J. Hale is older than I. She rules alone. I. M. Vane drew the tower.' }), ['J. Hale is older than I.', 'She rules alone.', 'I. M. Vane drew the tower.']);
+  assert.deepEqual([...shape.stampsOf(old).values()], [t0, t0, t0], 'as old as it was');
+  /* what is new of a card's words */
+  assert.deepEqual(archivist.newSentences('Ruth keeps the surgery.', 'Dr. Halloway treats the hunters in secret. Ruth keeps the surgery.'), ['Dr. Halloway treats the hunters in secret.']);
+  /* the names a chapter's summary must keep: a name after a title's short form opens no sentence */
+  assert.deepEqual(namesjs.tokensMissing('Dr. Halloway came to the mill. Mara asked Dr. Halloway in.', 'Mara asked the doctor in.').names, ['Halloway']);
+  /* a note at a page's end, every sentence of it a note */
+  const note = 'What will you do next? Let me know if Dr. Halloway should live.';
+  assert.deepEqual(textshape.finishTail(`${story200}\n\n${note}`), { text: story200, removed: note, kinds: ['note'] });
+});
+
+await test('the notes’ check puts right what the helper keeps of the book only with a whole of it — one line is not the book, a title’s short form in it or not (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  /* written from the book: one line with "Dr." in it is one line, never two sentences — kept as tried */
+  const a = await makeBook([['Dr. Halloway met Mira at the gate.']]);
+  markAllSeen(a);
+  await reset();
+  await script([{ text: JSON.stringify({ about: 'Dr. Halloway keeps the light.' }) }]);
+  await archivist.run(a.novelId);
+  assert.equal((a.novel().kept.about || {}).text, '', 'never one line for what the book is about');
+  await putAway(a);
+  const b = await makeBook([['Dr. Halloway met Mira at the gate.']]);
+  markAllSeen(b);
+  /* (a card for the check to hold to the book) */
+  store.change('novel', b.novelId, (n) => { n.notes.people.push({ id: 'pe-h', name: 'Halloway', aka: [], about: 'The town doctor.', now: '' }); }, { now: true });
+  await reset();
+  /* kept first, whole, beside his words as they stand */
+  await script([{ text: JSON.stringify({ about: 'A keeper finds a letter. It pulls her home.' }) }]);
+  await archivist.run(b.novelId);
+  assert.equal(b.novel().kept.about.text, 'A keeper finds a letter. It pulls her home.');
+  const audit = async (about) => { await reset(); archivist.askAudit(b.novelId); await script([{ text: JSON.stringify({ clear: true, verdict: 'Checked.', about }) }]); await archivist.run(b.novelId); };
+  await audit('Dr. Halloway confronts Mira.');
+  assert.equal(b.novel().kept.about.text, 'A keeper finds a letter. It pulls her home.', 'one line — never two sentences for “Dr.”');
+  await audit('Dr. Halloway confronts Mira. She keeps the light.');
+  assert.equal(b.novel().kept.about.text, 'Dr. Halloway confronts Mira. She keeps the light.', 'a whole of it is put right');
   await putAway(b);
 });
 

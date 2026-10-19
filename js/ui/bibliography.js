@@ -580,8 +580,10 @@ function quickRow(novelId, r, redraw) {
     /* each newer word of his: where it went in, or that it did not (2.12.40, the review) */
     const notIn = ' — it did not go in: nothing it wrote carries it. Send your words again.';
     /* (no words for it that hold, asked once more and still none: nothing of it went in, his words as he wrote them —
-     * never his own words spliced in: 2.12.41, the third review) */
+     * never his own words spliced in: 2.12.41, the third review; that it gave none only where it gave none, else that its
+     * words for it could not go in as they were: the fourth) */
     const noWords = '; it did not go in — your partner gave no words for it.';
+    const couldNot = '; it did not go in — its words for it could not go in as they were.';
     row.append(section('It changes your earlier words', r.changes.map((x, i) => {
       const kids = [h('span', `“${x.mine}”`), ' — ', h('span', x.label), ` said “${x.was}”`];
       if (x.kind === 'about') {
@@ -590,8 +592,9 @@ function quickRow(novelId, r, redraw) {
           : b.status === 'made' || b.status === 'kept' ? `; it says “${b.now}” now.`
             : b.status === 'undone' ? ' — put back as it was.'
               : b.noWords ? noWords
-                : ` — it still says it: ${b.why}.`);
-      } else if (x.in === false) kids.push(x.noWords ? noWords : x.waits ? ' — it did not go in: the entry it goes into waits, under Not put in.' : notIn);
+                : b.couldNot ? couldNot
+                  : ` — it still says it: ${b.why}.`);
+      } else if (x.in === false) kids.push(x.noWords ? noWords : x.couldNot ? couldNot : x.waits ? ' — it did not go in: the entry it goes into waits, under Not put in.' : notIn);
       else if (x.kind === 'entry') { if (x.put) kids.push(`; it says “${x.put}” now.`); else if (x.in) kids.push(' — your entry says your newer word now.'); }
       /* his premise is his record of what he asked for that passage: never written again — his newer word stands over it */
       else if (x.kind === 'premise') kids.push(' — your newer word stands over it.');
