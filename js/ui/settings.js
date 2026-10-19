@@ -572,7 +572,7 @@ function rolesGroup(hs, open) {
   checkSel.addEventListener('change', () => {
     changeHouse((x) => {
       x.roles = x.roles || {};
-      /* a checker chosen after Nobody begins now: writing from before waits to be asked for (checker.js checksFromOf) */
+      /* a checker chosen after Nobody begins now: what is written from now on goes first, writing from before after it (checker.js checksFromOf, nextBatch) */
       /* (with Super automatic checking for Nobody already, from when it was switched on: never later — 2.12.35, the pages
        * written since and not checked yet were dropped to Check this chapter) */
       if (x.roles.checker === 'off' && checkSel.value !== 'off') { const all = superFrom(x); x.checksFrom = all === null ? Date.now() : Math.min(Date.now(), all); }
@@ -588,7 +588,7 @@ function rolesGroup(hs, open) {
     roleSel('writer', 'The writer', 'Writes the pages, the other takes, the rewrites, and narrates the scenes you play. The writer button under the page switches it too.', false),
     roleSel('partner', 'The partner', 'Talks the book over with you.', true),
     roleSel('helper', 'The helper', 'Keeps the notes and the chapter summaries, quietly, after each change. A quick, inexpensive model is perfect here.', true),
-    field('The checker', checkSel, `Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. ${superOn(hs) ? 'With Super automatic on, it checks every page of the book, the newest first — words brought in from a file only when you ask.' : 'Writing from before it began is checked only when you ask.'} A quick, inexpensive model is perfect here.${superOn(hs) && curCheck === 'off' ? ' With Super automatic on, the helper’s connection checks even though this says Nobody.' : ''}`),
+    field('The checker', checkSel, `Reads each passage once it’s finished — grammar, wording that sounds machine-made, your words to avoid, slips against the book — and puts what it would change behind the bubble on the page, for you to apply or leave. It checks every page of the book by itself, the newest first — words brought in from a file only when you ask. A quick, inexpensive model is perfect here.${superOn(hs) && curCheck === 'off' ? ' With Super automatic on, the helper’s connection checks even though this says Nobody.' : ''}`),
     judgeField(hs),
     ...autoFields(hs),
     ideasField(hs));
@@ -622,7 +622,7 @@ function superField(hs) {
   });
   return h('div.field.superauto',
     h('label.toggle', on, h('span', 'Super automatic')),
-    h('em', 'Everything that can happen by itself does — you write the premises and read, and play a scene now and then. In every book the helper keeps What it’s about and How it reads, the bibliography fills itself from the pages, and Smart recall brings in what a page needs that nothing on it names. The writer ends a chapter where the story would, and your next page goes in the next one. The checker checks every page of the book — those written before too, the newest first — and its fixes go in by themselves. Your partner’s changes land at once, with Undo. Your notes are kept as always — your own cards too: what the book adds goes beside your words, and the notes’ check puts right what the book contradicts. Never by itself: a passage under your mark written again (its own switch, below) and your mark. Off: every switch is as you set it; what was written meanwhile stays.'));
+    h('em', 'Everything that can happen by itself does — you write the premises and read, and play a scene now and then. In every book the helper keeps What it’s about and How it reads, the bibliography fills itself from the pages, and Smart recall brings in what a page needs that nothing on it names. The writer ends a chapter where the story would, and your next page goes in the next one. The checker’s fixes go in by themselves on every page it checks — and it checks even with Nobody chosen. Your partner’s changes land at once, with Undo. Your notes are kept as always — your own cards too: what the book adds goes beside your words, and the notes’ check puts right what the book contradicts. Never by itself: a passage under your mark written again (its own switch, below) and your mark. Off: every switch is as you set it; what was written meanwhile stays.'));
 }
 
 /* what happens by itself: the checker's fixes, and a passage under his mark

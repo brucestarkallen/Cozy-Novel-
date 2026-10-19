@@ -108,14 +108,15 @@ export function entryFor(chapter, p) {
 }
 
 /* a passage the checker reads by itself: finished, not checked as it reads
- * now, and written since checking began here (or in a chapter he asked to
- * have checked whole) */
+ * now — any page of the book, in either mode (2.12.38); words brought in
+ * from a file only in a chapter he asked to have checked */
 /* checked, but with no grade on the ten checks (never one it would not give: graded false) */
 const needsGrade = (e) => Boolean(e) && !e.aside && e.graded !== false && !(e.grade && Number.isFinite(e.grade.overall) && e.grade.of);
 
 /* WHEN CHECKING BEGAN HERE: Settings' own start (set when the house was made, and again when he chooses a checker
  * after Nobody: settings.js) — or, with Nobody chosen and Super automatic checking for him, when Super automatic was
- * switched on: writing from before it began waits, as ever, to be asked for (`checkAll`), never all checked at once */
+ * switched on. What is new since goes first (nextBatch); writing from before is checked by itself after it, in either
+ * mode (2.12.38) */
 export function checksFromOf(house) {
   const from = house && house.checksFrom;
   const roles = (house && house.roles) || {};
@@ -130,22 +131,23 @@ function wanted(house, chapter, p) {
   if (!v || v.streaming || !String(v.text || '').trim()) return false;
   const e = entryFor(chapter, p);
   /* an answer that gave it no grade: graded again on a later look, twice at most (S06-G6) — and one checked
-   * with no grade (the judge was off, or its grade is from before the ten checks) graded once he asks for
-   * the chapter: its grade alone is asked for, what it found kept */
+   * with no grade (the judge was off, or its grade is from before the ten checks) graded by itself once the judge
+   * is on, in either mode: its grade alone is asked for, what it found kept (2.12.38 — his word: "manual doesn't
+   * mean that something is not automatic and self heal"; before, only once he asked for the chapter) */
   if (e) {
     if (!judgeOf(house)) return false;
     if (e.graded === false) return (e.tries || 0) < 2;
-    return Boolean(chapter.checkAll) && needsGrade(e);
+    return needsGrade(e);
   }
   if (chapter.checkAll) return true;
   /* by itself, only a finished page: one cut short or stopped waits for its Go on (Cozy Tavern M552) */
   if (v.cut) return false;
   if (howOf(v) === 'imported') return false;
-  /* Super automatic: every page of the book — written before it was switched on too, and words changed since they
-   * were checked (his word, 18 October: "make it like Grammarly that fixes everything"); the newest first (nextBatch) */
-  if (superOn(house)) return true;
-  const from = checksFromOf(house);
-  return Number.isFinite(from) && bornOf(v) >= from;
+  /* every page of the book, in either mode — written before checking began too, and words changed since they were
+   * checked (his word, 18 October: "make it like Grammarly that fixes everything"; and 19 October: manual decides
+   * what goes in, never whether the book is looked at — 2.12.38); the newest first (nextBatch). What its fixes do is
+   * the mode's: with Super automatic they go in by themselves, else they wait for him (autoOf) */
+  return true;
 }
 
 function chaptersOf(novelId) {
@@ -236,7 +238,7 @@ export function unchecked(novelId, chapterId = null) {
   const judge = Boolean(judgeOf(house));
   let n = 0;
   let words = 0;
-  /* checked, never graded — with the judge on, graded when he asks for the chapter (in one he asked for already, they wait their turn) */
+  /* checked, never graded — with the judge on, graded by itself, in either mode (2.12.38: waiting() counts them; in a chapter he asked for, they wait their turn) */
   let ungraded = 0;
   for (const c of chaptersOf(novelId)) {
     if (chapterId && c.id !== chapterId) continue;
@@ -252,13 +254,10 @@ export function unchecked(novelId, chapterId = null) {
   }
   return { passages: n, words, ungraded };
 }
-/* a new page that stopped partway: checked once Go on finishes it — never "older writing" (S11-G11); with Super
- * automatic, any page that stopped partway (2.12.35: every page is checked, so an old one is too once Go on finishes it) */
+/* a page that stopped partway: checked once Go on finishes it — never "older writing" (S11-G11); any page, in either
+ * mode (every page is checked: an old one too, once Go on finishes it — 2.12.35, and with Super automatic off 2.12.38) */
 function waitsForGoOn(house, v) {
-  if (!v || !v.cut || howOf(v) === 'imported') return false;
-  if (superOn(house)) return true;
-  const from = checksFromOf(house);
-  return Number.isFinite(from) && bornOf(v) >= from;
+  return Boolean(v && v.cut && howOf(v) !== 'imported');
 }
 function cutWaiting(novelId) {
   const house = store.peek('house', 'house') || {};
@@ -303,10 +302,11 @@ export function stateOf(novelId) {
   if (again) return { state: 'waiting', words: `An automatic rewrite couldn’t finish just now. It tries again by itself in ${archivist.waitWords(again.until - Date.now())}.`, count };
   const toGo = waiting(novelId);
   if (toGo) return { state: 'waiting', words: toGo > 3 ? `${plural(toGo, 'passage')} to check — the newest first, a few at a time.` : 'The newest words are checked in a moment.', count };
-  /* green says only what is true: older writing, never sent unasked, is not
-   * called checked; a page that stopped partway waits for its Go on; one its
-   * model would not check is said */
-  const { passages: older, ungraded } = unchecked(novelId);
+  /* green says only what is true: words brought in from a file, never sent
+   * unasked, are not called checked; a page that stopped partway waits for its
+   * Go on; one its model would not check is said */
+  /* (a passage checked but not graded is graded by itself once the judge is on — waiting() counts it, never a task for him: 2.12.38) */
+  const { passages: older } = unchecked(novelId);
   const cut = cutWaiting(novelId);
   const aside = setAsideList(novelId).length;
   const asideSaid = aside ? `${aside === 1 ? 'One passage' : plural(aside, 'passage')} its model would not check — in Suggestions, with Check it again.` : '';
@@ -314,9 +314,8 @@ export function stateOf(novelId) {
   const more = [
     cut ? `${cut === 1 ? 'A passage that stopped partway is' : `${plural(cut, 'passage')} that stopped partway are`} checked once Go on finishes ${cut === 1 ? 'it' : 'them'}.` : '',
     asideSaid,
-    /* (with Super automatic every page is checked by itself: what waits for him is only words brought in from a file) */
-    older ? `${plural(older, superOn(house) ? 'passage' : 'older passage')} ${superOn(house) ? 'brought in from a file ' : ''}${older === 1 ? 'is' : 'are'} checked only when you ask.` : '',
-    ungraded ? `${ungraded === 1 ? 'One passage is' : `${plural(ungraded, 'passage')} are`} checked but not graded yet — Check this chapter, or Check the whole book, grades ${ungraded === 1 ? 'it' : 'them'}.` : '',
+    /* (every page is checked by itself, in either mode: what waits for him is only words brought in from a file) */
+    older ? `${plural(older, 'passage')} brought in from a file ${older === 1 ? 'is' : 'are'} checked only when you ask.` : '',
   ].filter(Boolean).join(' ');
   return { state: 'clean', words: more ? `${cut || aside ? 'Everything else new' : 'Everything new'} is checked — nothing to change. ${more}` : 'Everything is checked — nothing to change.', count: 0 };
 }
@@ -448,7 +447,7 @@ function nextBatch(novelId, limit, { one = false } = {}) {
   const novel = store.peek('novel', novelId);
   const from = checksFromOf(house);
   /* what is new first — written since checking began, words changed since they were checked, a chapter he asked for —
-   * and only then, with Super automatic, the book's older pages (2.12.35): a backlog never holds up the newest page */
+   * and only then the book's older pages (2.12.35; in either mode since 2.12.38): a backlog never holds up the newest page */
   const isNew = (c, p) => { const v = picked(p); return Boolean(c.checkAll) || Boolean(c.checks && c.checks[p.id] && c.checks[p.id][v.id]) || (Number.isFinite(from) && bornOf(v) >= from); };
   for (const older of [false, true]) for (const c of chaptersOf(novelId)) {
     const list = [];
@@ -1022,6 +1021,9 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
   };
   /* a passage whose grades could not be asked for again just now: graded on a later look */
   const gradeLater = new Set();
+  /* asked again and answered, still with no grade: its model will not grade it — marked so (graded false, as the
+   * grades alone mark it, noGrade), since one checked with no grade is graded by itself on a later look (2.12.38) */
+  const wontGrade = new Set();
   if (judge) {
     gather(grades);
     /* a passage the answer gave no grade: asked once more for its grades alone (S06-G6) — never for one read in parts */
@@ -1031,7 +1033,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
       const again = await archivist.askJson(conn, system, request(numberedText(novel, chapter, passages), { gradesOnly: true }), { want: (o) => Array.isArray(o.grades), beforeAsk: choice.beforeAsk });
       await archivist.mustHold('checker', novelId);
       /* answered and still no grade: its model will not grade it — checked, never asked in a loop */
-      if (again.ok) gather(again.obj.grades);
+      if (again.ok) { gather(again.obj.grades); for (const a of missing) wontGrade.add(a.pid); }
       else for (const a of missing) gradeLater.add(a.pid);
     }
   }
@@ -1090,7 +1092,7 @@ async function checkBatch(novelId, conn, batch, limit, choice) {
     const home = homeOf(novelId, chapter.id, a.pid);
     if (!home) continue;
     /* no grade, its asking again stopped by a fault: checked again on a later look (twice at most), never counted judged */
-    const ungraded = judge && !grade && gradeLater.has(a.pid) ? { graded: false, tries: a.tries + 1 } : {};
+    const ungraded = judge && !grade && gradeLater.has(a.pid) ? { graded: false, tries: a.tries + 1 } : judge && !grade && wontGrade.has(a.pid) ? { graded: false, tries: 2 } : {};
     /* (read in parts: its chapter, if it is the whole of one, is read whole too — wholeWanted) */
     store.change('chapter', home, chapterSteps.setCheck(a.pid, a.vid, { round: newId('ck'), sig: a.sig, at, items, ...(grade ? { grade } : {}), ...ungraded, ...(numbered.length > 1 ? { parts: numbered.length } : {}) }), { checkpoint: true });
   }
@@ -1881,13 +1883,9 @@ function settleWhole(novelId) {
     else if (!wholeWanted(c)) wholeDone(c.id, sig, wordsOf(ps), { byCheck: true });
   }
 }
-/* the next chapter to read whole — {chapter, sig} — or {wait} until one may be, or null. Writing from before checking
- * began is never read whole unasked, as it is never checked unasked — with Super automatic every page is wanted
- * (2.12.35, the audit: the first look after 2.12.33 read every ended chapter of a checked book whole by itself) */
+/* the next chapter to read whole — {chapter, sig} — or {wait} until one may be, or null. Every page is checked by
+ * itself, in either mode (2.12.38), so every ended chapter is read whole by itself too, a few a day (WHOLE_A_DAY) */
 function wholeDue(novelId, now = Date.now()) {
-  const house = store.peek('house', 'house') || {};
-  const from = checksFromOf(house);
-  const all = superOn(house);
   const list = chaptersOf(novelId);
   let last = -1;
   list.forEach((c, i) => { if (wholeList(c).length) last = i; });
@@ -1902,7 +1900,6 @@ function wholeDue(novelId, now = Date.now()) {
     if (r.sig === sig) continue;
     const key = `${c.id}:${sig}`;
     if ((wholeMiss.get(key) || 0) >= 2) continue;
-    if (!c.wholeAsked && !all && !ps.some((p) => Number.isFinite(from) && bornOf(picked(p)) >= from)) continue;
     const words = wordsOf(ps);
     if (!c.wholeAsked && !(i < last || chapterClosed(c) || words - (Number(r.words) || 0) >= WHOLE_GROW)) continue;
     const held = wholeWait.get(key);

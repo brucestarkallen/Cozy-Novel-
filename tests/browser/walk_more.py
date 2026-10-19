@@ -762,7 +762,8 @@ async def scenario_checker(b):
     check('his own words are checked too, and a clarity fix says Clarity', [t.lower() for t in tags] == ['clarity'], tags)
     await pg.locator('.sheet.on .sug:has-text("She chose") button:has-text("Leave it")').click(); await pg.wait_for_timeout(300)
     if await pg.locator('.sheet.on').count(): await close_sheet(pg)
-    # checked with the judge off: once it is on, said, and Check this chapter grades it — never sent by itself
+    # checked with the judge off: once it is on, graded by itself — its grade alone asked for (2.12.38: manual decides
+    # what goes in, never whether the book is looked after; through 2.12.37 it waited for Check this chapter)
     async def judge_on(on):
         await pg.click('#moreBtn'); await pg.click('.menu-pop button:has-text("Settings")')
         await pg.wait_for_selector('.sheet.on')
@@ -778,24 +779,21 @@ async def scenario_checker(b):
         await pg.wait_for_timeout(250)
     await pg.wait_for_function("['clean', 'found'].includes(document.querySelector('#checkBubble').dataset.state)", timeout=15000)
     await pg.wait_for_timeout(800)
-    await judge_on(True)
     sent = len(reqs())
-    await pg.wait_for_timeout(2500)
+    await judge_on(True)
+    for i in range(120):
+        st = await pg.get_attribute('#checkBubble', 'data-state')
+        asked = [x for x in reqs()[sent:] if 'Answer every check of every passage' in json.dumps(x['body'].get('messages') or [])]
+        if st in ('clean', 'found') and asked: break
+        await pg.wait_for_timeout(250)
     await pg.click('#checkBubble'); await pg.wait_for_selector('.sheet.on .sugstate')
     said = await pg.inner_text('.sheet.on .sugstate')
-    btn = pg.locator('.sheet.on button:has-text("Check this chapter")')
-    check('a passage checked with the judge off is said not graded yet, with Check this chapter — never sent by itself', 'checked but not graded yet' in said and await btn.count() == 1 and len(reqs()) == sent, (said, await btn.count(), len(reqs()) - sent))
-    await btn.click()
-    for i in range(80):
-        st = await pg.get_attribute('#checkBubble', 'data-state')
-        now = await pg.inner_text('.sheet.on .sugstate') if await pg.locator('.sheet.on .sugstate').count() else ''
-        if st in ('clean', 'found') and 'not graded yet' not in now and len(reqs()) > sent: break
-        await pg.wait_for_timeout(250)
     if await pg.locator('.sheet.on').count(): await close_sheet(pg)
     await pg.click('#passages .passage >> nth=-1', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(300)
     line = (await pg.inner_text('#passages .passage >> nth=-1 >> .pctl .note >> nth=0')).lower()
     asked = [x for x in reqs()[sent:] if 'Answer every check of every passage' in json.dumps(x['body'].get('messages') or [])]
-    check('Check this chapter asks for the grade alone, and the passage’s line says it', 'graded 10 of 10' in line and len(asked) >= 1 and all('Suggest only what is worth changing' not in json.dumps(x['body'].get('messages') or []) for x in asked), (line, len(asked)))
+    check('a passage checked with the judge off is graded by itself once the judge is on — its grade alone asked for, never Check this chapter handed to him',
+          'graded 10 of 10' in line and len(asked) >= 1 and 'not graded yet' not in said and all('Suggest only what is worth changing' not in json.dumps(x['body'].get('messages') or []) for x in asked), (line, len(asked), said))
     # search: the words, wherever they are written, and a tap goes there
     await pg.click('#searchBtn')
     await pg.wait_for_selector('.sheet.on .searchtop')

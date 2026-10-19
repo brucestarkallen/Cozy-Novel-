@@ -3863,45 +3863,35 @@ await test('the checker reads each finished passage once; only fixes that stand 
   await putAway(b);
 });
 
-await test('writing from before the checker began, or brought in from a file, is checked only when he asks — a chapter, or the whole book', async () => {
+/* (2.12.38 — his word: "manual is for someone who prefers to decide what to apply; manual doesn't mean something is not
+ * automatic and self-healing". Through 2.12.37, with Super automatic off, writing from before the checker began was
+ * checked only when he asked; now every page is, newest first — only words brought in from a file wait for him) */
+await test('every page is checked by itself, Super automatic or not — what is new first, then writing from before the checker began; only words brought in from a file wait for Check this chapter or Check the whole book', async () => {
   const b = await makeBook([['Old words from before.', { text: 'Brought in from a file.', how: 'imported' }], ['More old words.']]);
   await sleep(5);
   await setHouse({}, { checksFrom: Date.now(), judge: { on: false } });
   await sleep(5);
   writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'New words of his.' });
-  assert.equal(checker.waiting(b.novelId), 1);
-  await checker.runCheck(b.novelId);
-  let r = await requests();
-  assert.equal(r.length, 1);
+  assert.equal(checker.waiting(b.novelId), 3, 'his new words and the two older pages — never the words brought in');
+  for (let i = 0; i < 6 && checker.waiting(b.novelId); i++) await checker.runCheck(b.novelId);
   /* what is checked: the passages under "Check these passages" — the story before them rides as context */
   const checked = (m) => m.slice(m.indexOf('Check these passages from'));
-  let ask = checked(r[0].body.messages.at(-1).content);
-  assert.ok(ask.includes('New words of his.') && !ask.includes('Old words from before.') && !ask.includes('Brought in from a file.') && !ask.includes('More old words.'), ask);
+  const looks = (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Check these passages from')).map(checked);
+  assert.ok(looks.length >= 1 && looks[0].includes('New words of his.') && !looks[0].includes('Old words from before.'), 'the new words first');
+  assert.ok(looks.some((m) => m.includes('Old words from before.')) && looks.some((m) => m.includes('More old words.')), 'then the older pages, by themselves');
+  assert.ok(!looks.some((m) => m.includes('Brought in from a file.')), 'never the words brought in, unasked');
+  assert.equal(checker.waiting(b.novelId), 0);
   const st = checker.stateOf(b.novelId);
   assert.equal(st.state, 'clean');
-  assert.match(st.words, /3 older passages are checked only when you ask/);
-  /* (2.6.3: it says too how many are checked but not graded — none here, the new one graded) */
-  assert.deepEqual(checker.unchecked(b.novelId, b.ids[0]), { passages: 2, words: 9, ungraded: 0 });
+  assert.match(st.words, /1 passage brought in from a file is checked only when you ask/);
+  assert.deepEqual(checker.unchecked(b.novelId, b.ids[0]), { passages: 1, words: 5, ungraded: 0 });
+  /* the words brought in: when he asks */
   await reset();
   checker.checkChapter(b.novelId, b.ids[0]);
   await checker.runCheck(b.novelId);
-  r = await requests();
-  /* (2.12.33: Check this chapter reads the chapter whole too, once its passages are checked — one more request) */
-  const whole = r.filter((x) => String(x.body.messages.at(-1).content).includes(prompts.WHOLE_ASK));
-  assert.equal(whole.length, 1, 'and the chapter read whole');
-  r = r.filter((x) => !whole.includes(x));
-  assert.equal(r.length, 1);
-  ask = checked(r[0].body.messages.at(-1).content);
-  assert.ok(ask.includes('Old words from before.') && ask.includes('Brought in from a file.') && !ask.includes('More old words.') && !ask.includes('New words of his.'), ask);
-  await reset();
-  checker.checkBook(b.novelId);
-  await checker.runCheck(b.novelId);
-  r = await requests();
-  assert.equal(r.length, 1);
-  assert.ok(r[0].body.messages.at(-1).content.includes('More old words.'));
+  const asked = (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes('Check these passages from')).map(checked);
+  assert.ok(asked.length === 1 && asked[0].includes('Brought in from a file.'), asked.join('\n---\n').slice(0, 600));
   assert.equal(checker.stateOf(b.novelId).words, 'Everything is checked — nothing to change.');
-  await sleep(350);
-  assert.equal((await requests()).length, 1, 'the look he asked for, and nothing more');
   await setHouse();
   await putAway(b);
 });
@@ -6700,9 +6690,13 @@ await test('the checker knows words brought in by the version they came from: ol
   await setHouse({}, { checksFrom: Date.now(), judge: { on: false } });
   await reset();
   const c = await makeBook([[{ text: 'Jovan walked.', at: Date.now() - 100000 }, { text: 'Jovan ran.', at: Date.now() - 100000 }]], { manual: true });
+  /* (2.12.38: every page is checked by itself in either mode — these two were, before the name changed) */
+  checkedBefore(c, 0);
+  checkedBefore(c, 1);
   assert.equal(changes.makeChange(c.novelId, { rename: { from: 'Jovan', to: 'Jovann' } }).status, 'made');
   await checker.runCheck(c.novelId);
-  assert.equal((await requests()).length, 0, 'writing from before the checker began is not checked by itself — renamed or not');
+  assert.equal((await requests()).length, 0, 'pages checked before a name changed everywhere are not checked again for it');
+  assert.equal(checker.waiting(c.novelId), 0);
   await setHouse();
   await putAway(c);
 });
@@ -9070,23 +9064,26 @@ await test('a grade a fix lost before 2.6.3 is put back from the version the fix
   await putAway(b);
 });
 
-await test('checked with the judge off, or graded before the ten checks: said, never asked by itself — Check this chapter asks for the grade alone, what it found kept; a model that will not grade it is not asked again', async () => {
+/* (2.12.38: graded by itself once the judge is on, in either mode — through 2.12.37 it waited for Check this chapter) */
+await test('checked with the judge off, or graded before the ten checks: graded by itself once the judge is on — its grade alone asked for, what it found kept; Check this chapter the same; a model that will not grade it is not asked again', async () => {
   await setHouse({}, { checksFrom: 0, judge: { on: false } });
   const b = await makeBook([['Mara climbed the the stair.', 'Tom came up the path.']]);
   await script([{ text: JSON.stringify({ edits: [{ passage: '1.1', kind: 'grammar', find: 'the the', replace: 'the', why: 'doubled' }] }) }]);
   await checker.runCheck(b.novelId);
   const before = checker.suggestions(b.novelId).map((x) => x.item.id);
   assert.equal(before.length, 1);
-  /* the judge switched on: nothing is sent by itself — the bubble says so, and the button is there */
+  /* the judge switched on: graded by itself — the grades alone, what it found kept */
   await setHouse({}, { checksFrom: 0 });
   await reset();
-  await checker.runCheck(b.novelId);
-  assert.equal((await requests()).length, 0, 'never asked by itself');
   assert.deepEqual(checker.unchecked(b.novelId, b.ids[0]), { passages: 0, words: 0, ungraded: 2 });
-  /* (with nothing left to look at, the green line says it) */
-  const leave = checker.suggestions(b.novelId)[0];
-  checker.leaveOne(leave.chapterId, leave.passageId, leave.item.id);
-  assert.match(checker.stateOf(b.novelId).words, /2 passages are checked but not graded yet — Check this chapter, or Check the whole book, grades them\./);
+  assert.equal(checker.waiting(b.novelId), 2, 'wanted for their grades, by themselves');
+  await script([{ text: JSON.stringify({ grades: [{ passage: '1.1', checks: ALL_YES(), faults: [] }, { passage: '1.2', checks: ALL_YES(), faults: [] }] }) }]);
+  await checker.runCheck(b.novelId);
+  const self = await checkAsk();
+  assert.equal(self.length, 1, 'asked by itself, once');
+  assert.ok(self[0].includes('Answer every check of every passage') && !self[0].includes('Suggest only what is worth changing'), 'the grades alone');
+  assert.deepEqual([checker.unchecked(b.novelId, b.ids[0]).ungraded, checker.waiting(b.novelId)], [0, 0]);
+  assert.deepEqual(checker.suggestions(b.novelId).map((x) => x.item.id), before, 'what it found kept');
   /* Check this chapter: the grades alone */
   await putAway(b);
   await setHouse({}, { checksFrom: 0, judge: { on: false } });
@@ -9109,23 +9106,22 @@ await test('checked with the judge off, or graded before the ten checks: said, n
   assert.equal(now[0].item.id, ids[0], 'the same suggestion');
   assert.deepEqual(checker.unchecked(c.novelId), { passages: 0, words: 0, ungraded: 0 });
   await putAway(c);
-  /* in one chapter, an older passage never checked and one checked but not graded: each its own checking */
+  /* in one chapter, a passage never checked and one checked but not graded: each its own checking, by themselves */
   await setHouse({}, { checksFrom: 0, judge: { on: false } });
   await reset();
-  const m = await makeBook([['Mara climbed the stair.', { text: 'Old words from before.', at: 0 }]]);
-  await setHouse({}, { checksFrom: Date.now() - 60000, judge: { on: false } });
+  const m = await makeBook([['Mara climbed the stair.']]);
   await script([CK_NONE]);
   await checker.runCheck(m.novelId);
-  await setHouse({}, { checksFrom: Date.now() - 60000 });
+  await setHouse({}, { checksFrom: 0 });
+  writer.addMine({ novelId: m.novelId, chapterId: m.ids[0], text: 'New words came after.' });
   assert.deepEqual(checker.unchecked(m.novelId), { passages: 1, words: 4, ungraded: 1 });
   await reset();
-  checker.checkChapter(m.novelId, m.ids[0]);
-  await checker.runCheck(m.novelId);
+  for (let i = 0; i < 4 && checker.waiting(m.novelId); i++) await checker.runCheck(m.novelId);
   const two = await checkAsk();
   assert.equal(two.length, 2, 'two checkings');
   const whole = two.find((x) => x.includes('Suggest only what is worth changing'));
   const alone = two.find((x) => !x.includes('Suggest only what is worth changing'));
-  assert.ok(whole && checkedPart(whole).includes('[1.2] Old words') && !checkedPart(whole).includes('[1.1]'), 'the one never checked, checked whole');
+  assert.ok(whole && checkedPart(whole).includes('[1.2] New words') && !checkedPart(whole).includes('[1.1]'), 'the one never checked, checked whole');
   assert.ok(alone && checkedPart(alone).includes('[1.1] Mara climbed') && !checkedPart(alone).includes('[1.2]'), 'the other, its grade alone');
   assert.equal(checker.gradesOf(m.novelId).rows.length, 2);
   await putAway(m);
@@ -13127,18 +13123,22 @@ await test('a chapter of one passage is read whole when its checking read it in 
   await putAway(c);
 });
 
-await test('writing from before checking began is never read whole unasked — with Super automatic it is; the checker’s own fixes, however many, never ask for another read, and the base they are measured from stays where it was, past his edit', async () => {
+/* (2.12.38 — his word: "manual doesn't mean that something is not automatic and self heal". Through 2.12.37, with
+ * Super automatic off, writing from before checking began was never read whole unasked) */
+await test('writing from before checking began is read whole by itself, Super automatic or not — once: switching Super automatic on reads nothing again; the checker’s own fixes, however many, never ask for another read, and the base they are measured from stays where it was, past his edit', async () => {
   const long = Date.now() + 60000;
   await setHouse({}, { checksFrom: long, judge: { on: false } });
   const b = await makeBook([['Mara climbed the stairs.', 'The lamp room was cold.'], ['Morning.']]);
   for (const p of b.ch().passages) checkedBefore(b, b.ch().passages.indexOf(p));
   await reset();
   await checker.runCheck(b.novelId);
-  assert.equal((await wholeAsks()).length, 0, 'older writing: not read whole unasked');
+  const read = await wholeAsks();
+  assert.equal(read.length, 1, 'older writing, Super automatic off: the ended chapter read whole by itself');
+  assert.ok(read[0].includes('The lamp room was cold.') && !read[0].includes('Morning.'), 'chapter one, the one that has ended');
   store.change('house', 'house', (x) => { x.superAuto = { on: true, from: Date.now() }; }, { now: true });
   await reset();
   await checker.runCheck(b.novelId);
-  assert.equal((await wholeAsks()).length, 1, 'Super automatic: every page wanted');
+  assert.equal((await wholeAsks()).length, 0, 'Super automatic switched on: nothing read again');
   await setHouse();
   await putAway(b);
   /* the base the fixes by themselves are measured from: kept on the version, past his edit, however many go in */
@@ -13402,21 +13402,24 @@ await test('the passages its last answer changed are shown to the partner as a s
   await putAway(b);
 });
 
-await test('with Super automatic on, an old page that stopped partway is said to be checked once Go on finishes it, and what waits for him is said as words brought in from a file', async () => {
-  const long = Date.now() - 100000;
-  await setHouse({}, { roles: { writer: 'c-w' }, checksFrom: long, judge: { on: false } });
-  const b = await makeBook([[{ text: 'An old page cut short in the', cut: true, at: long - 1000 }, { text: 'Brought in from a file.', how: 'imported', at: long - 1000 }]]);
-  store.change('house', 'house', (x) => { x.superAuto = { on: true, from: Date.now() }; }, { now: true });
-  await reset();
-  await checker.runCheck(b.novelId);
-  assert.equal((await passageAsks()).length, 0);
-  const st = checker.stateOf(b.novelId);
-  assert.equal(st.state, 'clean', JSON.stringify(st));
-  assert.match(st.words, /A passage that stopped partway is checked once Go on finishes it\./);
-  assert.match(st.words, /1 passage brought in from a file is checked only when you ask\./);
-  assert.doesNotMatch(st.words, /older passage/);
-  await setHouse();
-  await putAway(b);
+/* (2.12.38: Super automatic off too — every page is checked by itself in either mode) */
+await test('Super automatic on or off, an old page that stopped partway is said to be checked once Go on finishes it, and what waits for him is said as words brought in from a file', async () => {
+  for (const on of [false, true]) {
+    const long = Date.now() - 100000;
+    await setHouse({}, { roles: { writer: 'c-w' }, checksFrom: long, judge: { on: false } });
+    const b = await makeBook([[{ text: 'An old page cut short in the', cut: true, at: long - 1000 }, { text: 'Brought in from a file.', how: 'imported', at: long - 1000 }]]);
+    if (on) store.change('house', 'house', (x) => { x.superAuto = { on: true, from: Date.now() }; }, { now: true });
+    await reset();
+    await checker.runCheck(b.novelId);
+    assert.equal((await passageAsks()).length, 0, `Super automatic ${on ? 'on' : 'off'}`);
+    const st = checker.stateOf(b.novelId);
+    assert.equal(st.state, 'clean', JSON.stringify(st));
+    assert.match(st.words, /A passage that stopped partway is checked once Go on finishes it\./, `Super automatic ${on ? 'on' : 'off'}`);
+    assert.match(st.words, /1 passage brought in from a file is checked only when you ask\./);
+    assert.doesNotMatch(st.words, /older passage/);
+    await setHouse();
+    await putAway(b);
+  }
 });
 
 await test('the proofreading: a few passages its model will not read are asked again one at a time; a long passage read in parts keeps what part 1 found when part 2 fails, and goes on at part 2', async () => {

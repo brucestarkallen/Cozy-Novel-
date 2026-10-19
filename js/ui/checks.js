@@ -210,7 +210,7 @@ function drawSheet(st = checker.stateOf(C.novelId)) {
     const n = checker.applyAll(novelId);
     toast(n ? `${plural(n, 'change')} put in on the page — ⋯ → Put back the words before, on a passage, takes them out.` : 'Nothing could be applied — the words had changed.');
   } }, `Apply all (${can})`));
-  /* the older writing, checked only when he asks */
+  /* words brought in from a file, checked only when he asks (every other page is checked by itself, in either mode: 2.12.38) */
   const here = checker.unchecked(novelId, C.chapterId);
   const all = checker.unchecked(novelId);
   const busyNow = st.state === 'checking' || st.state === 'waiting';
@@ -221,7 +221,7 @@ function drawSheet(st = checker.stateOf(C.novelId)) {
   const allN = all.passages + all.ungraded;
   /* (and a chapter not read whole as it stands, 2.12.33: read whole now — not asked for again while it is waiting to be) */
   const owed = checker.wholeOwed(novelId, C.chapterId) && !store.peek('chapter', C.chapterId)?.wholeAsked;
-  if ((hereN || owed) && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s older passages too, grades any checked but not graded yet, and reads the chapter whole for what disagrees across it.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
+  if ((hereN || owed) && !busyNow && st.state !== 'off') row.append(h('button.btn.small', { title: 'The checker reads this chapter’s passages not checked yet — words brought in from a file too — grades any not graded yet, and reads the chapter whole for what disagrees across it.', onclick: () => { checker.checkChapter(novelId, C.chapterId); toast('Checking this chapter.'); } }, 'Check this chapter'));
   if (allN > hereN && !busyNow && st.state !== 'off') row.append(h('button.btn.small.quiet', { title: 'The checker reads every passage of the book not checked yet, and grades any not graded yet, a chapter at a time — then reads each chapter whole for what disagrees across it.', onclick: async () => {
     const said = [all.passages ? `${plural(all.passages, 'passage')} that haven’t been checked — about ${all.words.toLocaleString()} words —` : '', all.ungraded ? `${all.passages ? 'and ' : ''}${plural(all.ungraded, 'passage')} checked but not graded` : ''].filter(Boolean).join(' ');
     if (!(await confirmIt('Check the whole book?', `${said} go to the checker, a chapter at a time — and each chapter is read whole once its passages are checked.`, 'Check the whole book'))) return;
@@ -238,7 +238,7 @@ function drawSheet(st = checker.stateOf(C.novelId)) {
     s.body.append(h('div.btnrow', h('button.btn.small', { title: 'Choose who checks the writing.', onclick: () => { s.close(); hooks.openSettings('roles'); } }, 'Open Who does what')));
   }
   if (!list.length) {
-    /* (older writing: the line above says so, and the buttons are there) */
+    /* (words brought in from a file: the line above says so, and the buttons are there) */
     if (st.state === 'clean' && !allN) s.body.append(h('div.check-empty', icon('feather', 30), h('h3', 'Room to keep writing.'), h('p.say', 'New passages are checked when they’re finished. Any suggestions will be waiting here.')));
     restore();
     return;

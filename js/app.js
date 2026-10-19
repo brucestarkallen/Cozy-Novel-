@@ -80,7 +80,7 @@ async function boot() {
   if (narratorCarryDue(house)) store.change('house', 'house', carryNarrator, { now: true });
   /* one note at the end for both, before 2.3.2: the scenes keep it in their own box, once */
   if (lateSplitDue(house)) store.change('house', 'house', splitLate, { now: true });
-  /* the checker reads what is written from now on; older writing only when he asks */
+  /* the checker reads what is written from now on first; older writing after it, by itself (checker.js nextBatch, 2.12.38) */
   if (!Number.isFinite(house.checksFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.checksFrom)) x.checksFrom = Date.now(); }, { now: true });
   /* the judge reads two writers' takes head to head from now on — takes written before are never sent unasked */
   if (!Number.isFinite(house.duelsFrom)) store.change('house', 'house', (x) => { if (!Number.isFinite(x.duelsFrom)) x.duelsFrom = Date.now(); }, { now: true });
