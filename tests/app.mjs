@@ -16464,6 +16464,45 @@ await test('Quick add: a name changed everywhere while its partner answers is ca
   await putAway(m);
 });
 
+/* (2.12.41, the fourth review's round, with the store's sweep — a step laid again over another window's newer copy:
+ * changes.js entryStep lays his entry's parts only while they read as found, and a paragraph it adds after his newer
+ * words. Its entries' writes were his whole entry as this window had it, his new paragraph in it) */
+await test('Quick add laid again over his newer words in another window: what it adds goes in after them, his words there kept as he typed them — never his entry as this window had it written over them (2.12.41, the fourth review)', async () => {
+  await setHouse();
+  const over = async ({ text, there, words, answer }) => {
+    const b = await makeBook([['Emilia Vermaine walked the wall at dusk.']], { manual: true });
+    markAllSeen(b);
+    putEntries(b, [{ name: 'Emilia Vermaine', kind: 'people', line: EMILIA_LINE, text, by: 'you' }]);
+    await reset();
+    await script([{ pause: 1.5, text: JSON.stringify(answer) }, { text: JSON.stringify({ entries: [] }) }]);
+    const asking = quickadd.quickAdd({ novelId: b.novelId, words });
+    for (let i = 0; i < 300 && !(await quickSent()).length; i++) await sleep(10);
+    /* (his entry changed in another window while its partner answers: this window hears nothing of it — the tests have
+     * no news line — and its save is turned away with that newer copy) */
+    await store.flush();
+    await otherWindow('novel', b.novelId, (n) => { n.bibliography[0].text = there; });
+    const out = await asking;
+    assert.equal(out.ok, true, out.error);
+    await store.flush();
+    return { b, out, phone: (await onPhone('novel', b.novelId)).bibliography.map((e) => e.text) };
+  };
+  /* what it adds: after his newer words */
+  const one = await over({ text: 'Emilia keeps a raven.', there: 'Emilia keeps a raven named Tock.', words: 'Emilia hunts at night.',
+    answer: { verdict: 'In.', entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'She hunts at night.' }] } });
+  assert.deepEqual([one.phone, one.out.row.added.map((a) => a.status)], [['Emilia keeps a raven named Tock.\n\nShe hunts at night.'], ['made']]);
+  /* his newer word put into a sentence of his, beside what it adds: his words there stand as he typed them, never
+   * this window's older entry over them; what it adds goes after them */
+  const two = await over({ text: 'Emilia has grey eyes. She keeps a raven.', there: 'Emilia has grey eyes. She keeps a raven named Tock.', words: 'Emilia has green eyes now. She hunts at night.',
+    answer: { verdict: 'In.', changes: [{ mine: 'Emilia has green eyes now', was: 'Emilia has grey eyes', now: 'Emilia has green eyes', where: 'your entry Emilia Vermaine', why: 'newer' }], entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'She hunts at night.' }] } });
+  assert.deepEqual(two.phone, ['Emilia has grey eyes. She keeps a raven named Tock.\n\nShe hunts at night.']);
+  for (const x of [one, two]) await putAway(x.b);
+  /* and with no other window, the same answer writes his entry as before: his newer word in place, what it adds after */
+  const three = await quickOn({ text: 'Emilia has grey eyes. She keeps a raven.', words: 'Emilia has green eyes now. She hunts at night.', answers: [
+    { verdict: 'In.', changes: [{ mine: 'Emilia has green eyes now', was: 'Emilia has grey eyes', now: 'Emilia has green eyes', where: 'your entry Emilia Vermaine', why: 'newer' }], entries: [{ name: 'Emilia Vermaine', kind: 'people', add: 'She hunts at night.' }] }, { entries: [] }] });
+  assert.deepEqual([three.e.text, three.row.changes.map((c) => [c.in, c.put])], ['Emilia has green eyes. She keeps a raven.\n\nShe hunts at night.', [[true, 'Emilia has green eyes.']]]);
+  await putAway(three.b);
+});
+
 await test('a title’s short form or an initial ends no sentence wherever sentences decide what is written — his entry’s, its times, what is new of a card, the names a summary keeps, a note at a page’s end (2.12.41, the fourth review)', async () => {
   /* his entry's sentences, and a time kept under the parts it was cut into before */
   const t0 = Date.now() - 3600000;

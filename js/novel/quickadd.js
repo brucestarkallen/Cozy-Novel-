@@ -1549,7 +1549,8 @@ function mergeEntry({ had, offered = '', adds = '', changes = [], ctx, seenWhole
   count('added', fresh.length);
   count('lost', lost);
   count('lostNot', lostNot);
-  return { text: whole ? offered : text, whole, asWritten, why, joined, put: put.map(({ c, now, by }) => ({ c, now, by })), unput, gave, back, both, foreign };
+  /* (`base`: his sentences as they go in, `more`: what it adds after them — the parts its write lays apart: putEntries) */
+  return { text: whole ? offered : text, base: whole ? offered : text0, more: whole ? '' : fresh.join(' '), whole, asWritten, why, joined, put: put.map(({ c, now, by }) => ({ c, now, by })), unput, gave, back, both, foreign };
 }
 
 /* HIS LINE, HELD TO THE SAME KEEP RULE (2.12.40, the review: "An elder vampire, mother of the twins, sworn enemy of the
@@ -1602,7 +1603,8 @@ function lineFor(cur, said, changes, ctx) {
  * neither in its words nor its line — `gave`: those its partner gave words for, its own or a sentence carrying it); and
  * the sentences of his, and his line, that would stand saying what his newer words say "not" to (`denied`: [{his, not}]
  * — deniedBy); and the words of what it wrote that brought none of his, only its own (`foreign`). {text: null — his
- * stands, line, lineHow, how, why, whole, asWritten, joined, put, unput, gave, back, both, denied, foreign} */
+ * stands, base and more — that text as his sentences and what it adds after them —, line, lineHow, how, why, whole,
+ * asWritten, joined, put, unput, gave, back, both, denied, foreign} */
 function entryOp(cur, e, changes, ctx, seenWhole) {
   const had = String(cur.text || '').trim();
   const said = e ? line(e.line, 400) : '';
@@ -1610,10 +1612,10 @@ function entryOp(cur, e, changes, ctx, seenWhole) {
   const adds = e ? String(e.add || '').trim() : '';
   const mine = changes.filter((c) => c.kind === 'entry' && c.entryId === cur.id);
   const inText = mine.filter((c) => stands(had, c.was));
-  const out = { text: null, line: '', lineHow: '', how: '', why: '', whole: false, asWritten: true, joined: null, put: [], unput: [], gave: new Set(), back: [], both: [], denied: [], foreign: [] };
+  const out = { text: null, base: null, more: '', line: '', lineHow: '', how: '', why: '', whole: false, asWritten: true, joined: null, put: [], unput: [], gave: new Set(), back: [], both: [], denied: [], foreign: [] };
   if (offered || adds || inText.length) {
     const m = mergeEntry({ had, offered, adds, changes: inText, ctx, seenWhole });
-    if (m.text !== had) out.text = m.text;
+    if (m.text !== had) { out.text = m.text; out.base = m.base; out.more = m.more; }
     out.how = m.whole ? 'whole' : 'merged';
     out.why = m.why;
     out.whole = m.whole;
@@ -1835,9 +1837,18 @@ function putEntries(novelId, entries, seen, changes, words, { got, standing = []
        * beside "cousin", never both in his entry) */
       if (r.denied.length) { waits({ name, why: deniedWhy(r.denied[0], againWhy), denied: true }); return; }
       if (r.both.length) { waits({ name, why: bothWhy(r.both[0], againWhy), both: true }); return; }
-      if (r.text !== null) op.text = r.text;
+      /* (what it adds after his sentences goes as a paragraph to add, laid on his entry as it stands: his words typed there
+       * meanwhile in another window stay, and it goes after them — changes.js entryStep's `more`; his sentences with his
+       * newer word put in go only while his entry reads as it was found — 2.12.41, a step laid again over another window's
+       * newer copy) */
+      if (r.text !== null) {
+        if (r.more && r.more.length <= 8000 && r.base !== null && r.base.trim()) {
+          if (r.base.trim() !== String(cur.text || '').trim()) op.text = r.base;
+          op.add = r.more;
+        } else op.text = r.text;
+      }
       if (r.line && r.line !== String(cur.line || '').trim()) op.line = r.line;
-      const nothing = op.text === undefined && op.line === undefined && !op.aka;
+      const nothing = op.text === undefined && op.add === undefined && op.line === undefined && !op.aka;
       /* (nothing of it to write, where what it brought of his newer words was in a sentence of his said again, or one that
        * said "not" otherwise than his words do: said so, never "the entry already says that") */
       if (nothing && r.joined && (r.joined.lost || r.joined.lostNot)) { got.refused.push({ name, why: lostWhy(r.joined), lost: true }); return; }
@@ -1847,7 +1858,7 @@ function putEntries(novelId, entries, seen, changes, words, { got, standing = []
        * not a vampire": said so, with Ask again, never "the entry already says that") */
       if (nothing && r.foreign.length) { got.refused.push({ name, why: `what it wrote says what your words do not (${listOf(r.foreign.slice(0, 3).map((w) => `“${w}”`))}) — nothing of it went in` }); return; }
       const before = new Set(sentencesOf(String(cur.text || '')));
-      fresh = [...(op.text !== undefined ? sentencesOf(op.text).filter((s) => !before.has(s)) : []), ...(op.line ? [op.line] : [])];
+      fresh = [...(r.text !== null ? sentencesOf(r.text).filter((s) => !before.has(s)) : []), ...(op.line ? [op.line] : [])];
     }
     const about = { refs: new Set(cur ? [`e:${cur.id}`] : []), words: new Set(wordsOf([name, ...aka, ...(cur ? [cur.name, ...(cur.aka || [])] : [])].join(' '))) };
     const on = heldBy(fresh.filter(Boolean), standing, ctx ? ctx.prep : prepared(nameReader(finder, null)), about);
