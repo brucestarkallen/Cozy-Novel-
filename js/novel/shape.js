@@ -296,11 +296,56 @@ export function premiseOf(passage) {
   const r2 = (passage.versions || []).find((x) => x && x.ask && String(x.ask.premise || '').trim());
   return r2 ? String(r2.ask.premise).trim() : '';
 }
+/* WHEN HE TYPED IT: the first version written from his premise (another take carries the same words, later) — 0 when
+ * none of them is kept any more (a rewrite carries the premise on alone): never newer than anything */
+export function premiseAt(passage) {
+  const text = premiseOf(passage);
+  if (!text) return 0;
+  const ats = ((passage && passage.versions) || []).filter((v) => v && (v.how === 'write' || v.how === 'another') && String((v.ask && v.ask.direction) || '').trim() === text).map((v) => Number(v.at) || 0).filter((x) => x > 0);
+  return ats.length ? Math.min(...ats) : 0;
+}
+/* HIS LATER WORD ON A PASSAGE (2.12.40, the audit — his newest word wins: he typed "Tom, Mara's brother, comes home",
+ * then had the page written again with "Tom is not in this book at all", and the premise still stood as the book; his
+ * own edit taking Tom out, the same). What he did to the passage after its premise, on the version on show and the
+ * versions it was made from, back to the one written from the premise: written again with a note (the whole page, or
+ * the words he selected — never the app's own lift, nor the checker's sentence by itself), his own words on it, his
+ * partner's words on it, or the passage written anew by his partner. Each with when, oldest first:
+ * [{how: 'rewrite' | 'selection' | 'edit' | 'partner' | 'anew', note, at}]. None: the premise stands as the book.
+ * (A version he picked back with the arrows is the page he chose: what came after it on another version is not on it.)
+ * His hand on the words is read from the words before kept on the version (inplace.js) — never what he only put back
+ * there (Put back what was taken off, `back`); past BEFORE_KEEP changes his can have gone from that list, and his hand
+ * on the version says it then. */
+export function laterWords(passage) {
+  if (!passage || passage.by === 'break' || passage.by === 'you') return [];
+  const versions = passage.versions || [];
+  const out = [];
+  const seen = new Set();
+  let v = picked(passage);
+  while (v && !seen.has(v.id)) {
+    seen.add(v.id);
+    const note = String((v.ask && v.ask.note) || '').trim();
+    if (v.how === 'rewrite' && !v.lift && note) out.push({ how: 'rewrite', note, at: Number(v.at) || 0 });
+    else if (v.how === 'selection' && !v.spanAuto && note) out.push({ how: 'selection', note, at: Number(v.at) || 0 });
+    else if (v.how === 'partner') out.push({ how: 'anew', note: '', at: Number(v.at) || 0 });
+    else if (v.how === 'edit') out.push({ how: 'edit', note: '', at: Number(v.at) || 0 });
+    const before = Array.isArray(v.before) ? v.before : [];
+    for (const b of before) if (b && (b.by === 'you' || b.by === 'partner') && !b.back) out.push({ how: b.by === 'you' ? 'edit' : 'partner', note: '', at: Number(b.at) || 0 });
+    for (const by of ['you', 'partner']) {
+      if (before.length >= BEFORE_KEEP && handsOf(v).includes(by) && !before.some((b) => b && b.by === by)) out.push({ how: by === 'you' ? 'edit' : 'partner', note: '', at: Number(v.done || v.at) || 0 });
+    }
+    if (v.how === 'write' || v.how === 'another') break;
+    const up = v.from || v.base;
+    v = up ? versions.find((x) => x.id === up) : null;
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
 /* EVERY PREMISE HE TYPED, THE BOOK THROUGH (2.12.36 — his report: "does the notes read my premise too?" — the world
  * his premise set up, an elder vampire's turning that comes once in a thousand, was read by the writer of that one page
  * and nobody after it; the notes read only what the page said, and the pages after it drifted). In the book's order,
  * each with the passage it was typed for, as the page numbers it: what the notes' reading, check and the helper's
- * telling of the book hold as his word (archivist.js). `chapters`: id → chapter. */
+ * telling of the book hold as his word (archivist.js). `chapters`: id → chapter. Each with when he typed it (`at`) and
+ * what he did to its passage since (`later`, laterWords — 2.12.40: while there is any, the premise is no longer the
+ * book; what he changed stands over it). */
 export function premisesOf(novel, chapters) {
   const out = [];
   (((novel && novel.order) || [])).forEach((id) => {
@@ -309,7 +354,7 @@ export function premisesOf(novel, chapters) {
     const nums = passageNumbers(c);
     for (const p of c.passages || []) {
       const text = premiseOf(p);
-      if (text) out.push({ chapterId: id, pid: p.id, text, label: `${chapterLabel(novel, c, { withName: false })}, Passage ${nums.get(p.id) || '—'}` });
+      if (text) out.push({ chapterId: id, pid: p.id, text, label: `${chapterLabel(novel, c, { withName: false })}, Passage ${nums.get(p.id) || '—'}`, at: premiseAt(p), later: laterWords(p) });
     }
   });
   return out;
@@ -973,12 +1018,16 @@ export function hisField(card, field) {
   const list = card.updated.his;
   return !Array.isArray(list) || list.includes(field);
 }
-/* his mark once he (or his partner, for him) wrote these fields */
+/* his mark once he (or his partner, for him) wrote these fields — with when his words were written (`hisAt`, 2.12.40:
+ * the helper's own changes move `at`, never this; a premise of his is weighed against it, archivist.js foldNotes) */
 export function hisStamp(card, fields, at = Date.now()) {
-  if (hisCard(card) && !Array.isArray(card.updated.his)) return { by: 'you', at };
+  if (hisCard(card) && !Array.isArray(card.updated.his)) return { by: 'you', at, hisAt: at };
   const before = hisCard(card) ? card.updated.his : [];
-  return { by: 'you', at, his: CARD_FIELDS.filter((k) => before.includes(k) || (fields || []).includes(k)) };
+  return { by: 'you', at, hisAt: at, his: CARD_FIELDS.filter((k) => before.includes(k) || (fields || []).includes(k)) };
 }
+/* when his words on a card were written: his mark's own time, else (a mark from before 2.12.40) when the card last
+ * changed — never later than that */
+export const hisAtOf = (updated) => Number((updated && (updated.hisAt || updated.at)) || 0);
 /* A CARD'S WORDS NEVER CARRY THE NOTES' OWN DISPLAY (2.12.16; 2.12.18 for
  * every field and every kind). The notes are shown to the helper as
  * "- Name (also A, B) — who they are (my words) / With others: … / Right now:
@@ -1072,7 +1121,7 @@ export function letGoStamp(updated, field, chapterId, at) {
   const list = Array.isArray(updated && updated.his) ? updated.his : CARD_FIELDS;
   const off = Array.isArray(field) ? field : [field];
   const his = list.filter((k) => !off.includes(k));
-  return his.length ? { by: 'you', his, chapterId, at } : { chapterId, at };
+  return his.length ? { by: 'you', his, ...(hisAtOf(updated) ? { hisAt: hisAtOf(updated) } : {}), chapterId, at } : { chapterId, at };
 }
 /* WORDS HE CHANGED HIMSELF (2.12.10): a passage written again from his note or
  * his partner's (never the app's own lift), the words he selected written again
@@ -1085,7 +1134,8 @@ export const hisChange = (v) => Boolean(v) && ((v.how === 'rewrite' && !v.lift) 
 /* the mark a card keeps when the helper writes what is not his */
 export function keptStamp(card, chapterId, at) {
   if (!hisCard(card)) return { chapterId, at };
-  return { by: 'you', ...(Array.isArray(card.updated.his) ? { his: [...card.updated.his] } : {}), chapterId, at };
+  /* (when his words were written stays: the helper's change is not his — 2.12.40) */
+  return { by: 'you', ...(Array.isArray(card.updated.his) ? { his: [...card.updated.his] } : {}), ...(hisAtOf(card.updated) ? { hisAt: hisAtOf(card.updated) } : {}), chapterId, at };
 }
 
 /* A THREAD IS FOUND BY SENSE (Cozy Tavern M259, M653): two titles say the

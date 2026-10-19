@@ -25,14 +25,14 @@ import { wireOf, contextOf } from '../model/providers.js';
 import { assemble, partnerReply } from './context.js';
 import { connFor } from './writer.js';
 import { picked, passageNumbers, chapterLabel, premisesOf } from './shape.js';
-import { quickAddRequest, quickAgainRequest, premisesPart, entriesPart, PREMISE_ROOM, JSON_AGAIN, JSON_CUT } from './prompts.js';
+import { quickAddRequest, quickAgainRequest, PREMISE_ROOM, JSON_AGAIN, JSON_CUT } from './prompts.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
 import { findIn } from './search.js';
 import { namesAndFigures, foldedText, foldName } from './names.js';
 import { entriesOf, entriesNamed, entryNamed, entryWords, kindSaid, nameForms, makeFinder, formKey } from './bibliography.js';
 import { makeChange, undoChange } from './changes.js';
 import * as archivist from './archivist.js';
-import { newId, estimateTokens, fitRows, numberWords } from '../util.js';
+import { newId, estimateTokens, numberWords } from '../util.js';
 
 /* the rows kept (his words and what came of them), and how many of the newest that put something in keep their Undo */
 export const QUICK_KEEP = 12;
@@ -496,33 +496,28 @@ function plainAccount(r) {
 
 /* ------------------------------------------------------------- asking */
 
-/* his premises fitted to a room in one pass (util.js fitRows — 2.12.40, the audit: the fit built the whole part again
- * for every premise it let go, and one long premise first left none): the newest first — a later premise of his stands
- * over an earlier one — told in the book's order */
-function premisesFor(all, room) {
-  const order = all.map((x, i) => ({ x, i })).reverse();
-  const size = ({ x }) => estimateTokens(String(x.text || '').slice(0, PREMISE_ROOM + 80)) + estimateTokens(String(x.label || '')) + 4;
-  const { kept, left } = fitRows(order, room, size, estimateTokens(premisesPart([{ label: 'Chapter One, Passage 1', text: 'x' }], 2)));
-  return { list: kept.sort((a, b) => a.i - b.i).map((r) => r.x), left };
-}
-
 /* the request as his partner's connection sees the book now, for these words: {request, shown} — shown, the entries it
  * gives whole (id -> their words as they stand) */
 function requestFor(novelId, words, c) {
   const { novel, chapters } = bookNow(novelId);
   const room = Math.max(1500, Math.floor(contextOf(c) * 0.25));
-  const prem = premisesFor(premisesOf(novel, chapters), Math.floor(room / 4));
   const names = namesIn(words, novel, chapters);
+  /* his premises — those naming what his words name first, then the newest — and his entries for those names, fitted in
+   * one pass (archivist.js premisesFitted, entriesFitted — 2.12.40, the audit: the earliest only, rebuilt for every one
+   * let go, and none at all when the first was long) */
+  const prem = archivist.premisesFitted(novel, chapters, Math.floor(room / 4), { names });
   /* (his entries his words name, found as the page finds a name — 2.12.40, the audit: any word of a name in small
    * letters counted; the partner reads every entry, Never ones too) */
   const byWords = new Set(entriesNamed(entriesOf(novel), words).map((e) => e.id));
   const named = entriesOf(novel).filter((e) => byWords.has(e.id) || names.some((n) => entryNamed([e], n).entry));
-  const ent = fitRows(named, Math.floor(room / 4), (e) => estimateTokens(entryWords(e)) + 3, estimateTokens(entriesPart([{ name: 'x', text: 'x' }], 2)));
+  const ent = archivist.entriesFitted(named, Math.floor(room / 4));
   const pas = passagesNaming(novel, chapters, names, Math.floor(room / 2));
   /* what was said before in Quick add, the newest few (never the one being asked) */
   const earlier = quickLog(novel).filter((r) => r.state === 'done').slice(-4);
-  const request = quickAddRequest({ words, earlier, premises: prem.list, premisesLeft: prem.left, entries: ent.kept, entriesLeft: ent.left, ...pas });
-  return { request, shown: new Map(ent.kept.map((e) => [e.id, String(e.text || '')])) };
+  const request = quickAddRequest({ words, earlier, ...prem, ...ent, ...pas });
+  /* (whole: an entry past its room rides by its opening only — prompts.js entryRow — and is never written over from that) */
+  const whole = ent.entries.filter((e) => String(entryWords(e) || '').length <= PREMISE_ROOM);
+  return { request, shown: new Map(whole.map((e) => [e.id, String(e.text || '')])) };
 }
 
 const want = (o) => isObj(o) && (Array.isArray(o.entries) || typeof o.verdict === 'string' || Array.isArray(o.conflicts));

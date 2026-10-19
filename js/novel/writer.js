@@ -1145,7 +1145,8 @@ export function putBackTail({ novelId, chapterId, passageId }) {
   if (!now || now.streaming || (!top && !end)) return false;
   const body = String(now.text || '').replace(/\s+$/, '');
   const t = `${top ? `${top}\n\n` : ''}${body}${end ? `\n\n${now.tookOff}` : ''}`;
-  if (!changeInPlace({ novelId, chapterId, passageId, versionId: now.id, next: t, by: 'you', tail: true })) return false;
+  /* (`back`: the writer's own words put back where they stood — never a word of his on the story, shape.js laterWords) */
+  if (!changeInPlace({ novelId, chapterId, passageId, versionId: now.id, next: t, by: 'you', tail: true, extra: { back: true } })) return false;
   recount(novelId);
   return true;
 }

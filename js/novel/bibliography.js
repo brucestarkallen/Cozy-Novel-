@@ -22,7 +22,7 @@
  * nor in a name joined with a hyphen ("Mary" is not in "Mary-Jane"). */
 import { newId, nameKey, estimateTokens, hashText } from '../util.js';
 import { picked, matchCard, chapterLabel } from './shape.js';
-import { foldedText, nameInText, firstSentence } from './names.js';
+import { foldedText, nameInText, firstSentence, samePersonName, titlesConflict } from './names.js';
 import { superActive } from './auto.js';
 
 export const ENTRY_KINDS = ['people', 'places', 'things', 'groups', 'lore'];
@@ -583,6 +583,7 @@ function repeatOf(kept, seq) {
   return kept.find((k) => k.seq === seq) || null;
 }
 
+const BY_NAME = new Intl.Collator(undefined, { sensitivity: 'base' });
 export function bibItems(novel, chapters = {}, { facts = true } = {}) {
   const entries = entriesOf(novel);
   const notes = (novel && novel.notes) || {};
@@ -666,6 +667,32 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
       }
     });
   }
+  /* HIS ENTRY AND THE NOTES' CARD FOR ONE NAME ARE ONE (2.12.37 — his report: the notes, the Timeline and the
+   * bibliography "must be connected"): a tap on the name showed his entry and the card as two who go by that name.
+   * The card his entry stands for (cardForEntry, kept while the names stand: entryJoins). 2.12.40, the audit: the join
+   * went one way only — what the book told under another form of the name stayed on the card's own row, so the list
+   * showed the name twice (his entry on one row, the book's facts on the other), and a tap on the card's name opened the
+   * card without his entry. The card's row is folded into his entry's: its facts with his, in the book's order, and its
+   * names to find it by (cardNames, itemForms). What the writer reads of it is his entry's own words, and the facts. */
+  const joins = entryJoins(entries, notes);
+  const cardsById = new Map(['people', 'places', 'lore'].flatMap((k) => (notes[k] || []).filter(Boolean).map((c) => [`${k}:${c.id}`, c])));
+  for (const e of entries) {
+    const j = joins.get(e.id);
+    const card = j ? cardsById.get(`${j.kind}:${j.id}`) || null : null;
+    const it = items.get(`e:${e.id}`);
+    if (!card || !it) continue;
+    it.card = { kind: j.kind, id: card.id, about: card.about || '' };
+    it.cardNames = [card.name, ...(card.aka || [])].filter(Boolean);
+    const theirs = items.get(`c:${j.kind}:${card.id}`);
+    if (!theirs || theirs.entry) continue;
+    for (const f of theirs.facts) {
+      const same = it.facts.find((x) => x.fact === f.fact);
+      if (same) same.more = [...(same.more || []), ...(f.evidence || []), ...(f.more || [])];
+      else it.facts.push(f);
+    }
+    it.facts.sort((a, b) => a.chapterNumber - b.chapterNumber || a.passageNumber - b.passageNumber);
+    items.delete(theirs.ref);
+  }
   const out = [];
   for (const it of items.values()) {
     if (!it.entry && !it.facts.length) continue;
@@ -675,35 +702,103 @@ export function bibItems(novel, chapters = {}, { facts = true } = {}) {
       if (top && ENTRY_KINDS.includes(top[0])) it.kind = top[0];
     }
     it.first = it.facts[0] || null;
-    if (!it.line) it.line = it.card && it.card.about ? firstSentence(it.card.about) : it.facts[0] ? it.facts[0].fact : '';
-    /* HIS ENTRY AND THE NOTES' CARD FOR ONE NAME ARE ONE (2.12.37 — his report: the notes, the Timeline and the
-     * bibliography "must be connected"): a tap on the name showed his entry and the card as two who go by that name.
-     * The card his entry stands for, by a name of theirs — on the screen only: what the writer reads of it is his
-     * entry's own words (itemWords) */
-    if (it.entry && !it.card) {
-      const card = cardForEntry(it.entry, notes);
-      if (card) it.card = card;
-    }
+    if (!it.line) it.line = !it.entry && it.card && it.card.about ? firstSentence(it.card.about) : it.facts[0] ? it.facts[0].fact : '';
     out.push(it);
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  /* (by name, one collator for the whole list: a comparison made with its own words for each pair took 65 ms of every
+   * gathering of 1,500 names — 2.12.40, the audit) */
+  return out.sort((a, b) => BY_NAME.compare(a.name, b.name));
 }
 
-/* the notes' card an entry of his stands for: {kind, id, about} — by a name of theirs, the card's kind for the entry's
- * kind first (a group or a thing is kept among the lore), then a fuller or shorter form as the notes match one */
+/* the notes' card an entry of his stands for: {kind, id, about} — the card's kind for the entry's kind first (a group or
+ * a thing is kept among the lore). 2.12.40, the audit — joins that were wrong: a clan "Kuchiki" took Rukia Kuchiki's
+ * card, "Wells" Tom Wells's, "Gotei 13" a card "Gotei"; "Mei Lin" (also Mei) took Mei Ling's card (also Mei), and with a
+ * card "Mei Lin" as well, neither. Now: name to name first, every kind; then a name either goes by, only where one card
+ * answers and never two people (a title that disagrees, or two whole names that are not one person's — Mei Lin and Mei
+ * Ling); then a fuller or shorter form as the notes match one ("Emilia" is Emilia Vermaine, "Bruce's Batwing" the
+ * Batwing) — a person's card so only for a person's entry. */
 const CARD_KINDS_FOR = { people: ['people', 'lore'], places: ['places', 'lore'], things: ['lore', 'places'], groups: ['lore', 'people'], lore: ['lore', 'places', 'people'] };
+const nameWords = (n) => cleanName(n).split(' ').filter((w) => /\p{L}/u.test(w)).length;
 export function cardForEntry(e, notes) {
+  const person = kindOf(e.kind) === 'people';
+  const kinds = CARD_KINDS_FOR[kindOf(e.kind)] || ['lore'];
+  const own = nameKey(e.name);
   const keys = new Set([e.name, ...(e.aka || [])].map(nameKey).filter(Boolean));
-  for (const kind of CARD_KINDS_FOR[kindOf(e.kind)] || ['lore']) {
-    const cards = (notes && notes[kind]) || [];
-    const exact = cards.filter((c) => [c.name, ...(c.aka || [])].some((x) => keys.has(nameKey(x))));
-    if (exact.length === 1) return { kind, id: exact[0].id, about: exact[0].about || '' };
-    if (exact.length > 1) return null;
-    /* a fuller or shorter form, as the notes match one ("Emilia" is Emilia Vermaine; "Bruce's Batwing" the Batwing) */
+  const at = (kind, c) => ({ kind, id: c.id, about: c.about || '' });
+  const twoPeople = (kind, c) => kind === 'people' && (titlesConflict(e.name, c.name) || (nameWords(e.name) >= 2 && nameWords(c.name) >= 2 && !samePersonName(e.name, c.name)));
+  for (const kind of kinds) {
+    const byName = ((notes && notes[kind]) || []).filter((c) => c && nameKey(c.name) === own);
+    if (byName.length === 1) return at(kind, byName[0]);
+    if (byName.length > 1) return null;
+  }
+  for (const kind of kinds) {
+    const cards = ((notes && notes[kind]) || []).filter(Boolean);
+    const named = cards.filter((c) => [c.name, ...(c.aka || [])].some((x) => keys.has(nameKey(x))));
+    if (named.length > 1) return null;
+    if (named.length === 1) { if (twoPeople(kind, named[0])) return null; return at(kind, named[0]); }
+    if (kind === 'people' && !person) continue;
     const m = matchCard(cards, e.name, e.aka || [], { kind, near: true, slip: false });
-    if (m.card) return { kind, id: m.card.id, about: m.card.about || '' };
+    if (m.card && !twoPeople(kind, m.card)) return at(kind, m.card);
+    if (m.ambiguous) return null;
   }
   return null;
+}
+/* EVERY ENTRY'S CARD, KEPT WHILE THE NAMES ARE THE SAME (2.12.40, the audit: the join was worked out again for every
+ * entry each time the bibliography was gathered — for every page, every check, every reading: 1,500 entries and 400
+ * cards took 0.6 s each time). Entry id → {kind, id} or null, kept by the names and kinds of the entries and the cards. */
+const JOINS = new Map();   /* names print -> Map(entry id -> {kind, id} | null) */
+export function entryJoins(entries, notes) {
+  const rows = [];
+  for (const e of entries || []) if (e) rows.push(`e${e.id}\u0001${e.name}\u0001${(e.aka || []).join('\u0002')}\u0001${kindOf(e.kind)}`);
+  for (const kind of ['people', 'places', 'lore']) for (const c of (notes && notes[kind]) || []) if (c) rows.push(`${kind}${c.id}\u0001${c.name}\u0001${(c.aka || []).join('\u0002')}`);
+  const print = hashText(rows.join('\u0003'));
+  let map = JOINS.get(print);
+  if (!map) {
+    if (JOINS.size >= 8) JOINS.clear();
+    map = new Map();
+    JOINS.set(print, map);
+  }
+  for (const e of entries || []) {
+    if (!e || map.has(e.id)) continue;
+    const c = cardForEntry(e, notes || {});
+    map.set(e.id, c ? { kind: c.kind, id: c.id } : null);
+  }
+  return map;
+}
+
+/* WHAT A NAME'S SHEET SHOWS (ui/bibliography.js showRefs — a name tapped in the page, a row of the list, a card's In the
+ * bibliography): one row for each who goes by it, {it, card, cardKind} — his entry with the notes' card it stands for,
+ * a card's name opening his entry with it (bibItems folds the card's row into his entry's); each once (2.12.40, the
+ * audit: a card with the book's facts and no entry of his opened as "2 who go by that name", itself twice). */
+export function nameRows(novel, chapters, refs) {
+  const items = bibItems(novel, chapters, { facts: true });
+  const byRef = new Map(items.map((it) => [it.ref, it]));
+  const rows = [];
+  const cardOf = (kind, id) => (((novel && novel.notes) || {})[kind] || []).find((c) => c && c.id === id) || null;
+  for (const ref of refs || []) {
+    const m = /^c:(people|places|lore):(.+)$/.exec(ref);
+    const it = byRef.get(ref) || (m ? items.find((x) => x.entry && x.card && x.card.id === m[2]) || null : null);
+    /* his entry with the notes' card it stands for: one, never two who go by the name (2.12.37) */
+    const joined = !m && it && it.entry && it.card ? cardOf(it.card.kind, it.card.id) : null;
+    const card = m ? cardOf(m[1], m[2]) : joined;
+    if (!it && !card) continue;
+    if (rows.some((r) => (it && r.it && r.it.ref === it.ref) || (!it && !r.it && card && r.card && r.card.id === card.id))) continue;
+    rows.push({ it, card, cardKind: m ? m[1] : (it && it.card ? it.card.kind : '') });
+  }
+  /* a card shown with his entry is not shown again on its own — what the book told under the card's name goes with it */
+  for (const r of rows.filter((x) => x.it && x.it.entry && x.card)) {
+    for (const other of rows.filter((x) => x !== r && x.card && x.card.id === r.card.id && !(x.it && x.it.entry))) {
+      if (other.it && other.it.facts.length) r.it = { ...r.it, facts: [...r.it.facts, ...other.it.facts.filter((f) => !r.it.facts.some((g) => g.id === f.id))] };
+      rows.splice(rows.indexOf(other), 1);
+    }
+  }
+  return rows;
+}
+/* what the bibliography holds for a card of the notes (2.12.37): his entry it stands for, or what the book told under its
+ * name — and the card itself, once */
+export function cardRefs(novel, chapters, kind, cardId) {
+  const refs = bibItems(novel, chapters, { facts: true }).filter((it) => it.card && it.card.id === cardId && (it.entry || it.facts.length)).map((it) => it.ref);
+  return refs.length ? [...new Set([...refs, `c:${kind}:${cardId}`])] : [];
 }
 
 /* the names a list of items answers to, for the finder: [{form, refs}] */
@@ -711,7 +806,10 @@ export function itemForms(items) {
   const map = new Map();
   for (const it of items || []) {
     const names = [it.name, ...(it.aka || [])];
-    const forms = [...names, ...(it.kind === 'people' ? names.flatMap(nameParts) : [])];
+    /* (the names of the notes' card his entry stands for find it too — only as names, with a capital, as a card's
+     * are found: bibItems, 2.12.40) */
+    const theirs = (it.cardNames || []).filter(cased);
+    const forms = [...names, ...(it.kind === 'people' ? names.flatMap(nameParts) : []), ...theirs, ...(it.kind === 'people' ? theirs.flatMap(nameParts) : [])];
     for (const n of forms) {
       /* a name with its article ("The Iron Covenant") is found by its name, written with the article in small letters
        * mid-sentence too ("bowed to the Iron Covenant") — as a card's is (nameForms); never a description in small

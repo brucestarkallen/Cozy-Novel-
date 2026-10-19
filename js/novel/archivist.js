@@ -25,14 +25,14 @@ import { ask, emptyWhy } from '../model/call.js';
 import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow } from './writer.js';
 import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
-import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords } from '../util.js';
-import { picked, premiseOf, premisesOf, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisChange, unrender, cleanCard, PRIOR_KEEP } from './shape.js';
+import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows } from '../util.js';
+import { picked, premiseOf, premisesOf, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, unrender, cleanCard, PRIOR_KEEP } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures } from './names.js';
-import { autoOn, helperFrame, premisesPart, entriesPart, timelinePart, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
-import { fitBook, bibAutoOn } from './context.js';
+import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook } from './prompts.js';
+import { fitBook, bibAutoOn, shortOf } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep, timelineOf, carriedContinuity, continuityDone, continuityNow, turnsOfPrint, withCarriedTurns, sameTurn } from './timeline.js';
-import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey, entriesOf, entriesForNotes, entriesNamed, entryWords, cardForEntry, CODEX_SCHEMA } from './bibliography.js';
+import { codexOf, mergeCodex, codexStep, codexNow, bibItems, carriedCodex, withCarriedFacts, sourceKey, entriesOf, entriesForNotes, entriesNamed, entryWords, CODEX_SCHEMA, entryJoins, nameForms, makeFinder } from './bibliography.js';
 import { stretchPlan, keptStretches, withStretch, sceneChapter } from './stretches.js';
 import { setHelperHooks } from './inplace.js';
 import { applyCheck, checkSig, checkedNow } from './summarycheck.js';
@@ -1114,7 +1114,16 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
       if (!c || mineSaid.has(c.id)) continue;
       if (asked && JSON.stringify(askedCard(row.kind, c.id)) !== JSON.stringify(standingCard(row.kind, c.id))) continue;
       const holds = truthOf(row.holds);
-      const bookHas = (words) => { const g = words ? foldedText(words) : null; return Boolean(g && g.loose.trim() && mine.book && (mine.book.loose.includes(' ' + g.loose.trim() + ' ') || mine.book.tight.includes(' ' + g.tight.trim() + ' '))); };
+      const within = (f, g) => Boolean(f) && (f.loose.includes(' ' + g.loose.trim() + ' ') || f.tight.includes(' ' + g.tight.trim() + ' '));
+      /* against: his card — the quote stands in the pages, or in a premise of his typed after the card (2.12.40, the
+       * audit: his newest word wins — a premise older than his card is never the book overturning it) */
+      const bookHas = (words, against = null) => {
+        const g = words ? foldedText(words) : null;
+        if (!g || !g.loose.trim() || !mine.book) return false;
+        if (!against || !his(against) || !mine.pages) return within(mine.book, g);
+        const since = hisAtOf(against.updated);
+        return within(mine.pages, g) || (mine.premises || []).some((x) => x.at > since && within(x.f, g));
+      };
       /* A THREAD IS WHAT THE BOOK SETS UP (2.12.16): every thread is held to the
        * book's own words that set it up ("evidence", standing in the book) — a
        * thread no words of the book set up goes; one partly told from nowhere
@@ -1173,7 +1182,7 @@ export function foldNotes(notes, answer, { chapterId = '', at = Date.now(), audi
         continue;
       }
       const q = cleanText(row.contradicts, 600);
-      const inBook = bookHas(q);
+      const inBook = bookHas(q, c);
       /* the quote is the book's, and what the account beside his words already tells (never a contradiction made up out of other words) */
       /* (a card with no Since then is held to its own subject: the quote names it — never a contradiction made of words about someone else) */
       const inSince = q && (String(c.since || '').trim() ? heldIn(q, String(c.since)) >= 0.5
@@ -1298,7 +1307,7 @@ export function wordsToJudge(novel, chapters) {
    * 2.12.40, the audit: any word of a name in small letters anywhere counted) */
   const entries = entriesForNotes(novel);
   if (entries.length) {
-    const named = new Set(entriesNamed(entries, [...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...premisesOf(novel, chapters).map((x) => x.text)].join('\n\n')).map((e) => e.id));
+    const named = new Set(entriesNamed(entries, [...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...standingPremises(novel, chapters).map((x) => x.text)].join('\n\n')).map((e) => e.id));
     let room = 9000;
     let n = 0;
     for (const e of entries) {
@@ -1439,14 +1448,54 @@ const claimsContradiction = (o) => [...NOTE_KINDS, 'gone'].some((k) => Array.isA
 export function groundsOf(novel) {
   const chapters = chaptersOf(novel);
   const kept = Object.values((novel && novel.kept) || {}).map((k) => (k && typeof k === 'object' ? k.text : '')).filter(Boolean);
-  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), novel.brief || '', novel.style || '', ...kept, ...premisesOf(novel, chapters).map((x) => x.text), ...entriesForNotes(novel).map(entryWords)].join('\n\n'));
+  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), novel.brief || '', novel.style || '', ...kept, ...standingPremises(novel, chapters).map((x) => x.text), ...entriesForNotes(novel).map(entryWords)].join('\n\n'));
+}
+/* HIS PREMISES THAT ARE STILL THE BOOK (2.12.41, the audit — his newest word wins): a premise stands until his newer
+ * word on its passage says otherwise (shape.js laterWords) — and from then on it is shown beside that word as what it
+ * stands over, never counted as the book: never a ground for a card, never what keeps a card from going, never quoted
+ * as the book's words (groundsOf, standsFolded, bookFolded). His newer word says otherwise when it is an instruction —
+ * the passage written again with a note of his, or the words he selected, or written anew by his partner — or when his
+ * hand (or his partner's words changed in it) took out of the page a name the premise gives that is still a name of
+ * the book: "Tom, Mara's brother, comes home" and then "She had never had a brother". A slip he mended, or a name
+ * changed everywhere, leaves the premise standing: it never takes his world out of the book. */
+const INSTRUCTS = new Set(['rewrite', 'selection', 'anew']);
+const NAME_WORD = /(?<![\p{L}\p{N}])\p{Lu}[\p{L}\p{M}'’-]+/gu;
+const hasWord = (text, w) => new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'u').test(String(text || ''));
+function bookNameWords(novel) {
+  const out = new Set();
+  const add = (n) => { for (const w of String(n || '').match(NAME_WORD) || []) out.add(w); };
+  for (const k of NOTE_KINDS) for (const c of ((novel && novel.notes) || {})[k] || []) { add(c && c.name); for (const a of (c && c.aka) || []) add(a); }
+  for (const e of entriesOf(novel)) { add(e.name); for (const a of e.aka || []) add(a); }
+  return out;
+}
+function nameTakenOut(chapters, x, names) {
+  const c = chapters[x.chapterId];
+  const p = c && (c.passages || []).find((q) => q.id === x.pid);
+  const v = p && picked(p);
+  if (!v) return false;
+  const now = String(v.text || '');
+  const was = (Array.isArray(v.before) ? v.before : []).map((b) => String((b && b.text) || '')).filter(Boolean);
+  for (const w of String(x.text || '').match(NAME_WORD) || []) {
+    if (names.has(w) && was.some((t) => hasWord(t, w)) && !hasWord(now, w)) return true;
+  }
+  return false;
+}
+export function standingPremises(novel, chapters) {
+  let names = null;
+  return premisesOf(novel, chapters).filter((x) => {
+    const later = x.later || [];
+    if (!later.length) return true;
+    if (later.some((w) => INSTRUCTS.has(w.how))) return false;
+    if (!names) names = bookNameWords(novel);
+    return !nameTakenOut(chapters, x, names);
+  });
 }
 /* What a card's name may stand in for "gone" to be refused (foldNotes' `stands`): the book and his premises
  * (bookFolded), and his bibliography's entries (2.12.37: a card for a name his entry gives is never "gone" for no page
  * naming it) */
 export function standsFolded(novel) {
   const chapters = chaptersOf(novel);
-  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...premisesOf(novel, chapters).map((x) => x.text), ...entriesForNotes(novel).map(entryWords)].join('\n\n'), { cased: true });
+  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...standingPremises(novel, chapters).map((x) => x.text), ...entriesForNotes(novel).map(entryWords)].join('\n\n'), { cased: true });
 }
 /* HIS ENTRIES BESIDE THE NOTES (2.12.37): those the words read name (`text`), found as the page finds them — never one
  * set to Never (2.12.40, the audit: bibliography.js entriesForNotes, entriesNamed) */
@@ -1454,21 +1503,58 @@ export function entriesNamedIn(novel, text) {
   if (!String(text || '').trim()) return [];
   return entriesNamed(entriesForNotes(novel), text);
 }
-/* his entries for some cards (`cards`: {kind: [card]}) — an entry and a card for one name, as the bibliography joins
- * them (bibliography.js cardForEntry); never one set to Never */
+/* his entries joined to a card of the notes, each with its card ({entry, card: {kind, id}}): the join made against the
+ * whole notes (bibliography.js entryJoins, kept while the names stand) — never one set to Never */
+function joinedEntries(novel) {
+  const notes = (novel && novel.notes) || {};
+  const joins = entryJoins(entriesOf(novel), notes);
+  return entriesForNotes(novel).map((e) => ({ entry: e, card: joins.get(e.id) || null })).filter((x) => x.card);
+}
+/* his entries for some cards (`cards`: {kind: [card]}, or a Set of their ids) — an entry and a card for one name, as the
+ * bibliography joins them. 2.12.40, the audit: joined against the cards checked alone, a group holding only Mei Ling
+ * was given Mei Lin's entry (the two go by "Mei"), and "Emilia", two cards' in the notes, the one Emilia the group had.
+ * Joined against the whole notes, then kept where its card is among these. */
 export function entriesForCards(novel, cards) {
-  return entriesForNotes(novel).filter((e) => Boolean(cardForEntry(e, cards)));
+  const ids = cards instanceof Set ? cards : new Set(NOTE_KINDS.flatMap((k) => ((cards && cards[k]) || []).map((c) => c && c.id)));
+  return joinedEntries(novel).filter((x) => ids.has(x.card.id)).map((x) => x.entry);
 }
-/* the entries, fitted to `room` tokens: the first ones whole, how many more were left out */
-function entriesFitted(list, room) {
-  let n = list.length;
-  while (n > 0 && estimateTokens(entriesPart(list.slice(0, n), list.length - n)) > room) n--;
-  return { entries: list.slice(0, n), entriesLeft: list.length - n };
+/* HIS WORDS BESIDE THE NOTES, FITTED TO THEIR ROOM IN ONE PASS (2.12.40, the audit: each fit built its part again for
+ * every row it let go — a thousand premises, a thousand times, two seconds on the page's thread — kept the earliest
+ * rows whatever they were, and one long row first left none, nothing said): the rows that matter here first, then the
+ * newest; a long one by its opening (prompts.js premiseRow, entryRow); told in the book's order; how many were left out,
+ * said even when none fits (util.js fitRows). */
+const byNewest = (a, b) => (Number(b.at) || 0) - (Number(a.at) || 0);
+/* the finder for the names in question: cards' names (as the page finds them) and names given as words */
+function namesFinder({ cards = null, names = null } = {}) {
+  const forms = [];
+  if (cards) forms.push(...nameForms([], cards));
+  for (const n of names || []) if (String(n || '').trim().length >= 2) forms.push({ form: String(n).trim(), refs: ['n'] });
+  return forms.length ? makeFinder(forms) : null;
 }
-/* the Timeline's newest turns for some cards (ids), at most three each, in the book's order, fitted to `room` tokens */
-function turnsFitted(novel, chapters, ids, room) {
-  let events = [];
-  try { events = timelineOf(novel, chapters, {}).events; } catch (_) { events = []; }
+/* his premises: those that name the cards checked (or the names his words give) first, then the newest */
+export function premisesFitted(novel, chapters, room, { cards = null, names = null } = {}) {
+  const all = premisesOf(novel, chapters);
+  if (!all.length) return { premises: [], premisesLeft: 0 };
+  const finder = namesFinder({ cards, names });
+  const ranked = all.map((x, i) => ({ x, i, hit: Boolean(finder && finder.find(x.text).length) }))
+    .sort((a, b) => Number(b.hit) - Number(a.hit) || byNewest(a.x, b.x) || b.i - a.i);
+  const overhead = estimateTokens(premisesHead(all.some((x) => (x.later || []).length > 0))) + estimateTokens(leftLine('premise', all.length)) + 2;
+  const { kept, left } = fitRows(ranked, Math.max(0, room), (r) => estimateTokens(premiseRow(r.x)) + 1, overhead);
+  return { premises: kept.sort((a, b) => a.i - b.i).map((r) => r.x), premisesLeft: left };
+}
+/* his entries (all of them for the names in question): the newest first, told in the order given */
+export function entriesFitted(list, room) {
+  const all = (list || []).map((e, i) => ({ e, i, at: e && e.at }));
+  if (!all.length) return { entries: [], entriesLeft: 0 };
+  const overhead = estimateTokens(`${ENTRIES_HEAD}\n"""\n\n"""`) + estimateTokens(leftLine('entry', all.length)) + 2;
+  const { kept, left } = fitRows([...all].sort((a, b) => byNewest(a, b) || a.i - b.i), Math.max(0, room), (r) => estimateTokens(entryRow(r.e)) + 2, overhead);
+  return { entries: kept.sort((a, b) => a.i - b.i).map((r) => r.e), entriesLeft: left };
+}
+/* the Timeline's newest turns for some cards (ids), at most three each, in the book's order, fitted to `room` tokens —
+ * the newest first when they cannot all ride: the earliest go */
+/* (events: the Timeline's, when the caller has them already) */
+function turnsFitted(novel, chapters, ids, room, events = null) {
+  if (!events) { try { events = timelineOf(novel, chapters, {}).events; } catch (_) { events = []; } }
   const per = new Map();
   const keep = new Set();
   for (let i = events.length - 1; i >= 0; i--) {
@@ -1479,41 +1565,64 @@ function turnsFitted(novel, chapters, ids, room) {
     keep.add(i);
   }
   const all = events.filter((_, i) => keep.has(i));
-  /* the newest first when they cannot all ride: the earliest go */
-  let from = 0;
-  while (from < all.length && estimateTokens(timelinePart(all.slice(from), from)) > room) from++;
-  return { turns: all.slice(from), turnsLeft: from };
+  if (!all.length) return { turns: [], turnsLeft: 0 };
+  const overhead = estimateTokens(TIMELINE_HEAD) + estimateTokens(leftLine('turn', all.length)) + 2;
+  const { kept, left } = fitRows([...all].reverse(), Math.max(0, room), (e) => estimateTokens(timelineRow(e)) + 1, overhead);
+  const on = new Set(kept);
+  return { turns: all.filter((e) => on.has(e)), turnsLeft: left };
 }
-/* the print of his entries that stand under a card of the notes: when it moves, the notes are checked against them
- * (auditDue) — an entry changed by his hand, his partner, Quick add or a lorebook alike (2.12.37) */
-const printsKept = new Map();   /* novelId -> {key, print}: the same entries and card names, the same answer */
+/* THE PRINT OF HIS ENTRIES, EACH BY ITS WORDS (2.12.37: when an entry under a card changes — by his hand, his partner,
+ * Quick add or a lorebook — the notes are checked against it, auditDue). 2.12.40, the audit: the print was one hash of
+ * the joined entries in their order, so a reading that made a card for a name his entry already had, or an entry taken
+ * out and put back (at the end of the list), owed a whole check with no entry changed. Now each entry for the notes by
+ * id and the hash of its words, in the order of their ids, the ones joined to a card marked "+": owed is an entry under
+ * a card whose words differ from those the last check saw (or new), or one under a card then that is gone — never a
+ * new join of words already seen. */
+const entryHash = (e) => hashText(JSON.stringify([e.name, e.aka || [], e.line || '', e.text || '']));
 export function entriesPrint(novel) {
-  const notes = (novel && novel.notes) || {};
   const entries = entriesForNotes(novel);
-  if (!entries.length || !NOTE_KINDS.some((k) => (notes[k] || []).length)) return '';
-  const key = JSON.stringify([entries.map((e) => [e.id, e.name, e.aka, e.kind, e.at, (e.line || '').length, (e.text || '').length]), NOTE_KINDS.map((k) => (notes[k] || []).map((c) => [c.id, c.name, c.aka]))]);
-  const was = novel && novel.id ? printsKept.get(novel.id) : null;
-  if (was && was.key === key) return was.print;
-  const rows = entries.filter((e) => cardForEntry(e, notes)).map((e) => [e.name, e.aka || [], e.line || '', e.text || '']);
-  const print = rows.length ? hashText(JSON.stringify(rows)) : '';
-  if (novel && novel.id) printsKept.set(novel.id, { key, print });
-  return print;
+  if (!entries.length) return '';
+  const joined = new Set(joinedEntries(novel).map((x) => x.entry.id));
+  return entries.map((e) => `${e.id}=${entryHash(e)}${joined.has(e.id) ? '+' : ''}`).sort().join(',');
+}
+/* whether the entries owe the notes a check since the print `was` (a print kept before 2.12.40 — one hash, no "=" — is
+ * read as it was made: the joined entries' words in their order) */
+export function entriesOwed(novel, was) {
+  const stored = String(was || '');
+  if (stored && !stored.includes('=')) {
+    const notes = (novel && novel.notes) || {};
+    const joins = entryJoins(entriesOf(novel), notes);
+    const rows = entriesForNotes(novel).filter((e) => joins.get(e.id)).map((e) => [e.name, e.aka || [], e.line || '', e.text || '']);
+    return stored !== (rows.length ? hashText(JSON.stringify(rows)) : '');
+  }
+  const seen = new Map();
+  for (const row of stored ? stored.split(',') : []) {
+    const m = /^(.+)=([0-9a-z]+)(\+?)$/.exec(row);
+    if (m) seen.set(m[1], { h: m[2], joined: Boolean(m[3]) });
+  }
+  const now = joinedEntries(novel);
+  const here = new Set(now.map((x) => x.entry.id));
+  if (now.some((x) => { const s = seen.get(x.entry.id); return !s || s.h !== entryHash(x.entry); })) return true;
+  return [...seen].some(([id, s]) => s.joined && !here.has(id));
 }
 /* The book's words as they stand, folded once, for asking whether a card's
  * name still stands in it (foldNotes' `stands`) — with his premises, his word
  * on the book (2.12.36: a card his premise alone names is never "gone" for no
- * page naming it, and a thread his premise sets up is quoted from it) */
+ * page naming it, and a thread his premise sets up is quoted from it) — only
+ * those still the book (standingPremises, 2.12.40) */
 export function bookFolded(novel) {
   const chapters = chaptersOf(novel);
-  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...premisesOf(novel, chapters).map((x) => x.text)].join('\n\n'), { cased: true });
+  return foldedText([...(novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })), ...standingPremises(novel, chapters).map((x) => x.text)].join('\n\n'), { cased: true });
 }
-/* his premises fitted to a share of the helper's room: the earliest first — where a book's world is set up — and how
- * many later ones were left out (2.12.36) */
-function premisesFitted(novel, chapters, room) {
-  const all = premisesOf(novel, chapters);
-  let n = all.length;
-  while (n > 0 && estimateTokens(premisesPart(all.slice(0, n), all.length - n)) > room) n--;
-  return { premises: all.slice(0, n), premisesLeft: all.length - n };
+/* …and for the check's judgment of his cards (foldNotes' `mine`): the book with the premises that are still the book,
+ * the pages alone, and each of those premises with when he typed it — a premise older than his card never says the
+ * book is otherwise than his card (2.12.40, the audit: a premise "a fledgling vampire" turned his card typed after it,
+ * "a higher vampire", into the fledgling, and the card was his no longer) */
+function mineBook(novel) {
+  const chapters = chaptersOf(novel);
+  const pages = (novel.order || []).map((id) => chapterText(chapters[id] || { passages: [] })).join('\n\n');
+  const standing = standingPremises(novel, chapters);
+  return { book: foldedText([pages, ...standing.map((x) => x.text)].join('\n\n'), { cased: true }), pages: foldedText(pages, { cased: true }), premises: standing.map((x) => ({ at: Number(x.at) || 0, f: foldedText(x.text, { cased: true }) })) };
 }
 
 /* One reading's changes laid over the undo record: a card keeps the copy from
@@ -1547,6 +1656,28 @@ export function notesRoomOf(conn) { return Math.max(2000, Math.floor(contextOf(c
 export function readingRoom(conn, fixed) {
   const reply = thinksOn(conn) ? Math.max(helperRoom(conn), thinkingFloor(conn)) : helperRoom(conn);
   return contextOf(conn) - reply - 1500 - fixed;
+}
+/* the least of its model the book is read in, beside the notes (Cozy Tavern M752): a quarter */
+const bookFloor = (conn) => Math.max(1500, Math.floor(contextOf(conn) * 0.25));
+/* WHAT HIS WORDS BESIDE THE BOOK MAY TAKE (2.12.40, the audit — the notes' check, and What it's about written from the
+ * book). Through 2.12.39 his premises, his entries, the Timeline's turns and his other words took their fifths on top
+ * of the notes, and a chapter that rode whole without them — not summed up yet — was told by its opening and close.
+ * Now they take what is left once the book has its room beside the rest (`fixed`): never below its floor, and never so
+ * much that a chapter the book would tell whole, with no summary to tell it by, goes to its opening and close — it stays
+ * whole, with every chapter after it (the book is told whole from its newest back), the ones before it in short. */
+const BARE = /^\((?:not summarised yet|The summary is waiting)/;
+function besideRoom(conn, novel, chapters, fixed) {
+  const room = readingRoom(conn, fixed);
+  if (room <= 0) return 0;
+  const order = novel.order || [];
+  const fit = fitBook({ novel, chapters, chapterId: null, current: null, room });
+  const whole = new Set(fit.book.whole.map((x) => x.id));
+  const ch = (id) => chapters[id] || { id, passages: [] };
+  const from = order.findIndex((id) => whole.has(id) && BARE.test(shortOf(ch(id))));
+  let keep = 0;
+  if (from >= 0) order.forEach((id, i) => { if (i >= from) keep += estimateTokens(chapterText(ch(id))) + 12; else if (i >= fit.book.omitted) keep += estimateTokens(shortOf(ch(id))) + 12; });
+  /* (the book as it is sent — its chapters' headings with it — a little over what the fit counts) */
+  return Math.max(0, room - Math.max(bookFloor(conn), from >= 0 ? Math.ceil(keep * 1.02) + 60 : 0));
 }
 
 /* The shape of a notes answer: an object of the notes' parts — never one row
@@ -1617,24 +1748,31 @@ export async function probe(conn, { beforeAsk } = {}) {
 /* Prefer paragraph ends, but a paragraph can itself be longer than the
  * model holds. Split that at counted words (including unspaced CJK), keeping
  * every character of it, so a long imported paragraph can still be read. */
-export function partsOf(text, words = 9000) {
+/* (first: the first part's size, when it carries more than its words — the words it replaces, his premise: the parts
+ * after it are `words` each; 2.12.40) */
+export function partsOf(text, words = 9000, first = words) {
   words = Math.max(1, Math.floor(Number(words) || 9000));
+  first = Math.max(1, Math.min(words, Math.floor(Number(first) || words)));
   const paras = String(text || '').split(/\n+/);
   const out = [];
   let cur = [];
   let n = 0;
+  /* the room of the part being made: the first one's, until it is made */
+  const room = () => (out.length ? words : first);
   for (const p of paras) {
     const w = countWords(p);
-    if (w > words) {
+    if (w > room()) {
       if (cur.length) { out.push(cur.join('\n\n')); cur = []; n = 0; }
-      const cjk = /[぀-ヿ㐀-鿿가-힯]/g;
-      const starts = [...p.matchAll(cjk), ...p.replace(cjk, ' ').matchAll(/[\p{L}\p{N}][\p{L}\p{N}'’\-]*/gu)].map((m) => m.index).sort((a, b) => a - b);
-      let from = 0;
-      for (let i = words; i < starts.length; i += words) { out.push(p.slice(from, starts[i])); from = starts[i]; }
-      out.push(p.slice(from));
-      continue;
+      if (w > room()) {
+        const cjk = /[぀-ヿ㐀-鿿가-힯]/g;
+        const starts = [...p.matchAll(cjk), ...p.replace(cjk, ' ').matchAll(/[\p{L}\p{N}][\p{L}\p{N}'’\-]*/gu)].map((m) => m.index).sort((a, b) => a - b);
+        let from = 0;
+        for (let i = room(); i < starts.length; i += words) { out.push(p.slice(from, starts[i])); from = starts[i]; }
+        out.push(p.slice(from));
+        continue;
+      }
     }
-    if (n + w > words && cur.length) { out.push(cur.join('\n\n')); cur = []; n = 0; }
+    if (n + w > room() && cur.length) { out.push(cur.join('\n\n')); cur = []; n = 0; }
     cur.push(p);
     n += w;
   }
@@ -1978,13 +2116,21 @@ async function readChanges(novelId, conn) {
     const notesFit = notesRoomOf(conn);
     /* a long change is read in parts; the first part carries what was taken out */
     const changes = target ? target.changes : [];
-    /* the premise he typed for each passage read, shown beside it (2.12.36): his word on the book */
-    for (const c of changes) c.premise = c.pid && chapter ? premiseOf((chapter.passages || []).find((p) => p.id === c.pid)) : '';
+    /* the premise he typed for each passage read, shown beside it (2.12.36): his word on the book — with what he did to
+     * the passage since, his newer word on it (2.12.40, shape.js laterWords); and whether the words read are his own (a
+     * page he wrote or changed himself, shape.js hisChange): beside his entries, his newer word (2.12.40) */
+    for (const c of changes) {
+      const p = c.pid && chapter ? (chapter.passages || []).find((x) => x.id === c.pid) : null;
+      c.premise = p ? premiseOf(p) : '';
+      c.later = c.premise ? laterWords(p) : [];
+      c.his = Boolean(p && hisChange(picked(p)));
+    }
     const removed = target ? target.removed : [];
     const firstChanged = changes.length ? chapter.passages.findIndex((p) => p.id === changes[0].pid) : -1;
     const before = chapter && firstChanged > 0 ? chapterText({ passages: chapter.passages.slice(0, firstChanged) }) : '';
     /* the notes measured as they are sent: every card all of what is read now names, whole — no reading of a part of it carries more (Cozy Tavern M714: a request measured without what it carries) */
-    const focusAll = [before, ...changes.map((c) => `${c.old || ''}\n${c.text || ''}`), ...removed.map((r) => String((r && r.text) || '')), ...removedChapters.map((r) => String((r && r.text) || ''))].join('\n');
+    /* (his premise among those words, as the request has them: prompts.js readingFocus — 2.12.40) */
+    const focusAll = [before, ...changes.map(readingFocus), ...removed.map((r) => String((r && r.text) || '')), ...removedChapters.map((r) => String((r && r.text) || ''))].join('\n');
     /* Count the request's actual fixed words, including the history's
      * format and rules. The former guessed instructions plus a 1,500-token
      * safety allowance refused a 6,000-token helper that still had ample
@@ -2066,7 +2212,10 @@ async function readChanges(novelId, conn) {
     let words = 0;
     const push = () => { if (batch.length) batches.push(ask({ items: batch })); batch = []; words = 0; };
     for (const c of changes) {
-      const w = countWords(c.text) + countWords(c.old) + countWords(c.premise) + sourceWords;
+      /* his premise as it rides beside the page — by its opening when long (prompts.js premiseBeside, 2.12.40: through
+       * 2.12.39 it went whole, and a long one made every part of the page smaller, though only its first part carries it) */
+      const besideWords = countWords(premiseBeside(c));
+      const w = countWords(c.text) + countWords(c.old) + besideWords + sourceWords;
       if (one) push();
       if (w > batchWords) {
         push();
@@ -2075,7 +2224,9 @@ async function readChanges(novelId, conn) {
          * change. Its seen mark and reversible reading wait for the end. */
         const oldFirst = countWords(c.old) > batchWords - 150;
         if (oldFirst) for (const old of partsOf(c.old, batchWords)) batches.push(ask({ items: [{ ...c, whole: c.text, text: '', old, oldOnly: true, fromChange: true, partial: true, premise: '' }] }));
-        const parts = partsOf(c.text, Math.max(150, batchWords - countWords(c.premise) - (oldFirst ? 0 : countWords(c.old))));
+        /* the words replaced and his premise ride with the first part only: that part is made smaller for them, the
+         * parts after it are not (2.12.40, the audit) */
+        const parts = partsOf(c.text, Math.max(150, batchWords), Math.max(150, batchWords - besideWords - (oldFirst ? 0 : countWords(c.old))));
         if (!parts.length) parts.push('');
         parts.forEach((part, i) => batches.push(ask({ items: [{ ...c, whole: c.text, fromChange: Boolean(c.old), premise: i === 0 ? c.premise : '', text: part + (parts.length > 1 ? `\n\n(part ${i + 1} of ${parts.length})` : ''), old: !oldFirst && i === 0 ? c.old : '', partial: i < parts.length - 1 }] })));
         continue;
@@ -2124,8 +2275,9 @@ async function readChanges(novelId, conn) {
       for (const c of B.items) c.source = c.pid ? `Passage ${pageNums.get(c.pid) || '—'}` : '';
       /* whether this reading asks for the bibliography (and a short portrait): what comes back is read as what was asked, whatever the switch says by then */
       const askedCodex = bibReading(now, conn);
-      /* the words read, with his premise for each (names the premise gives are someone's own) */
-      const readText = B.items.map((c) => `${c.text}${c.premise ? `\n\n${c.premise}` : ''}`).join('\n\n');
+      /* the words read, with his premise for each (names the premise gives are someone's own) — and his notes for writing
+       * it again since, beside the premise (2.12.40) */
+      const readText = B.items.map((c) => `${c.text}${c.premise ? `\n\n${c.premise}${(c.later || []).map((w) => (w.note ? `\n\n${w.note}` : '')).join('')}` : ''}`).join('\n\n');
       const readFold = B.items.length ? foldedText(readText) : null;
       /* his entries for the names these words give, beside the notes — at most a twelfth of its room (2.12.37) */
       const entered = entriesFitted(B.items.length ? entriesNamedIn(now, readText) : [], Math.floor(room / 12));
@@ -3520,9 +3672,11 @@ async function keepTheBook(novelId, conn) {
   setLight(novelId, 'reading', `Reading the book for ${keeps.map((k) => KEPT_WORDS[k]).join(' and ')}…`);
   const frame = helperFrame(house, novel);
   const notesFit = notesRoomOf(conn);
-  /* his premises, his word on the book (2.12.36): what it is about holds them — a fifth of its room at most */
-  const prem = premisesFitted(novel, chapters, Math.floor(readingRoom(conn, 0) / 5));
-  const fixed = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true, fit: notesFit })) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 1200 + estimateTokens(premisesPart(prem.premises, prem.premisesLeft));
+  /* his premises, his word on the book (2.12.36): what it is about holds them — a fifth of its room at most, and only
+   * what the book leaves (besideRoom, 2.12.40); those naming the people and things of the notes first, then the newest */
+  const fixed0 = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true, fit: notesFit })) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 1200;
+  const prem = premisesFitted(novel, chapters, premisesOf(novel, chapters).length ? Math.min(Math.floor(readingRoom(conn, 0) / 5), besideRoom(conn, novel, chapters, fixed0)) : 0, { cards: novel.notes || {} });
+  const fixed = fixed0 + estimateTokens(premisesPart(prem.premises, prem.premisesLeft));
   const room = readingRoom(conn, fixed);
   if (room < 600) {
     /* no room to read the book beside its notes: never written from no book —
@@ -3613,7 +3767,7 @@ export function auditDue(novel) {
   if (m.auditAsked) return true;
   /* his entries under a card changed since the last check — by his hand, his partner, Quick add or a lorebook: the
    * notes are held to them now (2.12.37) */
-  if (m.audit && typeof m.audit.entries === 'string' && m.audit.entries !== entriesPrint(novel)) return true;
+  if (m.audit && typeof m.audit.entries === 'string' && entriesOwed(novel, m.audit.entries)) return true;
   return Boolean(m.audit) && (m.audit.reads || 0) >= AUDIT_EVERY;
 }
 /* A book opened for the first time since there was an auditor, or since it
@@ -3635,6 +3789,10 @@ export function firstCheck(novelId) {
   const novel = store.peek('novel', novelId);
   const a = (novel.memory && novel.memory.audit) || null;
   if (a && (a.v || 1) >= AUDIT_V) return false;
+  /* every chapter in hand first (2.12.40, the audit: a chapter that failed to open was read as none — no premise in it,
+   * none of his words — and the check it owed was never asked, the version kept as if it had been weighed): tried again
+   * the next time the book opens. A chapter gone for good (null) is no reason to wait. */
+  if ((novel.order || []).some((id) => store.peek('chapter', id) === undefined)) return false;
   const has = NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length);
   /* owed once the bibliography holds the book's facts (owedCheck): notes checked by the check of 2.4–2.11 only for the
    * portrait — so not where the bibliography is not filled from the book; older ones in any case; notes checked under 3 owe nothing there */
@@ -3648,7 +3806,7 @@ export function firstCheck(novelId) {
   /* 11 (2.12.36): his premises shown to the check — notes read before it never saw them, so a book with any is held against them once, soon */
   const premised = has && (!a || (a.v || 1) < 11) && premisesOf(novel, chapters).length > 0;
   /* 12 (2.12.37): his entries and the Timeline shown to the check — a book with an entry under a card of the notes is held to them once, soon */
-  const entered = has && (!a || (a.v || 1) < 12) && Boolean(entriesPrint(novel));
+  const entered = has && (!a || (a.v || 1) < 12) && joinedEntries(novel).length > 0;
   store.change('novel', novelId, novelSteps.setMemory({ audit: { ...(a || {}), at: a ? a.at || 0 : Date.now(), reads: a ? a.reads || 0 : 0, v: AUDIT_V, entries: entriesPrint(novel), ...(owed ? { owed } : {}) }, ...(sinceHis || premised || entered ? { auditAsked: true } : {}) }), { now: true });
   return has;
 }
@@ -3731,8 +3889,44 @@ async function auditNotes(novelId, conn) {
   /* the notes never take the room the book needs to be read beside them
    * (Cozy Tavern M752): a quarter of its model, at least, is the book's */
   const replyRoom = thinksOn(conn) ? Math.max(helperRoom(conn), thinkingFloor(conn)) : helperRoom(conn);
-  const around = estimateTokens(frame) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 2000;
-  const budget = Math.min(Math.max(2000, Math.floor(contextOf(conn) * 0.4)), contextOf(conn) - replyRoom - 1500 - around - Math.max(1500, Math.floor(contextOf(conn) * 0.25)));
+  const around0 = estimateTokens(frame) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 2000;
+  /* HIS WORDS BESIDE THE NOTES ARE PART OF WHAT SURROUNDS THE BOOK (2.12.40, the audit: his premises, his entries, the
+   * Timeline's turns and his other words to judge each took a fifth on top of the notes, and a chapter that rode whole
+   * without them was told by its opening and close). What they need beside the whole notes — each at most its fifth —
+   * is held back from the notes' room, half of what is left after the book's floor at most; and they are fitted to
+   * what the book leaves (besideRoom). */
+  const hisNow = hisWordsFolded(novel, chapters);
+  const listCost = (ws) => estimateTokens(ws.map((w) => w.text).join('\n')) + 30 * ws.length;
+  const wordsRoom = Math.max(0, Math.floor(readingRoom(conn, 0) / 5));
+  const CAPS = { words: wordsRoom, premises: wordsRoom, entries: Math.floor(wordsRoom * 2 / 3), turns: Math.floor(wordsRoom / 3) };
+  /* (worked out once for the check: what there is to judge, and the Timeline's turns) */
+  const toJudge = hisNow ? wordsToJudge(novel, chapters) : [];
+  let events = [];
+  try { events = timelineOf(novel, chapters, {}).events; } catch (_) { events = []; }
+  /* his words beside the notes for some cards (`cards`: {kind: [card]}), each fitted to its room: his other words to
+   * judge (judge: with the round's first group — the entries give way first, then the chapters' plans), his premises
+   * (those naming the cards first, then the newest), his entries for the cards — never one judged in this same check
+   * (2.12.40, the audit: judged against the book and ruling the cards in one request, it was told both, and an answer
+   * that did both left the entry and the card saying opposite things) — and the Timeline's newest turns for them */
+  const besideFor = (rooms, { cards, judge }) => {
+    let words = judge ? toJudge.slice() : [];
+    while (words.length && listCost(words) > rooms.words) {
+      const drop = [...words].reverse().find((w) => w.what === 'entry') || [...words].reverse().find((w) => w.what === 'plan') || words[words.length - 1];
+      words = words.filter((w) => w !== drop);
+    }
+    const ids = new Set(NOTE_KINDS.flatMap((k) => ((cards && cards[k]) || []).map((c) => c.id)));
+    const judged = new Set(words.filter((w) => w.what === 'entry').map((w) => w.id));
+    const prem = premisesFitted(novel, chapters, rooms.premises, { cards });
+    const ent = entriesFitted(entriesForCards(novel, ids).filter((e) => !judged.has(e.id)), rooms.entries);
+    const tl = turnsFitted(novel, chapters, ids, rooms.turns, events);
+    const costs = { words: words.length ? listCost(words) : 0, premises: estimateTokens(premisesPart(prem.premises, prem.premisesLeft)), entries: estimateTokens(entriesPart(ent.entries, ent.entriesLeft)), turns: estimateTokens(timelinePart(tl.turns, tl.turnsLeft)) };
+    return { words, prem, ent, tl, costs, cost: costs.words + costs.premises + costs.entries + costs.turns };
+  };
+  const floor = bookFloor(conn);
+  const whole0 = besideFor(CAPS, { cards: novel.notes || {}, judge: Boolean(hisNow) });
+  const avail = contextOf(conn) - replyRoom - 1500 - around0 - floor;
+  const around = around0 + Math.min(whole0.cost, Math.floor(Math.max(0, avail) / 2));
+  const budget = Math.min(Math.max(2000, Math.floor(contextOf(conn) * 0.4)), contextOf(conn) - replyRoom - 1500 - around - floor);
   let only = null;
   let others = [];
   let nextFrom = 0;
@@ -3784,24 +3978,22 @@ async function auditNotes(novelId, conn) {
   if (budget < 800) { tooSmall(tooSmallWhy(conn, novel, 'the notes')); return; }
   /* what it judges by name — his cards, the threads, his other words — counted in the room before the book is fitted to it (2.12.18) */
   const mineList = mineToJudge(novel, only);
-  const hisNow = hisWordsFolded(novel, chapters);
-  let wordsList = hisNow && (!only || roundBegins) ? wordsToJudge(novel, chapters) : [];
-  const listCost = (ws) => estimateTokens(ws.map((w) => w.text).join('\n')) + 30 * ws.length;
-  const judgeCost = 30 * mineList.length + (mineList.length ? 500 : 0) + (wordsList.length ? 400 : 0);
-  /* never more than a fifth of the helper's room for his other words: the entries give way first, then the chapters' plans */
-  const wordsRoom = Math.max(0, Math.floor(readingRoom(conn, 0) / 5));
-  while (wordsList.length && listCost(wordsList) > wordsRoom) {
-    const drop = [...wordsList].reverse().find((w) => w.what === 'entry') || [...wordsList].reverse().find((w) => w.what === 'plan') || wordsList[wordsList.length - 1];
-    wordsList = wordsList.filter((w) => w !== drop);
-  }
-  /* his premises, his word on the book (2.12.36): a fifth of its room at most, the earliest first */
-  const prem = premisesFitted(novel, chapters, wordsRoom);
-  /* his entries for the cards checked, and the Timeline's newest turns for them (2.12.37): another fifth between them */
+  const judgeCost = 30 * mineList.length + (mineList.length ? 500 : 0);
+  /* his words beside the notes for the cards checked, fitted to what the book leaves (besideRoom): each part at most its
+   * fifth, and all of them made smaller alike, each to its share, when they cannot all have that */
   const checkedCards = Object.fromEntries(NOTE_KINDS.map((k) => [k, ((novel.notes || {})[k] || []).filter((c) => !only || only.has(c.id))]));
-  const ent = entriesFitted(entriesForCards(novel, checkedCards), Math.floor(wordsRoom * 2 / 3));
-  const tl = turnsFitted(novel, chapters, new Set(NOTE_KINDS.flatMap((k) => checkedCards[k].map((c) => c.id))), Math.floor(wordsRoom / 3));
-  const fixed = estimateTokens(frame) + estimateTokens(notesText(novel, { forHelper: true, only })) + estimateTokens(others.join(', ')) + estimateTokens(aboutTheBook(novel, { plans: false, kept: 'his' })) + 2000 + judgeCost + listCost(wordsList) + estimateTokens(premisesPart(prem.premises, prem.premisesLeft))
-    + estimateTokens(entriesPart(ent.entries, ent.entriesLeft)) + estimateTokens(timelinePart(tl.turns, tl.turnsLeft));
+  const judge = Boolean(hisNow) && (!only || roundBegins);
+  const fixed0 = around0 + estimateTokens(notesText(novel, { forHelper: true, only })) + estimateTokens(others.join(', ')) + judgeCost;
+  let side = only || judge !== Boolean(hisNow) ? besideFor(CAPS, { cards: checkedCards, judge }) : whole0;
+  /* (the words that ask him to judge his other words, when there are any to judge: 400) */
+  const allowed = side.cost > 0 ? besideRoom(conn, novel, chapters, fixed0 + (side.words.length ? 400 : 0)) : 0;
+  if (side.cost > allowed) {
+    const share = allowed / side.cost;
+    side = besideFor(Object.fromEntries(Object.keys(CAPS).map((k) => [k, Math.floor(side.costs[k] * share)])), { cards: checkedCards, judge });
+  }
+  const { prem, ent, tl } = side;
+  const wordsList = side.words;
+  const fixed = fixed0 + side.cost + (wordsList.length ? 400 : 0);
   const room = readingRoom(conn, fixed);
   if (room < 600) { tooSmall(tooSmallWhy(conn, novel, 'the notes')); return; }
   const fit = fitBook({ novel, chapters, chapterId: null, current: null, room });
@@ -3868,7 +4060,7 @@ async function auditNotes(novelId, conn) {
     chapterId: '', at: Date.now(), audit: true, limit: only,
     stands: hasGone(got.obj) ? standsFolded(latest) : null,
     hisWords: claimsContradiction(got.obj) ? hisWordsFolded(latest, live) : null,
-    mine: mineList.length ? { ids: new Set(mineList.map((x) => x.id)), book: Array.isArray(got.obj && got.obj.mine) && got.obj.mine.length ? bookFolded(latest) : null } : null,
+    mine: mineList.length ? { ids: new Set(mineList.map((x) => x.id)), ...(Array.isArray(got.obj && got.obj.mine) && got.obj.mine.length ? mineBook(latest) : { book: null }) } : null,
     grounds: groundsOf(namedBook(latest, store.peek('house', 'house') || {})),
     asked: askedNotes, keepOpen: openedByNewest(latest, live), unseen, keptElsewhere: askedCodex ? factsByCard(novelId) : null,
     /* where people are "now" is the end of the book's: when it read the end only in short, it only fills one never written */
@@ -3903,19 +4095,28 @@ async function auditNotes(novelId, conn) {
   const round = roundOn && a0.round ? a0.round : [];
   const nextRound = only ? [...round, ...(clear ? [] : [{ at: Date.now(), verdict, refused }])].slice(-6) : [];
   const fixedNow = folded.cards.length + Object.keys(kept).length;
+  /* AN ENTRY THE CHECK PUT RIGHT RULES ITS CARD AT THE NEXT CHECK (2.12.40, the audit): judged here, it did not rule the
+   * cards in this check (besideFor); put right under a card of the notes, the notes owe a check against it — at once —
+   * and it is held as the check left it (its words are what the book has now), so that check holds the card to it
+   * instead of judging it again. Through 2.12.39 the print was taken after the entry changed: nothing was owed, and the
+   * card said the opposite of the entry until the sixth reading. */
+  const afterAll = store.peek('novel', novelId) || latest;
+  const joinsNow = entryJoins(entriesOf(afterAll), afterAll.notes || {});
+  const ruled = new Map(judged.changes.filter((w) => w.what === 'entry' && w.after && joinsNow.get(w.id)).map((w) => [w.key, hashText([String(w.after.text || '').trim(), hisPrint(afterAll)].join('\n'))]));
   /* what it said of each card of his it was asked to judge: held is not asked again until its Since then changes; put right or gone, nothing to keep; not answered, counted */
   const mineNow = { ...((store.peek('novel', novelId).memory || {}).mine || {}) };
   const judgedOf = [...mineList.map((x) => ({ key: x.id, h: x.h, said: folded.mineSaid.get(x.id) })), ...wordsList.map((x) => ({ key: x.key, h: x.h, said: judged.said.get(x.key) }))];
   for (const x of judgedOf) {
-    if (x.said === 'changed' || x.said === 'gone') delete mineNow[x.key];
+    if (x.said === 'changed' && ruled.has(x.key)) mineNow[x.key] = { h: ruled.get(x.key), held: true };
+    else if (x.said === 'changed' || x.said === 'gone') delete mineNow[x.key];
     else if (x.said === 'held') mineNow[x.key] = { h: x.h, held: true };
     else mineNow[x.key] = { h: x.h, n: ((mineNow[x.key] && mineNow[x.key].h === x.h ? mineNow[x.key].n : 0) || 0) + 1 };
   }
   if (judgedOf.length) store.change('novel', novelId, novelSteps.setMemory({ mine: mineNow }));
   store.change('novel', novelId, novelSteps.setMemory({ audit: { at: Date.now(), reads: 0, v: AUDIT_V, entries: entriesPrint(store.peek('novel', novelId) || novel), checked: true, fixed: fixedNow, changes: changed.slice(0, 200), verdict, clear, partial, refused, refusedAll: folded.refused.length,
     ...(only ? { from: nextFrom, some: { checked: only.size, all: every.length }, round: nextRound, earlier: round, ...roundKeep, roundFixed: roundKeep.roundFixed + fixedNow, roundChanges: [...roundKeep.roundChanges, ...changed].slice(0, 200) } : {}), ...(a0.groupMax ? { groupMax: a0.groupMax } : {}), ...owedKeep },
-    /* the next group of the round, as soon as the helper is free */
-    auditAsked: roundLeft > 0 }));
+    /* the next group of the round, as soon as the helper is free — and a check at once for an entry put right under a card */
+    auditAsked: roundLeft > 0 || ruled.size > 0 }));
   await store.flush('novel', novelId);
 }
 
