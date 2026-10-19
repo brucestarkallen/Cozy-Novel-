@@ -95,11 +95,17 @@ export function bibOwedLine(novelId) {
   const helper = connFor(store.peek('house', 'house') || {}, 'helper');
   if (!novel || !helper || !bibReading(novel, helper)) return '';
   const due = bibDue(novelId).length;
-  if (!due) return '';
+  /* (and the pages set aside, as their words stand: never in the bibliography, said apart as the Timeline says them —
+   * 2.12.41, round 6: a page its model stayed silent on is set aside too, and the bibliography said nothing of it) */
+  const aside = asideNow(novel).filter((x) => !x.out && !String(x.key).startsWith('summary:')).length;
+  if (!due && !aside) return '';
   const it = due === 1 ? 'it' : 'them';
   const head = `${plural(due, 'page')} ${due === 1 ? 'is' : 'are'} not read for the bibliography yet`;
   /* (and those whose next try waits its time, said with when — the Timeline's line says it the same way: 2.12.41) */
-  return helperState(novelId) === 'stopped' ? `${head}. ${HELPER_STOPPED}, and it reads ${it} by itself.` : `${head} — ${readsByItself(due, readAgainLater(novelId, 'facts'))}.`;
+  const owed = !due ? '' : helperState(novelId) === 'stopped' ? `${head}. ${HELPER_STOPPED}, and it reads ${it} by itself.` : `${head} — ${readsByItself(due, readAgainLater(novelId, 'facts'))}.`;
+  const one = (a, b) => (aside === 1 ? a : b);
+  const set = aside ? `${plural(aside, 'page')} ${one('was', 'were')} set aside — the helper’s model would not read ${one('it', 'them')} for the notes, so the bibliography has nothing from ${one('it', 'them')}. ${one('Read it again', 'Read them all again')}, under Cards, has ${one('it', 'them')} read afresh.` : '';
+  return [owed, set].filter(Boolean).join(' ');
 }
 export function lightOf(novelId) {
   /* no helper chosen is said whatever was last seen */
@@ -115,9 +121,9 @@ export function lightOf(novelId) {
   if (l && l.state === 'waiting' && busy && MOMENT_WORDS.has(l.words)) return { ...l, words: MOMENT_WORDS.get(l.words) };
   /* reading, waiting, or turned away: said as it is */
   if (l && (l.state === 'reading' || l.state === 'waiting' || l.state === 'trouble')) return l;
-  /* green only when nothing is left unread */
+  /* green only when nothing is left unread (what waits its time after a stall said with when, below: pendingNow) */
   const novel = store.peek('novel', novelId);
-  if (pendingWork(novelId)) return { state: 'waiting', words: rebuildingNow(novel) ? 'Reading the whole book again — until it is done, the writer and the rest go on with the notes as they were.' : `The helper reads the newest words ${busy ? PAGE_DONE : 'in a moment'}.` };
+  if (pendingNow(novelId)) return { state: 'waiting', words: rebuildingNow(novel) ? 'Reading the whole book again — until it is done, the writer and the rest go on with the notes as they were.' : `The helper reads the newest words ${busy ? PAGE_DONE : 'in a moment'}.` };
   /* nor while a passage is owed that waits its time — what waits and when, said as it stands now (2.12.41: it said "The
    * notes are up to date.") */
   const waits = whatWaits(novelId);
@@ -2017,10 +2023,13 @@ export async function run(novelId) {
       await keepTheBook(novelId, conn);
       await auditNotes(novelId, conn);
       failures.delete(novelId);
-      const left = pendingWork(novelId) || stretchLeft || sceneLeft || checksLeft || bibLeft || turnsLeft;
+      /* (what the notes' reading waits to ask again after a stall is booked below, never asked every two seconds:
+       * pendingNow — 2.12.41, round 6) */
+      const left = pendingNow(novelId) || stretchLeft || sceneLeft || checksLeft || bibLeft || turnsLeft;
       if (left) nudge(novelId, 2000);
       else {
-        finishReread(novelId);
+        /* (the whole book read again is done only once every page is read or set aside — none still waiting its time) */
+        if (!pendingWork(novelId)) finishReread(novelId);
         /* a check owed now (after reading the whole book again, or a row kept on a card of its own) runs next — said so,
          * never "up to date" while it is owed (2.12.41) */
         if (auditDue(store.peek('novel', novelId))) {
@@ -2174,18 +2183,23 @@ function setAside(novelId, chapter, B, why, conn = null) {
 /* The parts set aside as the book stands now: each labelled where it stands
  * now (a passage moved or renumbered says so), none for a passage, chapter or
  * summary no longer in the book (S02-G13) */
-export function asideNow(novel) {
+/* (a passage only as its words stand — timeline.js setAsideNow, the Timeline's and the bibliography's own test: words
+ * of it changed since are read again, and never said set aside meanwhile — 2.12.41, round 6. Kept on the book all the
+ * same, `all`: picked back, the words set aside are said so again, never read with nothing taken in silence) */
+export function asideNow(novel, { all: every = false } = {}) {
   const all = (novel && novel.memory && novel.memory.aside) || {};
   const chapters = chaptersOf(novel);
   const where = new Map();
-  for (const id of (novel && novel.order) || []) for (const p of ((chapters[id] || {}).passages) || []) where.set(p.id, id);
+  for (const id of (novel && novel.order) || []) for (const p of ((chapters[id] || {}).passages) || []) where.set(p.id, [id, p]);
   const out = [];
   for (const [key, a] of Object.entries(all)) {
     if (key.startsWith('summary:')) { const cid = key.slice(8); if (chapters[cid]) out.push({ ...a, key, label: `the summary of ${chapterLabel(novel, chapters[cid], { withName: false })}`, out: false }); continue; }
     if (key.startsWith('out:chapter:')) { out.push({ ...a, key, out: true }); continue; }
     if (key.startsWith('out:')) { const cid = key.slice(4); if (chapters[cid]) out.push({ ...a, key, label: `what was taken out of ${chapterLabel(novel, chapters[cid], { withName: false })}`, out: true }); continue; }
-    const cid = where.get(key);
-    if (!cid) continue;
+    const at = where.get(key);
+    if (!at) continue;
+    const [cid, p] = at;
+    if (!every && a && a.sig && signature(picked(p)) !== a.sig) continue;
     out.push({ ...a, key, chapterId: cid, label: passageLabel(novel, chapters[cid], key) + (/\(a part of it\)$/.test(a.label || '') ? ' (a part of it)' : ''), out: false });
   }
   return out;
@@ -2195,7 +2209,7 @@ function pruneAside(novelId) {
   const novel = store.peek('novel', novelId);
   const all = (novel && novel.memory && novel.memory.aside) || {};
   if (!Object.keys(all).length) return;
-  const keep = new Set(asideNow(novel).map((x) => x.key));
+  const keep = new Set(asideNow(novel, { all: true }).map((x) => x.key));
   const drop = Object.keys(all).filter((k) => !keep.has(k));
   if (drop.length) store.change('novel', novelId, novelSteps.dropAside(drop));
 }
@@ -2204,7 +2218,7 @@ function unsetAside(novelId, key) {
   const novel = store.peek('novel', novelId);
   const a = novel && novel.memory && novel.memory.aside && novel.memory.aside[key];
   if (!a) return false;
-  const now = asideNow(novel).find((x) => x.key === key);
+  const now = asideNow(novel, { all: true }).find((x) => x.key === key);
   const cid = (now && now.chapterId) || a.chapterId;
   if (cid && a.sig) {
     const map = { ...((novel.memory || {}).seen || {})[cid] };
@@ -2245,6 +2259,148 @@ function takeBackInParts(novelId, parts) {
   store.change('novel', novelId, novelSteps.setMemory({ ...(parts.from ? { undo: parts.from.undo, lit: parts.from.lit } : {}), inParts: null }), { now: true });
 }
 
+/* THE NOTES' READING OF A PASSAGE ITS MODEL STAYS SILENT ON (2.12.41, round 6 — as the backfills' own rules have it,
+ * stallEnds: through round 5 a reading let go on its leash was thrown as a passing fault every time — asked again in a
+ * minute, three, then ten, never counted — and each throw ended the run before the summaries, the backfills and the
+ * notes' check, so one passage its model never answered held back the whole book's upkeep for good). A stall ends that
+ * reading for the run, never the run: what it asked is asked again once as long as it was waited has passed, never at
+ * once — the run books itself for it (whatWaits) and the light says it, the other pages read meanwhile. Of several, read
+ * a passage at a time from then on; alone, a stall on the longest leash (or an answer that made no progress at all,
+ * M748) is counted, as a refusal is — on the take it read, as the backfills keep theirs, so a reload never lets it go —
+ * and counted twice, it is set aside as a page its model will not read is: said, with Read it again under Cards. A
+ * stall on a shorter leash is waited out: the leash grows, nothing is counted. What was taken out has no take: its count
+ * is kept by what was asked (stuck), its wait as a look (lookIn). */
+/* (`tries.notes` = {fp, n, part, next}: the words as they were read, how many tries counted, the part of a passage read
+ * in parts they are of, the phone's time before which it is not asked again) */
+const partKey = (c) => (c.partial || c.whole !== undefined ? hashText(JSON.stringify([c.old || '', c.text])) : '');
+function notesTryOf(v) {
+  const t = v && v.tries && v.tries.notes;
+  return t && t.fp === hashText(String(v.text || '')) ? t : null;
+}
+/* one more try counted for what one reading read (`count` 0: none), and when it is asked again (`next`, 0: the next
+ * run) — on the take it read, while it reads as it was read; how many it has now */
+function notesTried(chapterId, c, count, next) {
+  const [vid, h] = String(c.sig || '').split(SIG_SEP);
+  const part = partKey(c);
+  let n = 0;
+  store.change('chapter', chapterId, (ch) => {
+    const p = (ch.passages || []).find((x) => x.id === c.pid);
+    const v = p && (p.versions || []).find((x) => x.id === vid);
+    if (!v || v.streaming || hashText(String(v.text || '')) !== h) return false;
+    const was = notesTryOf(v);
+    n = (was && (was.part || '') === part ? Number(was.n) || 0 : 0) + count;
+    const t = { fp: h, n, ...(part ? { part } : {}), ...(next ? { next } : {}) };
+    v.tries = { ...(v.tries || {}), notes: t };
+  });
+  return n;
+}
+/* (let go once what it counted is read — that very part of a passage read in parts: the part before it read is no reason
+ * to forget a part that stalls, or it would be asked for ever; `any`: whatever part, the passage set aside) */
+function notesTriesDone(chapterId, c, { any = false } = {}) {
+  const [vid] = String(c.sig || '').split(SIG_SEP);
+  const part = partKey(c);
+  const ch = store.peek('chapter', chapterId);
+  const p = ch && (ch.passages || []).find((x) => x.id === c.pid);
+  const v = p && (p.versions || []).find((x) => x.id === vid);
+  if (!v || !v.tries || !v.tries.notes || (!any && (v.tries.notes.part || '') !== part)) return;
+  store.change('chapter', chapterId, (d) => {
+    const q = (d.passages || []).find((x) => x.id === c.pid);
+    const w = q && (q.versions || []).find((x) => x.id === vid);
+    if (!w || !w.tries || !w.tries.notes || (!any && (w.tries.notes.part || '') !== part)) return false;
+    const { notes: _n, ...rest } = w.tries;
+    if (Object.keys(rest).length) w.tries = rest; else delete w.tries;
+  });
+}
+/* a passage the notes' reading waits to ask again: its wait after a stall not over */
+function notesWait(chapter, x) {
+  const p = ((chapter && chapter.passages) || []).find((y) => y.id === x.pid);
+  const t = notesTryOf(p && picked(p));
+  return Boolean(t && Number(t.next) > store.phoneNow());
+}
+/* (what was taken out, as a look: a passage's, and a chapter's taken out whole) */
+const outKey = (r) => 'notes:out:' + (r.key || r.pid);
+const chapterOutKey = (r) => 'notes:chapter:' + r.id;
+/* one ask's count: on the take it read, or by what was asked */
+function readTried(chapter, B, count, next) {
+  if (B.items.length === 1 && chapter) return notesTried(chapter.id, B.items[0], count, next);
+  const key = askedKey(B);
+  const n = (stuck.get(key) || 0) + count;
+  if (count) stuck.set(key, n);
+  return n;
+}
+function readTriesDone(chapter, B, { any = false } = {}) {
+  if (chapter) for (const c of B.items) notesTriesDone(chapter.id, c, { any });
+  stuck.delete(askedKey(B));
+}
+/* WHAT IS READ NOW: what the notes have not read, but for what waits its time after a stall (pendingWork, all of it) —
+ * the run's own test for work left, the notes' check's and the light's */
+function pendingNow(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return false;
+  if (((novel.memory && novel.memory.removed) || []).some((r) => !lookWaits(novelId, chapterOutKey(r)))) return true;
+  if (toKeep(novel).length) return true;
+  for (const id of novel.order || []) {
+    const c = store.peek('chapter', id);
+    if (!c) return true;
+    const ch = changesIn(novel, c);
+    if (ch.changes.some((x) => !notesWait(c, x)) || ch.removed.some((r) => !lookWaits(novelId, outKey(r)))) return true;
+  }
+  return false;
+}
+/* the passages the notes' reading waits to ask again after a stall: {n, ms (until the first), label (of the first)} */
+function notesWaiting(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel) return null;
+  const now = store.phoneNow();
+  const seen = (novel.memory || {}).seen || {};
+  let n = 0;
+  let at = Infinity;
+  let label = '';
+  for (const cid of novel.order || []) {
+    const c = store.peek('chapter', cid);
+    for (const p of (c && c.passages) || []) {
+      const v = picked(p);
+      /* (a quick look first — a stall booked so — and the words' own print only for those: said on every paint) */
+      if (!v || v.streaming || !v.tries || !v.tries.notes || !(Number(v.tries.notes.next) > now)) continue;
+      if (!notesTryOf(v) || (seen[cid] || {})[p.id] === signature(v)) continue;
+      n++;
+      if (Number(v.tries.notes.next) < at) { at = Number(v.tries.notes.next); label = readLabel(novel, c, [{ pid: p.id }]); }
+    }
+  }
+  return n ? { n, ms: Math.max(0, at - now), label } : null;
+}
+/* A STALL OF THE NOTES' READING: what it asked waits as long as it was waited — a passage at a time from then on, of
+ * several; alone, counted on the longest leash and set aside at its second. Returns whether it set something aside. */
+function readingStalled(novelId, chapter, B, got, conn) {
+  const several = B.items.length + B.removed.length + B.chapters.length > 1;
+  const counted = !several && ((got.leashed === 'quiet' && got.longest) || got.leashed === 'long');
+  const wait = Math.max(1000, Number(got.leashMs) || 0);
+  const next = store.phoneNow() + wait;
+  if (several) narrow.add(novelId);
+  const n = readTried(chapter, B, counted ? 1 : 0, next);
+  if (counted && n >= 2) {
+    readTriesDone(chapter, B, { any: true });
+    setAside(novelId, chapter, B.items.some((c) => c.partial || c.whole !== undefined) ? { ...B, items: B.items.map((c) => ({ ...c, partial: false })) } : B, got.error, conn);
+    return true;
+  }
+  /* each part of the ask waits: a passage on its take (readTried did it for one alone), what was taken out as a look */
+  if (chapter && B.items.length > 1) for (const c of B.items) notesTried(chapter.id, c, 0, next);
+  const novel = store.peek('novel', novelId);
+  const say = (what, one) => (ms, busy) => `The helper reads ${what} again ${inWhile(ms, busy)} — its model was too slow to answer for ${one ? 'it' : 'them'}.`;
+  for (const r of B.removed) {
+    const cid = chapter && chapter.id;
+    lookIn(novelId, outKey(r), wait, say(`what was taken out of ${chapter ? chapterLabel(novel, chapter, { withName: false }) : 'the book'}`, true), () => {
+      const n2 = store.peek('novel', novelId);
+      const c2 = cid && store.peek('chapter', cid);
+      return Boolean(n2 && c2) && changesIn(n2, c2).removed.some((x) => outKey(x) === outKey(r));
+    });
+  }
+  for (const r of B.chapters) {
+    lookIn(novelId, chapterOutKey(r), wait, say('a chapter taken out', true), () => (((store.peek('novel', novelId) || {}).memory || {}).removed || []).some((x) => x.id === r.id));
+  }
+  return false;
+}
+
 async function readChanges(novelId, conn) {
   /* a passage left half read when a window closed: its earlier parts taken back before anything is read */
   const left = ((store.peek('novel', novelId) || {}).memory || {}).inParts;
@@ -2260,16 +2416,19 @@ async function readChanges(novelId, conn) {
     const renamesSeen = renameCount(novel);
     const house = store.peek('house', 'house') || {};
     /* a whole chapter taken out comes first */
-    const removedChapters = (novel.memory && novel.memory.removed) || [];
+    /* (what waits its time after a stall is not asked before then — the others are read meanwhile: 2.12.41, round 6) */
+    const removedChapters = ((novel.memory && novel.memory.removed) || []).filter((r) => !lookWaits(novelId, chapterOutKey(r)));
     let target = null;
     for (const id of novel.order || []) {
       const c = store.peek('chapter', id);
       if (!c) continue;
       const ch = changesIn(novel, c);
-      if (ch.changes.length || ch.removed.length) { target = { chapter: c, ...ch }; break; }
+      const changesNow = ch.changes.filter((x) => !notesWait(c, x));
+      const removedNow = ch.removed.filter((r) => !lookWaits(novelId, outKey(r)));
+      if (changesNow.length || removedNow.length) { target = { chapter: c, ...ch, changes: changesNow, removed: removedNow }; break; }
     }
-    /* nothing left to read: one at a time is over */
-    if (!target && !removedChapters.length) { narrow.delete(novelId); return; }
+    /* nothing left to read: one at a time is over — unless what waits is still to be read a passage at a time */
+    if (!target && !removedChapters.length) { if (!pendingWork(novelId)) narrow.delete(novelId); return; }
     const chapter = target ? target.chapter : null;
     const label = chapter ? chapterLabel(novel, chapter) : 'the book';
     const at = chapter ? novel.order.indexOf(chapter.id) + 1 : 0;
@@ -2496,26 +2655,29 @@ async function readChanges(novelId, conn) {
       if (!got.ok) {
         /* a passage its model will not read is set aside, never asked forever */
         const giveUp = (e) => { takeBackParts(); return e; };
-        /* let go on its leash (nothing heard, or no progress, for minutes): never the passage's fault, never set
-         * aside for it — but a long ask is what a slow model chokes on, so it is asked one passage at a time
-         * (Cozy Tavern's M675-7) */
+        /* it made way for his page on its connection: it reads on once the page has gone, never counted */
         if (got.leashed === 'gaveway') throw giveUp(failed(got));
+        /* LET GO ON ITS LEASH (nothing heard, or no progress, for minutes): that reading ends for this run, never the run —
+         * waited as long before it is asked again, a passage at a time of several (Cozy Tavern's M675-7: a long ask is
+         * what a slow model chokes on), counted alone on the longest leash, set aside at its second (readingStalled,
+         * 2.12.41, round 6; through round 5 it was thrown, and every run stopped here) */
         if (got.leashed) {
-          if (B.items.length + B.removed.length + B.chapters.length > 1) { narrow.add(novelId); throw giveUp(failed(got)); }
-          /* alone, and making no progress for minutes (Cozy Tavern M748): what it asks is too much for its model — set aside after a second run, like words it will not read, never asked for ever */
-          if (got.leashed !== 'long') throw giveUp(failed(got));
+          takeBackParts();
+          readingStalled(novelId, chapter, B, got, conn);
+          pruneReadings(novelId);
+          await store.flush('novel', novelId);
+          return;
         }
         let fault;
-        try { fault = got.leashed === 'long' ? 'words' : await helperFault(novelId, conn, got); }
+        try { fault = await helperFault(novelId, conn, got); }
         catch (e) { takeBackParts(); throw e; }
         try { await mustHold('helper', novelId); } catch (e) { takeBackParts(); throw e; }
         if (fault !== 'words') throw giveUp(failed(fault === 'model' ? passingFrom(got) : fault));
         if (B.items.length + B.removed.length + B.chapters.length > 1) { narrow.add(novelId); const e = failed(got); e.soon = true; throw giveUp(e); }
-        const key = askedKey(B);
-        const n = (stuck.get(key) || 0) + 1;
-        stuck.set(key, n);
+        /* (counted on the take it read, as a stall is — readTried: one count for a page its model will not read) */
+        const n = readTried(chapter, B, 1, 0);
         if (n < 2) throw giveUp(failed({ error: got.error }));
-        stuck.delete(key);
+        readTriesDone(chapter, B, { any: true });
         if (B.items.some((c) => c.partial || c.whole !== undefined)) {
           /* One unread part means this passage was not read whole. Undo
            * its earlier parts and skip its remainder, never erase its
@@ -2527,7 +2689,8 @@ async function readChanges(novelId, conn) {
         } else setAside(novelId, chapter, B, got.error, conn);
         continue;
       }
-      stuck.delete(askedKey(B));
+      /* (answered: what it counted, or waited, for what it asked let go) */
+      readTriesDone(chapter, B);
       const latest = store.peek('novel', novelId);
       /* its chapter taken out while it was asked: nothing of it is laid on or marked read — the chapter going is read as such (Cozy Tavern M290) */
       if (chapter && !((latest.order || []).includes(chapter.id) && store.peek('chapter', chapter.id))) { takeBackParts(); break; }
@@ -3648,7 +3811,9 @@ function looksDue(novelId) {
  * just come, the run booked for it on its way) — or null. (One whose time came longer ago than a minute is the next
  * run's like any page owed — a book opened again after its wait was over — never a run booked every second for it.) */
 const JUST_NOW_MS = 60000;
-export function readAgainLater(novelId, what, refs = null) {
+/* (`notes`: with those of `refs` the notes have not read yet — their turns and facts come with that reading — whose
+ * reading waits its time after a stall: the Timeline's line says them as the light does, 2.12.41, round 6) */
+export function readAgainLater(novelId, what, refs = null, { notes = false } = {}) {
   const only = refs ? new Set(refs.map((r) => `${r.pid}:${r.vid}`)) : null;
   const now = store.phoneNow();
   /* (a quick look first — a try booked so — and the due tests only for those: said on every paint) */
@@ -3662,6 +3827,20 @@ export function readAgainLater(novelId, what, refs = null) {
     if (!next || next <= now - JUST_NOW_MS) continue;
     n++;
     at = Math.min(at, next);
+  }
+  if (notes && refs) {
+    const seen = ((store.peek('novel', novelId) || {}).memory || {}).seen || {};
+    for (const r of refs) {
+      const c = store.peek('chapter', r.chapterId);
+      const p = c && (c.passages || []).find((x) => x.id === r.pid);
+      const v = p && picked(p);
+      if (!v || v.id !== r.vid || !v.tries || !v.tries.notes || (seen[r.chapterId] || {})[p.id] === signature(v)) continue;
+      const t = notesTryOf(v);
+      const next = t ? Number(t.next) || 0 : 0;
+      if (next <= now) continue;
+      n++;
+      at = Math.min(at, next);
+    }
   }
   /* (and whether a page being written holds the run back: what comes "in a moment" waits for it — PAGE_DONE) */
   return n ? { n, ms: Math.max(0, at - now), busy: writerBusy(novelId) } : null;
@@ -3679,25 +3858,28 @@ export function readsByItself(n, later) {
   if (later.n >= n) return `the helper’s model was too slow to answer for ${it}, so the helper reads ${it} again by itself${n === 1 ? ' ' : ''}${firstIn(n, later.ms, busy)}`;
   return `the helper reads ${it} by itself, a few at a time (${later.n === 1 ? `the one its model was too slow to answer for, again ${inWhile(later.ms, busy)}` : `the ${later.n} its model was too slow to answer for again${firstIn(later.n, later.ms, busy)}`})`;
 }
-/* WHAT WAITS ITS TIME, for the light and for the run to book itself: {ms (until the soonest), words} — the Timeline's
- * and the bibliography's passages asked again once their wait is over, and the other looks booked (lookIn) — or null */
+/* WHAT WAITS ITS TIME, for the light and for the run to book itself: {ms (until the soonest), words} — the passages the
+ * notes' reading waits to ask again after a stall (notesWaiting, 2.12.41, round 6), the Timeline's and the
+ * bibliography's passages asked again once their wait is over, and the other looks booked (lookIn) — or null */
 function whatWaits(novelId) {
   const novel = store.peek('novel', novelId);
   if (!novel) return null;
   const conn = connFor(store.peek('house', 'house') || {}, 'helper');
+  const reading = notesWaiting(novelId);
   const turns = readAgainLater(novelId, 'turns');
   const facts = conn && bibReading(novel, conn) ? readAgainLater(novelId, 'facts') : null;
   const now = store.phoneNow();
   const other = [...(looks.get(novelId) || new Map()).values()].filter((l) => lookLive(l, now)).sort((a, b) => a.at - b.at);
-  if (!turns && !facts && !other.length) return null;
+  if (!reading && !turns && !facts && !other.length) return null;
   const said = [];
   const busy = writerBusy(novelId);
+  if (reading) said.push(reading.n === 1 ? `The helper reads ${reading.label} again ${inWhile(reading.ms, busy)} — its model was too slow to answer for it.` : `The helper reads ${plural(reading.n, 'passage')} again${firstIn(reading.n, reading.ms, busy)} — its model was too slow to answer for them.`);
   const n = (turns ? turns.n : 0) + (facts ? facts.n : 0);
   const soon = Math.min(turns ? turns.ms : Infinity, facts ? facts.ms : Infinity);
   const what = [turns ? `${plural(turns.n, 'passage')} for the Timeline` : '', facts ? `${plural(facts.n, 'page')} for the bibliography` : ''].filter(Boolean).join(' and ');
   if (what) said.push(`The helper reads ${what} again${n === 1 ? ' ' : ''}${firstIn(n, soon, busy)} — its model was too slow to answer for ${n === 1 ? 'it' : 'them'}.`);
   for (const l of other) said.push(l.say(l.at - now, busy));
-  return { ms: Math.max(0, Math.min(soon, other.length ? other[0].at - now : Infinity)), words: said.join(' ') };
+  return { ms: Math.max(0, Math.min(reading ? reading.ms : Infinity, soon, other.length ? other[0].at - now : Infinity)), words: said.join(' ') };
 }
 const triesDone = (x, what) => store.change('chapter', x.chapterId, triedStep(x.pid, x.vid, what, hashText(x.text), 0));
 /* the passage a backfill asked about, where it stood */
@@ -4427,7 +4609,9 @@ async function auditNotes(novelId, conn) {
   if (!novel) return;
   /* asked of notes that have no cards (any more): nothing to check, and never "checking" for good */
   if (novel.memory && novel.memory.auditAsked && !NOTE_KINDS.some((k) => ((novel.notes || {})[k] || []).length)) { store.change('novel', novelId, novelSteps.setMemory({ auditAsked: false })); return; }
-  if (!auditDue(novel) || pendingWork(novelId)) return;
+  /* (a page the notes' reading waits to ask again after a stall holds it back no longer: the notes of the others are
+   * checked meanwhile — 2.12.41, round 6) */
+  if (!auditDue(novel) || pendingNow(novelId)) return;
   const house = store.peek('house', 'house') || {};
   const chapters = chaptersOf(novel);
   setLight(novelId, 'reading', 'Checking the notes against the book…');
