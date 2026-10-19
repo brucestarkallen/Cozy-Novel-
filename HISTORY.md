@@ -1180,6 +1180,11 @@ The wash under a marked name was worse. It is gone, and so is the dotted line.
 
 A name the notes know is the word itself, in the room's colour, the way a keyword sits in a line of a tale: copper in the Academy and the Study, the tube's pink in Tokyo, and the same idea in the older rooms. Spoken words keep their own colour, and the name stays apart from them. A tap still opens its card.
 
+## 2.12.46, Quick add talks it through
+
+**Quick add.** It is the partner, and this talk is only the world: adding an entry, or changing one. It speaks first, in its own sentences, and checks there — a clash is only where a page says the opposite, not a guess or something left unsaid. Those sentences stay on the row. What holds still goes into the bibliography, with Undo. Where a page really does say the opposite, that line still waits, and the row says what came of it under the partner’s own words.
+
+
 ## 2.12.45, Quick add’s ring turns, and Batman stays Batman
 
 **Quick add’s ring** stood still whenever the room’s motion was off, or the phone asked for less motion. A ring that does not turn looks stuck. It turns now, the same way the Suggestions ring does, and slowly when the phone asks for less motion. In a tab out of sight it still stops.

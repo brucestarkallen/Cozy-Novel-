@@ -14801,6 +14801,40 @@ const putEntries = (b, list) => store.change('novel', b.novelId, (n) => { n.bibl
 const quickSent = async () => (await requests()).map((x) => String(x.body.messages.at(-1).content)).filter((m) => m.includes(prompts.QUICK_ASK));
 const QUICK_BOOK = () => makeBook([['Emilia Vermaine had silver hair and led the youngest house of the Sanguelis.', { text: 'Jovan woke in the dark.', ask: { direction: 'Only an elder can turn a hunter, and only once.', length: 'scene' } }]], { manual: true });
 
+await test('Quick add: the partner talks the check through first — its own sentences stay, and what holds still goes in', async () => {
+  await setHouse();
+  const b = await makeBook([['The city keeps its own hours.']], { manual: true });
+  markAllSeen(b);
+  await reset();
+  const talk = 'The Night Market can go in. Nothing on the page says otherwise.';
+  await script([{ text: `${talk}\n\n${JSON.stringify({ verdict: talk, entries: [{ name: 'Night Market', kind: 'places', line: 'A street that opens after dark.', text: 'A street of stalls that opens only after dark.' }] })}` }]);
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'The Night Market is a street of stalls that opens only after dark.' });
+  assert.equal(out.ok, true, out.error);
+  const [sent] = await quickSent();
+  assert.ok(sent.includes('This talk is the bibliography, not the next page'), 'told this talk is only the world');
+  assert.ok(sent.includes('Talk to me first') && sent.includes('Something I left unsaid'), 'told to check it in its own words, and not to invent a clash');
+  assert.equal(out.row.talk, talk, 'its own sentences stay');
+  assert.equal(out.row.verdictBy, 'partner');
+  assert.equal(bib.entriesOf(b.novel())[0].name, 'Night Market');
+  /* a verdict that claims it went in, while a page says the opposite: the sentences stay, and the account says what happened */
+  const c = await makeBook([['Emilia Vermaine had silver hair.']], { manual: true });
+  markAllSeen(c);
+  await reset();
+  const lied = 'Your newer word goes in. Nothing on the page says otherwise.';
+  await script([
+    { text: `${lied}\n${JSON.stringify({ verdict: 'Your newer word goes in.', changes: [{ mine: 'Emilia has black hair', was: 'Emilia Vermaine had silver hair', where: 'Chapter One, Passage 1', why: 'newer' }], entries: [{ name: 'Emilia Vermaine', kind: 'people', line: 'An elder.', text: 'Emilia has black hair.' }] })}` },
+    { text: JSON.stringify({ entries: [] }) },
+  ]);
+  const held = await quickadd.quickAdd({ novelId: c.novelId, words: 'Emilia has black hair.' });
+  assert.equal(held.ok, true, held.error);
+  assert.equal(held.row.talk, lied, 'its check stays even where the look-up parts from it');
+  assert.equal(held.row.verdictBy, 'app');
+  assert.ok(held.row.verdict.startsWith('Nothing went in'), held.row.verdict);
+  assert.equal(bib.entriesOf(c.novel()).length, 0, 'the line the page contradicts does not go in');
+  await putAway(b);
+  await putAway(c);
+});
+
 await test('Quick add: his words held against the book first — a page that says otherwise said with where it stands, his own earlier words changed as his newer word, what cannot be with its rule, words quoted from nowhere set aside; what holds goes in as his, with one Undo', async () => {
   await setHouse();
   const b = await QUICK_BOOK();

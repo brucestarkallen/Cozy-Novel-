@@ -1985,7 +1985,7 @@ const earlierRows = (novel) => quickLog(novel).filter((r) => r.state === 'done')
  * names the book uses now. The row he sees still shows his words as he typed them. A row from before, with no count,
  * stays as he typed it: the book cannot say which renames came after it. The change it made, and its Undo, are never
  * rewritten. */
-const CARRY_KEYS = new Set(['said', 'verdict', 'mine', 'against', 'was', 'now', 'why', 'label', 'name', 'rule', 'quote', 'error', 'againWhy']);
+const CARRY_KEYS = new Set(['said', 'verdict', 'talk', 'mine', 'against', 'was', 'now', 'why', 'label', 'name', 'rule', 'quote', 'error', 'againWhy']);
 function carriedQuick(novel, row) {
   if (!row || typeof row.renameCount !== 'number') return row;
   const since = renamesSince(novel, row.renameCount);
@@ -2069,6 +2069,13 @@ function renamedFrom(value, novelId, count) {
 }
 const want = (o) => isObj(o) && (Array.isArray(o.entries) || typeof o.verdict === 'string' || Array.isArray(o.conflicts));
 const wantAgain = (o) => isObj(o) && Array.isArray(o.entries);
+/* the partner's own check, said before the record — the sentences, never the object (2.12.46) */
+function talkBefore(text) {
+  let raw = String(text || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/```(?:json|JSON)?/g, '');
+  const at = raw.search(/\{\s*"/);
+  const prose = (at < 0 ? '' : raw.slice(0, at)).replace(/\s+/g, ' ').trim();
+  return prose.length >= 12 ? prose.slice(0, 1800) : '';
+}
 const CUT_TWICE = 'its answer was cut off at the reply’s length both times — give your partner’s connection a longer Longest reply (Settings → Connections)';
 const MOST_WORDS = numberWords(ENTRIES_MOST).toLowerCase();
 
@@ -2144,6 +2151,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     if (!out.ok) return { ok: false, error: out.error || 'no answer came', row: settle({ state: 'failed', error: line(out.error || 'no answer came', 400) }), giveBack: t };
     let obj = readOut(out, want);
     let answered = out;
+    let talk = talkBefore(out.text);
     /* once more, told what went wrong (as the helper is) */
     if (!obj) {
       const first = out;
@@ -2155,6 +2163,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
         return { ok: false, error: why, row: settle({ state: 'failed', error: line(why, 400) }), giveBack: t };
       }
       answered = out;
+      talk = talk || talkBefore(out.text);
     }
     let seen = seenNow;
     let { novel, chapters } = bookNow(novelId);
@@ -2163,6 +2172,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     obj = renamedFrom(obj, novelId, takenAt);
     const answeredText = renamedFrom(String(answered.text || ''), novelId, takenAt);
     said = renamedFrom(t, novelId, sentAt);
+    talk = renamedFrom(talk, novelId, takenAt);
     let carriedTo = renameCount(novel);
     const read = readAnswer(novel, chapters, obj);
     let entries = read.entries;
@@ -2317,7 +2327,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
     const agreed = !fix && !refused.length && !overNot && book.every((b) => b.status === 'made') && added.every((a) => !a.notAsWritten)
       && read.changes.every((c) => c.in) && read.conflicts.every((c) => !c.overruled || c.in) && Boolean(read.verdict);
     const facts = { ...shown, added, refused, book, ...(keptAgain.length ? { keptAgain } : {}), ...(keeps.length && !helper ? { keptNone: true } : {}) };
-    const done = settle({ state: 'done', ...facts, verdict: agreed ? read.verdict : plainAccount(facts, { novelId }), verdictBy: agreed ? 'partner' : 'app' });
+    const done = settle({ state: 'done', ...facts, ...(talk ? { talk } : {}), verdict: agreed ? read.verdict : plainAccount(facts, { novelId }), verdictBy: agreed ? 'partner' : 'app' });
     for (const k of keptAgain) archivist.keepAgain(novelId, k);
     /* the notes follow what went in: an entry changed under a card has them checked against it (archivist.js auditDue) */
     if (added.length || book.some((b) => b.status === 'made')) archivist.nudge(novelId, 1500);

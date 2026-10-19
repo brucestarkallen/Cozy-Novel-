@@ -222,6 +222,9 @@
   background: color-mix(in srgb, var(--accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
   color: var(--chrome-ink); font: 15.5px/1.55 var(--serif); white-space: pre-wrap; overflow-wrap: anywhere;
   box-shadow: 0 10px 22px -18px color-mix(in srgb, var(--accent) 90%, black); }
+.bibview .quick-talk { align-self: flex-start; max-width: 92%; margin: 0; padding: 10px 14px; border-radius: 16px 16px 16px 5px;
+  background: color-mix(in srgb, var(--paper) 86%, var(--chrome-solid)); color: var(--ink); border: 1px solid var(--paper-edge);
+  font: 15.5px/1.55 var(--serif); white-space: pre-wrap; overflow-wrap: anywhere; }
 .bibview .quick-verdict { margin: 0; padding: 10px 12px; border-radius: 12px; color: var(--chrome-ink); font: italic 15px/1.55 var(--serif);
   background: color-mix(in srgb, var(--chrome-ink) 4%, transparent); border: 1px solid var(--line); }
 .bibview .quick-wait { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; color: var(--chrome-soft); }

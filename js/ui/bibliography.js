@@ -470,7 +470,7 @@ function quickView(novelId, redraw) {
     redraw();
     undoToast('Quick add is cleared — your bibliography is as it was.', () => { putBackQuick(novelId, rows); redraw(); });
   } }, 'Clear'));
-  box.append(head, h('p.notekey', 'Tell it what you want in your world — a council, a power and what it costs, a rule, a person. Your partner’s connection holds it against the book, your premises, your bibliography and the notes first: what holds goes into the bibliography at once, with Undo; what a page says otherwise, or what cannot be by your world’s rules, is said with where it stands and waits for your word — answer here.'));
+  box.append(head, h('p.notekey', 'Tell it what you want in your world — a council, a power and what it costs, a rule, a person. Your partner talks it through with you here. This is only about adding to the world or changing what is already written: it checks that in its own words first. What holds goes into the bibliography at once, with Undo. Where a page says the opposite, it says so and waits for your word — answer here.'));
   const helper = connFor(store.peek('house', 'house') || {}, 'partner');
   if (!helper) box.append(h('p.notekey.bibdue', 'No connection is chosen for your partner, so Quick add cannot ask — choose one in Settings → Connections.'));
   /* A ROW ANOTHER WINDOW IS ASKING, looked at again — in this browser, whether its tab is still open (the store's open-tab
@@ -525,7 +525,7 @@ function quickView(novelId, redraw) {
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!quickBusy(novelId)) send(); } });
   const row = h('div.btnrow.quickactions');
   if (busy) row.append(h('button.btn.small', { title: 'Stops the check — nothing goes in, and your words come back to the box.', onclick: () => stopQuick(novelId) }, 'Stop'));
-  else row.append(h('button.btn.primary.small', { title: 'Holds your words against the book, your premises, your bibliography and the notes, then puts what holds into the bibliography, with Undo.', disabled: !helper, onclick: send }, 'Check and add'));
+  else row.append(h('button.btn.primary.small', { title: 'Your partner talks it through — only the world, adding or changing — then puts what holds into the bibliography, with Undo.', disabled: !helper, onclick: send }, 'Check and add'));
   box.append(ta, row);
   return box;
 }
@@ -543,7 +543,9 @@ function quickRow(novelId, r, redraw) {
   /* (one its closed tab was asking, put right as stopped: said as that — 2.12.40, the review) */
   if (r.state === 'stopped') { row.append(h('p.notekey', r.closed ? 'Not checked — its window closed before it answered. Nothing went in.' : 'Not checked — it was stopped before it finished. Nothing went in.'), h('div.btnrow', again())); return row; }
   if (r.state === 'failed') { row.append(h('p.notekey.bibdue', `Not checked — ${r.error || 'no answer came'}. Nothing went in.`), h('div.btnrow', again())); return row; }
-  if (r.verdict) row.append(h('p.quick-verdict', r.verdict));
+  if (r.talk) row.append(h('p.quick-talk', r.talk));
+  const sameTalk = r.talk && r.verdict && String(r.talk).replace(/\s+/g, ' ').trim() === String(r.verdict).replace(/\s+/g, ' ').trim();
+  if (r.verdict && !sameTalk) row.append(h('p.quick-verdict', r.verdict));
   const go = (x) => (x.chapterId && x.passageId && hooks.whenOpen ? h('button.link', { title: 'Go to the passage, its words lit.', onclick: () => { if (hooks.closeSide) hooks.closeSide(); hooks.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: x.against || x.rule || '' } }); } }, x.label) : h('span', x.label));
   const section = (title, items, cls = '') => h('div.quick-sec' + cls, h('h4', title), h('ul', ...items));
   const added = r.added || [];
