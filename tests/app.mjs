@@ -4369,8 +4369,10 @@ await test('a sentence to write again, with the fixes going in by themselves: hi
   const refused = { status: 400, message: 'Invalid request: the prompt was refused' };
   await script([{ text: JSON.stringify({ edits: [] }) }, refused, refused, refused]);
   await checker.runCheck(c.novelId);
-  const out = await checker.forTests().lifting.get(c.novelId);
-  assert.equal(out && out.ok, false);
+  /* (2.12.40: written again as soon as its passage is checked — the writing may be over before the look ends, and gone
+   * from `lifting`; what it came to is on the version either way, below) */
+  const spanJob = checker.forTests().lifting.get(c.novelId);
+  if (spanJob) assert.equal((await spanJob).ok, false);
   const q = c.ch().passages[0];
   assert.deepEqual([q.versions.length, picked(q).spanFailed], [1, ['The rope smelled of tar.']], 'the page as it was, the failure kept on it');
   await reset();
