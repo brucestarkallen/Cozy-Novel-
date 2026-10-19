@@ -101,6 +101,7 @@ def main():
         if "Traceback" in out:
             failed.append("server raised")
             print(out[-3000:])
+    run_relay_wait()
     run_first_cozynovel()
     run_update_lands()
     run_launcher()
@@ -393,6 +394,71 @@ def run_relay(home):
     gone.wait(5)
     check("Stop reaches the provider even while it is silent", gone.is_set() and time.time() - t0 < 2.5, time.time() - t0)
     up.shutdown()
+
+
+def run_relay_wait():
+    """The relay waits on a silent provider as long as the call names — the page names a minute past its own leash
+    (call.js relayWait), so the app lets a silent model go, never the relay first (2.12.40, the review) — and, told
+    nothing it can wait by, its own wait: ten minutes, or COZYNOVEL_RELAY_TIMEOUT seconds when set (two here)."""
+    print("the relay's wait")
+    home = Path(tempfile.mkdtemp(prefix="cozynovel-home-"))
+    port = PORT + 15
+    up_port = PORT + 19
+
+    class Silent(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.flush()
+            # a model thinking in silence for three seconds, then its words
+            time.sleep(3)
+            try:
+                self.wfile.write(b'data: {"choices":[{"delta":{"content":"Late words"}}]}\n\n')
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except OSError:
+                pass
+
+    silent = ThreadingHTTPServer(("127.0.0.1", up_port), Silent)
+    silent.daemon_threads = True
+    threading.Thread(target=silent.serve_forever, daemon=True).start()
+    srv = None
+    try:
+        srv = start(home, port=port, extra_env={"COZYNOVEL_RELAY_TIMEOUT": "2"})
+
+        def call(**named):
+            spec = {"url": "http://127.0.0.1:%d/v1/chat/completions" % up_port, "headers": {}, "body": {"stream": True}, "stream": True, **named}
+            req = urllib.request.Request("http://127.0.0.1:%d/api/call" % port, method="POST", data=json.dumps(spec).encode(),
+                                         headers={"Content-Type": "application/json", "X-Client": "tab-test", "Origin": "http://127.0.0.1:%d" % port})
+            t0 = time.time()
+            out = urllib.request.urlopen(req, timeout=20).read().decode()
+            return out, time.time() - t0
+
+        out, took = call(timeout=6)
+        check("a call that names its wait is waited that long — its words come after a silence past the relay's own wait",
+              "Late words" in out and "dropped" not in out, (round(took, 1), out[-200:]))
+        for label, named in [("told nothing", {}), ("a wait of nothing", {"timeout": 0}), ("a flag for a wait", {"timeout": True}),
+                             ("words for a wait", {"timeout": "6"}), ("a wait with no end", {"timeout": float("inf")})]:
+            out, took = call(**named)
+            check("%s: its own wait (COZYNOVEL_RELAY_TIMEOUT), the line let go and said so" % label,
+                  "dropped partway through" in out and "Late words" not in out and 1.7 < took < 2.9, (round(took, 1), out[-200:]))
+    finally:
+        silent.shutdown()
+        if srv:
+            srv.terminate()
+            try:
+                srv.wait(timeout=5)
+            except Exception:
+                srv.kill()
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def run_first_cozynovel():
