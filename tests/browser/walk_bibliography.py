@@ -324,6 +324,53 @@ async def scenario(browser):
     await pg.context.close()
 
 
+# (2.12.40, the review: the line for the pages not read for the bibliography yet said "the helper reads them by itself"
+# while the helper was stopped — said now as the Timeline says it, by the controls' own names)
+async def helper_states(browser):
+    logs = []
+    pg = await H.page(browser, logs)
+    await H.new_book(pg, 'What the bibliography says', 'A keeper of the light.')
+    ids = await pg.evaluate("""async () => {
+      const s = await import('/js/store.js'); const sh = await import('/js/novel/shape.js'); const a = await import('/js/novel/archivist.js');
+      const nid = location.hash.split('/')[2], cid = s.peek('novel', nid).order[0];
+      const p = sh.newPassage('you', 'Mara lit the lamp at dusk, as her mother had.');
+      s.change('chapter', cid, (c) => { c.passages = [p]; });
+      /* read for the notes, never for the bibliography: one page it reads by itself */
+      s.change('novel', nid, sh.novelSteps.seen(cid, { [p.id]: a.signature(sh.picked(p)) }));
+      /* a helper with room for it, its connection turned away (the checker off, so nothing else is asked) */
+      const conn = { id: 'c-h', name: 'Helper', url: 'http://127.0.0.1:9/v1', model: 'stand-in', key: 'k', context: 64000 };
+      s.change('house', 'house', (h) => { h.connections = [...(h.connections || []).filter((c) => c.id !== 'c-h'), conn]; h.roles = { ...(h.roles || {}), helper: 'c-h', checker: 'off' }; });
+      a.forTests().blocked.set(nid, { conn: a.connPrint(conn), words: null });
+      await s.flush();
+      return { nid, due: a.bibDue(nid).length };
+    }""")
+    check('one page owed for the bibliography', ids['due'] == 1, ids)
+    await open_bib(pg)
+    line = await pg.locator('.bibview > .bibdue').all_inner_texts()
+    check('the helper stopped: said so, with what to do as the screen names it — never that it reads them',
+          any('The helper is stopped: its connection was turned away. Put it right in Settings → Connections, or press Try again now under Cards, and it reads it by itself.' in x for x in line)
+          and not any('a few at a time' in x for x in line), line)
+    await pg.evaluate("""async (nid) => {
+      const s = await import('/js/store.js'); const a = await import('/js/novel/archivist.js');
+      a.forTests().blocked.delete(nid);
+      s.change('novel', nid, (n) => { n.memory = { ...(n.memory || {}) }; });
+      await s.flush();
+    }""", ids['nid'])
+    await close_and_reopen(pg)
+    line = await pg.locator('.bibview > .bibdue').all_inner_texts()
+    check('the helper reading again: the page read by itself, a few at a time', any('1 page is not read for the bibliography yet — the helper reads it by itself, a few at a time.' in x for x in line), line)
+    check('the bibliography’s states have no page exceptions', not [x for x in logs if x.startswith('PAGEERROR')], [x for x in logs if x.startswith('PAGEERROR')])
+    await pg.context.close()
+
+
+async def close_and_reopen(pg):
+    await pg.click('[data-notes-view=cards]')
+    await pg.wait_for_timeout(200)
+    await pg.click('[data-notes-view=bibliography]')
+    await pg.wait_for_selector('.bibview')
+    await pg.wait_for_timeout(300)
+
+
 async def main():
     with H.Env():
         async with async_playwright() as p:
@@ -333,6 +380,11 @@ async def main():
             except Exception:
                 traceback.print_exc()
                 check('the walk ran to its end', False)
+            try:
+                await helper_states(browser)
+            except Exception:
+                traceback.print_exc()
+                check('the helper’s states walk ran to its end', False)
             await browser.close()
     passed = sum(1 for r in RESULTS if r[1])
     failed = len(RESULTS) - passed

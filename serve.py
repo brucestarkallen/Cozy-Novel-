@@ -54,6 +54,20 @@ SELF = Path(__file__).resolve()
 HOME = Path(os.environ.get("COZYNOVEL_HOME") or (Path.home() / ".cozynovel")).expanduser().resolve()
 PORT = int(os.environ.get("COZYNOVEL_PORT") or "8081")
 
+
+def _relay_wait():
+    # how long the relay waits on a silent provider when the page names no wait (every call of the page names one,
+    # a minute past its own leash: call.js relayWait) — ten minutes, or COZYNOVEL_RELAY_TIMEOUT seconds when set
+    # (the tests scale it with the page's leashes)
+    try:
+        v = float(os.environ.get("COZYNOVEL_RELAY_TIMEOUT") or 0)
+    except ValueError:
+        v = 0
+    return v if 0 < v < float("inf") else 600
+
+
+RELAY_WAIT = _relay_wait()
+
 STORE = HOME / "store"        # store/<kind>/<id>.json   {"rev": n, "at": ms, "data": {...}}
 HISTORY = HOME / "history"    # history/<kind>/<id>/<stamp>.json.gz — the copy before each save
 TRASH = HOME / "trash"        # trash/<stamp>-<kind>-<id>.json.gz — deleted things, kept 30 days
@@ -1981,7 +1995,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         for k, v in headers.items():
             if isinstance(k, str) and isinstance(v, str):
                 req.add_header(k, v)
-        timeout = spec.get("timeout") if isinstance(spec.get("timeout"), (int, float)) else 600
+        named = spec.get("timeout")
+        timeout = named if isinstance(named, (int, float)) and not isinstance(named, bool) and 0 < named < float("inf") else RELAY_WAIT
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
         except urllib.error.HTTPError as e:

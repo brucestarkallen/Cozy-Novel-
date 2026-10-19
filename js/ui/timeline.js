@@ -7,6 +7,8 @@ import { timelineOf } from '../novel/timeline.js';
 import { picked, passageNumbers } from '../novel/shape.js';
 import { h, icon, setText } from './dom.js';
 import { plural } from '../util.js';
+/* (said in the bibliography's words too: archivist.js helperState, bibOwedLine — 2.12.40, the review) */
+import { HELPER_STOPPED } from '../novel/archivist.js';
 
 const KINDS = { relationship: 'Relationships', character: 'People', thread: 'Threads' };
 const STANCES = { belief: 'Belief', claim: 'Claim', intention: 'Intention' };
@@ -195,7 +197,7 @@ export function makeTimeline({ novelId, chapterId: openedChapter, current, openC
     const { passed = 0, aside = 0, passedFound = 0, owed = 0 } = result.coverage;
     const who = helper();
     const one = (n, a, b) => (n === 1 ? a : b);
-    const stopped = 'The helper is stopped: its connection was turned away. Put it right in Settings → Connections, or press Try again now under Cards';
+    const stopped = HELPER_STOPPED;
     setText(gapCopy, unavailable ? `${plural(unavailable, 'chapter')} could not be opened. These turns show only the chapters available here.`
       : [owed ? `${plural(owed, 'passage')} ${one(owed, 'is', 'are')} not read for the Timeline yet${who === 'on' ? ` — the helper reads ${one(owed, 'it', 'them')} by itself, a few at a time, and ${one(owed, 'its', 'their')} turns show here as they are read.` : who === 'stopped' ? `. ${stopped}, and it reads ${one(owed, 'it', 'them')} by itself.` : ` — choose a helper in Settings → Connections and it reads ${one(owed, 'it', 'them')} by itself.`}` : '',
         aside ? `${plural(aside, 'passage')} ${one(aside, 'was', 'were')} set aside — the helper’s model would not read ${one(aside, 'it', 'them')} for the notes, so ${one(aside, 'it has', 'they have')} no turns here. ${one(aside, 'Read it again', 'Read them all again')}, under Cards, has ${one(aside, 'it', 'them')} read afresh.` : '',
