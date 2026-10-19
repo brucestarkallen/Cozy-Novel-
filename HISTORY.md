@@ -1180,4 +1180,11 @@ The wash under a marked name was worse. It is gone, and so is the dotted line.
 
 A name the notes know is the word itself, in the room's colour, the way a keyword sits in a line of a tale: copper in the Academy and the Study, the tube's pink in Tokyo, and the same idea in the older rooms. Spoken words keep their own colour, and the name stays apart from them. A tap still opens its card.
 
+## 2.12.45, Quick add’s ring turns, and Batman stays Batman
+
+**Quick add’s ring** stood still whenever the room’s motion was off, or the phone asked for less motion. A ring that does not turn looks stuck. It turns now, the same way the Suggestions ring does, and slowly when the phone asks for less motion. In a tab out of sight it still stops.
+
+**Who is telling.** A writer set as Batman is spoken to as Batman, and opens his thinking as Batman. The words the app itself adds — the writer, the narrator, the partner, and Quick add — were read through with those words taken out: no persona, no robot, no assistant. The three lines in Your instructions that said “a persona” now say whoever you want them to be. The button that reads his own boxes for a machine’s voice still names what it is looking for.
+
+
 

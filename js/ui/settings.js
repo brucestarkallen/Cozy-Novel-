@@ -816,14 +816,14 @@ function wordsGroup(hs) {
   const sys = box('system', 9, 'How you like your stories written…');
   sys.classList.add('tall');
   const narr = box('narrator', 7, 'How the narrator tells the scenes you play…');
-  const partner = box('partner', 5, 'A way of talking, or a persona, for your writing partner…');
+  const partner = box('partner', 5, 'A way of talking for your writing partner…');
   g.body.append(
     presetsField(hs),
     field('Your name', name, 'How your notes and the helper speak of you (“Bruce here.”, “a novel Bruce is writing”).'),
-    field('How you like it written', sys, 'Sent first, word for word, to the writer — like the main prompt of a SillyTavern preset. Who the writer is, your voice, your rules, a persona if you like. The novel craft rides right after it (Modules, below).'),
+    field('How you like it written', sys, 'Sent first, word for word, to the writer — like the main prompt of a SillyTavern preset. Who the writer is, your voice, your rules, whoever you want them to be. The novel craft rides right after it (Modules, below).'),
     back(sys, 'system'),
     tellerField(hs, 'write', sys),
-    field('How the narrator tells scenes', narr, 'Sent first, word for word, when you play a scene — the narrator’s own voice and rules, a persona if you like. The scene craft rides right after it. Empty: nothing of yours is sent.'),
+    field('How the narrator tells scenes', narr, 'Sent first, word for word, when you play a scene — the narrator’s own voice and rules, whoever you want them to be. The scene craft rides right after it. Empty: nothing of yours is sent.'),
     back(narr, 'narrator'),
     tellerField(hs, 'play', narr),
     field('How the partner talks', partner, 'Sent first, word for word, to your partner. Empty: nothing of yours is sent.'),
@@ -1363,7 +1363,7 @@ function lookGroup(hs) {
   g.body.append(h('p.say', 'Choose a world to write in. Make it morning, or stay a little after dark.'), sw,
     h('div.world-mode-row', h('span', 'The light in your room'), modes),
     toggle('motion', 'Ambient animation', look.motion !== 'off'),
-    h('p.say.motion-hint', 'Slow ink, candlelight, rain or a gentle lamplight glow. Off, only the room is still: what is at work — the Suggestions ring, the notes’ light while the helper reads, the page being written — still moves. Your device’s reduced-motion setting is always respected; only the Suggestions ring still turns, slowly, so it never looks stuck.'),
+    h('p.say.motion-hint', 'Slow ink, candlelight, rain or a gentle lamplight glow. Off, only the room is still: what is at work — the Suggestions ring, Quick add’s ring while it holds your words against the book, the notes’ light while the helper reads, the page being written — still moves. Your device’s reduced-motion setting is always respected; those rings still turn, slowly, so they never look stuck.'),
     toggle('room', 'The room behind the page', look.room !== 'off'),
     toggle('tint', 'Tint the dialogue', look.tint !== 'off'),
     ...colourEditors.map(editor => editor.box),

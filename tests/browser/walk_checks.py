@@ -128,6 +128,19 @@ async def main():
                 moving = [await rp.evaluate(turn, [s, False]) for s in ('waiting', 'checking')]
                 check(f'the checker’s ring turns while it waits and while it checks ({label})', moving == [True, True])
                 check(f'and stands still in a tab out of sight ({label})', not await rp.evaluate(turn, ['checking', True]))
+                qmoving = await rp.evaluate("""async (hidden) => {
+                  const box = document.createElement('div'); box.className = 'bibview';
+                  const w = document.createElement('p'); w.className = 'quick-wait';
+                  const r = document.createElement('span'); r.className = 'ring';
+                  w.append(r); box.append(w); document.body.append(box);
+                  if (hidden) document.documentElement.dataset.pageHidden = 'true'; else delete document.documentElement.dataset.pageHidden;
+                  const angle = (t) => { const m = /matrix\\(([^,]+), ([^,]+)/.exec(t); return m ? Math.round(Math.atan2(+m[2], +m[1]) * 180 / Math.PI) : 0; };
+                  const seen = new Set();
+                  for (let i = 0; i < 6; i++) { seen.add(angle(getComputedStyle(r).transform)); await new Promise((ok) => setTimeout(ok, 120)); }
+                  box.remove();
+                  return seen.size > 2;
+                }""", False)
+                check(f'Quick add’s ring turns while it holds his words against the book ({label})', qmoving)
                 await ctx.close()
             # 2.12.35: the phone's reduced motion with Ambient animation off too — the ring alone turns, and slowly; the
             # notes' light does not breathe, nor the caret blink (the rules that keep them moving outranked reduced motion)
@@ -139,6 +152,14 @@ async def main():
             check('reduced motion and Ambient animation off: the ring still turns, waiting and checking', moving == [True, True])
             slow = await rp.evaluate("() => getComputedStyle(document.querySelector('#checkBubble .ring')).animationDuration")
             check(f'and slowly, as reduced motion asks ({slow})', slow == '2.4s')
+            qslow = await rp.evaluate("""() => {
+              const box = document.createElement('div'); box.className = 'bibview';
+              const w = document.createElement('p'); w.className = 'quick-wait';
+              const r = document.createElement('span'); r.className = 'ring';
+              w.append(r); box.append(w); document.body.append(box);
+              const dur = getComputedStyle(r).animationDuration; box.remove(); return dur;
+            }""")
+            check(f'and Quick add’s ring turns slowly too ({qslow})', qslow == '2.4s')
             still = await rp.evaluate("""() => {
               const n = document.createElement('button'); n.className = 'notesbtn'; n.dataset.state = 'reading';
               const d = document.createElement('span'); d.className = 'dot'; n.append(d); document.body.append(n);
