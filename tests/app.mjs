@@ -8898,6 +8898,33 @@ await test('a huge window rides no more notes than a reading can chew (2.12.60):
   await putAway(b);
 });
 
+await test('the chapter behind a new page rides its end when the window is huge (2.12.61): the near words for context, the beginning left to the notes the reading already holds', async () => {
+  const page = (i) => Array.from({ length: 40 }, (_, k) => `Part ${i} run ${k}: the hall went on and the lantern swung. WORDS${i}X${k} happened here in full. ${i === 1 ? 'EARLYGATE stood open. ' : ''}${i === 14 ? 'LATELAMP burned. ' : ''}`).join(' ');
+  const filler = Array.from({ length: 12 }, (_, i) => `Fact ${i} of this one, kept for good.`).join(' ');
+  const people = Array.from({ length: 39 }, (_, i) => ({ id: `pe-${i}`, name: `Card${i}`, aka: [], about: `Card${i} is a person. ${filler}`, now: '' }));
+  const b = await makeBook([Array.from({ length: 14 }, (_, i) => page(i + 1))], { manual: true });
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], (c) => { for (const p of c.passages) { const v = shape.picked(p); if (v) { v.continuity = { events: [], complete: true }; v.codex = { facts: [], complete: true }; } } });
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people, places: [], lore: [], threads: [] }), { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'NEWGATE: the newest page, at the chapter’s end.', { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await setHouse({ context: 500000 });
+  await script([{ text: '{"people": []}' }, { text: '{"people": []}' }]);
+  await archivist.run(b.novelId);
+  const reads = (await requests()).map((x) => x.body.messages.map((m) => String(m.content)).join('\n'));
+  const ask = reads.find((m) => m.includes('Update the notes'));
+  assert.ok(ask, 'the reading was asked');
+  assert.ok(ask.includes('NEWGATE'), 'the new page rides');
+  assert.ok(ask.includes('Fact 11 of this one, kept for good.'), 'the cards ride whole, few as they are');
+  assert.ok(ask.includes('up to the new part (for context — already in the notes)'), 'the near chapter rides');
+  assert.ok(ask.includes('LATELAMP'), 'its end rides');
+  assert.ok(!ask.includes('EARLYGATE'), 'not from the beginning — the notes hold the past');
+  assert.ok(ask.includes('[…]'), 'cut at its front, said so');
+  assert.ok(util.estimateTokens(ask) < 13500, 'the whole ask small, whatever the window');
+  assert.equal(archivist.pendingWork(b.novelId), false, 'read and done');
+  await setHouse();
+  await putAway(b);
+});
+
 await test('a scene is written into the book only as far as the narrator has told it — his move it has not answered stays in the scene, never written in as done', async () => {
   const b = await makeBook([['The lamp was lit.']], { manual: true });
   const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });

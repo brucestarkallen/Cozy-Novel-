@@ -1863,6 +1863,11 @@ function helperRoom(conn) {
 const NOTES_RIDE_MOST = 12000;
 export function notesRoomOf(conn) { return Math.min(NOTES_RIDE_MOST, Math.max(2000, Math.floor(contextOf(conn) * 0.3))); }
 
+/* the chapter behind the new words rides its end — the near words for context, the beginning left to the notes the
+ * reading already holds (the request says so itself: "for context — already in the notes", prompts.js notesRequest).
+ * A huge window once rode 60,000 characters of it on every reading, minute asks made of context the notes hold (2.12.61). */
+const BEFORE_RIDE_CHAR = 20000;
+
 /* how many tokens of the book a helper's request can carry, beside its notes
  * (and beside the reply's room, raised for a model that thinks) */
 export function readingRoom(conn, fixed) {
@@ -2840,7 +2845,7 @@ async function readChanges(novelId, conn) {
      * Count that cost in the batch too: hundreds of one-line passages
      * cannot share the room of a single passage with the same word count. */
     const sourceWords = Math.ceil(estimateTokens(`Passage source Passage 1234\nThis part of ${label} was changed. It used to read:\n"""\n\n"""\nIt now reads:\n"""\n\n"""`) / 1.4);
-    const beforeChars = Math.max(0, Math.min(60000, Math.floor(room * 0.3 * 3.2)));
+    const beforeChars = Math.max(0, Math.min(BEFORE_RIDE_CHAR, Math.floor(room * 0.3 * 3.2)));
     /* a part written into the middle of a chapter: the chapter goes on after it, already read */
     const lastChanged = changes.length ? Math.max(...changes.map((c) => chapter.passages.findIndex((p) => p.id === c.pid))) : -1;
     const goesOn = lastChanged >= 0 && chapter.passages.slice(lastChanged + 1).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());

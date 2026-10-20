@@ -1263,5 +1263,13 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 Tests. The new one (the app suite) sets a 500,000-token helper over notes far past the room: the card the page names rides whole, a far one by its first line only, and the whole ask stays under sixteen thousand tokens; the guard was undone — the room went to 150,000, every card rode whole — and the test failed; the guard was put back, and it passed. Ran once on this code, all passing: the new test; the notes suite, 24; the archivist suite, 20; the checker suite, 14 (run on his Windows machine, whose temp-folder cleanup at the end of every runner fails as it always has, on any code — the checks above are what ran). Not run: the whole app suite again — it ran in full today on 2.12.59’s tree, 800 passed, and this release is one room and its one test; nor the Python suites (serve.py holds only the version this time), the browser walks, or a real model, as ever.
 
+## 2.12.61, the chapter behind it rides its end
+
+**Why.** The notes’ ride was bounded (2.12.60) and each ask was still slow on a huge window: the chapter behind the new words rode with it, from its beginning — up to sixty thousand characters, on every reading, labelled by the request itself “for context — already in the notes”. A small passage was still a giant ask, and its reading had minute teeth.
+
+**Now.** The chapter behind the new words rides its end — twenty thousand characters (`BEFORE_RIDE_CHAR`) — the near words a “now” or a thread’s seam needs, cut at its front and said so. The beginning is left to the notes the reading already holds: the cards are where the past lives, and the notes’ check still reads the whole book whole. A smaller window is unchanged — it always rode by its room.
+
+Tests. The new one (the app suite) sets a 500,000-token helper on a long chapter with a new page at its end: the near words ride, the beginning does not, the cut is said, the cards ride whole, and the whole ask stays small; the guard was undone — the chapter rode from its beginning — and the test failed; the guard was put back, and it passed. Ran once on this code, all passing: the new test; the notes suite, 24; the archivist suite, 20 (his Windows runner’s end-of-run cleanup fails as ever — the checks above are what ran). Not run: the whole app suite again — this release is one bound and its one test; nor the Python suites (serve.py holds only the version), the browser walks, or a real model, as ever.
+
 
 
