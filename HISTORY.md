@@ -1214,6 +1214,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **Taking out the passage at the start of a chapter** left the old name sitting there. The name now follows what the chapter is. Nothing left, and a name the app wrote is cleared, so the next page you write names the chapter. A later page still there becomes the start, and the name is written from it. A name you typed stays. Undo puts the old name back.
 
+## 2.12.54, The notes light was held yellow
+
+**The notes stayed yellow, then went green when a connection was tested.** Naming a chapter was asking the helper with no time limit, on the same connection the notes use, and it went first. The notes waited behind it. The test is a short ask, so it got through, and when the line was free the notes finished and the light went green. The notes read the page first now. The title waits, and it is let go if it sits too long.
+
+
 
 
 

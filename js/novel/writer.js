@@ -11,7 +11,7 @@
  */
 
 import * as store from '../store.js';
-import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
+import { ask, emptyWhy, stripControlLeak, finalWords, workersBusy } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
@@ -813,8 +813,7 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords(chapter) } : null });
   const out = await runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length, closing,
     build: { target: { chapterId, before: passage.id }, request, moment } });
-  const chapterName = out && out.ok ? await titleOpening(novelId, chapterId, passage.id) : '';
-  return chapterName ? { ...out, chapterName } : out;
+  return titled(out, novelId, chapterId, passage.id);
 }
 
 /* What wakes a rule for a passage written again or carried on: his note for
@@ -927,8 +926,29 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
   const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
     build: { target: { chapterId, before: passageId }, request, moment } });
-  const chapterName = out && out.ok ? await titleOpening(novelId, chapterId, passageId) : '';
-  return chapterName ? { ...out, chapterName } : out;
+  return titled(out, novelId, chapterId, passageId);
+}
+
+/* The notes read a new page before a title is asked. Asking first held their
+ * connection — no time limit, the same one the notes use — and their light
+ * stayed yellow until that ask let go. A test of the connection gets through
+ * and the light goes green, which is what made it look like the test fixed it. */
+const TITLE_AFTER_MS = typeof document === 'undefined' ? 0 : 5000;
+function pause(ms) { return new Promise((r) => setTimeout(r, ms)); }
+async function afterTheNotes(conn, ms) {
+  await pause(ms);
+  const start = Date.now();
+  while (conn && workersBusy(conn) && Date.now() - start < 120000) await pause(400);
+}
+function titled(out, novelId, chapterId, passageId) {
+  if (!out || !out.ok) return out;
+  const pending = (async () => {
+    const conn = connFor(house(), 'helper') || connFor(house(), 'writer');
+    await afterTheNotes(conn, TITLE_AFTER_MS);
+    return titleOpening(novelId, chapterId, passageId);
+  })();
+  if (!TITLE_AFTER_MS) return pending.then((chapterName) => (chapterName ? { ...out, chapterName } : out));
+  return { ...out, titlePromise: pending };
 }
 
 /* The chapter's title, from the chapter as it stands and what came before —
@@ -980,7 +1000,7 @@ async function titleOpening(novelId, chapterId, passageId) {
   const premise = premiseOf(list[i]);
   const asRead = chapterPrint(chapter);
   const request = chapterTitleRequest({ novel, label: chapterLabel(novel, chapter, { withName: false }), text, before: earlierOf(novel, chapterId), premise });
-  const got = await ask(conn, { build: () => ({ system: 'You name chapters of a novel. A title is a few words, drawn from the chapter and from what came before. You never copy the premise, and you never write the chapter.', messages: [{ role: 'user', content: request }], maxTokens: 400 }), stream: true });
+  const got = await ask(conn, { build: () => ({ system: 'You name chapters of a novel. A title is a few words, drawn from the chapter and from what came before. You never copy the premise, and you never write the chapter.', messages: [{ role: 'user', content: request }], maxTokens: 400 }), stream: true, worker: true });
   if (!got || !got.ok) return '';
   const obj = parseFirstObject(got.text || got.thinking, (o) => o && typeof o.name === 'string');
   const name = tidyTitle(obj && obj.name, premise);
@@ -1004,6 +1024,8 @@ export async function titleChapter(novelId, chapterId) {
     store.change('chapter', chapterId, chapterSteps.setName('', ''), { now: true });
     return '';
   }
+  const conn = connFor(house(), 'helper') || connFor(house(), 'writer');
+  await afterTheNotes(conn, TITLE_AFTER_MS ? 10000 : 0);
   return titleOpening(novelId, chapterId, first.id);
 }
 
