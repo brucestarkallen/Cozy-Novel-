@@ -657,7 +657,7 @@ export function lengthWords(length, { between = false, outcome = 'writer', chose
   if (length === 'auto') return between ? AUTO_BETWEEN : (chosen ? AUTO_CHOSEN : AUTO_CARRY)[outcome === 'me' ? 'me' : 'writer'];
   const L = LENGTHS[length] || LENGTHS.scene;
   if (length === 'chapter') return 'Write the rest of this chapter, through to a natural chapter ending.';
-  if (length === 'paragraphs') return `Write the next few paragraphs — around ${L.words[0]} to ${L.words[1]} words.`;
+  if (length === 'paragraphs') return `Write the next few paragraphs, as long as this beat needs — near ${L.words[0]} words when it’s a short one, and only toward ${L.words[1]} when it needs the room. Stop when the beat is done.`;
   if (length === 'long') return `Write a long stretch — around ${L.words[0].toLocaleString()} to ${L.words[1].toLocaleString()} words.`;
   return `Write the next scene — around ${L.words[0].toLocaleString()} to ${L.words[1].toLocaleString()} words.`;
 }
@@ -667,7 +667,7 @@ export function openingWords(length, { outcome = 'writer' } = {}) {
   if (length === 'auto') return AUTO_OPEN[outcome === 'me' ? 'me' : 'writer'];
   const L = LENGTHS[length] || LENGTHS.scene;
   if (length === 'chapter') return 'Write the whole chapter, through to a natural chapter ending.';
-  if (length === 'paragraphs') return `Write its opening paragraphs — around ${L.words[0]} to ${L.words[1]} words.`;
+  if (length === 'paragraphs') return `Write its opening paragraphs, as long as this beat needs — near ${L.words[0]} words when it’s a short one, and only toward ${L.words[1]} when it needs the room. Stop when the beat is done.`;
   if (length === 'long') return `Write a long opening stretch — around ${L.words[0].toLocaleString()} to ${L.words[1].toLocaleString()} words.`;
   return `Write the opening scene — around ${L.words[0].toLocaleString()} to ${L.words[1].toLocaleString()} words.`;
 }

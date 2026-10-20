@@ -1206,6 +1206,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **The name at the top was the premise copied out.** That was wrong. It is a title now: a few words, from the chapter as it stands and from what came before. The premise is shown so the title can follow it, and a title that only repeats the premise is thrown out. A name you typed still stays, unless Super automatic is on.
 
+## 2.12.52, A short beat may be short
+
+**A few paragraphs** was asked as around 250 to 500 words, and 250 was read as a floor. It is as long as the beat needs now: near 100 words when it is a short one, and only toward 500 when it needs the room.
+
+
 
 
 

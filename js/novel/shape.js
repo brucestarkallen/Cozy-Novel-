@@ -33,7 +33,7 @@ export const COVERS = ['ember', 'moss', 'dusk', 'rose', 'ink', 'sea', 'wine', 'g
  * target to hit or a reason to rush. Automatic leaves it to the writer. */
 export const LENGTHS = {
   auto: { label: 'Automatic', words: [0, 0], hint: 'the writer judges how much the story needs' },
-  paragraphs: { label: 'A few paragraphs', words: [250, 500] },
+  paragraphs: { label: 'A few paragraphs', words: [100, 500], hint: 'as long as the beat needs — a short one near 100 words, and only toward 500 when it needs the room' },
   scene: { label: 'A scene', words: [1000, 1800] },
   long: { label: 'A long stretch', words: [2500, 4000] },
   chapter: { label: 'The rest of the chapter', words: [0, 0] },
