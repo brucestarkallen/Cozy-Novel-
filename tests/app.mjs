@@ -245,6 +245,14 @@ await test('the premise that opens a chapter names it, and editing that premise 
   assert.equal(kept.ok, true, kept.error);
   assert.equal(b.ch().name, 'My own name', 'a name he typed is left as he typed it');
   assert.equal(b.ch().nameBy, 'you');
+  store.change('house', 'house', (x) => { x.superAuto = { on: true, from: Date.now() }; }, { now: true });
+  await reset();
+  await script([{ text: 'The dark.' }]);
+  const auto = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: 'The lighthouse goes dark.' });
+  assert.equal(auto.ok, true, auto.error);
+  assert.equal(b.ch().name, 'The lighthouse goes dark', 'Super automatic names it from the premise even when he had typed one');
+  assert.equal(b.ch().nameBy, 'helper');
+  store.change('house', 'house', (x) => { x.superAuto = { on: false }; }, { now: true });
   await putAway(b);
 });
 

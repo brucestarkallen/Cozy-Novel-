@@ -1198,6 +1198,12 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **The name at the top.** It was given once, and left there. Editing the premise that starts the chapter, then Resend, now names the chapter from that premise. A later page does not. A name you typed yourself stays until you change it.
 
+## 2.12.50, Super automatic keeps the name
+
+**A name you type** stays, and the premise does not replace it. **Super automatic** is the exception: the name is always the opening premise’s, even one you typed.
+
+
+
 
 
 

@@ -930,14 +930,16 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
   return chapterName ? { ...out, chapterName } : out;
 }
 
-/* The premise that opens a chapter names it. A later page does not, and a name
- * he typed (or cleared) stays. The name is the premise's first sentence, short
- * enough for the heading. '' when nothing was changed. */
+/* The premise that opens a chapter names it. A later page does not. A name he
+ * typed stays — unless Super automatic is on, when the name is always the
+ * premise's. The name is that premise's first sentence, short enough for the
+ * heading. '' when nothing was changed. */
 function nameOpening(chapterId, passageId, premise) {
   const text = String(premise || '').replace(/\s+/g, ' ').trim();
   if (!text) return '';
   const chapter = store.peek('chapter', chapterId);
-  if (!chapter || chapter.nameBy === 'you') return '';
+  if (!chapter) return '';
+  if (chapter.nameBy === 'you' && !superOn(house())) return '';
   const list = chapter.passages || [];
   const i = list.findIndex((p) => p.id === passageId);
   if (i < 0) return '';
