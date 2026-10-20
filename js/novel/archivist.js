@@ -1851,8 +1851,17 @@ function helperRoom(conn) {
 }
 
 /* how much of the helper's model the notes may take (Cozy Tavern's M664):
- * past this, the cards the words in hand do not name ride by their first line */
-export function notesRoomOf(conn) { return Math.max(2000, Math.floor(contextOf(conn) * 0.3)); }
+ * past this, the cards the words in hand do not name ride by their first line.
+ * A BIG WINDOW DOES NOT MAKE A READING BETTER (2.12.60): a half-a-million-token
+ * model rode the whole notes on every ask — the reading of each page, every
+ * check of the summary, What it's about — and every ask was slow to chew where
+ * its work was seconds. Past this room the notes fold as a small helper's always
+ * have: the cards its words name whole, the rest by their first line. Cozy
+ * Tavern caps its whole ledger the same way (engine/whole.js ALL_KNOWLEDGE_ROOM),
+ * whatever its workers hold. The notes' check still holds the whole notes
+ * against the book (auditNotes asks for its own room — nothing here reaches it). */
+const NOTES_RIDE_MOST = 12000;
+export function notesRoomOf(conn) { return Math.min(NOTES_RIDE_MOST, Math.max(2000, Math.floor(contextOf(conn) * 0.3))); }
 
 /* how many tokens of the book a helper's request can carry, beside its notes
  * (and beside the reply's room, raised for a model that thinks) */

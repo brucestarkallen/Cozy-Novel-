@@ -1255,5 +1255,13 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **Who is telling.** A writer set as Batman is spoken to as Batman, and opens his thinking as Batman. The words the app itself adds — the writer, the narrator, the partner, and Quick add — were read through with those words taken out: no persona, no robot, no assistant. The three lines in Your instructions that said “a persona” now say whoever you want them to be. The button that reads his own boxes for a machine’s voice still names what it is looking for.
 
+## 2.12.60, a big window rides no more notes than a reading can chew
+
+**Why.** A model with a huge window rode the whole notes on every ask of them — the reading of each page, the checker’s looks, What it’s about — and every ask was slow to chew where its work was seconds. A bigger model only made the notes slower: half a million tokens of window meant the whole notes, again and again, on asks about one small passage. A long book’s notes are an index to be aimed, not a haystack to be carried whole.
+
+**Now.** The notes ride in a bounded room, twelve thousand tokens, however much the model holds (`notesRoomOf`; Cozy Tavern caps its whole ledger the same way, engine/whole.js `ALL_KNOWLEDGE_ROOM`). A small window is unchanged — it always folded. Past the room the notes fold as they always have on a small helper: the cards the words in hand name ride whole, the rest by their first line, so a reading still finds the one it can change and knows who exists. The readings, the checker’s looks and What it’s about all ride under the same room. The notes’ check still holds the whole notes against the book (`auditNotes` asks in its own room) — that is where the whole of them belongs, and nothing here reaches it.
+
+Tests. The new one (the app suite) sets a 500,000-token helper over notes far past the room: the card the page names rides whole, a far one by its first line only, and the whole ask stays under sixteen thousand tokens; the guard was undone — the room went to 150,000, every card rode whole — and the test failed; the guard was put back, and it passed. Ran once on this code, all passing: the new test; the notes suite, 24; the archivist suite, 20; the checker suite, 14 (run on his Windows machine, whose temp-folder cleanup at the end of every runner fails as it always has, on any code — the checks above are what ran). Not run: the whole app suite again — it ran in full today on 2.12.59’s tree, 800 passed, and this release is one room and its one test; nor the Python suites (serve.py holds only the version this time), the browser walks, or a real model, as ever.
+
 
 

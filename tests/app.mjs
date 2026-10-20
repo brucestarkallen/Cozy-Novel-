@@ -8875,6 +8875,29 @@ await test('a reading is measured with the notes as they are sent — every card
   await putAway(b);
 });
 
+await test('a huge window rides no more notes than a reading can chew (2.12.60): the card the page names whole, the far ones by their first line — and the ask stays small though the model holds it all', async () => {
+  assert.equal(archivist.notesRoomOf({ ...CONN, context: 500000 }), 12000, 'a big window rides a bounded room');
+  assert.equal(archivist.notesRoomOf({ ...CONN, context: 8000 }), 2400, 'a small one as it always was');
+  const filler = Array.from({ length: 30 }, (_, i) => `Fact ${i} about this one, long and particular, kept for good.`).join(' ');
+  const people = Array.from({ length: 100 }, (_, i) => ({ id: `pe-${i}`, name: `Card${i}`, aka: [], about: `Card${i} is a person. ${filler}`, now: '' }));
+  const b = await makeBook([['At the gate stood Card17, soaked through.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people, places: [], lore: [], threads: [] }), { now: true });
+  await setHouse({ context: 500000 });
+  await script(Array.from({ length: 4 }, () => ({ text: '{"people": []}' })));
+  await archivist.run(b.novelId);
+  const reads = (await requests()).map((x) => x.body.messages.map((m) => String(m.content)).join('\n'));
+  assert.ok(reads.length >= 1, archivist.lightOf(b.novelId).words);
+  const ask = reads.find((m) => m.includes('Update the notes'));
+  assert.ok(ask, 'the reading was asked');
+  assert.ok(ask.includes('shown by their first line'), 'folded, though the window held it all');
+  assert.ok(ask.includes('Fact 29 about this one, long and particular, kept for good.'), 'the card the page names, whole');
+  assert.ok(ask.includes('- Card59 — Card59 is a person. Fact 0 about this one, long and particular, kept for good.'), 'a far card by its first line');
+  assert.ok(!ask.includes('Card59 is a person. Fact 0 about this one, long and particular, kept for good. Fact 1'), 'never its whole words');
+  assert.ok(util.estimateTokens(ask) < 16000, 'the whole ask small, whatever the window');
+  await setHouse();
+  await putAway(b);
+});
+
 await test('a scene is written into the book only as far as the narrator has told it — his move it has not answered stays in the scene, never written in as done', async () => {
   const b = await makeBook([['The lamp was lit.']], { manual: true });
   const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });
