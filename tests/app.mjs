@@ -3935,6 +3935,8 @@ await test('Off that still thinks is learned — but not when his own <think> se
   await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] });
   let conn = store.peek('house', 'house').connections[0];
   assert.equal(Boolean(conn.learned && conn.learned.offThinks), true, 'thinking with Off is learned');
+  const again = providers.buildRequest({ ...conn, thinking: 'off' }, { system: 'S', messages: [{ role: 'user', content: 'x' }], maxTokens: 800 });
+  assert.ok(!again.body.reasoning_effort || again.body.reasoning_effort === 'none', 'Off stays Off — it is not asked to think');
   await setHouse({ thinking: 'off', prefill: '<think>Let me consider' });
   await reset();
   await script([{ text: 'A page.', think: 'the scene carefully.' }]);

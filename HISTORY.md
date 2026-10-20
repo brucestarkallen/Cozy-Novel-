@@ -1230,6 +1230,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **2.12.56 lowered the notes’ thinking on its own.** That was wrong. Who does the notes, and how hard that connection thinks, is the setting you already chose. The notes use that again, unchanged.
 
+## 2.12.58, Off stays off
+
+**The notes thought for a long time with thinking set to Off.** The app had decided Off did not work, and from then on it asked for a think anyway. That is why a non-thinking model sat there. Off is sent as Off again.
+
+
 
 
 
