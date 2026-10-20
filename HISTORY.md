@@ -1222,6 +1222,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **The light stayed yellow until a connection was tested.** That test was kicking a stuck title request off the notes’ connection, then the notes ran and turned green. The title request is gone. The notes read the page as they always did, and they name the chapter while they do. Green still means they are caught up.
 
+## 2.12.56, The notes do not think as long as a page
+
+**The notes’ light stayed yellow for a long think.** The notes were using the same thinking level as the writer, so a page’s long think held the light the whole time. The notes now ask at the lowest think. The pages you write keep the level you set.
+
+
 
 
 
