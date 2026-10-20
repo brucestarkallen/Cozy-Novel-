@@ -397,9 +397,17 @@ function applyThinking(body, conn, wire) {
     if (body.output_config && typeof body.output_config.effort === 'string') body.output_config = { ...body.output_config, effort: fitEffort(body.output_config.effort, listed) };
   }
   if (learned && !learned.down) {
+    const style = familyStyle(conn);
+    if (t === 'off' && learned.offThinks && style !== 'hermes') {
+      const least = learned.efforts ? fitEffort('low', learned.efforts) : 'low';
+      if ('thinking' in body) body.thinking = { type: 'enabled' };
+      if ('enable_thinking' in body) body.enable_thinking = true;
+      if (style === 'openrouter') body.reasoning = { effort: least };
+      else body.reasoning_effort = least;
+    }
     for (const f of learned.drop) delete body[f];
     if (learned.efforts) {
-      if (typeof body.reasoning_effort === 'string') body.reasoning_effort = fitEffort(body.reasoning_effort, learned.efforts, t === 'off');
+      if (typeof body.reasoning_effort === 'string') body.reasoning_effort = fitEffort(body.reasoning_effort, learned.efforts, t === 'off' && !learned.offThinks);
       if (body.reasoning && typeof body.reasoning.effort === 'string') body.reasoning.effort = fitEffort(body.reasoning.effort, learned.efforts);
       /* Claude's level rides in output_config: a level it named as refused is fitted there too */
       if (body.output_config && typeof body.output_config.effort === 'string') body.output_config = { ...body.output_config, effort: fitEffort(body.output_config.effort, learned.efforts) };

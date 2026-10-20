@@ -393,7 +393,7 @@ function connectionForm(c) {
     if (facts.completionField) bits.push('takes the reply’s length as “max_completion_tokens”');
     if (facts.efforts) bits.push('takes thinking at ' + facts.efforts.join(', '));
     if (facts.drop.length) bits.push('does not take ' + facts.drop.map((f) => `“${f}”`).join(', '));
-    if (facts.offThinks) bits.push('it has thought even with Off — Off is still sent as Off');
+    if (facts.offThinks) bits.push('Off does not stop it thinking, so Off asks for its least');
     if (facts.down) bits.push('refused thinking today, so none is sent until tomorrow');
     if (facts.noLateSystem) bits.push('takes no system message after the request');
     if (facts.prefillDown) bits.push('will not continue a started reply');
