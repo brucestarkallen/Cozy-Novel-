@@ -106,7 +106,8 @@ class H(BaseHTTPRequestHandler):
             proof = "Find every slip of the hand in them" in last_user
             # the Timeline read for itself (2.12.37): an honest reading with no turns, unless the test queued an answer for it ({"turns": true})
             turns = "Read these passages for the Timeline alone" in last_user
-            if QUEUE and not (turns and not QUEUE[0].get("turns")) and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole) and not (marks and not QUEUE[0].get("marks")) and not (QUEUE[0].get("marks") and not marks) and not (proof and not QUEUE[0].get("proof")) and not (QUEUE[0].get("proof") and not proof):
+            title = "Give it a chapter title" in last_user
+            if QUEUE and not (turns and not QUEUE[0].get("turns")) and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole) and not (marks and not QUEUE[0].get("marks")) and not (QUEUE[0].get("marks") and not marks) and not (proof and not QUEUE[0].get("proof")) and not (QUEUE[0].get("proof") and not proof) and not (title and not QUEUE[0].get("title")) and not (QUEUE[0].get("title") and not title):
                 beh = QUEUE.pop(0)
             elif turns:
                 sources = re.findall(r"^(Chapter [^\n]+?, passage \d+):$", last_user, re.M)
@@ -139,6 +140,8 @@ class H(BaseHTTPRequestHandler):
                 beh = {"text": json.dumps({"wrong": [], "missing": []})}
             elif "Which is the better page" in last_user:
                 beh = {"text": json.dumps({"better": "same", "why": "DEFAULT DUEL"})}
+            elif "Give it a chapter title" in last_user:
+                beh = {"text": json.dumps({"name": "The Lantern"})}
             elif "Read these passages for the Timeline alone" in last_user:
                 # the Timeline read for itself (2.12.37): an honest reading of every passage shown, with no turns in it
                 sources = re.findall(r"^(Chapter [^\n]+?, passage \d+):$", last_user, re.M)

@@ -1200,7 +1200,12 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 ## 2.12.50, Super automatic keeps the name
 
-**A name you type** stays, and the premise does not replace it. **Super automatic** is the exception: the name is always the opening premise’s, even one you typed.
+**A name you type** stays, and the premise does not replace it. **Super automatic** is the exception: the name is always taken again from the chapter, even one you typed.
+
+## 2.12.51, A chapter title, not the premise
+
+**The name at the top was the premise copied out.** That was wrong. It is a title now: a few words, from the chapter as it stands and from what came before. The premise is shown so the title can follow it, and a title that only repeats the premise is thrown out. A name you typed still stays, unless Super automatic is on.
+
 
 
 

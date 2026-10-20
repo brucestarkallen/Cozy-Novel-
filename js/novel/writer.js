@@ -18,9 +18,10 @@ import { assemble, requiredLength } from './context.js';
 import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
 import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
-import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
+import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, chapterTitleRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
-import { renameIn, firstSentence } from './names.js';
+import { renameIn } from './names.js';
+import { parseFirstObject } from './jsonutil.js';
 import { changeInPlace, foldVersion, grownFields } from './inplace.js';
 
 /* -------------------------------------------------------------- roles */
@@ -812,7 +813,7 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords(chapter) } : null });
   const out = await runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length, closing,
     build: { target: { chapterId, before: passage.id }, request, moment } });
-  const chapterName = out && out.ok ? nameOpening(chapterId, passage.id, direction) : '';
+  const chapterName = out && out.ok ? await titleOpening(novelId, chapterId, passage.id) : '';
   return chapterName ? { ...out, chapterName } : out;
 }
 
@@ -926,31 +927,65 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
   const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
     build: { target: { chapterId, before: passageId }, request, moment } });
-  const chapterName = out && out.ok ? nameOpening(chapterId, passageId, text) : '';
+  const chapterName = out && out.ok ? await titleOpening(novelId, chapterId, passageId) : '';
   return chapterName ? { ...out, chapterName } : out;
 }
 
-/* The premise that opens a chapter names it. A later page does not. A name he
- * typed stays — unless Super automatic is on, when the name is always the
- * premise's. The name is that premise's first sentence, short enough for the
- * heading. '' when nothing was changed. */
-function nameOpening(chapterId, passageId, premise) {
-  const text = String(premise || '').replace(/\s+/g, ' ').trim();
-  if (!text) return '';
+/* The chapter's title, from the chapter as it stands and what came before —
+ * never his premise copied out. A later page does not rename it. A name he
+ * typed stays, unless Super automatic is on. '' when nothing was changed. */
+function wordsOfTitle(s) {
+  return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+function tidyTitle(raw, premise) {
+  let name = String(raw || '').replace(/\s+/g, ' ').trim();
+  name = name.replace(/^["“”']+|["“”']+$/g, '').replace(/^(?:chapter\s+[\w-]+\s*[:.—–-]\s*)/i, '').trim();
+  name = name.replace(/[.!?…]+$/g, '').trim();
+  const words = name.split(/\s+/).filter(Boolean);
+  if (!name || words.length > 8 || name.length > 60 || !/[\p{L}\p{N}]/u.test(name)) return '';
+  const got = wordsOfTitle(name);
+  const asked = wordsOfTitle(premise);
+  if (!got || got === asked || (asked && asked.startsWith(got) && got.split(' ').length > 4)) return '';
+  return name;
+}
+function earlierOf(novel, chapterId) {
+  const order = novel.order || [];
+  const at = order.indexOf(chapterId);
+  const parts = [];
+  for (const id of order.slice(0, at < 0 ? 0 : at)) {
+    const c = store.peek('chapter', id);
+    if (!c) continue;
+    const sum = c.summary && String(c.summary.text || '').trim();
+    const body = (sum || chapterText(c)).replace(/\s+/g, ' ').trim().slice(0, 500);
+    if (body) parts.push(`${chapterLabel(novel, c)}: ${body}`);
+  }
+  return parts.join('\n');
+}
+function chapterForTitle(chapter) {
+  const text = chapterText(chapter).trim();
+  if (text.length <= 5000) return text;
+  return `${text.slice(0, 2500).trim()}\n\n…\n\n${text.slice(-2000).trim()}`;
+}
+async function titleOpening(novelId, chapterId, passageId) {
   const chapter = store.peek('chapter', chapterId);
-  if (!chapter) return '';
-  if (chapter.nameBy === 'you' && !superOn(house())) return '';
+  if (!chapter || (chapter.nameBy === 'you' && !superOn(house()))) return '';
   const list = chapter.passages || [];
   const i = list.findIndex((p) => p.id === passageId);
   if (i < 0) return '';
   if (list.slice(0, i).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim())) return '';
-  let name = firstSentence(text).replace(/\s+/g, ' ').trim().replace(/[.!?…]+$/, '').trim();
-  if (name.length > 80) {
-    const room = name.slice(0, 80);
-    const sp = room.search(/\s\S*$/);
-    name = (sp > 40 ? room.slice(0, sp) : room).trim();
-  }
-  if (!name || name === (chapter.name || '')) return '';
+  const novel = store.peek('novel', novelId);
+  const conn = connFor(house(), 'helper') || connFor(house(), 'writer');
+  const text = chapterForTitle(chapter);
+  if (!novel || !conn || !text) return '';
+  const premise = premiseOf(list[i]);
+  const request = chapterTitleRequest({ novel, label: chapterLabel(novel, chapter, { withName: false }), text, before: earlierOf(novel, chapterId), premise });
+  const got = await ask(conn, { build: () => ({ system: 'You name chapters of a novel. A title is a few words, drawn from the chapter and from what came before. You never copy the premise, and you never write the chapter.', messages: [{ role: 'user', content: request }], maxTokens: 400 }), stream: true });
+  if (!got || !got.ok) return '';
+  const obj = parseFirstObject(got.text || got.thinking, (o) => o && typeof o.name === 'string');
+  const name = tidyTitle(obj && obj.name, premise);
+  if (!name) return '';
+  const live = store.peek('chapter', chapterId);
+  if (!live || name === (live.name || '') || (live.nameBy === 'you' && !superOn(house()))) return '';
   store.change('chapter', chapterId, chapterSteps.setName(name, 'helper'), { now: true });
   return name;
 }
