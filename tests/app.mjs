@@ -8925,6 +8925,63 @@ await test('the chapter behind a new page rides its end when the window is huge 
   await putAway(b);
 });
 
+await test('the reply room a reading is given grows with the words it answers for (2.12.62): a chapter’s worth never cut at a page’s cap and paid for twice — its floor still the floor, a small window’s share its share', async () => {
+  /* helperRoom as the house writes it (archivist.js): never lower than he set, never past the share its model holds */
+  const floorOf = (c) => Math.max(1024, Math.min(Math.max(Number.isFinite(c.maxTokens) && c.maxTokens > 0 ? c.maxTokens : 0, 6000), Math.floor(providers.contextOf(c) * 0.4)));
+  const readAsk = (all) => all.find((x) => x.body.messages.map((m) => String(m.content)).join('\n').includes('Update the notes'));
+  /* their turns and facts already laid, so no backfill asks beside the reading */
+  const stage = (b) => store.change('chapter', b.ids[0], (c) => { for (const p of c.passages) { const v = shape.picked(p); if (v) { v.continuity = { events: [], complete: true }; v.codex = { facts: [], complete: true }; } } });
+  /* one reading, a chapter’s worth of pages in one ask */
+  const long = Array.from({ length: 600 }, () => 'The hall went dark and the lamps were lit again before the storm arrived.').join(' ');
+  const b = await makeBook([['The lamps burned.']], { manual: true });
+  markAllSeen(b);
+  stage(b);
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', long, { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await setHouse({ context: 500000 });
+  await script(Array.from({ length: 6 }, () => ({ text: '{"people": []}' })));
+  await archivist.run(b.novelId);
+  const call = readAsk(await requests());
+  assert.ok(call, 'the reading was asked');
+  const grown = Number(call.body.max_tokens || call.body.max_completion_tokens) || 0;
+  const big = store.peek('house', 'house').connections[0];
+  assert.equal(grown, floorOf(big) + Math.ceil(util.countWords(long) * 0.5), 'the room grows with the words it answers for');
+  const sent = util.estimateTokens(call.body.messages.map((m) => m.content).join('\n'));
+  assert.ok(sent + grown <= providers.contextOf(big), `${sent} + ${grown} > ${providers.contextOf(big)}`);
+  await setHouse();
+  await putAway(b);
+  await reset();
+  /* a page’s reading: the floor its connection always allowed, and the hair more its few words ask */
+  const short = 'A short page, whole.';
+  const s = await makeBook([['The lamps burned.']], { manual: true });
+  markAllSeen(s);
+  stage(s);
+  store.change('chapter', s.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', short, { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await setHouse({ context: 500000 });
+  await script(Array.from({ length: 6 }, () => ({ text: '{"people": []}' })));
+  await archivist.run(s.novelId);
+  const page = readAsk(await requests());
+  assert.ok(page, 'the reading was asked');
+  const wide = store.peek('house', 'house').connections[0];
+  assert.equal(Number(page.body.max_tokens), floorOf(wide) + Math.ceil(util.countWords(short) * 0.5), 'a page keeps the floor its connection allows');
+  await setHouse();
+  await putAway(s);
+  await reset();
+  /* a small helper: its window’s share is its room, grown or not */
+  const t = await makeBook([['One line kept.']], { manual: true });
+  markAllSeen(t);
+  stage(t);
+  store.change('chapter', t.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', 'Two lamps burned on.', { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await setHouse({ context: 12000 });
+  await script(Array.from({ length: 6 }, () => ({ text: '{"people": []}' })));
+  await archivist.run(t.novelId);
+  const small = readAsk(await requests());
+  assert.ok(small, 'the reading was asked');
+  const narrow = store.peek('house', 'house').connections[0];
+  assert.equal(Number(small.body.max_tokens), floorOf(narrow), 'a small window’s share never grows past it');
+  await setHouse();
+  await putAway(t);
+});
+
 await test('a scene is written into the book only as far as the narrator has told it — his move it has not answered stays in the scene, never written in as done', async () => {
   const b = await makeBook([['The lamp was lit.']], { manual: true });
   const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });

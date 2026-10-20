@@ -1850,6 +1850,21 @@ function helperRoom(conn) {
   return Math.max(1024, Math.min(Math.max(set, 6000), Math.floor(contextOf(conn) * 0.4)));
 }
 
+/* THE REPLY ROOM A READING IS GIVEN GROWS WITH WHAT IT READS (2.12.62): a reading answers for every
+ * page its ask carries — timeline turns and bibliography facts for each — so a chapter's worth of
+ * new pages needs more room than a page's. Through 2.12.61 every reading had the helper's own floor
+ * (helperRoom): a big reading's answer, cut off there, was asked a second time at twice the room,
+ * every field given again — the reading paid once for its work and once for its length. The room
+ * still holds the house's law: never lower than the floor his connection allows, never more than
+ * two fifths of its window, and never past what its model holds beside the ask as it is sent (with
+ * the reading's own 900 of safety still held from it). */
+function readingReplyOf(conn, words, askTokens) {
+  const base = thinksOn(conn) ? Math.max(helperRoom(conn), thinkingFloor(conn)) : helperRoom(conn);
+  const grown = base + Math.ceil(Math.max(0, Math.floor(words)) * 0.5);
+  const spare = Math.floor(contextOf(conn)) - 900 - Math.max(0, Math.floor(askTokens));
+  return Math.max(base, Math.min(grown, Math.floor(contextOf(conn) * 0.4), Math.max(base, spare)));
+}
+
 /* how much of the helper's model the notes may take (Cozy Tavern's M664):
  * past this, the cards the words in hand do not name ride by their first line.
  * A BIG WINDOW DOES NOT MAKE A READING BETTER (2.12.60): a half-a-million-token
@@ -1918,10 +1933,12 @@ const hasGone = (o) => Boolean(o && Array.isArray(o.gone) && o.gone.length);
 
 /* (a call let go on its leash: on its longest one, and how long it was waited — call.js `leashMs`, 2.12.41) */
 const leashKept = (r) => ({ ...(r.longest ? { longest: true } : {}), ...(r.leashMs ? { leashMs: r.leashMs } : {}) });
-export async function askJson(conn, system, request, { want, beforeAsk } = {}) {
-  const room = helperRoom(conn);
+export async function askJson(conn, system, request, { want, room = 0, beforeAsk } = {}) {
+  /* the floor his connection allows — or the room a caller proved its ask leaves (readingReplyOf, 2.12.62): never below it,
+   * never past three fifths of the window, the share a cut answer's own second ask was always given */
+  const answer = room > helperRoom(conn) ? Math.max(helperRoom(conn), Math.min(Math.floor(room), Math.floor(contextOf(conn) * 0.6))) : helperRoom(conn);
   if (beforeAsk) await beforeAsk();
-  const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: room }), stream: true, worker: true, patient: true });
+  const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: answer }), stream: true, worker: true, patient: true });
   if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed, ...leashKept(first) };
   /* an answer cut off counts only when its object closed: one cut inside it holds pieces, never the answer (Cozy Tavern's M685, M737) */
   let obj = !first.cut || closesWhole(first.text) ? parseFirstObject(first.text, want) : null;
@@ -1932,7 +1949,7 @@ export async function askJson(conn, system, request, { want, beforeAsk } = {}) {
   if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed, ...leashKept(first) };
   /* once more, told what went wrong — given more room when it ran out of it; never more than that */
   const cut = Boolean(first.cut);
-  const more = cut ? Math.min(room * 2, Math.floor(contextOf(conn) * 0.6)) : room;
+  const more = cut ? Math.min(answer * 2, Math.floor(contextOf(conn) * 0.6)) : answer;
   if (beforeAsk) await beforeAsk();
   const second = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
   if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed, ...leashKept(second) };
@@ -2982,10 +2999,14 @@ async function readChanges(novelId, conn) {
         removedChapters: B.chapters.map((r) => r.text),
         at, of: (now.order || []).length, later: laterRead, goesOn, notesFit, shortIds, plain, codex: askedCodex, ...entered,
       });
+      /* the words this ask carries — its answer answers for all of them: the reply room grows with them (2.12.62),
+       * measured as the ask is sent so the room never passes what its model holds beside it */
+      const readWords = B.items.reduce((a, c) => a + countWords(c.text) + countWords(c.old), 0) + B.removed.reduce((a, r) => a + countWords(r.text), 0) + B.chapters.reduce((a, r) => a + countWords(r.text), 0);
+      const replyRoom = readingReplyOf(conn, readWords, estimateTokens(helperFrame(house, now)) + estimateTokens(request));
       let got;
       const gen = ((now.memory || {}).reread || 0);
       readingNow.add(novelId);
-      try { got = await helperJson(novelId, conn, helperFrame(house, now), request, { want: notesShape, asGiven: true }); }
+      try { got = await helperJson(novelId, conn, helperFrame(house, now), request, { want: notesShape, asGiven: true, room: replyRoom }); }
       catch (e) { takeBackParts(); throw e; }
       finally { readingNow.delete(novelId); }
       /* the whole book began to be read again (or that was undone) while it was asked: its answer belongs to notes no longer there */
