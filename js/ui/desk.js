@@ -788,25 +788,19 @@ function removePassage(p) {
    * taken out with them nor brought back by Undo as the older words: 2.12.41, a step laid again over another window's
    * newer copy) */
   const wasOpening = !c.passages.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
-  const nameBefore = wasOpening ? { name: c.name || '', nameBy: c.nameBy || '' } : null;
+  const nameBefore = wasOpening ? { name: c.name || '', nameBy: c.nameBy || '', nameDue: Boolean(c.nameDue) } : null;
   store.change('chapter', S.chapterId, chapterSteps.removePassage(p.id, passagePrint(p)), { now: true });
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId, 9000);
   writer.recount(S.novelId);
+  if (wasOpening) writer.releaseOpening(S.chapterId);
   S.undo = { chapterId: S.chapterId, passage: copy, after, nameBefore };
   drawPage();
-  if (wasOpening) {
-    const novelId = S.novelId;
-    const chapterId = S.chapterId;
-    writer.titleChapter(novelId, chapterId).then((chapterName) => {
-      if (chapterName && S.novelId === novelId && S.chapterId === chapterId) toast(`The chapter is named “${chapterName}”.`);
-    });
-  }
   undoToast('The passage is removed.', () => {
     const u = S.undo;
     if (!u) return;
     store.change('chapter', u.chapterId, chapterSteps.addPassage(u.passage, u.after), { now: true });
-    if (u.nameBefore) store.change('chapter', u.chapterId, chapterSteps.setName(u.nameBefore.name, u.nameBefore.nameBy), { now: true });
+    if (u.nameBefore) store.change('chapter', u.chapterId, (ch) => { ch.name = u.nameBefore.name; ch.nameBy = u.nameBefore.nameBy; if (u.nameBefore.nameDue) ch.nameDue = true; else delete ch.nameDue; }, { now: true });
     /* back in its place: nothing of it is taken out any more — and the
      * notes it made, taken back when it went, come back at once */
     store.change('chapter', u.chapterId, chapterSteps.clearRetired([u.passage.id]), { now: true });
@@ -1113,9 +1107,6 @@ async function run(fn) {
     }
   } else if (out && out.ok) {
     archivist.nudge(novelId);
-    const tellName = (chapterName) => { if (chapterName && here()) toast(`The chapter is named “${chapterName}”.`); };
-    if (out.titlePromise) out.titlePromise.then(tellName);
-    else tellName(out.chapterName);
   }
   drawComposer();
   return out;

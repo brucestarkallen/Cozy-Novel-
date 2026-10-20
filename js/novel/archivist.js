@@ -3154,11 +3154,17 @@ async function readChanges(novelId, conn) {
       /* the chapter's name, when it has none, he has not cleared it, and it is long enough to have earned one */
       const cn = cleanName(got.obj.chapterName);
       const liveCh = chapter ? store.peek('chapter', chapter.id) : null;
-      if (liveCh && cn && !liveCh.name && liveCh.nameBy !== 'you' && chapterWords(liveCh) >= 600) {
-        /* (on the chapter as the copy it is laid on has it: never over a name he gave it, or took off, meanwhile in another
-         * window — 2.12.41, a step laid again over another window's newer copy) */
-        const named = chapterSteps.setName(cn.replace(/^chapter\s+\w+\s*[:—-]\s*/i, '').slice(0, 80), 'helper');
-        store.change('chapter', chapter.id, (ch) => (ch.name || ch.nameBy === 'you' ? false : named(ch)));
+      if (liveCh && cn && (liveCh.nameDue || (!liveCh.name && liveCh.nameBy !== 'you' && chapterWords(liveCh) >= 600))) {
+        const tidy = cn.replace(/^chapter\s+\w+\s*[:—-]\s*/i, '').slice(0, 80);
+        /* (on the chapter as the copy it is laid on has it: never over a name he gave it meanwhile — 2.12.41.
+         * nameDue: the opening changed, so a name the helper gave before is replaced, however short the chapter) */
+        store.change('chapter', chapter.id, (ch) => {
+          if (ch.nameBy === 'you') return false;
+          if (!ch.nameDue && (ch.name || chapterWords(ch) < 600)) return false;
+          chapterSteps.setName(tidy, 'helper')(ch);
+          delete ch.nameDue;
+          return true;
+        });
       }
       /* what was read is marked read. A passage he changed while it was being
        * read is marked as read as it WAS, with those words kept — so the next
@@ -3515,7 +3521,7 @@ function saveSummary(novelId, chapterId, stamp, summary, { cache = false, name =
     if (!n || !(n.order || []).includes(chapterId) || ((n.memory || {}).reread || 0) !== stamp.reread || !summaryMatches(c, stamp)) return false;
     chapterSteps.setSummary(clone(kept))(c);
     if (cache && kept) chapterSteps.keepSummary(kept)(c);
-    if (name && !c.name && c.nameBy !== 'you') chapterSteps.setName(name, 'helper')(c);
+    if (name && c.nameBy !== 'you' && (!c.name || c.nameDue)) { chapterSteps.setName(name, 'helper')(c); delete c.nameDue; }
     return true;
   });
 }
@@ -3614,7 +3620,7 @@ async function summarise(novelId, conn) {
     for (let k = 0; k < parts.length; k++) {
       const lastPart = k === parts.length - 1;
       /* a summary with words in it, or none (an empty one is asked again — M681) */
-      const got = await helperJson(novelId, conn, frame, summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[k], needsName: lastPart && !c.name && c.nameBy !== 'you', words,
+      const got = await helperJson(novelId, conn, frame, summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[k], needsName: lastPart && c.nameBy !== 'you' && (!c.name || c.nameDue), words,
         part: parts.length > 1 ? k + 1 : 0, parts: parts.length, soFar: summary, known, his: lastPart ? his : '', stretched: parts[0] === stretched && Boolean(stretched), tail: stretched ? tail : '' }), { want: (o) => Boolean(summaryWords(o.summary)) });
       if (!(await summaryStillCurrent(novelId, c.id, stamp))) { setAsideNow = true; break; }
       if (!got.ok) {

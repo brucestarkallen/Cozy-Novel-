@@ -1216,7 +1216,12 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 ## 2.12.54, The notes light was held yellow
 
-**The notes stayed yellow, then went green when a connection was tested.** Naming a chapter was asking the helper with no time limit, on the same connection the notes use, and it went first. The notes waited behind it. The test is a short ask, so it got through, and when the line was free the notes finished and the light went green. The notes read the page first now. The title waits, and it is let go if it sits too long.
+**The notes stayed yellow, then went green when a connection was tested.** Naming a chapter was a second request on the notes’ connection, and it went first. The notes could not finish while it sat there. Testing the connection is not a notes request: the provider said it was busy, that sitting request was kicked off the line, and saving the test starts the notes again. They finish, and the light goes green. The chapter is named by the notes’ own reading again. There is no second request.
+
+## 2.12.55, The notes are not held up by a title
+
+**The light stayed yellow until a connection was tested.** That test was kicking a stuck title request off the notes’ connection, then the notes ran and turned green. The title request is gone. The notes read the page as they always did, and they name the chapter while they do. Green still means they are caught up.
+
 
 
 

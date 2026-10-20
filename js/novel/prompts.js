@@ -1820,21 +1820,6 @@ ${his ? `\nMy own summary of this chapter, from before its latest changes — my
   return lines.join('\n\n');
 }
 
-/* A chapter's title, from the chapter as it stands and what came before.
- * His premise is there so the title can follow it — never so it can be copied. */
-export function chapterTitleRequest({ novel, label, text, before = '', premise = '' }) {
-  const about = String((novel && novel.brief) || '').trim();
-  return [
-    `Name ${label} of “${(novel && novel.meta && novel.meta.title) || 'Untitled'}”.`,
-    about ? `What the book is about:\n${fence(about)}` : '',
-    before ? `What came before this chapter:\n${fence(before)}` : '',
-    `The chapter, as it stands:\n${fence(text)}`,
-    premise ? `What I asked for at the start of it. This is not the title. Do not write it out again, and do not shorten it into the title:\n${fence(premise)}` : '',
-    `Give it a chapter title: a few words, in the voice of this book, from what this chapter does and from what came before. A title, not a sentence, not a summary, and not my words above copied. No quotation marks. No “Chapter”.`,
-    `Answer with one JSON object and nothing else: {"name": "…"}`,
-  ].filter(Boolean).join('\n\n');
-}
-
 /* A stretch of a long chapter (stretches.js), summed up on its own — what
  * rides for it when the chapter does not fit word for word. The summary of
  * the stretch before it comes along, so it picks up where that one ends. */

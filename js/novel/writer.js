@@ -11,17 +11,16 @@
  */
 
 import * as store from '../store.js';
-import { ask, emptyWhy, stripControlLeak, finalWords, workersBusy } from '../model/call.js';
+import { ask, emptyWhy, stripControlLeak, finalWords } from '../model/call.js';
 import { wireOf, splitPrefill } from '../model/providers.js';
 import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, chapterPrint, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
-import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, chapterTitleRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
+import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
 import { renameIn } from './names.js';
-import { parseFirstObject } from './jsonutil.js';
 import { changeInPlace, foldVersion, grownFields } from './inplace.js';
 
 /* -------------------------------------------------------------- roles */
@@ -813,7 +812,8 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords(chapter) } : null });
   const out = await runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length, closing,
     build: { target: { chapterId, before: passage.id }, request, moment } });
-  return titled(out, novelId, chapterId, passage.id);
+  if (out && out.ok) releaseOpening(chapterId, passage.id);
+  return out;
 }
 
 /* What wakes a rule for a passage written again or carried on: his note for
@@ -926,108 +926,44 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
   const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
     build: { target: { chapterId, before: passageId }, request, moment } });
-  return titled(out, novelId, chapterId, passageId);
+  if (out && out.ok) releaseOpening(chapterId, passageId);
+  return out;
 }
 
-/* The notes read a new page before a title is asked. Asking first held their
- * connection — no time limit, the same one the notes use — and their light
- * stayed yellow until that ask let go. A test of the connection gets through
- * and the light goes green, which is what made it look like the test fixed it. */
-const TITLE_AFTER_MS = typeof document === 'undefined' ? 0 : 5000;
-function pause(ms) { return new Promise((r) => setTimeout(r, ms)); }
-async function afterTheNotes(conn, ms) {
-  await pause(ms);
-  const start = Date.now();
-  while (conn && workersBusy(conn) && Date.now() - start < 120000) await pause(400);
-}
-function titled(out, novelId, chapterId, passageId) {
-  if (!out || !out.ok) return out;
-  const pending = (async () => {
-    const conn = connFor(house(), 'helper') || connFor(house(), 'writer');
-    await afterTheNotes(conn, TITLE_AFTER_MS);
-    return titleOpening(novelId, chapterId, passageId);
-  })();
-  if (!TITLE_AFTER_MS) return pending.then((chapterName) => (chapterName ? { ...out, chapterName } : out));
-  return { ...out, titlePromise: pending };
-}
-
-/* The chapter's title, from the chapter as it stands and what came before —
- * never his premise copied out. A later page does not rename it. A name he
- * typed stays, unless Super automatic is on. '' when nothing was changed. */
-function wordsOfTitle(s) {
-  return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
-}
-function tidyTitle(raw, premise) {
-  let name = String(raw || '').replace(/\s+/g, ' ').trim();
-  name = name.replace(/^["“”']+|["“”']+$/g, '').replace(/^(?:chapter\s+[\w-]+\s*[:.—–-]\s*)/i, '').trim();
-  name = name.replace(/[.!?…]+$/g, '').trim();
-  const words = name.split(/\s+/).filter(Boolean);
-  if (!name || words.length > 8 || name.length > 60 || !/[\p{L}\p{N}]/u.test(name)) return '';
-  const got = wordsOfTitle(name);
-  const asked = wordsOfTitle(premise);
-  if (!got || got === asked || (asked && asked.startsWith(got) && got.split(' ').length > 4)) return '';
-  return name;
-}
-function earlierOf(novel, chapterId) {
-  const order = novel.order || [];
-  const at = order.indexOf(chapterId);
-  const parts = [];
-  for (const id of order.slice(0, at < 0 ? 0 : at)) {
-    const c = store.peek('chapter', id);
-    if (!c) continue;
-    const sum = c.summary && String(c.summary.text || '').trim();
-    const body = (sum || chapterText(c)).replace(/\s+/g, ' ').trim().slice(0, 500);
-    if (body) parts.push(`${chapterLabel(novel, c)}: ${body}`);
-  }
-  return parts.join('\n');
-}
-function chapterForTitle(chapter) {
-  const text = chapterText(chapter).trim();
-  if (text.length <= 5000) return text;
-  return `${text.slice(0, 2500).trim()}\n\n…\n\n${text.slice(-2000).trim()}`;
-}
-async function titleOpening(novelId, chapterId, passageId) {
+/* The opening of a chapter changed — written, sent again, or taken out.
+ * A name the helper gave is let go, so the notes' own reading names the
+ * chapter again from the chapter. No separate ask: that ask sat on the
+ * notes' connection and held their light yellow until a connection test,
+ * which is not a notes request, kicked it off the line. A name he typed
+ * stays, unless Super automatic is on. Nothing left in the chapter: the
+ * helper's name is simply cleared. */
+export function releaseOpening(chapterId, passageId = null) {
   const chapter = store.peek('chapter', chapterId);
-  if (!chapter || (chapter.nameBy === 'you' && !superOn(house()))) return '';
+  if (!chapter) return;
   const list = chapter.passages || [];
-  const i = list.findIndex((p) => p.id === passageId);
-  if (i < 0) return '';
-  if (list.slice(0, i).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim())) return '';
-  const novel = store.peek('novel', novelId);
-  const conn = connFor(house(), 'helper') || connFor(house(), 'writer');
-  const text = chapterForTitle(chapter);
-  if (!novel || !conn || !text) return '';
-  const premise = premiseOf(list[i]);
-  const asRead = chapterPrint(chapter);
-  const request = chapterTitleRequest({ novel, label: chapterLabel(novel, chapter, { withName: false }), text, before: earlierOf(novel, chapterId), premise });
-  const got = await ask(conn, { build: () => ({ system: 'You name chapters of a novel. A title is a few words, drawn from the chapter and from what came before. You never copy the premise, and you never write the chapter.', messages: [{ role: 'user', content: request }], maxTokens: 400 }), stream: true, worker: true });
-  if (!got || !got.ok) return '';
-  const obj = parseFirstObject(got.text || got.thinking, (o) => o && typeof o.name === 'string');
-  const name = tidyTitle(obj && obj.name, premise);
-  if (!name) return '';
-  const live = store.peek('chapter', chapterId);
-  if (!live || chapterPrint(live) !== asRead || name === (live.name || '') || (live.nameBy === 'you' && !superOn(house()))) return '';
-  store.change('chapter', chapterId, chapterSteps.setName(name, 'helper'), { now: true });
-  return name;
+  if (passageId) {
+    const i = list.findIndex((p) => p.id === passageId);
+    if (i < 0) return;
+    if (list.slice(0, i).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim())) return;
+  }
+  const words = list.some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
+  store.change('chapter', chapterId, (c) => {
+    if (c.nameBy === 'you' && !superOn(house())) return false;
+    if (!words) {
+      if (!c.name && c.nameBy !== 'helper' && !c.nameDue) return false;
+      c.name = '';
+      c.nameBy = '';
+      delete c.nameDue;
+      return true;
+    }
+    if (!c.name && !c.nameBy && c.nameDue) return false;
+    c.name = '';
+    c.nameBy = '';
+    c.nameDue = true;
+    return true;
+  }, { now: true });
 }
 
-/* The opening passage was taken out. A name he typed stays. Otherwise the
- * name follows what the chapter is now: gone, when nothing is left to name;
- * written again from what remains, when a later page is now the start. */
-export async function titleChapter(novelId, chapterId) {
-  const chapter = store.peek('chapter', chapterId);
-  if (!chapter || (chapter.nameBy === 'you' && !superOn(house()))) return '';
-  const list = chapter.passages || [];
-  const first = list.find((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
-  if (!first) {
-    if (!chapter.name) return '';
-    store.change('chapter', chapterId, chapterSteps.setName('', ''), { now: true });
-    return '';
-  }
-  const conn = connFor(house(), 'helper') || connFor(house(), 'writer');
-  await afterTheNotes(conn, TITLE_AFTER_MS ? 10000 : 0);
-  return titleOpening(novelId, chapterId, first.id);
-}
 
 /* A rewrite of a whole passage, with his note. */
 export async function rewrite({ novelId, chapterId, passageId, note = '', fromVersion = null, lift = 0 }) {
