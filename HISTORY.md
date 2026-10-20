@@ -1210,6 +1210,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **A few paragraphs** was asked as around 250 to 500 words, and 250 was read as a floor. It is as long as the beat needs now: near 100 words when it is a short one, and only toward 500 when it needs the room.
 
+## 2.12.53, Delete the opening, and the name follows
+
+**Taking out the passage at the start of a chapter** left the old name sitting there. The name now follows what the chapter is. Nothing left, and a name the app wrote is cleared, so the next page you write names the chapter. A later page still there becomes the start, and the name is written from it. A name you typed stays. Undo puts the old name back.
+
+
 
 
 

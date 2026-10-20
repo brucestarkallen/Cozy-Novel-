@@ -265,6 +265,38 @@ await test('the premise that opens a chapter names it, and editing that premise 
   await putAway(b);
 });
 
+await test('deleting the opening passage refreshes the chapter name, and a new page written after it is named — a name he typed stays', async () => {
+  const b = await makeBook([[]]);
+  await script([{ text: 'Mara struck a match in the dark.' }, { title: true, text: JSON.stringify({ name: 'A Match in the Dark' }) }]);
+  const wrote = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.' });
+  assert.equal(wrote.ok, true, wrote.error);
+  assert.equal(b.ch().name, 'A Match in the Dark');
+  await reset();
+  await script([{ text: 'The storm took the roof off the shed.' }]);
+  const later = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'The storm takes the roof.' });
+  assert.equal(later.ok, true, later.error);
+  const first = b.ch().passages[0].id;
+  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(first), { now: true });
+  await reset();
+  await script([{ title: true, text: JSON.stringify({ name: 'The Roof Comes Off' }) }]);
+  const named = await writer.titleChapter(b.novelId, b.ids[0]);
+  assert.equal(named, 'The Roof Comes Off');
+  assert.equal(b.ch().name, 'The Roof Comes Off', 'what is now the start of the chapter names it');
+  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(b.ch().passages[0].id), { now: true });
+  await writer.titleChapter(b.novelId, b.ids[0]);
+  assert.equal(b.ch().name, '', 'nothing left: the old name goes');
+  await reset();
+  await script([{ text: 'She found the letter under the door.' }, { title: true, text: JSON.stringify({ name: 'Under the Door' }) }]);
+  const again = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'A letter is under the door.' });
+  assert.equal(again.ok, true, again.error);
+  assert.equal(b.ch().name, 'Under the Door', 'the new page names the chapter');
+  store.change('chapter', b.ids[0], shape.chapterSteps.setName('My own name', 'you'), { now: true });
+  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(b.ch().passages[0].id), { now: true });
+  await writer.titleChapter(b.novelId, b.ids[0]);
+  assert.equal(b.ch().name, 'My own name', 'a name he typed is not cleared');
+  await putAway(b);
+});
+
 await test('Write sends his own words first, the book, and his request last — all above it as system', async () => {
   const b = await makeBook([['The lamp was cold.']]);
   await script([{ text: 'Mara struck a match.' }]);

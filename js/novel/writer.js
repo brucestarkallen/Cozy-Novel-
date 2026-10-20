@@ -17,7 +17,7 @@ import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, chapterPrint, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, chapterTitleRequest, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
 import { renameIn } from './names.js';
@@ -978,6 +978,7 @@ async function titleOpening(novelId, chapterId, passageId) {
   const text = chapterForTitle(chapter);
   if (!novel || !conn || !text) return '';
   const premise = premiseOf(list[i]);
+  const asRead = chapterPrint(chapter);
   const request = chapterTitleRequest({ novel, label: chapterLabel(novel, chapter, { withName: false }), text, before: earlierOf(novel, chapterId), premise });
   const got = await ask(conn, { build: () => ({ system: 'You name chapters of a novel. A title is a few words, drawn from the chapter and from what came before. You never copy the premise, and you never write the chapter.', messages: [{ role: 'user', content: request }], maxTokens: 400 }), stream: true });
   if (!got || !got.ok) return '';
@@ -985,9 +986,25 @@ async function titleOpening(novelId, chapterId, passageId) {
   const name = tidyTitle(obj && obj.name, premise);
   if (!name) return '';
   const live = store.peek('chapter', chapterId);
-  if (!live || name === (live.name || '') || (live.nameBy === 'you' && !superOn(house()))) return '';
+  if (!live || chapterPrint(live) !== asRead || name === (live.name || '') || (live.nameBy === 'you' && !superOn(house()))) return '';
   store.change('chapter', chapterId, chapterSteps.setName(name, 'helper'), { now: true });
   return name;
+}
+
+/* The opening passage was taken out. A name he typed stays. Otherwise the
+ * name follows what the chapter is now: gone, when nothing is left to name;
+ * written again from what remains, when a later page is now the start. */
+export async function titleChapter(novelId, chapterId) {
+  const chapter = store.peek('chapter', chapterId);
+  if (!chapter || (chapter.nameBy === 'you' && !superOn(house()))) return '';
+  const list = chapter.passages || [];
+  const first = list.find((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
+  if (!first) {
+    if (!chapter.name) return '';
+    store.change('chapter', chapterId, chapterSteps.setName('', ''), { now: true });
+    return '';
+  }
+  return titleOpening(novelId, chapterId, first.id);
 }
 
 /* A rewrite of a whole passage, with his note. */
