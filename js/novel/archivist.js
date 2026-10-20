@@ -1904,18 +1904,10 @@ const hasGone = (o) => Boolean(o && Array.isArray(o.gone) && o.gone.length);
 
 /* (a call let go on its leash: on its longest one, and how long it was waited — call.js `leashMs`, 2.12.41) */
 const leashKept = (r) => ({ ...(r.longest ? { longest: true } : {}), ...(r.leashMs ? { leashMs: r.leashMs } : {}) });
-/* the notes answer a form. A long think — the level on the writer — keeps their light yellow for the whole of it.
- * They ask at the lowest think, so the form comes back. His pages keep the level he set. */
-function notesConn(conn) {
-  const t = conn && conn.thinking;
-  if (!thinksOn(conn) || t === 'low' || t === 'off' || t === 'none' || t === false) return conn;
-  return { ...conn, thinking: 'low' };
-}
 export async function askJson(conn, system, request, { want, beforeAsk } = {}) {
-  const quick = notesConn(conn);
-  const room = helperRoom(quick);
+  const room = helperRoom(conn);
   if (beforeAsk) await beforeAsk();
-  const first = await ask(quick, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: room }), stream: true, worker: true, patient: true });
+  const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: room }), stream: true, worker: true, patient: true });
   if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed, ...leashKept(first) };
   /* an answer cut off counts only when its object closed: one cut inside it holds pieces, never the answer (Cozy Tavern's M685, M737) */
   let obj = !first.cut || closesWhole(first.text) ? parseFirstObject(first.text, want) : null;
@@ -1928,7 +1920,7 @@ export async function askJson(conn, system, request, { want, beforeAsk } = {}) {
   const cut = Boolean(first.cut);
   const more = cut ? Math.min(room * 2, Math.floor(contextOf(conn) * 0.6)) : room;
   if (beforeAsk) await beforeAsk();
-  const second = await ask(quick, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
+  const second = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
   if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed, ...leashKept(second) };
   obj = !second.cut || closesWhole(second.text) ? parseFirstObject(second.text, want) : null;
   if (!obj && !String(second.text || '').trim() && second.thinking && (!second.cut || closesWhole(second.thinking))) obj = parseLastObject(second.thinking, want);

@@ -6379,12 +6379,6 @@ await test('a helper’s call that hears nothing from its provider is let go on 
     assert.equal(part.ok, false);
     assert.equal(part.leashed, 'long');
     assert.equal((await requests()).length, 1);
-    await reset();
-    await script([{ text: '{"ok":true}' }]);
-    const named = await archivist.askJson({ ...CONN, thinking: 'high' }, 'Answer with JSON.', 'Go.');
-    assert.equal(named.ok, true, named.error);
-    const sent = (await requests())[0].body;
-    assert.equal(sent.reasoning_effort || (sent.reasoning || {}).effort, 'low', 'the notes do not think at the writer’s level');
     /* a page waits as long as its provider takes: he has Stop */
     await reset();
     await script([{ pause: 1.2, text: 'slow but sure' }]);

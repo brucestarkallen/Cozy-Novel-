@@ -1226,6 +1226,11 @@ A name the notes know is the word itself, in the room's colour, the way a keywor
 
 **The notes’ light stayed yellow for a long think.** The notes were using the same thinking level as the writer, so a page’s long think held the light the whole time. The notes now ask at the lowest think. The pages you write keep the level you set.
 
+## 2.12.57, The thinking you set is the thinking that is sent
+
+**2.12.56 lowered the notes’ thinking on its own.** That was wrong. Who does the notes, and how hard that connection thinks, is the setting you already chose. The notes use that again, unchanged.
+
+
 
 
 
