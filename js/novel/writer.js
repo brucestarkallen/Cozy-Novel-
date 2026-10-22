@@ -17,7 +17,7 @@ import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, premiseBehind, renameCount, renamesSince } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
 import { renameIn } from './names.js';
@@ -848,6 +848,10 @@ export function takeOf(passage) {
   const how = shown.how;
   if (how === 'rewrite' || how === 'selection') return { how, ask: shown.ask || {}, from: shown.from || shown.base || '' };
   if (how === 'play' && shown.ask && shown.ask.transcript) return { how: 'play', ask: shown.ask };
+  /* the premise the page on show was written from — after a Resend from an edited premise that one, never the first
+   * (2.12.63: Another take wrote from the old premise, and put it back as the page's) */
+  const behind = premiseBehind(passage, shown).version;
+  if (behind && behind.ask) return { how: 'write', ask: behind.ask };
   const first = (passage.versions || []).find((v) => v.ask && (v.how === 'write' || v.how === 'another' || v.how === 'play'));
   if (first && first.how === 'play' && first.ask.transcript) return { how: 'play', ask: first.ask };
   if (first) return { how: 'write', ask: first.ask };
@@ -898,8 +902,8 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
     build: { target: { chapterId, before: passageId }, request, moment } });
 }
 
-/* The page again, from a premise — the one it was written from, or one he has
- * changed (Edit, then Resend). A new version; the one on show stays an arrow back. */
+/* The page again from the premise in its box (Edit, then Resend) — a new version; the one on show stays an arrow back.
+ * Its premise as it stands, again, is Another take. */
 export async function resend({ novelId, chapterId, passageId, direction }) {
   const text = String(direction || '').trim();
   if (!text) return { ok: false, error: 'write the premise first' };
@@ -911,13 +915,21 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
   const chapter = book.chapters[chapterId];
   const p = chapter && chapter.passages.find((x) => x.id === passageId);
   if (!p) return { ok: false, error: 'that passage is not there any more' };
-  const first = (p.versions || []).find((v) => v && v.ask && (v.how === 'write' || v.how === 'another'));
-  if (!first) return { ok: false, error: 'these are your own words — use Rewrite to have them written another way' };
+  if (p.by === 'break') return { ok: false, error: 'a scene break is not written from a premise' };
+  if (p.by === 'you') return { ok: false, error: 'these are your own words — use Rewrite to have them written another way' };
+  /* as long as the page on show was asked to be — its premise's length, else any of its premise's; a page whose premise
+   * only a rewrite kept (2.12.63: the version written from it taken out, and Resend said "these are your own words",
+   * which they are not) is as long as the box is set to write now */
+  const from = premiseBehind(p).version || (p.versions || []).find((v) => v && v.ask && (v.how === 'write' || v.how === 'another'));
+  const length = (from && from.ask && from.ask.length) || (book.novel.prefs && book.novel.prefs.length) || 'scene';
+  /* a changed premise is a new start for the chapter it opens — the same one again names nothing anew (Another take) */
+  const changed = text !== premiseOf(p);
   const list = chapter.passages;
   const i = list.indexOf(p);
   const between = list.slice(i + 1).some(hasWords);
-  const length = first.ask.length || 'scene';
-  const moment = [text, momentOf(chapter, p)].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
+  /* what wakes a rule: the premise in the box and his words right before the page, as Write reads them for that
+   * place — never the premise it replaces (2.12.63: the old one still woke its rule) */
+  const moment = [text, hisWordsBefore(list, i - 1)].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
   const version = newVersion({ how: 'another', ask: { direction: text, length }, streaming: true });
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const empty = !list.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
@@ -926,7 +938,7 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
   const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
     build: { target: { chapterId, before: passageId }, request, moment } });
-  if (out && out.ok) releaseOpening(chapterId, passageId);
+  if (out && out.ok && changed) releaseOpening(chapterId, passageId);
   return out;
 }
 

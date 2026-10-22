@@ -10,7 +10,7 @@ import { learnKey } from './model/providers.js';
 import { h, $, icon, toast, hintToast, menu, closeMenu, closeAllSheets, afterBacks, onBack, dropOverlays, setText } from './ui/dom.js';
 import { enterFull, leaveFull, fullKind, holdFull } from './ui/full.js';
 import { initShelf, refresh as refreshShelf } from './ui/shelf.js';
-import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound, whenOpen } from './ui/desk.js';
+import { initDesk, openChapter, drawComposer, deskState, draftWaiting, draftNow, saveDeskForBranch, showFound, whenOpen, premiseUnsent } from './ui/desk.js';
 import { initPanes, openPanes, toggleLeft, showSide, closeLeft, closeRight, unsentWords, saveComposersForBranch, showTurn, showCard, showTimeline, notesLight } from './ui/panes.js';
 import { openSettings, redrawSettings, freshenPresets } from './ui/settings.js';
 import { openBook } from './ui/book.js';
@@ -487,7 +487,8 @@ function bannerRoom() {
  * an update landed mid-ask, and the row was left being asked by a page that was gone). */
 export function quietNow() {
   const typing = document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName) && document.activeElement.value;
-  const unsaved = document.querySelector('.editbox') || [...document.querySelectorAll('.rewriterow input')].some((i) => i.value.trim()) || unsentWords();
+  /* (and a page's premise box he has neither sent nor let go — kept in this window only, desk.js premiseUnsent) */
+  const unsaved = document.querySelector('.editbox') || [...document.querySelectorAll('.rewriterow input')].some((i) => i.value.trim()) || unsentWords() || premiseUnsent();
   const open = document.querySelector('.sheet.on');
   const working = writer.anyRunning() || anyTalking() || quickAny() || archivist.busyAny() || checkingAny() || store.hasPending() || draftWaiting();
   return !(working || unsaved || open || typing);

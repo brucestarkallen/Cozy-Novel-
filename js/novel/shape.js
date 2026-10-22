@@ -713,18 +713,46 @@ export function requestOf(passage, version = picked(passage)) {
 }
 /* THE PREMISE HE TYPED FOR A PASSAGE (his report, 2.12.30: "after the output my premise is gone — where can I see my
  * previous input?"): the words in the box under the page that it was written from, as he typed them — the version on
- * show's own request, else any version written from one (another take carries the same); '' when he pressed Continue
+ * show's own request, or the premise of the version it was written again from (premiseBehind), else any version
+ * written from one (another take carries the same); '' when he pressed Continue
  * and let the writer choose, and for his own words, a scene's prose or a scene break */
 export function premiseOf(passage) {
   if (!passage || passage.by === 'break') return '';
   const said = (ask) => String((ask && ask.direction) || '').trim();
   const r = requestOf(passage);
   if ((r.how === 'write' || r.how === 'another') && said(r.ask)) return said(r.ask);
+  /* the page on show written again (a rewrite, his partner's words): the premise of the version it was written again
+   * from — after a Resend from an edited premise that one, never the passage's first (2.12.63) */
+  const behind = premiseBehind(passage);
+  if (behind.version && said(behind.version.ask)) return said(behind.version.ask);
+  if (behind.kept) return behind.kept;
   const v = (passage.versions || []).find((x) => x && (x.how === 'write' || x.how === 'another') && said(x.ask));
   if (v) return said(v.ask);
   /* a rewrite carries the premise of the page it wrote again — the version it came from removed, the premise stays (2.12.35) */
   const r2 = (passage.versions || []).find((x) => x && x.ask && String(x.ask.premise || '').trim());
   return r2 ? String(r2.ask.premise).trim() : '';
+}
+/* THE VERSION THE PAGE ON SHOW WAS WRITTEN FROM HIS PREMISE (2.12.63): the version on show, and back through the
+ * versions it was made from — a rewrite, the words he selected written again, his partner's words, the checker's
+ * fixes — to the one written from a premise (Write, Another take, Resend), with its request; `kept`, the premise a
+ * rewrite on the way carried, the one nearest that version, for when it is gone. Never the passage's first premise
+ * when the page on show was written from another: Another take after a Resend from an edited premise wrote from the
+ * old one and put it back. A scene's prose has none. */
+export function premiseBehind(passage, version = picked(passage)) {
+  const versions = (passage && passage.versions) || [];
+  const seen = new Set();
+  let kept = '';
+  let v = version;
+  while (v && !seen.has(v.id)) {
+    seen.add(v.id);
+    if (v.how === 'write' || v.how === 'another') return { version: v, kept };
+    if (v.how === 'play') break;
+    const carried = String((v.ask && v.ask.premise) || '').trim();
+    if (carried) kept = carried;
+    const up = v.from || v.base;
+    v = up ? versions.find((x) => x.id === up) : null;
+  }
+  return { version: null, kept };
 }
 /* WHEN HE TYPED IT: the first version written from his premise (another take carries the same words, later) — 0 when
  * none of them is kept any more (a rewrite carries the premise on alone): never newer than anything */
@@ -853,8 +881,10 @@ export function hisWordsIn(passage) {
     return [t.length > HIS_WORDS_MAX ? '' : t, note].map((x) => x.trim()).filter(Boolean).join('\n');
   }
   const parts = [];
-  const first = versions.find((v) => v.ask && String(v.ask.direction || '').trim());
-  if (first) parts.push(first.ask.direction);
+  /* his premise for the page on show — after a Resend from an edited premise that one, never the passage's first
+   * (2.12.63: the old premise still woke its rules for the page written from the new one, and for the pages after) */
+  const premise = premiseOf(passage);
+  if (premise) parts.push(premise);
   if (note) parts.push(note);
   const scene = shown.how === 'play' && shown.ask ? shown : versions.find((v) => v.how === 'play' && v.ask);
   if (scene) parts.push(scene.ask.mine || movesIn(scene.ask.transcript, scene.ask.who));
