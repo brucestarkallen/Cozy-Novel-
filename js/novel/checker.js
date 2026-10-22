@@ -456,49 +456,62 @@ function checkerWaits(novelId) {
   const soonest = Math.min(...Object.values(rows).flat().map((r) => r.at));
   return { ms: Math.max(0, soonest - now), words: said.join(' ') };
 }
-/* a page or a sentence written again by itself that is waiting its time, or was let be (2.12.42) */
-function autoRewriteDue(novelId) {
+/* A PAGE OR A SENTENCE WRITTEN AGAIN BY ITSELF, WAITING ITS TIME OR LET BE (2.12.42), counted only as it stands now
+ * (2.12.63, the review of 2.12.42): waiting, only what the look would really ask once its wait is over — the switch on,
+ * the page still under his mark or the sentence still his to see, the count his writer's now (autoAfter, by the same
+ * liftOwed and spanAsks); let be, only where its suggestion still stands, with the button that asks for it.
+ * {lifts, spans, at (the soonest), gaveLift, gaveSpan} */
+function autoRewriteRows(novelId) {
+  const house = store.peek('house', 'house') || {};
+  const a = autoOf(house);
+  const judge = judgeOf(house);
+  const stands = standsNow(house);
+  const print = triesPrint(connFor(house, 'writer'));
   const now = store.phoneNow();
-  for (const c of chaptersOf(novelId)) for (const p of c.passages || []) {
-    const v = p.by === 'break' ? null : picked(p);
-    if (!v || !v.tries) continue;
-    const lt = v.tries.lift;
-    if (lt && lt.fp === sigOf(v) && (Number(lt.n) || 0) < 2 && Number(lt.next) > now) return true;
-    const st = v.tries.span;
-    if (st && st.fp === sigOf(v) && (Number(st.n) || 0) < 2 && Number(st.next) > now) return true;
-  }
-  return false;
-}
-function autoRewriteSaid(novelId) {
-  const now = store.phoneNow();
-  const busy = busyNow(novelId);
-  let lifts = 0;
-  let spans = 0;
-  let at = Infinity;
-  let gaveLift = 0;
-  let gaveSpan = 0;
+  const out = { lifts: 0, spans: 0, at: Infinity, gaveLift: 0, gaveSpan: 0 };
+  const waits = (t) => Boolean(t && (Number(t.n) || 0) < 2 && Number(t.next) > now);
   for (const c of chaptersOf(novelId)) {
     for (const p of c.passages || []) {
       const v = p.by === 'break' ? null : picked(p);
-      if (!v) continue;
-      const e = entryFor(c, p);
-      if (v.liftFailed && e && (e.items || []).some((x) => x.kind === 'grade')) gaveLift++;
-      if (e && (v.spanFailed || []).some((f) => (e.items || []).some((x) => x.find === f && x.replace === null))) gaveSpan++;
-      const lt = autoHeld(v, 'lift', sigOf(v));
-      if (lt && (Number(lt.n) || 0) < 2 && Number(lt.next) > now) { lifts++; at = Math.min(at, Number(lt.next)); }
-      const st = autoHeld(v, 'span', sigOf(v), (v.tries && v.tries.span && v.tries.span.find) || '');
-      if (st && (Number(st.n) || 0) < 2 && Number(st.next) > now && e && (e.items || []).some((x) => x.find === st.find && x.replace === null)) { spans++; at = Math.min(at, Number(st.next)); }
+      const e = v ? entryFor(c, p) : null;
+      if (!e) continue;
+      const card = (e.items || []).find((x) => x.kind === 'grade');
+      /* (said only where Suggestions shows its button: the grade still under his mark, with what it needs — ui/checks.js) */
+      if (v.liftFailed && card && card.lift && stands(card)) out.gaveLift++;
+      if ((v.spanFailed || []).some((f) => (e.items || []).some((x) => x.find === f && x.replace === null && x.kind !== 'grade' && stands(x)))) out.gaveSpan++;
+      if (v.streaming || v.cut) continue;
+      /* (a page under his mark asked by itself holds its sentences, as the look does) */
+      if (liftOwed(a, judge, p, v, e) && !v.liftFailed && !liftTried.has(`${v.id}|${sigOf(v)}`)) {
+        const lt = autoHeld(v, 'lift', sigOf(v), '', print);
+        if (waits(lt)) { out.lifts++; out.at = Math.min(out.at, Number(lt.next)); }
+        continue;
+      }
+      if (a.fix === null || howOf(v) === 'imported' || v.fixesBack === sigOf(v) || spansOf(p) >= MAX_SPANS) continue;
+      const st = autoHeld(v, 'span', sigOf(v), '', print);
+      if (waits(st) && (e.items || []).some((x) => x.find === st.find && spanAsks(stands, v, x))) { out.spans++; out.at = Math.min(out.at, Number(st.next)); }
     }
   }
+  return out;
+}
+function autoRewriteDue(novelId) {
+  const r = autoRewriteRows(novelId);
+  return r.lifts + r.spans > 0;
+}
+function autoRewriteSaid(novelId) {
+  const now = store.phoneNow();
+  const { lifts, spans, at, gaveLift, gaveSpan } = autoRewriteRows(novelId);
+  const judge = judgeOf(store.peek('house', 'house') || {});
   const bits = [];
   if (lifts + spans > 0 && at < Infinity) {
-    const when = archivist.inWhile(Math.max(0, at - now), busy);
-    if (lifts && !spans) bits.push(lifts === 1 ? `A page written again by itself is asked again ${when} — its model was too slow to answer for it.` : `${plural(lifts, 'page')} written again by itself are asked again, the first ${when} — its model was too slow to answer for them.`);
-    else if (spans && !lifts) bits.push(spans === 1 ? `A sentence written again by itself is asked again ${when} — its model was too slow to answer for it.` : `${plural(spans, 'sentence')} written again by itself are asked again, the first ${when} — its model was too slow to answer for them.`);
+    const when = archivist.inWhile(Math.max(0, at - now), busyNow(novelId));
+    if (lifts && !spans) bits.push(lifts === 1 ? `A page written again by itself is asked again ${when} — its model was too slow to answer for it.` : `${plural(lifts, 'page')} written again by themselves are asked again, the first ${when} — its model was too slow to answer for them.`);
+    else if (spans && !lifts) bits.push(spans === 1 ? `A sentence written again by itself is asked again ${when} — its model was too slow to answer for it.` : `${plural(spans, 'sentence')} written again by themselves are asked again, the first ${when} — its model was too slow to answer for them.`);
     else bits.push(`What is written again by itself is asked again, the first ${when} — its model was too slow to answer for it.`);
   }
-  if (gaveLift) bits.push(gaveLift === 1 ? 'A page written again by itself did not come — Write it again asks for it.' : `${plural(gaveLift, 'page')} written again by itself did not come — Write it again asks for them.`);
-  if (gaveSpan) bits.push(gaveSpan === 1 ? 'A sentence written again by itself did not come — Write it again asks for it.' : `${plural(gaveSpan, 'sentence')} written again by itself did not come — Write it again asks for them.`);
+  /* (the button named as Suggestions names it: ui/checks.js) */
+  const lift = `Write it again toward ${judge ? judge.target : ''}`.trim();
+  if (gaveLift) bits.push(gaveLift === 1 ? `A page written again by itself did not come — ${lift} asks for it.` : `${plural(gaveLift, 'page')} written again by themselves did not come — ${lift} asks for them.`);
+  if (gaveSpan) bits.push(gaveSpan === 1 ? 'A sentence written again by itself did not come — Write it again asks for it.' : `${plural(gaveSpan, 'sentence')} written again by themselves did not come — Write it again asks for them.`);
   return bits.join(' ');
 }
 
@@ -1234,11 +1247,14 @@ function triedDone(novelId, chapterId, a, what) {
  * on the longest leash or when it made no progress, a refusal counted; let be at the second — the lift or the sentence
  * given up on that version. Kept on the version it was asked of, for its words as they were (`v.tries.lift`,
  * `v.tries.span`: {fp, n, next, find, refused, conn}), each count worked out once and laid only where the copy still
- * holds what it counted from. */
-function autoHeld(v, what, fp, find) {
+ * holds what it counted from. (`print`: the writer's connection asking now, as he chose it — a count kept for a writer he
+ * has left is not his new one's, as the checker's own tries are read: triedOn. 2.12.63, the review of 2.12.42: its
+ * `conn` was kept and never read, so a count from a writer he left let the page be at his new one's first stall) */
+function autoHeld(v, what, fp, find, print = '') {
   const t = v && v.tries && v.tries[what];
   if (!t || t.fp !== fp) return null;
   if (what === 'span' && find && t.find !== find) return null;
+  if (t.conn && print && t.conn !== print) return null;
   return t;
 }
 function autoCount(chapterId, a, what, count, next, extra = {}) {
@@ -1246,7 +1262,7 @@ function autoCount(chapterId, a, what, count, next, extra = {}) {
   const p = c && (c.passages || []).find((x) => x.id === a.pid);
   const v = p && (p.versions || []).find((x) => x.id === a.vid);
   if (!v || sigOf(v) !== a.fp) return 0;
-  const was = autoHeld(v, what, a.fp, a.find);
+  const was = autoHeld(v, what, a.fp, a.find, extra.conn || '');
   const n = ((was && Number(was.n)) || 0) + count;
   const row = { fp: a.fp, n, ...(next ? { next } : {}), ...(a.find ? { find: a.find } : {}), ...((was && was.refused) || extra.refused ? { refused: true } : {}), ...(extra.conn ? { conn: extra.conn } : {}) };
   const found = JSON.stringify((v.tries && v.tries[what]) || null);
@@ -1274,7 +1290,7 @@ function autoDone(chapterId, a, what) {
   }, { checkpoint: true });
 }
 /* (waiting its time after a stall: not asked before then) */
-const autoWaitsOn = (v, what, fp, find) => { const t = autoHeld(v, what, fp, find); return Boolean(t && (Number(t.n) || 0) < 2 && Number(t.next) > store.phoneNow()); };
+const autoWaitsOn = (v, what, fp, find, print = '') => { const t = autoHeld(v, what, fp, find, print); return Boolean(t && (Number(t.n) || 0) < 2 && Number(t.next) > store.phoneNow()); };
 /* a chapter read whole, its tries kept on the chapter for its words as they were asked (`wholeTry` {sig, n, next}) */
 const wholeTryOf = (c, sig) => (c && c.wholeTry && c.wholeTry.sig === sig ? c.wholeTry : null);
 function wholeCount(chapterId, sig, count, next) {
@@ -3129,6 +3145,21 @@ const lifting = new Map();
  * words are in (2.12.35 — a look while it was written put the fixes it was waiting with into the old words) */
 const writingAgain = new Map();
 const checkOf = (c, p, v) => { const e = c.checks && c.checks[p.id] && c.checks[p.id][v.id]; return e && e.sig === sigOf(v) ? e : null; };
+/* WHAT IS WRITTEN AGAIN BY ITSELF, ONE ANSWER FOR THE LOOK THAT ASKS IT AND THE BUBBLE THAT SAYS IT (2.12.63, the review
+ * of 2.12.42: the bubble counted a page let be after his mark was lowered, the judge turned off or the word taken off
+ * his list, and a waiting page with Write it again by itself switched off — "did not come", "asked again in ten
+ * minutes", where nothing would be asked). A passage under his mark that Write it again by itself writes again toward
+ * it — its grade and the grade's card, or null: */
+function liftOwed(a, judge, p, v, e) {
+  if (!a || a.lift === null || !judge || !e) return null;
+  const g = e.grade;
+  const card = (e.items || []).find((x) => x.kind === 'grade');
+  const under = g && g.of && g.overall < judge.target && card;
+  return under && !v.chosen && since(v, a.lift) && liftsOf(p).length < MAX_LIFTS && !onlyCanon(g) && (card.lift || g.lift) ? { g, card } : null;
+}
+/* a sentence the fixes by themselves write again: one no fix mended, still his to see as his settings stand (`stands`),
+ * never a paragraph's marks not asked for, never one given up on that version */
+const spanAsks = (stands, v, x) => x.replace === null && x.kind !== 'grade' && Boolean(x.find) && stands(x) && !(x.marks && !x.asked) && !(v.spanFailed || []).includes(x.find);
 
 /* After each look at the book, passage by passage, one rule so the two never
  * cross:
@@ -3157,11 +3188,13 @@ function autoAfter(novelId) {
   if (waiting && waiting.until > Date.now()) { schedule(novelId, waiting.until - Date.now()); return; }
   const judge = judgeOf(house);
   const stands = standsNow(house);
+  /* (what was counted is the writer's he has now: autoHeld) */
+  const writerPrint = triesPrint(connFor(house, 'writer'));
   let next = null;
   /* the soonest a page or a sentence already asked is waited before it is asked again */
   let soon = null;
   const noteWait = (v, what, find) => {
-    const t = autoHeld(v, what, sigOf(v), find);
+    const t = autoHeld(v, what, sigOf(v), find, writerPrint);
     if (!t || (Number(t.n) || 0) >= 2 || !(Number(t.next) > store.phoneNow())) return;
     const ms = Number(t.next) - store.phoneNow();
     if (soon === null || ms < soon) soon = ms;
@@ -3202,13 +3235,14 @@ function autoAfter(novelId) {
             if (!e) continue;
           }
         }
-        const g = e.grade;
-        const card = (e.items || []).find((x) => x.kind === 'grade');
-        const under = g && g.of && g.overall < judge.target && card;
-        if (under && !v.chosen && since(v, a.lift) && liftsOf(p).length < MAX_LIFTS && !v.liftFailed && !onlyCanon(g) && (card.lift || g.lift)) {
+        const owed = liftOwed(a, judge, p, v, e);
+        /* (tried already for these words — written, or given way to his page — stops only the lift: its fixes and its
+         * sentences go on as for any page. 2.12.63, the review of 2.12.42: moved out of the lift's own test, it let the
+         * whole version be) */
+        if (owed && !liftTried.has(`${v.id}|${sigOf(v)}`) && !v.liftFailed) {
+          const { g, card } = owed;
           /* (waited out after a stall: not asked before then — the count is on the version, 2.12.42) */
-          if (autoWaitsOn(v, 'lift', sigOf(v))) { noteWait(v, 'lift'); continue; }
-          if (liftTried.has(`${v.id}|${sigOf(v)}`)) continue;
+          if (autoWaitsOn(v, 'lift', sigOf(v), '', writerPrint)) { noteWait(v, 'lift'); continue; }
           if (!next) next = { chapterId: c.id, passageId: p.id, v, note: card.lift || g.lift, lift: liftsOf(p).length + 1 };
           /* its fixes wait for the passage written again */
           continue;
@@ -3226,11 +3260,11 @@ function autoAfter(novelId) {
           e = v ? checkOf(now, np, v) : null;
           if (!e) continue;
         }
-        const waitingSpan = autoHeld(v, 'span', sigOf(v));
+        const waitingSpan = autoHeld(v, 'span', sigOf(v), '', writerPrint);
         const spanHeld = Boolean(waitingSpan && (Number(waitingSpan.n) || 0) < 2 && Number(waitingSpan.next) > store.phoneNow());
         /* one sentence's wait is the version's: another sentence is not asked over it, or its count would be lost */
         if (spanHeld) noteWait(v, 'span', waitingSpan.find);
-        const span = spanHeld ? null : (e.items || []).find((x) => x.replace === null && x.kind !== 'grade' && x.find && stands(x) && !(x.marks && !x.asked) && !spanTried.has(`${v.id}|${hashText(String(v.text || ''))}|${x.find}`) && !(v.spanFailed || []).includes(x.find) && !autoWaitsOn(v, 'span', sigOf(v), x.find));
+        const span = spanHeld ? null : (e.items || []).find((x) => spanAsks(stands, v, x) && !spanTried.has(`${v.id}|${hashText(String(v.text || ''))}|${x.find}`) && !autoWaitsOn(v, 'span', sigOf(v), x.find, writerPrint));
         const cur = ((store.peek('chapter', c.id) || c).passages || []).find((x) => x.id === p.id) || p;
         if (span && !next && spansOf(cur) < MAX_SPANS) next = { span: true, chapterId: c.id, passageId: p.id, v, item: span };
       }
