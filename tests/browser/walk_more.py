@@ -160,7 +160,18 @@ async def scenario_middle(b):
         await pg.click('#bookTitle') if await pg.locator('#chaptersPane.open').count() == 0 else None
         await pg.wait_for_timeout(300)
         chs = await pg.text_content('#chaptersBody')
-        check('brought back, it is at the end of its book, live on the open page', 'Chapter Two' in chs and 'Third' in chs, chs[:300])
+        # (2.12.63 — changed with a comment why: a chapter made by Start a new chapter from here is named from the page
+        # that opens it, so the list shows its name where it showed its first words, "Third…", while it had none. The
+        # chapter brought back is still the one that holds "Third", second in its book, and the list shows it by name.)
+        back = await pg.evaluate("""async () => {
+          const nid = location.hash.split('/')[2];
+          const n = (await (await fetch(location.origin + '/api/store/novel/' + nid)).json()).data;
+          const c = (await (await fetch(location.origin + '/api/store/chapter/' + n.order[1])).json()).data;
+          const shape = await import('/js/novel/shape.js');
+          const v = shape.picked(c.passages[0]);
+          return { count: n.order.length, name: c.name || '', opens: v.text };
+        }""")
+        check('brought back, it is at the end of its book, live on the open page', back['count'] == 2 and back['opens'].startswith('Third') and 'Chapter Two' in chs and (back['name'] or back['opens'][:20]) in chs, (back, chs[:300]))
     errs = [l for l in logs if l.startswith('PAGEERROR')]
     check('no page errors (middle)', not errs, errs[:5])
     await pg.close()
