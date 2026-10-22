@@ -273,7 +273,10 @@ export function notesText(novel, { forHelper = false, fit = 0, focus = '', only 
   /* (a name found as the book writes a name: one word of it only with its capital — 2.12.41, the review: "she will go
    * to the market, by grace of the tide" had Will Turner's and Grace Hollow's cards ride whole, and another left out) */
   const folded = focus ? foldedText(focus, { cased: true }) : null;
-  const whole = (kind, c) => Boolean(c.updated && c.updated.by === 'you') || Boolean(folded && [c.name, ...(c.aka || [])].some((nm) => nm && nameInText(folded, nm, { words: kind === 'people' })));
+  /* (and, for the helper's own reading, a thread still open: what it says is where the story stands, which a reading moves
+   * on, and its name is never in the words — shown by its first line, the reading wrote its new state and the rest of
+   * the old one was kept after it, "Tom gave the key to Ana… Tom still holds the key". 2.12.63) */
+  const whole = (kind, c) => Boolean(c.updated && c.updated.by === 'you') || (forHelper && kind === 'threads' && c.open !== false) || Boolean(folded && [c.name, ...(c.aka || [])].some((nm) => nm && nameInText(folded, nm, { words: kind === 'people' })));
   /* which cards rode short (shortIds, a Set to fill): one of them is never written whole from its first line */
   /* (a Map is told how each rode: 1 its first line, 2 its name, 3 left out) */
   const mark = (level) => { if (!shortIds) return; for (const k of NOTE_KINDS) for (const c of n[k] || []) { const lv = level(k, c); if (lv) { if (shortIds instanceof Map) shortIds.set(c.id, lv); else shortIds.add(c.id); } } };

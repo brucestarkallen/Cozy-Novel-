@@ -7,6 +7,7 @@ Each chat request takes the next behaviour (or a default by its kind):
   {"text": "...", "finish": "stop"|"length"|"content_filter", "delay": 0.0, "chunk": 7, "think": "...",
    "usage": {"prompt_tokens": n, "completion_tokens": n}}   (usage: sent at the end, as OpenAI does)
   {"status": 429, "message": "...", "retry_after": "120"}   refused before anything (with how long to wait, when given)
+  {"most": n, "message": "...", "text": "..."}   a reply cap: every ask for more than n tokens refused (400) in those words, the first within it answered
   {"hang_after": "words"}                    those words, then silence until the caller goes
   {"midstream_error": "words", "message": "..."}  words, then an error in the stream
   {"abrupt": "words"}                        words, then the line closes with no finish
@@ -107,7 +108,13 @@ class H(BaseHTTPRequestHandler):
             # the Timeline read for itself (2.12.37): an honest reading with no turns, unless the test queued an answer for it ({"turns": true})
             turns = "Read these passages for the Timeline alone" in last_user
             title = "Give it a chapter title" in last_user
-            if QUEUE and not (turns and not QUEUE[0].get("turns")) and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole) and not (marks and not QUEUE[0].get("marks")) and not (QUEUE[0].get("marks") and not marks) and not (proof and not QUEUE[0].get("proof")) and not (QUEUE[0].get("proof") and not proof) and not (title and not QUEUE[0].get("title")) and not (QUEUE[0].get("title") and not title):
+            # a provider that gives at most so many tokens in one reply ({"most": n, "message": "…"}): it turns away every ask
+            # for more, in its own words, and answers the first that asks for no more (2.12.63)
+            asked_most = body.get("max_tokens") or body.get("max_completion_tokens") or 0
+            capped = bool(QUEUE) and isinstance(QUEUE[0].get("most"), int) and isinstance(asked_most, int) and asked_most > QUEUE[0]["most"]
+            if capped:
+                beh = {"status": 400, "message": QUEUE[0].get("message", "max_tokens is too large")}
+            elif QUEUE and not (turns and not QUEUE[0].get("turns")) and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole) and not (marks and not QUEUE[0].get("marks")) and not (QUEUE[0].get("marks") and not marks) and not (proof and not QUEUE[0].get("proof")) and not (QUEUE[0].get("proof") and not proof) and not (title and not QUEUE[0].get("title")) and not (QUEUE[0].get("title") and not title):
                 beh = QUEUE.pop(0)
             elif turns:
                 sources = re.findall(r"^(Chapter [^\n]+?, passage \d+):$", last_user, re.M)

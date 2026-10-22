@@ -8982,6 +8982,75 @@ await test('the reply room a reading is given grows with the words it answers fo
   await putAway(t);
 });
 
+await test('a reading’s grown room never passes the longest reply he set, and one turned away in words the app cannot read is asked again at the floor — never a page set aside that the floor would read (2.12.63)', async () => {
+  const readAsks = (all) => all.filter((x) => x.body.messages.map((m) => String(m.content)).join('\n').includes('Update the notes'));
+  const stage = (b) => store.change('chapter', b.ids[0], (c) => { for (const p of c.passages) { const v = shape.picked(p); if (v) { v.continuity = { events: [], complete: true }; v.codex = { facts: [], complete: true }; } } });
+  const long = Array.from({ length: 600 }, () => 'The hall went dark and the lamps were lit again before the storm arrived.').join(' ');
+  /* his own longest reply, 8,192, his provider's own most: never asked past it */
+  const b = await makeBook([['The lamps burned.']], { manual: true });
+  markAllSeen(b);
+  stage(b);
+  store.change('chapter', b.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', long, { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await setHouse({ context: 500000, maxTokens: 8192 });
+  await script(Array.from({ length: 6 }, () => ({ text: '{"people": []}' })));
+  await archivist.run(b.novelId);
+  const mine = readAsks(await requests());
+  assert.ok(mine.length >= 1, 'the reading was asked');
+  assert.deepEqual(mine.map((x) => Number(x.body.max_tokens)), [8192], 'his own longest reply, as he set it');
+  assert.equal(archivist.pendingWork(b.novelId), false, 'read');
+  await setHouse();
+  await putAway(b);
+  await reset();
+  /* none set, and a provider that turns the grown room away in words that name no number */
+  const c = await makeBook([['The lamps burned.']], { manual: true });
+  markAllSeen(c);
+  stage(c);
+  store.change('chapter', c.ids[0], shape.chapterSteps.addPassage(shape.newPassage('ai', long, { how: 'write', ask: { direction: '', length: 'scene' } })), { now: true });
+  await setHouse({ context: 500000 });
+  await script([{ most: 8192, message: 'max_tokens is out of bounds for this model', text: '{"people": []}' }, ...Array.from({ length: 6 }, () => ({ text: '{"people": []}' }))]);
+  await archivist.run(c.novelId);
+  const asks = readAsks(await requests()).map((x) => Number(x.body.max_tokens));
+  const floor = 6000;
+  assert.ok(asks.length >= 2 && asks[0] > floor, `grown first: ${asks}`);
+  assert.equal(asks[asks.length - 1], floor, `then the floor: ${asks}`);
+  assert.equal(archivist.pendingWork(c.novelId), false, 'the page read, never set aside');
+  await setHouse();
+  await putAway(c);
+  /* and the wordings it can read are learned, as Claude's always were */
+  assert.equal(providers.replyLimitFrom('Invalid max_tokens value, the valid range of max_tokens is [1, 8192]'), 8192);
+  assert.equal(providers.replyLimitFrom('max_tokens is too large: 20000. This model supports at most 8192 completion tokens, whereas you provided 20000.'), 8192);
+  assert.ok(providers.REPLY_TOO_LONG.test('Invalid max_tokens value, the valid range of max_tokens is [1, 8192]'));
+});
+
+await test('a thread still open rides whole for the helper’s reading however big the notes, so its new state is never written beside the old one (2.12.63)', async () => {
+  const filler = Array.from({ length: 30 }, (_, i) => `Fact ${i} about this one, long and particular, kept for good.`).join(' ');
+  const people = Array.from({ length: 100 }, (_, i) => ({ id: `pe-${i}`, name: `Card${i}`, aka: [], about: `Card${i} is a person. ${filler}`, now: '' }));
+  const thread = { id: 'th-key', name: 'Whether Mara gets the key back', about: 'Tom stole the iron key from Mara at the inn. Tom still holds the key, hidden in his boot.', open: true };
+  const b = await makeBook([['Tom gave the iron key to Ana on the quay. Ana kept it in her coat.']], { manual: true });
+  store.change('novel', b.novelId, shape.novelSteps.setNotes({ people, places: [], lore: [], threads: [thread] }), { now: true });
+  await setHouse({ context: 500000 });
+  await script([{ text: JSON.stringify({ threads: [{ name: 'Whether Mara gets the key back', about: 'Tom gave the iron key to Ana on the quay; Ana keeps it in her coat.', open: true }] }) }, ...Array.from({ length: 4 }, () => ({ text: '{"people": []}' }))]);
+  await archivist.run(b.novelId);
+  const ask = (await requests()).map((x) => x.body.messages.map((m) => String(m.content)).join('\n')).find((m) => m.includes('Update the notes'));
+  assert.ok(ask, 'the reading was asked');
+  assert.ok(ask.includes('shown by their first line'), 'the rest folded');
+  assert.ok(ask.includes('Tom still holds the key, hidden in his boot.'), 'the open thread whole');
+  const now = b.novel().notes.threads.find((t) => t.id === 'th-key');
+  assert.equal(now.about, 'Tom gave the iron key to Ana on the quay; Ana keeps it in her coat.', 'its new state, never the old one after it');
+  await setHouse();
+  await putAway(b);
+});
+
+await test('a call holding half of an emoji cut in two goes out with the mark for a lost letter, never stopped before it leaves the phone (2.12.63)', async () => {
+  await reset();
+  const body = { model: 'scripted', stream: false, messages: [{ role: 'user', content: 'Before the cut \ud83d after it.' }] };
+  const res = await realFetch(`${BASE}/api/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: `${PROVIDER}/v1/chat/completions`, headers: { Authorization: 'Bearer test-key' }, body, stream: false, timeout: 30 }) });
+  const got = await res.json();
+  assert.ok(!got.error, `the call went out: ${JSON.stringify(got).slice(0, 200)}`);
+  const sent = (await requests()).map((x) => String(x.body.messages.at(-1).content));
+  assert.deepEqual(sent, ['Before the cut � after it.'], 'it reached the model, the lone half a lost-letter mark');
+});
+
 await test('a scene is written into the book only as far as the narrator has told it — his move it has not answered stays in the scene, never written in as done', async () => {
   const b = await makeBook([['The lamp was lit.']], { manual: true });
   const id = await talk.newPlay({ novelId: b.novelId, chapterId: b.ids[0], who: 'Mara' });

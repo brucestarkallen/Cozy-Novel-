@@ -1858,20 +1858,26 @@ function helperRoom(conn) {
  * still holds the house's law: never lower than the floor his connection allows, never more than
  * two fifths of its window, and never past what its model holds beside the ask as it is sent (with
  * the reading's own 900 of safety still held from it). */
+/* (and never past the longest reply he set on the connection, where he set one: the room grows only on a connection
+ * left to its provider's own length. 2.12.63 — through 2.12.62 a reading on a connection he had set to 8,192, its
+ * provider's own most, asked for 8,797, was turned away, and the page was set aside) */
 function readingReplyOf(conn, words, askTokens) {
   const base = thinksOn(conn) ? Math.max(helperRoom(conn), thinkingFloor(conn)) : helperRoom(conn);
+  const set = Number.isFinite(conn.maxTokens) && conn.maxTokens > 0 ? Math.floor(conn.maxTokens) : 0;
   const grown = base + Math.ceil(Math.max(0, Math.floor(words)) * 0.5);
   const spare = Math.floor(contextOf(conn)) - 900 - Math.max(0, Math.floor(askTokens));
-  return Math.max(base, Math.min(grown, Math.floor(contextOf(conn) * 0.4), Math.max(base, spare)));
+  return Math.max(base, Math.min(grown, set ? Math.max(base, set) : Infinity, Math.floor(contextOf(conn) * 0.4), Math.max(base, spare)));
 }
 
 /* how much of the helper's model the notes may take (Cozy Tavern's M664):
  * past this, the cards the words in hand do not name ride by their first line.
  * A BIG WINDOW DOES NOT MAKE A READING BETTER (2.12.60): a half-a-million-token
- * model rode the whole notes on every ask — the reading of each page, every
- * check of the summary, What it's about — and every ask was slow to chew where
+ * model rode the whole notes on every ask — the reading of each page, the
+ * checker's looks, What it's about — and every ask was slow to chew where
  * its work was seconds. Past this room the notes fold as a small helper's always
- * have: the cards its words name whole, the rest by their first line. Cozy
+ * have: the cards its words name whole (and, for the reading, every thread still
+ * open — 2.12.63), the rest by their first line, past that by their names, and
+ * past that the least of them left out, said so. Cozy
  * Tavern caps its whole ledger the same way (engine/whole.js ALL_KNOWLEDGE_ROOM),
  * whatever its workers hold. The notes' check still holds the whole notes
  * against the book (auditNotes asks for its own room — nothing here reaches it). */
@@ -1938,7 +1944,17 @@ export async function askJson(conn, system, request, { want, room = 0, beforeAsk
    * never past three fifths of the window, the share a cut answer's own second ask was always given */
   const answer = room > helperRoom(conn) ? Math.max(helperRoom(conn), Math.min(Math.floor(room), Math.floor(contextOf(conn) * 0.6))) : helperRoom(conn);
   if (beforeAsk) await beforeAsk();
-  const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: answer }), stream: true, worker: true, patient: true });
+  let first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: answer }), stream: true, worker: true, patient: true });
+  /* A ROOM GROWN PAST THE FLOOR, TURNED AWAY (2.12.63): a provider that gives fewer tokens in one reply than the grown room
+   * refuses the ask in words the app cannot always read for its number (call.js learns it only where it can), and the page
+   * was then set aside though the floor would have read it. Turned away so — refused outright, never a stall or a fault
+   * that passes — it is asked once more at the floor, as it was asked through 2.12.61. */
+  let asked = answer;
+  if (!first.ok && answer > helperRoom(conn) && !first.leashed && first.permanent && Number(first.status) >= 400 && Number(first.status) < 500 && ![401, 403, 404].includes(Number(first.status))) {
+    asked = helperRoom(conn);
+    if (beforeAsk) await beforeAsk();
+    first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: asked }), stream: true, worker: true, patient: true });
+  }
   if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed, ...leashKept(first) };
   /* an answer cut off counts only when its object closed: one cut inside it holds pieces, never the answer (Cozy Tavern's M685, M737) */
   let obj = !first.cut || closesWhole(first.text) ? parseFirstObject(first.text, want) : null;
@@ -1949,7 +1965,7 @@ export async function askJson(conn, system, request, { want, room = 0, beforeAsk
   if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed, ...leashKept(first) };
   /* once more, told what went wrong — given more room when it ran out of it; never more than that */
   const cut = Boolean(first.cut);
-  const more = cut ? Math.min(answer * 2, Math.floor(contextOf(conn) * 0.6)) : answer;
+  const more = cut ? Math.min(asked * 2, Math.floor(contextOf(conn) * 0.6)) : asked;
   if (beforeAsk) await beforeAsk();
   const second = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
   if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed, ...leashKept(second) };
@@ -2869,7 +2885,8 @@ async function readChanges(novelId, conn) {
     /* the book already read past this chapter (never while the whole book is
      * read again from the start): this part is read out of turn */
     const laterRead = Boolean(at) && (novel.order || []).slice(at).some((id) => Object.keys(((novel.memory || {}).seen || {})[id] || {}).length > 0);
-    const beforeTail = before.length > beforeChars ? (beforeChars > 200 ? '[…]\n' + before.slice(-beforeChars) : '') : before;
+    /* (cut at a word, as every other tail is: a cut through an emoji's pair of halves left one half alone — 2.12.63) */
+    const beforeTail = before.length > beforeChars ? (beforeChars > 200 ? '[…]\n' + before.slice(-beforeChars).replace(/^\S*\s+/, '') : '') : before;
     /* the book's newest passage is read on its own, so its version's notes
      * are its own: another take of it can take them back exactly */
     const newest = changes.length && !goesOn && at === (novel.order || []).length ? changes[changes.length - 1].pid : '';

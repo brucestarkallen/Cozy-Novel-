@@ -300,7 +300,7 @@ export const PREFILL_REFUSAL = /assistant message prefill|must end with a user m
 export const CONTEXT_REFUSAL = /context[_ ]length|context window|context size|maximum context|too (?:long|many tokens)|prompt is too long|input (?:is )?too long|exceeds? (?:the )?(?:model'?s? )?(?:maximum|max|context|available context)|exceeds? max(?:imum)? length|reduce the length|too large for model|token limit|maximum prompt length|maximum number of tokens/i;
 /* the reply's own length, too long for the model: "max_tokens … is too
  * large", "maximum allowed number of output tokens" */
-export const REPLY_TOO_LONG = /(?:max_tokens|max_completion_tokens|max_new_tokens|max_output_tokens|output tokens|completion tokens)[^.]{0,80}(?:too large|too long|exceeds?|greater than|maximum|at most|must be (?:less|<=?)|allowed)|(?:maximum|max)(?:imum)? (?:allowed )?(?:number of )?output tokens/i;
+export const REPLY_TOO_LONG = /(?:max_tokens|max_completion_tokens|max_new_tokens|max_output_tokens|output tokens|completion tokens)[^.]{0,80}(?:too large|too long|exceeds?|greater than|maximum|at most|must be (?:less|<=?)|allowed)|(?:maximum|max)(?:imum)? (?:allowed )?(?:number of )?output tokens|valid range of (?:max_tokens|max_completion_tokens|max_new_tokens|max_output_tokens)|supports at most \d[\d,]* (?:completion|output) tokens/i;
 /* OpenAI's own newer models: "Unsupported parameter: 'max_tokens' is not
  * supported with this model. Use 'max_completion_tokens' instead." (and never
  * vLLM's "'max_tokens' or 'max_completion_tokens' is too large") */
@@ -818,7 +818,11 @@ export function replyLimitFrom(detail) {
   const text = String(detail || '').replace(/(\d),(?=\d{3})/g, '$1');
   const m = new RegExp('>\\s*' + NUM + ',?\\s*which is the maximum allowed number of output tokens', 'i').exec(text)
     || new RegExp('(?:maximum|max)(?:imum)? (?:allowed )?(?:number of )?(?:output|completion) tokens\\D{0,30}' + NUM, 'i').exec(text)
-    || new RegExp('(?:max_tokens|max_completion_tokens|max_output_tokens)[^.]{0,60}?(?:at most|<=|less than or equal to|maximum(?: value)?(?: is| of)?)\\s*' + NUM, 'i').exec(text);
+    || new RegExp('(?:max_tokens|max_completion_tokens|max_output_tokens)[^.]{0,60}?(?:at most|<=|less than or equal to|maximum(?: value)?(?: is| of)?)\\s*' + NUM, 'i').exec(text)
+    /* DeepSeek's "the valid range of max_tokens is [1, 8192]", and OpenAI's "This model supports at most 8192 completion
+     * tokens" (2.12.63: neither was read, so a reply asked past it was refused for good) */
+    || new RegExp('valid range of (?:max_tokens|max_completion_tokens|max_output_tokens|max_new_tokens) is\\s*\\[\\s*\\d+\\s*,\\s*' + NUM + '\\s*\\]', 'i').exec(text)
+    || new RegExp('supports at most\\s*' + NUM + '\\s*(?:completion|output) tokens', 'i').exec(text);
   const n = m ? Number(m[1]) : 0;
   return n >= 256 && n <= 2000000 ? n : 0;
 }

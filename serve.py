@@ -86,6 +86,7 @@ KINDS = ("house", "novel", "chapter", "talk", "play", "draft")
 # the composer's unsent words (draft) do not — they change with every key
 KEPT_HISTORY = ("house", "novel", "chapter", "talk", "play")
 SAVES_KEPT = 30                     # each record remembers its newest saves (which tab, which words)
+LONE_HALF = re.compile("[\ud800-\udfff]")  # half of a pair of letters with no other half: what no UTF-8 can carry
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
 COPY_RE = re.compile(r"^cozynovel-(?:\d{4}-\d{2}-\d{2}|before-[0-9a-z-]{1,40})\.json\.gz$")
 TRASH_RE = re.compile(r"^\d{8}-\d{6}-\d{3}-[a-z]+-[A-Za-z0-9_-]{1,96}\.json\.gz$")
@@ -1994,7 +1995,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if str(spec.get("method") or "POST").upper() == "GET":
             req = urllib.request.Request(url, method="GET")
         else:
-            payload = json.dumps(spec.get("body") or {}, ensure_ascii=False).encode("utf-8")
+            # a lone half of a pair of letters (an emoji cut in two by a page's own cut) is no character: written as one it
+            # stopped the call before it left, every time it was asked again (2.12.63) — it goes as the mark for a lost letter
+            payload = LONE_HALF.sub("\ufffd", json.dumps(spec.get("body") or {}, ensure_ascii=False)).encode("utf-8")
             req = urllib.request.Request(url, data=payload, method="POST")
             req.add_header("Content-Type", "application/json")
         for k, v in headers.items():
