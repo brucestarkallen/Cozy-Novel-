@@ -363,8 +363,8 @@ body.shelfview .room { background: var(--room-veil), var(--shelf-img) center / c
 .pctl .note.premise { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .pctl .note.premise b { font-weight: 600; color: var(--ink-soft); }
 .pctl .note.premise[hidden] { display: none; }
-.pctl .premacts { width: 100%; display: flex; flex-wrap: wrap; gap: 4px; }
-.pctl .premacts[hidden] { display: none; }
+.pctl .note.premise > button { height: 26px; padding: 0 8px; vertical-align: baseline; }
+.pctl .premacts { width: 100%; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .pctl textarea.premiseedit { display: block; width: 100%; box-sizing: border-box; min-height: 72px; margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: 15px/1.45 var(--serif); resize: vertical; }
 .pctl button.premisebtn[aria-expanded="true"] { color: var(--accent-on-paper, var(--accent)); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .pctl .go { color: var(--accent-on-paper); font-weight: 600; }

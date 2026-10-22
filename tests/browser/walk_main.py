@@ -64,10 +64,12 @@ async def scenario_main(b):
     hidden_first = await pg.locator(btn).count() == 1 and not await pg.locator(line).is_visible()
     await pg.locator('#passages .passage.selected .pctl').scroll_into_view_if_needed(); await pg.screenshot(path=os.path.join(SHOTS, 'premise-closed.png'))
     await pg.click(btn); await pg.wait_for_timeout(150)
+    # (2.12.63: its own Edit stands in its line, after the words)
     shown = await pg.inner_text(line) if await pg.locator(line).is_visible() else ''
+    words = await pg.inner_text(line + ' .premisewords') if shown else ''
     await pg.screenshot(path=os.path.join(SHOTS, 'premise.png'))
     await pg.click(btn); await pg.wait_for_timeout(150)
-    check('the box empties; his premise waits behind Premise under the page — shown when pressed, put away again', await pg.input_value('#direction') == '' and hidden_first and shown == 'Your premise: She finds a bottle with a letter.' and not await pg.locator(line).is_visible(), (hidden_first, shown))
+    check('the box empties; his premise waits behind Premise under the page — shown when pressed, put away again', await pg.input_value('#direction') == '' and hidden_first and shown.startswith('Your premise: ') and words == 'She finds a bottle with a letter.' and not await pg.locator(line).is_visible(), (hidden_first, shown))
     calls = completions()
     body = calls[-1]['body'] if calls else {}
     check('the request streams to the chosen model', body.get('model') == 'fake-writer' and body.get('stream') is True, {k: body.get(k) for k in ('model', 'stream')})

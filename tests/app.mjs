@@ -195,7 +195,7 @@ await setHouse();
 /* =================================================== writing a page */
 heading('writing');
 
-await test('Resend writes the page again from a changed premise; Retry writes it again from the premise as it stands', async () => {
+await test('Resend writes the page again from a changed premise; the premise as it stands, sent again, stays the page’s', async () => {
   const b = await makeBook([['The lamp was cold.']]);
   await script([{ text: 'Mara struck a match.' }]);
   const wrote = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.' });
@@ -214,8 +214,90 @@ await test('Resend writes the page again from a changed premise; Retry writes it
   const again = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: shape.premiseOf(b.ch().passages[1]) });
   assert.equal(again.ok, true, again.error);
   assert.equal(b.ch().passages[1].versions.length, 3);
-  assert.equal(shape.premiseOf(b.ch().passages[1]), 'She lights the lamp and reads the letter.', 'Retry keeps the premise as it stands');
+  assert.equal(shape.premiseOf(b.ch().passages[1]), 'She lights the lamp and reads the letter.', 'the same premise sent again keeps it');
   assert.equal((await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: '  ' })).ok, false);
+  await putAway(b);
+});
+
+await test('after a Resend from an edited premise, Another take, a Rewrite and what wakes a rule all follow the premise of the version on show — never the first one', async () => {
+  const FIGHT = '## How A Fight Sounds';
+  const sys = (r) => r.body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+  const asked = (r) => String(r.body.messages.at(-1).content || '');
+  const OLD = 'Jovan fights Kenjaku on the cliff.';
+  const NEW = 'Jovan and Kenjaku sit by the fire and talk.';
+  const b = await makeBook([['The lamp was cold.']]);
+  await script([{ text: 'Steel rang on the cliff.' }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: OLD })).ok, true);
+  assert.ok(sys((await requests()).at(-1)).includes(FIGHT), 'the first premise wakes the fight rule');
+  const pid = b.ch().passages[1].id;
+  const p = () => b.ch().passages.find((x) => x.id === pid);
+  await reset();
+  await script([{ text: 'They talked by the fire until the tea went cold.' }]);
+  const sent = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: NEW });
+  assert.equal(sent.ok, true, sent.error);
+  assert.ok(!sys((await requests()).at(-1)).includes(FIGHT), 'Resend: the premise in the box is the moment — the one it replaces wakes nothing');
+  await reset();
+  await script([{ text: 'Another evening by the fire.' }]);
+  const take = await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid });
+  assert.equal(take.ok, true, take.error);
+  const tr = (await requests()).at(-1);
+  assert.ok(asked(tr).includes(NEW) && !asked(tr).includes(OLD), `Another take asks for the premise on show: ${asked(tr).slice(-300)}`);
+  assert.ok(!sys(tr).includes(FIGHT), 'and wakes what that premise wakes');
+  assert.deepEqual(p().versions.map((v) => v.ask.direction), [OLD, NEW, NEW], 'the new take carries the premise it was written from');
+  assert.equal(shape.premiseOf(p()), NEW, 'and the old premise is not put back');
+  /* written again with a note: the page's premise is still the one it was written again from */
+  await reset();
+  await script([{ text: 'Smoke by the fire, and talk.' }]);
+  assert.equal((await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'Let the fire smoke.' })).ok, true);
+  assert.equal(shape.premiseOf(p()), NEW, 'a Rewrite of the page: its premise, not the first');
+  /* the page after it carries on the premise on show */
+  await reset();
+  await script([{ text: 'Later, the stars.' }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0] })).ok, true);
+  assert.ok(!sys((await requests()).at(-1)).includes(FIGHT), 'the next page carries on the premise on show, not the first');
+  /* the first version picked back with the arrows: its own premise is the page's again */
+  store.change('chapter', b.ids[0], shape.chapterSteps.choose(pid, p().versions[0].id), { now: true });
+  assert.equal(shape.premiseOf(p()), OLD);
+  assert.equal(writer.takeOf(p()).ask.direction, OLD);
+  await putAway(b);
+});
+
+await test('Resend on a page whose premise only a rewrite kept writes from the box — never "these are your own words"; the same premise again keeps the chapter’s name, a changed one names it anew', async () => {
+  const b = await makeBook([[]]);
+  store.change('novel', b.novelId, shape.novelSteps.setPref('length', 'paragraphs'), { now: true });
+  await script([{ text: 'Mara struck a match in the dark.' }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'She lights the lamp.', length: 'long' })).ok, true);
+  const pid = b.ch().passages[0].id;
+  const p = () => b.ch().passages.find((x) => x.id === pid);
+  const named = () => store.change('chapter', b.ids[0], (c) => { c.name = 'A Match in the Dark'; c.nameBy = 'helper'; delete c.nameDue; }, { now: true });
+  named();
+  /* the premise as it stands, sent again: Another take — the name stays */
+  await reset();
+  await script([{ text: 'Mara struck a second match.' }]);
+  const same = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: '  She lights the lamp. ' });
+  assert.equal(same.ok, true, same.error);
+  assert.deepEqual([b.ch().name, b.ch().nameDue], ['A Match in the Dark', undefined], 'the same premise again names nothing anew');
+  assert.equal(picked(p()).ask.length, 'long', 'as long as the page was asked to be');
+  /* written again with a note, and every version written from the premise taken out: the premise lives on the rewrite */
+  await reset();
+  await script([{ text: 'Mara struck a match, and the flame was blue.' }]);
+  assert.equal((await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'Make the flame blue.' })).ok, true);
+  for (const v of p().versions.filter((x) => x.how !== 'rewrite')) store.change('chapter', b.ids[0], shape.chapterSteps.removeVersion(pid, v.id), { now: true });
+  assert.deepEqual(p().versions.map((v) => v.how), ['rewrite']);
+  assert.equal(shape.premiseOf(p()), 'She lights the lamp.');
+  await reset();
+  await script([{ text: 'Mara lit the lamp, and it burned green.' }]);
+  const out = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: 'She lights the lamp, and it burns green.' });
+  assert.equal(out.ok, true, out.error);
+  assert.ok(String((await requests()).at(-1).body.messages.at(-1).content).includes('She lights the lamp, and it burns green.'));
+  assert.equal(shape.premiseOf(p()), 'She lights the lamp, and it burns green.');
+  assert.equal(picked(p()).ask.length, 'paragraphs', 'with nothing left of how long it was asked, as long as the box is set to write');
+  assert.deepEqual([b.ch().name, b.ch().nameDue], ['', true], 'a changed opening premise: the chapter is named again from it');
+  /* his own words are his own */
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'My own lines.' });
+  const mine = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: b.ch().passages.at(-1).id, direction: 'Anything.' });
+  assert.equal(mine.ok, false);
+  assert.match(mine.error, /your own words/);
   await putAway(b);
 });
 
