@@ -106,6 +106,7 @@ class H(BaseHTTPRequestHandler):
             proof = "Find every slip of the hand in them" in last_user
             # the Timeline read for itself (2.12.37): an honest reading with no turns, unless the test queued an answer for it ({"turns": true})
             turns = "Read these passages for the Timeline alone" in last_user
+            # the chapter's name asked by itself (2.12.63, archivist.js nameChapters): "The Lantern", unless the test queued an answer for it ({"title": true})
             title = "Give it a chapter title" in last_user
             if QUEUE and not (turns and not QUEUE[0].get("turns")) and not ('Answer with {"ok": true} and nothing else.' in last_user and not QUEUE[0].get("probe")) and not (backfill and not QUEUE[0].get("bib")) and not (pick and not QUEUE[0].get("pick")) and not (whole and not QUEUE[0].get("whole")) and not (QUEUE[0].get("whole") and not whole) and not (marks and not QUEUE[0].get("marks")) and not (QUEUE[0].get("marks") and not marks) and not (proof and not QUEUE[0].get("proof")) and not (QUEUE[0].get("proof") and not proof) and not (title and not QUEUE[0].get("title")) and not (QUEUE[0].get("title") and not title):
                 beh = QUEUE.pop(0)

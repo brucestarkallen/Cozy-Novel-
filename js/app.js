@@ -25,7 +25,7 @@ import { initChecks, showChecks } from './ui/checks.js';
 import { initSearch, openSearch } from './ui/search.js';
 import { initBibliography } from './ui/bibliography.js';
 import { quickAny } from './novel/quickadd.js';
-import { mendBook, markRenames, keepWhose } from './novel/mend.js';
+import { mendBook, markRenames, keepWhose, mendNames } from './novel/mend.js';
 import { initBranches, openBranches } from './ui/branches.js';
 import { openConversation } from './novel/talk.js';
 
@@ -242,6 +242,8 @@ async function repairNow(novelId) {
      * then who put in each word of a page kept before 2.12.41 worked out once and kept with it, a chapter at a time */
     await markRenames(novelId);
     keepWhose(novelId).catch((e) => console.warn(e));
+    /* a chapter named with his premise copied out (2.12.49–2.12.62) named again from its opening, once (mend.js) */
+    if (mendNames(novelId)) archivist.nudge(novelId, 2000);
     if (store.peek('talk', novelId)) await talkRepair('talk', novelId);
     for (const id of (store.peek('novel', novelId) || {}).plays || []) if (store.peek('play', id)) await talkRepair('play', id);
   } catch (e) { console.warn(e); }

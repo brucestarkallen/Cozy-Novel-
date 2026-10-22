@@ -9,7 +9,7 @@ import * as talk from '../novel/talk.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf, premiseOf, passagePrint } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf, premiseOf, passagePrint, openingPage } from '../novel/shape.js';
 import { putBackWords } from '../novel/inplace.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
@@ -608,7 +608,10 @@ function pickVersion(p, i) {
   const v = p && p.versions[i];
   if (!v) return;
   /* put on show by his own hand: left as he chose it — nothing the checker does by itself starts from it */
+  const opening = writer.openingNow(S.chapterId);
   store.change('chapter', S.chapterId, chapterSteps.choose(p.id, v.id));
+  /* (another take of the page that opens the chapter: the name follows it, and the one it had with it comes back) */
+  writer.releaseOpening(S.chapterId, opening);
   /* a version read before brings its own notes back at once (readings.js) */
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId, 8000);
@@ -735,17 +738,21 @@ function removeVersions(p, ids) {
   if (gone.length >= live.versions.length) { toast('One version always stays.'); return; }
   const before = JSON.parse(JSON.stringify(live.versions));
   const shown = (picked(live) || {}).id;
+  const opening = writer.openingNow(chapterId);
   for (const id of gone) archivist.retireIfSeen(S.novelId, chapterId, p.id, id);
   for (const id of gone) store.change('chapter', chapterId, chapterSteps.removeVersion(p.id, id), { now: true });
   /* the one on show taken away: the version that comes on show in its place is his choice too */
   const after = gone.includes(shown) ? picked((chapter().passages || []).find((x) => x.id === p.id) || { versions: [] }) : null;
   if (after) store.change('chapter', chapterId, chapterSteps.choose(p.id, after.id), { now: true });
+  writer.releaseOpening(chapterId, opening);
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId);
   writer.recount(S.novelId);
   drawPage();
   undoToast(gone.length === 1 ? 'The version is removed.' : `${plural(gone.length, 'version')} are removed.`, () => {
+    const was = writer.openingNow(chapterId);
     store.change('chapter', chapterId, chapterSteps.putVersionsBack(p.id, before, shown), { now: true });
+    writer.releaseOpening(chapterId, was);
     store.change('chapter', chapterId, chapterSteps.clearRetired(gone.map((id) => `${p.id}:${id}`)), { now: true });
     archivist.settle(S.novelId);
     archivist.nudge(S.novelId);
@@ -787,20 +794,23 @@ function removePassage(p) {
   /* (taken out only while it reads as he saw it — his words typed into it meanwhile in another window keep it, never
    * taken out with them nor brought back by Undo as the older words: 2.12.41, a step laid again over another window's
    * newer copy) */
-  const wasOpening = !c.passages.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
-  const nameBefore = wasOpening ? { name: c.name || '', nameBy: c.nameBy || '', nameDue: Boolean(c.nameDue) } : null;
+  /* (the page that opens the chapter, as it stands before: the name follows only a change of it — a scene break or a
+   * later page taken out changes nothing, writer.js releaseOpening, 2.12.63) */
+  const opening = writer.openingNow(S.chapterId);
   store.change('chapter', S.chapterId, chapterSteps.removePassage(p.id, passagePrint(p)), { now: true });
   archivist.settle(S.novelId);
   archivist.nudge(S.novelId, 9000);
   writer.recount(S.novelId);
-  if (wasOpening) writer.releaseOpening(S.chapterId);
-  S.undo = { chapterId: S.chapterId, passage: copy, after, nameBefore };
+  writer.releaseOpening(S.chapterId, opening);
+  S.undo = { chapterId: S.chapterId, passage: copy, after };
   drawPage();
   undoToast('The passage is removed.', () => {
     const u = S.undo;
     if (!u) return;
+    const was = writer.openingNow(u.chapterId);
     store.change('chapter', u.chapterId, chapterSteps.addPassage(u.passage, u.after), { now: true });
-    if (u.nameBefore) store.change('chapter', u.chapterId, (ch) => { ch.name = u.nameBefore.name; ch.nameBy = u.nameBefore.nameBy; if (u.nameBefore.nameDue) ch.nameDue = true; else delete ch.nameDue; }, { now: true });
+    /* (the page back at the start: the name it had with it comes back — where the chapter still reads as the remove left it) */
+    writer.releaseOpening(u.chapterId, was);
     /* back in its place: nothing of it is taken out any more — and the
      * notes it made, taken back when it went, come back at once */
     store.change('chapter', u.chapterId, chapterSteps.clearRetired([u.passage.id]), { now: true });
@@ -823,6 +833,9 @@ async function splitHere(p) {
   fresh.passages = moving;
   /* what was kept for those passages goes with them (shape.js keptFor) */
   Object.assign(fresh, keptFor(c, moving.map((m) => m.id)));
+  /* (a chapter of its own now, opened by the page it starts at: owed its name from that page — archivist.js nameChapters,
+   * 2.12.63) */
+  if (openingPage(fresh)) fresh.nameDue = true;
   await store.create('chapter', fresh.id, fresh);
   store.change('novel', S.novelId, novelSteps.addChapter(fresh.id, c.id), { now: true });
   /* the moved passages were read where they stood: the helper is told nothing new */

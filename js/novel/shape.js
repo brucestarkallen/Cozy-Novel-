@@ -930,6 +930,76 @@ export function chapterPrint(chapter) {
   return hashText(chapterText(chapter));
 }
 
+/* ------------------------------------------------ the chapter's name */
+
+/* THE PAGE THAT OPENS A CHAPTER, AS IT STANDS (2.12.63): its first passage with words — {pid, vid, take, text, premise}
+ * or null. `take`: the version its words were first written as — a fix, his edit, a Rewrite, his partner's words or a
+ * few words written again keep the take they were made from (`from`, `base`); another take, a Retry or a Resend is a take
+ * of its own. The name follows the take: written, written again, another one put on show, or the page taken out. */
+export function openingOf(chapter) {
+  for (const p of (chapter && chapter.passages) || []) {
+    if (!hasWords(p)) continue;
+    const v = picked(p);
+    const versions = p.versions || [];
+    const seen = new Set();
+    let take = v.id;
+    for (let x = v; x && !seen.has(x.id);) {
+      seen.add(x.id);
+      take = x.id;
+      const up = x.from || x.base;
+      if (!up) break;
+      take = up;
+      x = versions.find((y) => y.id === up);
+    }
+    return { pid: p.id, vid: v.id, take, text: String(v.text || ''), premise: premiseOf(p) };
+  }
+  return null;
+}
+/* the take that opens it, as one key ('' for none): what a change of it is told by (writer.js releaseOpening) */
+export function openingPage(chapter) {
+  const op = openingOf(chapter);
+  return op ? `${op.pid}:${op.take}` : '';
+}
+/* the opening's words as they stand: what a name was asked for, and laid only while it still reads so */
+export function openingPrint(chapter) {
+  const op = openingOf(chapter);
+  return op ? hashText(`${op.pid}:${op.vid}:${op.text}`) : '';
+}
+/* every premise he typed in a chapter, on every version (a rewrite carries the premise of the page it wrote again) */
+export function premisesIn(chapter) {
+  const out = new Set();
+  for (const p of (chapter && chapter.passages) || []) {
+    if (p.by === 'break') continue;
+    for (const v of p.versions || []) {
+      for (const t of [v && v.ask && v.ask.direction, v && v.ask && v.ask.premise]) if (String(t || '').trim()) out.add(String(t).trim());
+    }
+  }
+  return [...out];
+}
+/* A NAME THAT ONLY REPEATS HIS PREMISE (2.12.51's rule, lost in 2.12.55 and back in 2.12.63): its words are the
+ * premise's whole, one of its sentences, its opening cut short — four words or more, or cut inside a word past forty
+ * letters (2.12.49 wrote the first sentence, cut to eighty) — or the premise inside it. Letters, accents and marks
+ * folded. `premises`: a premise, a list of them, or the chapter (every premise it holds). */
+const nameWordsOf = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/\p{M}+/gu, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+export function copiesPremise(name, premises) {
+  const g = nameWordsOf(name);
+  if (!g) return false;
+  const list = typeof premises === 'string' ? [premises] : Array.isArray(premises) ? premises : premisesIn(premises);
+  return list.some((p) => {
+    const a = nameWordsOf(p);
+    if (!a) return false;
+    if (g === a || (a.startsWith(`${g} `) && g.split(' ').length >= 4) || (g.length >= 40 && a.startsWith(g))) return true;
+    if (a.split(' ').length >= 3 && ` ${g} `.includes(` ${a} `)) return true;
+    return splitSentences(p).some((s) => nameWordsOf(s) === g);
+  });
+}
+/* THE HELPER OWES IT A NAME FROM ITS OPENING (`nameDue`): a page came to open it, or the page that opened it changed
+ * under its name (chapterSteps.releaseName), a name copied from his premise was mended (mend.js mendNames), or a reading
+ * that would have named it had not seen its opening (archivist.js readChanges) — never over a name he typed. A chapter
+ * with no name and none owed is named once it holds NAME_WORDS words (a reading that sees its opening), or by its summary. */
+export const NAME_WORDS = 600;
+export function nameOwed(chapter) { return Boolean(chapter && chapter.nameDue && chapter.nameBy !== 'you'); }
+
 /* ------------------------------------------ when his entries' words were written */
 
 /* WHEN EACH OF HIS ENTRY'S WORDS WAS WRITTEN (2.12.41, the review of 2.12.41, and Quick add's: an entry kept one time,
@@ -1467,6 +1537,53 @@ export const chapterSteps = {
   setName: (name, by, from = undefined) => (c) => {
     if (from !== undefined && !readsAs(c.name, from)) return false;
     c.name = name; c.nameBy = by;
+  },
+  /* THE OPENING CHANGED UNDER ITS NAME (2.12.63; writer.js releaseOpening): laid on the copy as it stands — only where the
+   * take that opens it is another than `before` (openingPage, as it was before the change: a scene break or a page with
+   * no words taken out changes nothing). A name he typed stays, unless Super automatic is on (`auto`). The name it had
+   * with the take that opens it now comes back with no call (`nameWas`: an Undo, the arrows back); otherwise a name the
+   * helper gave is let go and owed (`nameDue`) — named from the opening as it stands (archivist.js nameChapters). Nothing
+   * left: the name goes, owed by nothing. No helper chosen (`helper` false): nobody could give it back, so it stays,
+   * owed for when one is. */
+  releaseName: (before, { helper = true, auto = false } = {}) => (c) => {
+    const page = openingPage(c);
+    if (page === before) return false;
+    if (c.nameBy === 'you' && !auto) return false;
+    const was = { name: c.name || '', nameBy: c.nameBy || '', ...(c.nameDue ? { nameDue: true } : {}), page: before };
+    const back = page && c.nameWas && c.nameWas.page === page ? c.nameWas : null;
+    if (back) {
+      c.name = back.name || '';
+      c.nameBy = back.nameBy || '';
+      if (back.nameDue) c.nameDue = true; else delete c.nameDue;
+      c.nameWas = was;
+      return true;
+    }
+    if (!page) {
+      if (!helper || (!c.name && !c.nameBy && !c.nameDue)) return false;
+      c.name = ''; c.nameBy = ''; delete c.nameDue; c.nameWas = was;
+      return true;
+    }
+    if (!helper) {
+      if (c.nameDue && c.nameBy !== 'you') return false;
+      if (c.nameBy === 'you') c.nameBy = '';
+      c.nameDue = true; c.nameWas = was;
+      return true;
+    }
+    if (!c.name && !c.nameBy && c.nameDue) return false;
+    c.name = ''; c.nameBy = ''; c.nameDue = true; c.nameWas = was;
+    return true;
+  },
+  /* THE HELPER'S NAME, laid on the copy as it stands (2.12.63 — its own ask, a reading that saw the opening, a summary):
+   * only where one is owed — nameDue, or none at all and the chapter long enough to have earned one (`loose`: any length,
+   * the summary's rule) — never over a name he typed, never his premise copied out, and (`print`) only while the opening
+   * reads as it did when it was asked (openingPrint) */
+  nameFrom: (name, { print = null, loose = false } = {}) => (c) => {
+    if (!name || c.nameBy === 'you') return false;
+    if (!c.nameDue && (c.name || (!loose && chapterWords(c) < NAME_WORDS))) return false;
+    if (print !== null && openingPrint(c) !== print) return false;
+    if (copiesPremise(name, c)) return false;
+    c.name = name; c.nameBy = 'helper'; delete c.nameDue;
+    return true;
   },
   /* add a passage after another (or at the end), if it is not there yet */
   addPassage: (passage, afterId = null) => (c) => {

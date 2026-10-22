@@ -17,7 +17,7 @@ import { newId, countWords, numberWords, hashText } from '../util.js';
 import { assemble, requiredLength } from './context.js';
 import { pickEntries } from './bibpick.js';
 import { superOn, autoOf } from './auto.js';
-import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince } from './shape.js';
+import { chapterSteps, novelSteps, newPassage, newVersion, endOf, rootOf, keptTail, writtenWith, cutAtEnd, sameEnd, picked, requestOf, chapterLabel, countBook, chapterText, outcomeOf, hasWords, hisWordsIn, hisWordsBefore, chapterWords, chapterClosed, newChapter, premiseOf, renameCount, renamesSince, openingPage } from './shape.js';
 import { writeRequest, rewriteRequest, selectionRequest, goOnRequest, playToProseRequest, leftOutWords, MARK_OPEN, MARK_CLOSE } from './prompts.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, straysIn, dropMarkup, chapterEnds, partBlock, mendSpacing, marksOnlyResult } from './textshape.js';
 import { renameIn } from './names.js';
@@ -804,6 +804,8 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
   const moment = [direction, hisWordsBefore(list, at >= 0 ? at : list.length - 1)].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
   const empty = !list.slice(0, at >= 0 ? at + 1 : list.length).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
   const passage = newPassage('ai', '', { how: 'write', ask: { direction, length }, streaming: true });
+  /* (the page that opens the chapter before this one is added: the name follows a new one — releaseOpening) */
+  const opening = openingPage(chapter);
   store.change('chapter', chapterId, chapterSteps.addPassage(passage, at >= 0 ? after : null), { now: true });
   /* Super automatic: the writer may end the chapter here (prompts.js closeLine) — never between two passages, nor on its
    * opening page, but for the rest of a chapter written whole */
@@ -812,7 +814,7 @@ export async function writeNext({ novelId, chapterId, direction = '', length = '
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords(chapter) } : null });
   const out = await runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'write', length, closing,
     build: { target: { chapterId, before: passage.id }, request, moment } });
-  if (out && out.ok) releaseOpening(chapterId, passage.id);
+  if (out && out.ok) releaseOpening(chapterId, opening);
   return out;
 }
 
@@ -879,6 +881,8 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
   /* what wakes a rule: his words that made it, or the premise it carried on */
   const moment = momentOf(chapter, p);
   const version = newVersion({ how: take.how === 'play' ? 'play' : 'another', ask: { ...take.ask }, streaming: true });
+  /* (another take of the page that opens the chapter is a page of its own, as a Retry is: the name follows it) */
+  const opening = openingPage(chapter);
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const label = chapterLabel(book.novel, chapter, { withName: false });
   let request;
@@ -894,8 +898,10 @@ export async function anotherTake({ novelId, chapterId, passageId }) {
     request = writeRequest({ chapterLabel: label, direction: take.ask.direction || '', length, empty,
       firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
   }
-  return runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: version.how, length, closing,
+  const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: version.how, length, closing,
     build: { target: { chapterId, before: passageId }, request, moment } });
+  if (out && out.ok) releaseOpening(chapterId, opening);
+  return out;
 }
 
 /* The page again, from a premise — the one it was written from, or one he has
@@ -919,6 +925,7 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
   const length = first.ask.length || 'scene';
   const moment = [text, momentOf(chapter, p)].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
   const version = newVersion({ how: 'another', ask: { direction: text, length }, streaming: true });
+  const opening = openingPage(chapter);
   store.change('chapter', chapterId, chapterSteps.addVersion(passageId, version), { now: true });
   const empty = !list.slice(0, i).some((x) => x.by !== 'break' && String((picked(x) || {}).text || '').trim());
   const closing = superOn(house()) && !between && (!empty || length === 'chapter');
@@ -926,43 +933,26 @@ export async function resend({ novelId, chapterId, passageId, direction }) {
     firstOfBook: empty && book.novel.order.indexOf(chapterId) === 0, between, outcome: outcomeOf(book.novel), close: closing ? { words: chapterWords({ passages: list.slice(0, i) }) } : null });
   const out = await runVersion({ novelId, chapterId, passageId, versionId: version.id, mode: 'version', how: 'another', length, closing,
     build: { target: { chapterId, before: passageId }, request, moment } });
-  if (out && out.ok) releaseOpening(chapterId, passageId);
+  if (out && out.ok) releaseOpening(chapterId, opening);
   return out;
 }
 
-/* The opening of a chapter changed — written, sent again, or taken out.
- * A name the helper gave is let go, so the notes' own reading names the
- * chapter again from the chapter. No separate ask: that ask sat on the
- * notes' connection and held their light yellow until a connection test,
- * which is not a notes request, kicked it off the line. A name he typed
- * stays, unless Super automatic is on. Nothing left in the chapter: the
- * helper's name is simply cleared. */
-export function releaseOpening(chapterId, passageId = null) {
+/* THE NAME FOLLOWS THE PAGE THAT OPENS THE CHAPTER (2.12.49–2.12.55, made one rule in 2.12.63): a page written to open
+ * it — by the writer, a scene's prose, or his own words — another take of it, a Retry or a Resend, another version put on
+ * show with the arrows, or the page taken out — by his hand or his partner's. `before`: openingPage as it stood before the change; nothing is let go where the same take
+ * still opens it (a scene break or a later page taken out, a fix, his edit). The step is laid on the copy as it stands
+ * (shape.js releaseName): a name he typed stays, unless Super automatic is on; the name the chapter had with this very
+ * take comes back with no call; a name the helper gave is let go and owed, and its own small ask names the chapter from
+ * the opening as it stands (archivist.js nameChapters) — or a reading that saw that opening does. With no helper chosen
+ * the name stays — nobody could give it back — owed for when one is. Whether anything was let go. */
+export function releaseOpening(chapterId, before) {
   const chapter = store.peek('chapter', chapterId);
-  if (!chapter) return;
-  const list = chapter.passages || [];
-  if (passageId) {
-    const i = list.findIndex((p) => p.id === passageId);
-    if (i < 0) return;
-    if (list.slice(0, i).some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim())) return;
-  }
-  const words = list.some((p) => p.by !== 'break' && String((picked(p) || {}).text || '').trim());
-  store.change('chapter', chapterId, (c) => {
-    if (c.nameBy === 'you' && !superOn(house())) return false;
-    if (!words) {
-      if (!c.name && c.nameBy !== 'helper' && !c.nameDue) return false;
-      c.name = '';
-      c.nameBy = '';
-      delete c.nameDue;
-      return true;
-    }
-    if (!c.name && !c.nameBy && c.nameDue) return false;
-    c.name = '';
-    c.nameBy = '';
-    c.nameDue = true;
-    return true;
-  }, { now: true });
+  if (!chapter || typeof before !== 'string' || openingPage(chapter) === before) return false;
+  const h = house();
+  return store.change('chapter', chapterId, chapterSteps.releaseName(before, { helper: Boolean(connFor(h, 'helper')), auto: superOn(h) }), { now: true }) === true;
 }
+/* the take that opens a chapter now — what releaseOpening is told after a change (desk.js, changes.js) */
+export function openingNow(chapterId) { return openingPage(store.peek('chapter', chapterId)); }
 
 
 /* A rewrite of a whole passage, with his note. */
@@ -1182,11 +1172,15 @@ export async function playToProse({ novelId, chapterId, play, transcript, mine =
   const list = chapter.passages || [];
   const at = play.after === '^' || (play.after && list.some((x) => x.id === play.after)) ? play.after : null;
   const between = at === '^' ? list.some(hasWords) : Boolean(at) && list.slice(list.findIndex((x) => x.id === at) + 1).some(hasWords);
+  const opening = openingPage(chapter);
   store.change('chapter', chapterId, chapterSteps.addPassage(passage, at), { now: true });
   const request = playToProseRequest({ chapterLabel: chapterLabel(book.novel, chapter, { withName: false }), who, transcript, length, between,
     opens: !list.some(hasWords) && wordsBefore(book, chapterId) });
-  return runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'play', length,
+  const out = await runVersion({ novelId, chapterId, passageId: passage.id, versionId: passage.versions[0].id, mode: 'new', how: 'play', length,
     build: { target: { chapterId, before: passage.id }, request, moment: hisWordsIn(passage) } });
+  /* (a scene's prose that opens the chapter names it, as any page that opens it does — releaseOpening) */
+  if (out && out.ok) releaseOpening(chapterId, opening);
+  return out;
 }
 
 /* SUPER AUTOMATIC — WHERE THE NEXT PAGE GOES (auto.js): a chapter the writer ended (its last page says so, shape.js
@@ -1239,7 +1233,10 @@ export function addMine({ novelId, chapterId, text, after = null }) {
   const t = String(text || '').replace(/\s+$/, '');
   if (!t.trim()) return null;
   const passage = newPassage('you', t, { words: countWords(t) });
+  const opening = openingPage(store.peek('chapter', chapterId));
   store.change('chapter', chapterId, chapterSteps.addPassage(passage, after), { now: true });
+  /* (his own words that open the chapter name it, as any page that opens it does — releaseOpening) */
+  releaseOpening(chapterId, opening);
   store.change('novel', novelId, novelSteps.touchWritten(Date.now()));
   recount(novelId);
   return passage.id;

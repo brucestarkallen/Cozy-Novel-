@@ -27,6 +27,7 @@ import { replaceMany, renameRule, smallRenameRule, nameWritten } from './names.j
 import { entriesOf, entryFor, otherKindSaid, nameTaken, newEntry, tidyEntry, kindSaid, ENTRY_KINDS, RIDES, codexNow, carriedCodex } from './bibliography.js';
 import { carriedContinuity, continuityNow } from './timeline.js';
 import { changeInPlace, putBackWords } from './inplace.js';
+import { releaseOpening, openingNow } from './writer.js';
 
 /* ------------------------------------------------------------ reading it */
 
@@ -1484,7 +1485,11 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
       const after = i > 0 ? chapter.passages[i - 1].id : '^';
       const copy = clone(passage);
       if (!dry) archivist.retireIfSeen(novelId, chapter.id, passage.id);
+      /* (the page that opens the chapter taken out by his partner: the name follows it, as when he takes it out himself —
+       * writer.js releaseOpening, 2.12.63) */
+      const opening = openingNow(chapter.id);
       put('chapter', chapter.id, chapterSteps.removePassage(passage.id, passagePrint(passage)), { now: true });
+      if (!dry) releaseOpening(chapter.id, opening);
       put('novel', novelId, novelSteps.touchWritten(at));
       return { ...base, status: 'made', undo: { what: 'removed', chapterId: chapter.id, passage: copy, after }, before: String(v.text || ''), after: '' };
     }
@@ -1750,7 +1755,10 @@ export function undoChange(novelId, change) {
     const c = store.peek('chapter', u.chapterId);
     if (!c) return { ok: false, said: 'that chapter is not there any more' };
     if ((c.passages || []).some((p) => p.id === u.passage.id)) return { ok: false, said: 'the passage is back already' };
+    const was = openingNow(u.chapterId);
     store.change('chapter', u.chapterId, chapterSteps.addPassage(u.passage, u.after), { now: true });
+    /* (the page back at the start: the name it had with it comes back, where the chapter still reads as the change left it) */
+    releaseOpening(u.chapterId, was);
     /* back in its place: nothing of it is taken out any more (its notes come back as the page's Undo brings them) */
     store.change('chapter', u.chapterId, chapterSteps.clearRetired([u.passage.id]), { now: true });
     return { ok: true };

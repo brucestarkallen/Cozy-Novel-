@@ -83,7 +83,10 @@ async function everyRequest() { return (await (await realFetch(PROVIDER + '/requ
 const isProofAsk = (x) => ((x.body && x.body.messages) || []).some((m) => m.role === 'user' && String(m.content || '').includes(prompts.PROOF_ASK));
 /* and the Timeline's own reading of a page read with no turns (2.12.37): counted apart, as the picks and the proofreader's are */
 const isTurnsAsk = (x) => ((x.body && x.body.messages) || []).some((m) => m.role === 'user' && String(m.content || '').includes(prompts.TIMELINE_ASK));
-async function requests() { return (await everyRequest()).filter((x) => !isPickAsk(x) && !isProofAsk(x) && !isTurnsAsk(x)); }
+/* and the chapter's name asked by itself (2.12.63, archivist.js nameChapters): counted apart, as the others are */
+const isTitleAsk = (x) => ((x.body && x.body.messages) || []).some((m) => m.role === 'user' && String(m.content || '').includes(prompts.TITLE_ASK));
+async function titleAsks() { return (await everyRequest()).filter(isTitleAsk); }
+async function requests() { return (await everyRequest()).filter((x) => !isPickAsk(x) && !isProofAsk(x) && !isTurnsAsk(x) && !isTitleAsk(x)); }
 async function pickAsks() { return (await everyRequest()).filter(isPickAsk); }
 async function proofAsks() { return (await everyRequest()).filter(isProofAsk); }
 /* since 2.11.3 every new summary is held once against its words in the same run (the summary check): a count of
@@ -148,6 +151,35 @@ function markAllSeen(b, { facts = true, turns = true } = {}) {
   }
 }
 const markReadBefore212 = (b) => markAllSeen(b, { facts: false });
+/* THE DESK'S OWN STEPS, as js/ui/desk.js takes them (it draws a page, so it is not loaded here): Remove the passage, its
+ * Undo, and the arrows — the page that opens the chapter taken before each change, the name let go after it only where
+ * that page changed (writer.js releaseOpening, 2.12.63) */
+function deskRemove(b, i, ci = 0) {
+  const c = b.ch(ci);
+  const p = c.passages[i];
+  const after = i > 0 ? c.passages[i - 1].id : '^';
+  const copy = JSON.parse(JSON.stringify(p));
+  archivist.retireIfSeen(b.novelId, b.ids[ci], p.id);
+  const opening = writer.openingNow(b.ids[ci]);
+  store.change('chapter', b.ids[ci], shape.chapterSteps.removePassage(p.id, shape.passagePrint(p)), { now: true });
+  archivist.settle(b.novelId);
+  writer.releaseOpening(b.ids[ci], opening);
+  return () => {
+    const was = writer.openingNow(b.ids[ci]);
+    store.change('chapter', b.ids[ci], shape.chapterSteps.addPassage(copy, after), { now: true });
+    writer.releaseOpening(b.ids[ci], was);
+    store.change('chapter', b.ids[ci], shape.chapterSteps.clearRetired([copy.id]), { now: true });
+    archivist.settle(b.novelId);
+  };
+}
+function deskPick(b, ci, pid, vid) {
+  const opening = writer.openingNow(b.ids[ci]);
+  store.change('chapter', b.ids[ci], shape.chapterSteps.choose(pid, vid));
+  writer.releaseOpening(b.ids[ci], opening);
+  archivist.settle(b.novelId);
+}
+const userOf = (r) => { const m = [...((r.body && r.body.messages) || [])].reverse().find((x) => x.role === 'user'); return m ? String(m.content || '') : ''; };
+const nameOf = (b, ci = 0) => [b.ch(ci).name, b.ch(ci).nameBy, Boolean(b.ch(ci).nameDue)];
 /* a book done with: its helper has nothing to come back for */
 async function putAway(b) { try { await store.flush(); await store.remove('novel', b.novelId); } catch (_) { /* gone */ } }
 
@@ -233,6 +265,8 @@ await test('the premise that opens a chapter names it, and editing that premise 
   assert.equal(b.ch().name, 'A Match in the Dark');
   assert.equal(b.ch().nameBy, 'helper');
   assert.ok(!b.ch().nameDue);
+  /* (2.12.63: the reading saw the page that opens the chapter, so it names it — no ask of its own follows) */
+  assert.equal((await titleAsks()).length, 0, 'named by the reading that saw its opening');
   const pid = b.ch().passages[0].id;
   await reset();
   await script([{ text: 'The night went on.' }]);
@@ -263,26 +297,288 @@ await test('the premise that opens a chapter names it, and editing that premise 
   await putAway(b);
 });
 
-await test('deleting the opening passage refreshes the chapter name, and a new page written after it is named — a name he typed stays', async () => {
-  const b = await makeBook([['Mara struck a match in the dark.', 'The storm took the roof off the shed.']]);
-  store.change('chapter', b.ids[0], shape.chapterSteps.setName('A Match in the Dark', 'helper'), { now: true });
-  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(b.ch().passages[0].id), { now: true });
-  writer.releaseOpening(b.ids[0]);
-  assert.equal(b.ch().name, '');
-  assert.equal(b.ch().nameDue, true, 'what remains is named by the notes, not by another ask');
-  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(b.ch().passages[0].id), { now: true });
-  writer.releaseOpening(b.ids[0]);
-  assert.equal(b.ch().name, '', 'nothing left: the old name goes');
-  assert.ok(!b.ch().nameDue);
-  await script([{ text: 'She found the letter under the door.' }]);
-  const again = await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'A letter is under the door.' });
-  assert.equal(again.ok, true, again.error);
-  assert.equal(b.ch().name, '');
-  assert.equal(b.ch().nameDue, true, 'the new page is named by the notes');
+await test('the page that opens a chapter taken out: the page after it becomes its start and names it, by its own short ask — never the words taken out; Undo brings back the name each page had, with no call, never over a name he typed since; nothing left, the name goes, and a new page is owed one again (2.12.53, 2.12.63)', async () => {
+  const b = await makeBook([['Mara struck a match in the dark and the old letter caught fire at the corner.', 'Years later, in a city of glass, Tomas opened a shop that sold only clocks.']]);
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], shape.chapterSteps.setName('The Burning Letter', 'helper'), { now: true });
+  const undo = deskRemove(b, 0);
+  assert.deepEqual(nameOf(b), ['', '', true], 'let go, and owed');
+  /* the reading of what was taken out sees only those words: the name it gives is not the chapter's */
+  await script([{ text: JSON.stringify({ chapterName: 'Ash of the Letter', people: [] }) }, { title: true, text: JSON.stringify({ name: 'The Clock Shop' }) }]);
+  await archivist.run(b.novelId);
+  const read = (await requests()).map(userOf).filter((u) => u.includes('Update the notes'));
+  assert.ok(read.length === 1 && read[0].includes('old letter caught fire') && !read[0].includes('city of glass'), 'the reading read only what was taken out');
+  const asked = (await titleAsks()).map(userOf);
+  assert.equal(asked.length, 1, 'one short ask of its own');
+  assert.ok(asked[0].includes('city of glass') && !asked[0].includes('old letter caught fire'), asked[0]);
+  assert.deepEqual(nameOf(b), ['The Clock Shop', 'helper', false]);
+  await quietAll(); await reset();
+  undo();
+  assert.deepEqual(nameOf(b), ['The Burning Letter', 'helper', false], 'Undo: the page back at the start, and the name it had with it');
+  const again = deskRemove(b, 0);
+  assert.deepEqual(nameOf(b), ['The Clock Shop', 'helper', false], 'taken out again: the name the page after it was given comes back with it');
   store.change('chapter', b.ids[0], shape.chapterSteps.setName('My own name', 'you'), { now: true });
-  store.change('chapter', b.ids[0], shape.chapterSteps.removePassage(b.ch().passages[0].id), { now: true });
-  writer.releaseOpening(b.ids[0]);
-  assert.equal(b.ch().name, 'My own name', 'a name he typed is not cleared');
+  again();
+  assert.deepEqual(nameOf(b), ['My own name', 'you', false], 'Undo never writes over a name he typed since');
+  await archivist.run(b.novelId);
+  assert.equal((await titleAsks()).length, 0, 'no call for a name in all of it');
+  /* nothing left: the name goes, owed by nothing — and the next page written to open it is owed one */
+  store.change('chapter', b.ids[0], shape.chapterSteps.setName('The Burning Letter', 'helper'), { now: true });
+  while (b.ch().passages.length) deskRemove(b, 0);
+  assert.deepEqual(nameOf(b), ['', '', false], 'nothing left: the name goes');
+  await script([{ text: 'She found the letter under the door.' }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'A letter is under the door.' })).ok, true);
+  assert.deepEqual(nameOf(b), ['', '', true], 'the new page is owed its name');
+  await quietAll();
+  await putAway(b);
+});
+
+await test('a scene break, or a page with no words, taken out at the top of a chapter leaves its name — the page that opens it is the same (2.12.63)', async () => {
+  const b = await makeBook([['', '---', 'Mara struck a match in the dark and the old letter caught fire at the corner.']]);
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], shape.chapterSteps.setName('The Burning Letter', 'helper'), { now: true });
+  deskRemove(b, 0);
+  assert.deepEqual([b.ch().passages.length, ...nameOf(b)], [2, 'The Burning Letter', 'helper', false], 'a page with no words');
+  deskRemove(b, 0);
+  assert.deepEqual([b.ch().passages.length, ...nameOf(b)], [1, 'The Burning Letter', 'helper', false], 'a scene break');
+  await archivist.run(b.novelId);
+  assert.deepEqual([(await titleAsks()).length, ...nameOf(b)], [0, 'The Burning Letter', 'helper', false], 'nothing asked, nothing let go');
+  await putAway(b);
+});
+
+await test('his partner taking out the page that opens a chapter lets its name go as his own remove does — its Undo brings the page and its name back; a look at the change changes nothing (2.12.63)', async () => {
+  const b = await makeBook([['Mara struck a match in the dark.', 'The storm took the roof off the shed.']], { manual: true });
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], shape.chapterSteps.setName('A Match in the Dark', 'helper'), { now: true });
+  const look = changes.makeChange(b.novelId, { passage: '1.1', remove: true }, { dry: true });
+  assert.equal(look.status, 'made', look.said);
+  assert.deepEqual([b.ch().passages.length, ...nameOf(b)], [2, 'A Match in the Dark', 'helper', false], 'a look changes nothing');
+  const r = changes.makeChange(b.novelId, { passage: '1.1', remove: true, why: 'too quiet' });
+  assert.equal(r.status, 'made', r.said);
+  assert.deepEqual([b.ch().passages.length, ...nameOf(b)], [1, '', '', true], 'let go, and owed');
+  await script([{ title: true, text: JSON.stringify({ name: 'The Roof Goes' }) }]);
+  await archivist.run(b.novelId);
+  const asked = (await titleAsks()).map(userOf);
+  assert.ok(asked.length === 1 && asked[0].includes('The storm took the roof') && !asked[0].includes('struck a match'), asked.join('\n---\n'));
+  assert.deepEqual(nameOf(b), ['The Roof Goes', 'helper', false], 'named from the page that opens it now');
+  const back = changes.undoChange(b.novelId, r);
+  assert.equal(back.ok, true, back.said);
+  assert.deepEqual([b.ch().passages.length, ...nameOf(b)], [2, 'A Match in the Dark', 'helper', false], 'Undo: the page and its name back');
+  await putAway(b);
+});
+
+await test('with no helper chosen, the page that opens a chapter taken out leaves its name — nobody could give it back — owed for when one is chosen, and named then (2.12.63)', async () => {
+  await setHouse({}, { connections: [], roles: {} });
+  let b = null;
+  try {
+    b = await makeBook([['Mara struck a match in the dark.', 'The storm took the roof off the shed.']], { manual: true });
+    markAllSeen(b);
+    store.change('chapter', b.ids[0], shape.chapterSteps.setName('A Match in the Dark', 'helper'), { now: true });
+    deskRemove(b, 0);
+    assert.deepEqual(nameOf(b), ['A Match in the Dark', 'helper', true], 'kept, and owed');
+  } finally { await setHouse(); }
+  await script([{ title: true, text: JSON.stringify({ name: 'The Roof Goes' }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual(nameOf(b), ['The Roof Goes', 'helper', false], 'a helper chosen: named from the page that opens it now');
+  await putAway(b);
+});
+
+await test('a name that only repeats his premise is thrown out — the reading’s and its own ask’s — said by the light, asked again in a moment, and the chapter named with a title (2.12.51, 2.12.63)', async () => {
+  const b = await makeBook([[]], { manual: true });
+  /* (short enough to be a title by its length: what throws each one out is that it only repeats the premise) */
+  const premise = 'Mara keeps the letter from the bottle. She tells no one.';
+  await script([{ text: 'The bottle was green, and the letter inside it was dry.' }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: premise })).ok, true);
+  await quietAll(); await reset();
+  /* the reading gives its first sentence; the ask, the premise's opening cut short and dressed as a title */
+  await script([{ text: JSON.stringify({ chapterName: 'Mara keeps the letter from the bottle.', people: [] }) }, { title: true, text: JSON.stringify({ name: 'Chapter One: “Mara Keeps the Letter”' }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual(nameOf(b), ['', '', true], 'neither the reading’s premise nor the ask’s is the name');
+  const asked = (await titleAsks()).map(userOf);
+  assert.ok(asked.length === 1 && asked[0].includes(premise), 'shown his premise so the title can follow it');
+  assert.ok(archivist.lightOf(b.novelId).words.includes('The helper names Chapter One again in a moment — its model gave back only your premise, or no title, the first time.'), archivist.lightOf(b.novelId).words);
+  await quietAll(); await reset();
+  await script([{ title: true, text: JSON.stringify({ name: 'The Kept Letter' }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual(nameOf(b), ['The Kept Letter', 'helper', false]);
+  assert.equal(archivist.stageWait(b.novelId, 'name:' + b.ids[0]), null, 'nothing waits');
+  /* and the whole premise as the name, from a summary of a chapter it may name: thrown out the same */
+  const c = await makeBook([[{ text: 'Mara kept the letter.', ask: { direction: premise, length: 'scene' } }], ['Gulls wheeled.']], { manual: true });
+  markAllSeen(c);
+  await quietAll(); await reset();
+  await script([{ text: JSON.stringify({ summary: 'Mara keeps the letter from the bottle and tells no one.', name: premise }) }]);
+  await archivist.run(c.novelId);
+  assert.deepEqual([c.ch(0).summary && c.ch(0).summary.text, ...nameOf(c)], ['Mara keeps the letter from the bottle and tells no one.', '', '', false], 'the summary kept, its name thrown out');
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a chapter named with his premise copied out (2.12.49–2.12.62) is named again from its opening, once, when the book opens — a title and a name he typed stay (2.12.63)', async () => {
+  const first = 'She finds a bottle with a letter. The tide is out.';
+  const long = 'Mara walks the length of the shore at the lowest tide of the year, past the wreck of the Halcyon and the black rocks below the lighthouse, and finds a bottle.';
+  /* (2.12.49's own naming, as it named them: the premise's first sentence, cut to eighty letters) */
+  const named49 = (premise) => { let n = namesjs.firstSentence(premise).replace(/\s+/g, ' ').trim().replace(/[.!?…]+$/, '').trim(); if (n.length > 80) { const room = n.slice(0, 80); const sp = room.search(/\s\S*$/); n = (sp > 40 ? room.slice(0, sp) : room).trim(); } return n; };
+  const page = (text, direction) => ({ text, ask: { direction, length: 'scene' } });
+  const b = await makeBook([[page('The bottle was green.', first)], [page('The shore was long.', long)], [page('Gulls wheeled.', 'The gulls come back at noon.')], [page('Rain fell.', 'Rain on the lamp room.')], [page('Fog came.', 'Fog over the point.')]], { manual: true });
+  markAllSeen(b);
+  const set = (i, name, by) => store.change('chapter', b.ids[i], shape.chapterSteps.setName(name, by), { now: true });
+  set(0, named49(first), 'helper');
+  set(1, named49(long), 'helper');
+  set(2, 'The Gulls', 'helper');
+  set(3, 'Rain on the lamp room', 'you');
+  /* (a reading's name that only repeated his premise, laid as given 2.12.55–2.12.62) */
+  set(4, 'Fog over the point', 'helper');
+  assert.ok(b.ch(1).name.length < long.length && long.startsWith(b.ch(1).name), b.ch(1).name);
+  assert.equal(mend.mendNames(b.novelId), 3);
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => nameOf(b, i)), [['', '', true], ['', '', true], ['The Gulls', 'helper', false], ['Rain on the lamp room', 'you', false], ['', '', true]]);
+  assert.equal(mend.mendNames(b.novelId), 0, 'once');
+  await store.flush();
+  assert.equal(((await onPhone('novel', b.novelId)).memory || {}).namesMended, mend.NAMES_V, 'its mark kept with the book');
+  await script([{ title: true, text: JSON.stringify({ name: 'The Green Bottle' }) }, { title: true, text: JSON.stringify({ name: 'The Long Shore' }) }, { title: true, text: JSON.stringify({ name: 'Fog Point' }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => b.ch(i).name), ['The Green Bottle', 'The Long Shore', 'The Gulls', 'Rain on the lamp room', 'Fog Point']);
+  /* with no helper chosen, the name is kept meanwhile — owed for when one is */
+  const c = await makeBook([[page('The bottle was green.', first)]], { manual: true });
+  store.change('chapter', c.ids[0], shape.chapterSteps.setName(named49(first), 'helper'), { now: true });
+  await setHouse({}, { connections: [], roles: {} });
+  try {
+    assert.equal(mend.mendNames(c.novelId), 1);
+    assert.deepEqual(nameOf(c), [named49(first), 'helper', true]);
+  } finally { await setHouse(); }
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('a chapter owed a name whose reading settles with no call — the version before put back as 2.12.62 did it, its summary back with none — is named by its own ask from the page on show, in the last chapter and in one before it (2.12.63)', async () => {
+  for (const at of [1, 0]) {
+    await quietAll(); await reset();
+    const b = await makeBook(at ? [['The lamp was cold, and the sea was loud on the rocks below the lighthouse.'], []] : [[], ['Chapter two: the boat came in at dawn, and Tomas was on it.']], { manual: true });
+    markAllSeen(b);
+    await script([{ text: 'The bell rang in the drowned church, and Mara counted the strokes.' }]);
+    assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[at], direction: 'The drowned bell rings.' })).ok, true);
+    await quietAll(); await reset();
+    await script([{ text: JSON.stringify({ chapterName: 'The Drowned Bell', people: [] }) }]);
+    await archivist.run(b.novelId);
+    assert.deepEqual(nameOf(b, at), ['The Drowned Bell', 'helper', false], `${at}: named by the reading`);
+    const pid = b.ch(at).passages[0].id;
+    await quietAll(); await reset();
+    await script([{ text: 'A second try at the bell, which rang thirteen times that night.' }]);
+    assert.equal((await writer.resend({ novelId: b.novelId, chapterId: b.ids[at], passageId: pid, direction: 'The drowned bell rings.' })).ok, true);
+    assert.deepEqual(nameOf(b, at), ['', '', true], `${at}: Retry lets it go`);
+    /* the version before, as 2.12.62's arrows put it back — nothing let go or given back: a book left so */
+    store.change('chapter', b.ids[at], shape.chapterSteps.choose(pid, b.ch(at).passages[0].versions[0].id));
+    archivist.settle(b.novelId);
+    await quietAll(); await reset();
+    await script([{ title: true, text: JSON.stringify({ name: 'Counting the Strokes' }) }]);
+    await archivist.run(b.novelId);
+    const reads = (await requests()).map(userOf).filter((u) => u.includes('Update the notes'));
+    const asked = (await titleAsks()).map(userOf);
+    assert.deepEqual([reads.length, asked.length], [0, 1], `${at}: the reading settled with no call, the name asked by itself`);
+    assert.ok(asked[0].includes('Mara counted the strokes') && !asked[0].includes('thirteen times'), asked[0]);
+    assert.deepEqual(nameOf(b, at), ['Counting the Strokes', 'helper', false], `${at}`);
+    await quietAll();
+    await putAway(b);
+  }
+});
+
+await test('the arrows between takes of the page that opens a chapter: each take keeps the name it was given, back with no call — Another take is a page of its own, a Rewrite of it the same page (2.12.63)', async () => {
+  const b = await makeBook([[]], { manual: true });
+  await script([{ text: 'The bell rang in the drowned church, and Mara counted the strokes.' }]);
+  assert.equal((await writer.writeNext({ novelId: b.novelId, chapterId: b.ids[0], direction: 'The drowned bell rings.' })).ok, true);
+  await script([{ text: JSON.stringify({ chapterName: 'The Drowned Bell', people: [] }) }]);
+  await archivist.run(b.novelId);
+  const pid = b.ch().passages[0].id;
+  await quietAll(); await reset();
+  await script([{ text: 'Another telling: the bell rang thirteen times that night.' }]);
+  assert.equal((await writer.anotherTake({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid })).ok, true);
+  assert.deepEqual(nameOf(b), ['', '', true], 'Another take is a page of its own: its name owed');
+  await script([{ text: JSON.stringify({ chapterName: 'Thirteen Strokes', people: [] }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual(nameOf(b), ['Thirteen Strokes', 'helper', false], 'named by the reading that saw it');
+  const [v1, v2] = b.ch().passages[0].versions.map((v) => v.id);
+  await quietAll(); await reset();
+  deskPick(b, 0, pid, v1);
+  assert.deepEqual(nameOf(b), ['The Drowned Bell', 'helper', false], 'the version before: its own name back');
+  deskPick(b, 0, pid, v2);
+  assert.deepEqual(nameOf(b), ['Thirteen Strokes', 'helper', false], 'the version after: its own name back');
+  await script([{ text: 'Thirteen times the drowned bell rang, and Mara counted every one of them.' }]);
+  assert.equal((await writer.rewrite({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, note: 'Make it slower.' })).ok, true);
+  assert.deepEqual(nameOf(b), ['Thirteen Strokes', 'helper', false], 'a Rewrite keeps the name');
+  deskPick(b, 0, pid, v2);
+  assert.deepEqual(nameOf(b), ['Thirteen Strokes', 'helper', false], 'back to the page it rewrote: the same page');
+  await archivist.run(b.novelId);
+  assert.equal((await titleAsks()).length, 0, 'no call for a name in all of it');
+  await putAway(b);
+});
+
+await test('his own words, or a scene written into prose, that open a chapter name it as any page that opens it does — a page added after them changes nothing (2.12.63)', async () => {
+  const b = await makeBook([[], []], { manual: true });
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'I kept the lamp lit for him.' });
+  assert.deepEqual(nameOf(b, 0), ['', '', true], 'his own words open it: owed its name');
+  await script([{ text: JSON.stringify({ chapterName: 'The Lamp Kept', people: [] }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual(nameOf(b, 0), ['The Lamp Kept', 'helper', false], 'named by the reading that saw them');
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'Then I slept.' });
+  assert.deepEqual(nameOf(b, 0), ['The Lamp Kept', 'helper', false], 'a later page of his: nothing let go');
+  await quietAll(); await reset();
+  await script([{ text: 'Mara walked down to the shore, where the stranger stood with his collar up.' }]);
+  const out = await writer.playToProse({ novelId: b.novelId, chapterId: b.ids[1], play: { id: 'pl-shore', who: 'Mara', after: null }, transcript: 'Mara: I walk down to the shore.\n\nNarrator: The stranger waits with his collar up.' });
+  assert.equal(out.ok, true, out.error);
+  assert.deepEqual(nameOf(b, 1), ['', '', true], 'a scene’s prose opens it: owed its name');
+  await quietAll();
+  await putAway(b);
+});
+
+await test('a reading names a chapter only where it saw its opening as it stands — the page itself, or the chapter riding whole before the new words; one that did not leaves the name to its own ask (2.12.63)', async () => {
+  /* the opening riding whole before the new words: the reading names it */
+  const b = await makeBook([['Mara struck a match in the dark, and the letter caught.']], { manual: true });
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], (c) => { c.nameDue = true; }, { now: true });
+  writer.addMine({ novelId: b.novelId, chapterId: b.ids[0], text: 'The storm took the roof off the shed.' });
+  await script([{ text: JSON.stringify({ chapterName: 'A Match in the Dark', people: [] }) }]);
+  await archivist.run(b.novelId);
+  assert.deepEqual([(await titleAsks()).length, ...nameOf(b)], [0, 'A Match in the Dark', 'helper', false], 'saw it riding before the new words');
+  /* a long chapter read at its end, its opening cut off the words riding before: never named by that reading */
+  const opening = 'THE FIRST PAGE. ' + Array.from({ length: 900 }, (_, i) => `The shore ran on past the ${i}th stone.`).join(' ');
+  const c = await makeBook([[opening, 'The middle of it, where the tide turned.']], { manual: true });
+  markAllSeen(c);
+  writer.addMine({ novelId: c.novelId, chapterId: c.ids[0], text: 'At the end of it the lamp went out.' });
+  await quietAll(); await reset();
+  await script([{ text: JSON.stringify({ chapterName: 'The Lamp Goes Out', people: [] }) }, { title: true, text: JSON.stringify({ name: 'The Long Shore' }) }]);
+  await archivist.run(c.novelId);
+  const read = (await requests()).map(userOf).filter((u) => u.includes('Update the notes'));
+  assert.ok(read.length === 1 && !read[0].includes('THE FIRST PAGE'), 'the reading did not see the opening');
+  const asked = (await titleAsks()).map(userOf);
+  assert.ok(asked.length === 1 && asked[0].includes('THE FIRST PAGE'), 'its own ask has the opening');
+  assert.deepEqual(nameOf(c), ['The Long Shore', 'helper', false]);
+  await putAway(b);
+  await putAway(c);
+});
+
+await test('the name’s own ask out while the page that opens the chapter changes: never laid on words it was not asked for — asked again for the page as it stands (2.12.63)', async () => {
+  const b = await makeBook([['Mara struck a match in the dark.', 'The storm took the roof off the shed.']], { manual: true });
+  markAllSeen(b);
+  store.change('chapter', b.ids[0], (c) => { c.nameDue = true; }, { now: true });
+  await script([{ title: true, text: JSON.stringify({ name: 'A Match in the Dark' }) }, { title: true, text: JSON.stringify({ name: 'Wet Ash' }) }]);
+  let changed = false;
+  const was = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (!changed && init && typeof init.body === 'string' && init.body.includes(prompts.TITLE_ASK)) {
+      changed = true;
+      /* his edit on the page itself, while the ask is out */
+      store.change('chapter', b.ids[0], (c) => { picked(c.passages[0]).text = 'The match was wet, and the letter would not catch.'; }, { now: true });
+    }
+    return was(url, init);
+  };
+  try { await archivist.run(b.novelId); } finally { globalThis.fetch = was; }
+  assert.equal(changed, true, 'asked');
+  assert.deepEqual(nameOf(b), ['', '', true], 'not laid on the words as they read now');
+  await quietAll();
+  /* (the reading of his edit first, then the ask again for the opening as it stands) */
+  await archivist.run(b.novelId);
+  const asked = (await titleAsks()).map(userOf);
+  assert.ok(asked.length === 2 && asked[1].includes('The match was wet'), asked.join('\n---\n'));
+  assert.deepEqual(nameOf(b), ['Wet Ash', 'helper', false]);
   await putAway(b);
 });
 
@@ -19350,7 +19646,7 @@ async function stageModel(port, silent = []) {
   /* (`only`: silent only on an ask holding these words — the one stretch, of several) */
   const api = { asked, silent: new Set(silent), refuse: new Set(), only: '', url: `http://127.0.0.1:${port}/v1` };
   const sources = (t, re) => [...t.matchAll(re)].map((m) => m[1]);
-  const kindOf = (last) => (last.includes(prompts.AUDIT_ASK) ? 'audit' : last.includes(prompts.TIMELINE_ASK) ? 'turns'
+  const kindOf = (last) => (last.includes(prompts.TITLE_ASK) ? 'name' : last.includes(prompts.AUDIT_ASK) ? 'audit' : last.includes(prompts.TIMELINE_ASK) ? 'turns'
     : last.includes('were read into the notes before the book’s bibliography was kept') ? 'bib' : last.includes('Update the notes') ? 'notes'
       : last.includes('Its summary, as it stands') ? 'check' : last.includes('Write the summary again') ? 'tokens'
         : last.includes("Here's a stretch of a scene played from") ? 'scene' : last.startsWith("Here's a stretch of") ? 'stretch'
@@ -19381,7 +19677,8 @@ async function stageModel(port, silent = []) {
         : kind === 'summary' || kind === 'tokens' ? { summary: 'Mara keeps the light at the Point.', name: 'The Light' }
         : kind === 'stretch' || kind === 'scene' ? { summary: 'The shore is walked again and again.' }
         : kind === 'check' ? { wrong: [], missing: [] } : kind === 'audit' ? { clear: true, verdict: 'These hold.' }
-        : kind === 'keep' ? { about: 'A keeper and her light.', style: 'Plain, and close to her.' } : kind === 'probe' ? { ok: true } : {};
+        : kind === 'keep' ? { about: 'A keeper and her light.', style: 'Plain, and close to her.' } : kind === 'probe' ? { ok: true }
+          : kind === 'name' ? { name: 'The Keeper’s Light' } : {};
       const text = refused ? 'I would rather not.' : JSON.stringify(answer);
       if (!streamed) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] })); return; }
       res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: null }] }) + '\n\n');
@@ -19450,6 +19747,12 @@ const STAGES = {
     them: true,
     passed: (b) => assert.deepEqual(['about', 'style'].map((k) => [((b.novel().kept || {})[k] || {}).text, Boolean(((b.novel().kept || {})[k] || {}).again)]), [['', false], ['', false]], 'kept as tried: written as the book is read on, or by Write it from the book again'),
   },
+  /* (2.12.63: a chapter's name, asked by itself — its opening changed under the name it had) */
+  name: {
+    book: async () => { const b = await makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: true }); store.change('chapter', b.ids[0], (c) => { c.nameDue = true; }, { now: true }); return b; },
+    says: (L) => `The helper names ${L} again`,
+    passed: (b, r) => assert.deepEqual([archivist.stageWait(b.novelId, 'name:' + b.ids[0], r.fp), ...nameOf(b)], [{ passed: true }, '', '', true], 'passed by until its opening changes — the summary named it not meanwhile'),
+  },
   audit: {
     book: async () => makeBook([['Mara kept the light at the Point.'], ['Gulls wheeled.']], { manual: true }),
     says: () => 'The helper checks the notes against the book again',
@@ -19458,7 +19761,7 @@ const STAGES = {
   },
 };
 /* what is asked after each stage in the run's own order: the stages after a stall go on */
-const AFTER = { stretch: ['summary', 'turns', 'audit'], scene: ['summary', 'turns', 'audit'], summary: ['turns', 'audit'], tokens: ['turns', 'audit'], check: ['turns', 'audit'], keep: ['audit'], audit: [] };
+const AFTER = { name: ['summary', 'turns', 'audit'], stretch: ['summary', 'turns', 'audit'], scene: ['summary', 'turns', 'audit'], summary: ['turns', 'audit'], tokens: ['turns', 'audit'], check: ['turns', 'audit'], keep: ['audit'], audit: [] };
 async function stageStalls(stage) {
   const s = STAGES[stage];
   const keep = call.onLearn((id, learned) => store.change('house', 'house', (hs) => { const c = (hs.connections || []).find((x) => x.id === id); if (c) c.learned = learned; }));
@@ -19537,15 +19840,15 @@ async function stageStalls(stage) {
   }
 }
 for (const stage of Object.keys(STAGES)) {
-  await test(`a ${stage === 'tokens' ? 'summary’s names and figures' : stage === 'keep' ? 'What it’s about' : stage === 'audit' ? 'check of the notes' : stage === 'check' ? 'summary’s check' : stage === 'scene' ? 'scene’s stretch' : `chapter’s ${stage}`} its model stays silent on is waited as long as it was waited, its wait kept with the book and said — never a failure, never Try again now; the stages after it go on in the same run; counted on the longest leash, nothing more asked of that model until as long has passed; passed by at the second and said so; nothing asked in a loop (round 7: ${stage})`, () => stageStalls(stage));
+  await test(`a ${stage === 'name' ? 'chapter’s name' : stage === 'tokens' ? 'summary’s names and figures' : stage === 'keep' ? 'What it’s about' : stage === 'audit' ? 'check of the notes' : stage === 'check' ? 'summary’s check' : stage === 'scene' ? 'scene’s stretch' : `chapter’s ${stage}`} its model stays silent on is waited as long as it was waited, its wait kept with the book and said — never a failure, never Try again now; the stages after it go on in the same run; counted on the longest leash, nothing more asked of that model until as long has passed; passed by at the second and said so; nothing asked in a loop (round 7: ${stage})`, () => stageStalls(stage));
 }
 
 /* (2.12.41, round 8 — a refusal, not a stall, of a chapter's summary, What it's about or the notes' check was thrown on
  * its first try: the run ended there, the backfills and the notes' check waited out a failure's wait, and the light said
  * the helper "couldn't finish"; a stretch's, a scene's and a summary's check, asked again the next run, were said nowhere
  * as asked again) — what is asked after each in the run's own order, and its own line */
-const REFUSE_AFTER = { stretch: ['summary', 'turns', 'audit'], scene: ['summary', 'turns', 'audit'], summary: ['turns', 'audit'], check: ['turns', 'audit'], keep: ['audit'], audit: [] };
-const REFUSE_NAME = { stretch: 'chapter’s stretch', scene: 'scene’s stretch', summary: 'chapter’s summary', check: 'summary’s check', keep: 'What it’s about', audit: 'check of the notes' };
+const REFUSE_AFTER = { name: ['summary', 'turns', 'audit'], stretch: ['summary', 'turns', 'audit'], scene: ['summary', 'turns', 'audit'], summary: ['turns', 'audit'], check: ['turns', 'audit'], keep: ['audit'], audit: [] };
+const REFUSE_NAME = { name: 'chapter’s name', stretch: 'chapter’s stretch', scene: 'scene’s stretch', summary: 'chapter’s summary', check: 'summary’s check', keep: 'What it’s about', audit: 'check of the notes' };
 const OWN_LINE = {
   summary: (b) => archivist.summaryWait(b.novelId, b.ids[0]),
   stretch: (b, r) => archivist.stretchWait(b.novelId, 'chapter', b.ids[0], r.fp),
@@ -19553,6 +19856,7 @@ const OWN_LINE = {
   check: (b) => archivist.checkWait(b.novelId, 'chapter', b.ids[0], b.ch(0).summary),
   keep: (b) => archivist.keepWait(b.novelId, 'about'),
   audit: (b) => archivist.stageWait(b.novelId, 'audit'),
+  name: (b) => archivist.stageWait(b.novelId, 'name:' + b.ids[0]),
 };
 async function stageRefusals(stage) {
   const s = STAGES[stage];
@@ -19585,7 +19889,7 @@ async function stageRefusals(stage) {
     const own = OWN_LINE[stage](b, r1);
     const them = stage === 'audit';
     assert.deepEqual([own && own.when, own && own.refused, own && archivist.againWhy(own, them)], ['in a moment', true, `the helper’s model would not answer for ${them ? 'them' : 'it'} the first time`], `${stage}: its own line`);
-    if (['summary', 'keep', 'audit'].includes(stage)) {
+    if (['summary', 'keep', 'audit', 'name'].includes(stage)) {
       const L = shape.chapterLabel(b.novel(), b.ch(0), { withName: true });
       assert.deepEqual(archivist.lightOf(b.novelId), { state: 'waiting', words: `${s.says(L)} in a moment — its model would not answer for ${s.them ? 'them' : 'it'} the first time.` }, `${stage}: the light`);
     }
