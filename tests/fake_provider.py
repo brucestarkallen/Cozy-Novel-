@@ -49,8 +49,8 @@ def answer_for(body):
         asked = next((m.get("content") for m in msgs if m.get("role") == "user" and isinstance(m.get("content"), str) and "Hold my words against the book as it stands" in m.get("content")), last_user)
         said = asked.split('to go into my bibliography now:\n"""\n', 1)[-1].split('\n"""', 1)[0]
         # (the walk's own words that tell it how to answer — never part of what he adds)
-        flags = set(re.findall(r"\b(HELDBACK|LONE|ASIDE|SHAPE)\b", said))
-        said = re.sub(r"\b(?:HELDBACK|LONE|ASIDE|SHAPE)\s*", "", said)
+        flags = set(re.findall(r"\b(HELDBACK|LONE|ASIDE|SHAPE|TALK)\b", said))
+        said = re.sub(r"\b(?:HELDBACK|LONE|ASIDE|SHAPE|TALK)\s*", "", said)
         entries, conflicts = [], []
         for sentence in re.split(r"(?<=[.!?])\s+", said):
             m = re.match(r"^(?:The )?([A-Z][\w’' -]+?) is (.+?)[.!?]?$", sentence.strip())
@@ -59,26 +59,34 @@ def answer_for(body):
                 entries.append({"name": name, "kind": "groups" if "council" in what else "lore", "line": what[:1].upper() + what[1:], "text": f"{name}: {what}."})
         if "I looked up the words you quoted" in last_user:
             return json.dumps({"entries": entries})
+
+        # (2.12.63, the review) TALK: it talks first, as it is asked to — a promise, then a line that leads into the
+        # record, and the record in a fence
+        def answer(obj):
+            if "TALK" not in flags:
+                return json.dumps(obj)
+            return "I checked it against the book, and nothing on the page says otherwise. It goes in as you said.\n\nHere’s the record:\n```json\n" + json.dumps(obj) + "\n```"
+
         # (2.12.40, the review) HELDBACK: his newer word changes words a page holds, and the entry it writes says it —
         # asked again, it gives no entry for it, so that entry waits; LONE: his newer word changes his own entry's words, and
         # it writes no entry to carry it; ASIDE: it says the book says otherwise in words that stand nowhere
         if "HELDBACK" in flags:
             page = re.search(r"[^.\n\"]*silver hair[^.\n\"]*", asked.split("The passages of the book that name", 1)[-1])
-            return json.dumps({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has black hair", "was": page.group(0).strip() if page else "silver hair", "where": "your entry", "why": "your newer word"}],
+            return answer({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has black hair", "was": page.group(0).strip() if page else "silver hair", "where": "your entry", "why": "your newer word"}],
                                "entries": [{"name": "Emilia Vermaine", "kind": "people", "line": "An elder vampire.", "text": "Emilia has black hair now."}]})
         if "LONE" in flags:
-            return json.dumps({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has a brother", "was": "She has no family of her own yet", "where": "your entry Emilia Vermaine", "why": "your newer word"}], "entries": []})
+            return answer({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has a brother", "was": "She has no family of her own yet", "where": "your entry Emilia Vermaine", "why": "your newer word"}], "entries": []})
         # (2.12.41, the fourth review) SHAPE: the same, with its own words for it — words his never say, so they cannot go
         # in as they are
         if "SHAPE" in flags:
-            return json.dumps({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has a brother", "was": "She has no family of her own yet", "now": "Emilia has a brother who rules the Order.", "where": "your entry Emilia Vermaine", "why": "your newer word"}], "entries": []})
+            return answer({"verdict": "Your newer word goes in.", "changes": [{"mine": "Emilia has a brother", "was": "She has no family of her own yet", "now": "Emilia has a brother who rules the Order.", "where": "your entry Emilia Vermaine", "why": "your newer word"}], "entries": []})
         if "ASIDE" in flags:
-            return json.dumps({"verdict": "Green eyes wait for your word.", "conflicts": [{"mine": "her eyes are green", "against": "her eyes were always grey", "where": "Chapter One, Passage 1", "why": "grey"}], "entries": entries})
+            return answer({"verdict": "Green eyes wait for your word.", "conflicts": [{"mine": "her eyes are green", "against": "her eyes were always grey", "where": "Chapter One, Passage 1", "why": "grey"}], "entries": entries})
         if "black hair" in said:
             page = re.search(r"[^.\n\"]*silver hair[^.\n\"]*", last_user.split("The passages of the book that name", 1)[-1])
             if page:
                 conflicts.append({"mine": "black hair", "against": page.group(0).strip(), "where": "Chapter One, Passage 1", "why": "the page gives silver"})
-        return json.dumps({"verdict": f"{len(entries)} go in; {len(conflicts)} wait for your word.", "conflicts": conflicts, "entries": entries})
+        return answer({"verdict": f"{len(entries)} go in; {len(conflicts)} wait for your word.", "conflicts": conflicts, "entries": entries})
     if "Add the quotation marks each spoken line is missing" in last_user:
         # the marks' mender (2.12.34): a speech opened while one is still open is closed before the space in front of it
         out = []

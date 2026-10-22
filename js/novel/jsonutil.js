@@ -2,13 +2,17 @@
  * (its agents/jsonutil.js, M9/M26/M31/M259/M439/M607). A model's JSON fails
  * in known ways: thinking before it, a code fence, comments, trailing commas,
  * raw line breaks inside a string, curly quotes as delimiters. Each is mended
- * mechanically; nothing is guessed. Pure. */
+ * mechanically; nothing is guessed. Where the object it read opens is
+ * said by the same reading (findFirstObject `at`). Pure. */
 
-export function balancedCandidates(text, maxN = 5) {
+/* each whole object's place in the text — where it opens (`start`) and just past where it closes (`end`) — and every
+ * brace that never closes (`open`) */
+export function balancedSpans(text, maxN = 5) {
   const src = String(text || '');
-  const out = [];
+  const spans = [];
+  const open = [];
   let i = 0;
-  while (out.length < maxN) {
+  while (spans.length < maxN) {
     const start = src.indexOf('{', i);
     if (start === -1) break;
     let depth = 0; let inStr = false; let esc = false; let end = -1;
@@ -21,11 +25,16 @@ export function balancedCandidates(text, maxN = 5) {
     }
     /* a brace in the words before the object never closes: the search goes on
      * from the next one, so the object after it is still found */
-    if (end === -1) { i = start + 1; continue; }
-    out.push(src.slice(start, end + 1));
+    if (end === -1) { open.push(start); i = start + 1; continue; }
+    spans.push({ start, end: end + 1 });
     i = end + 1;
   }
-  return out;
+  return { spans, open };
+}
+
+export function balancedCandidates(text, maxN = 5) {
+  const src = String(text || '');
+  return balancedSpans(src, maxN).spans.map((s) => src.slice(s.start, s.end));
 }
 
 export function repairJson(text) {
@@ -101,42 +110,74 @@ export function parseLenient(candidate) {
   try { return JSON.parse(repairQuotes(mended)); } catch (_) { return null; }
 }
 
-/* The object that answers, or null. want(obj) picks among several. */
-/* whether the answer's first object closes — a reply cut off inside it holds
- * only inner objects, never the answer (Cozy Tavern's M685) */
-export function closesWhole(raw) {
-  const text = String(raw || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/```(?:json|JSON)?/g, '');
-  const start = text.indexOf('{');
-  if (start < 0) return false;
-  const first = balancedCandidates(text.slice(start), 1)[0];
-  return Boolean(first) && text.slice(start).startsWith(first);
+/* WHAT THE PARSE READS, AND WHERE IT STOOD IN THE ANSWER (2.12.63, the review: the words before Quick add's record were
+ * cut at a second guess — the first {" — so a brace in its words, or a record in curly quotes, garbled them): `re` cut
+ * out of the text, with the runs it keeps — each run's place in the new text and in the text it was cut from — so a
+ * place the parse finds is said in the answer's own words (`placeIn`) */
+function cutOut(text, re) {
+  let out = '';
+  const runs = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) { runs.push([out.length, last]); out += text.slice(last, m.index); }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) { runs.push([out.length, last]); out += text.slice(last); }
+  return { text: out, runs };
 }
+function placeIn(runs, at) {
+  let k = runs.length - 1;
+  while (k > 0 && runs[k][0] > at) k--;
+  return k < 0 ? at : runs[k][1] + (at - runs[k][0]);
+}
+const answers = (parsed, want) => Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed) && (typeof want !== 'function' || want(parsed));
 
-/* the last object in words that may hold drafts of it before (a model's thinking) */
-export function parseLastObject(raw, want = null) {
+/* The object that answers, with where it opens in the answer as it came (`at`), or null. want(obj) picks among several.
+ * `whole` — for an answer cut off: only an object that no brace before it leaves open counts. A reply cut off inside its
+ * object holds only inner objects, never the answer (Cozy Tavern's M685) — and that is asked of the object the parse
+ * reads, never of the first brace (2.12.63: words before the object holding a {…} of their own passed for its close). */
+export function findFirstObject(raw, want = null, { whole = false } = {}) {
   try {
-    const text = String(raw || '').replace(/```(?:json|JSON)?/g, '');
-    const all = balancedCandidates(text, 40);
-    for (let k = all.length - 1; k >= 0; k--) {
-      const parsed = parseLenient(all[k]);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (typeof want !== 'function' || want(parsed))) return parsed;
+    const thought = cutOut(String(raw || ''), /<think>[\s\S]*?(<\/think>|$)/gi);
+    const fenced = cutOut(thought.text, /```(?:json|JSON)?/g);
+    let text = fenced.text;
+    /* (one mark for one: every place stays where it stood) */
+    if (!text.includes('"') && /[“”]/.test(text)) text = text.replace(/[“”]/g, '"');
+    const { spans, open } = balancedSpans(text, 6);
+    for (const s of spans) {
+      if (whole && open.some((o) => o < s.start)) continue;
+      const parsed = parseLenient(text.slice(s.start, s.end));
+      if (answers(parsed, want)) return { value: parsed, at: placeIn(thought.runs, placeIn(fenced.runs, s.start)) };
     }
     return null;
   } catch (_) {
     return null;
   }
+}
+
+/* the last object in words that may hold drafts of it before (a model's thinking) — `whole` as above */
+export function findLastObject(raw, want = null, { whole = false } = {}) {
+  try {
+    const fenced = cutOut(String(raw || ''), /```(?:json|JSON)?/g);
+    const { spans, open } = balancedSpans(fenced.text, 40);
+    for (let k = spans.length - 1; k >= 0; k--) {
+      const s = spans[k];
+      if (whole && open.some((o) => o < s.start)) continue;
+      const parsed = parseLenient(fenced.text.slice(s.start, s.end));
+      if (answers(parsed, want)) return { value: parsed, at: placeIn(fenced.runs, s.start) };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function parseLastObject(raw, want = null) {
+  const found = findLastObject(raw, want);
+  return found ? found.value : null;
 }
 
 export function parseFirstObject(raw, want = null) {
-  try {
-    let text = String(raw || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/```(?:json|JSON)?/g, '');
-    if (!text.includes('"') && /[“”]/.test(text)) text = text.replace(/[“”]/g, '"');
-    for (const c of balancedCandidates(text, 6)) {
-      const parsed = parseLenient(c);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (typeof want !== 'function' || want(parsed))) return parsed;
-    }
-    return null;
-  } catch (_) {
-    return null;
-  }
+  const found = findFirstObject(raw, want);
+  return found ? found.value : null;
 }
