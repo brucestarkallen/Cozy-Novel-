@@ -301,6 +301,10 @@ export const CONTEXT_REFUSAL = /context[_ ]length|context window|context size|ma
 /* the reply's own length, too long for the model: "max_tokens … is too
  * large", "maximum allowed number of output tokens" */
 export const REPLY_TOO_LONG = /(?:max_tokens|max_completion_tokens|max_new_tokens|max_output_tokens|output tokens|completion tokens)[^.]{0,80}(?:too large|too long|exceeds?|greater than|maximum|at most|must be (?:less|<=?)|allowed)|(?:maximum|max)(?:imum)? (?:allowed )?(?:number of )?output tokens|valid range of (?:max_tokens|max_completion_tokens|max_new_tokens|max_output_tokens)|supports at most \d[\d,]* (?:completion|output) tokens/i;
+/* a refusal that names the reply's own length — its field, or its output or completion tokens — whether or not its
+ * number can be read (archivist.js askJson asks a reading turned away so once more at its floor; 2.12.63). A refusal
+ * of what was written, or of more words than the model holds, names neither. */
+export const REPLY_FIELD = /max_?(?:new_?|output_?|completion_?)?tokens|(?:output|completion) tokens/i;
 /* OpenAI's own newer models: "Unsupported parameter: 'max_tokens' is not
  * supported with this model. Use 'max_completion_tokens' instead." (and never
  * vLLM's "'max_tokens' or 'max_completion_tokens' is too large") */

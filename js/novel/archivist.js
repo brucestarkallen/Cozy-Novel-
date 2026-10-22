@@ -22,7 +22,7 @@
 
 import * as store from '../store.js';
 import { ask, emptyWhy } from '../model/call.js';
-import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
+import { contextOf, thinksOn, thinkingFloor, REPLY_FIELD } from '../model/providers.js';
 import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow, setHisAsk } from './writer.js';
 import { findFirstObject, findLastObject } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows, plural } from '../util.js';
@@ -1973,9 +1973,12 @@ export async function askJson(conn, system, request, { want, room = 0, beforeAsk
   /* A ROOM GROWN PAST THE FLOOR, TURNED AWAY (2.12.63): a provider that gives fewer tokens in one reply than the grown room
    * refuses the ask in words the app cannot always read for its number (call.js learns it only where it can), and the page
    * was then set aside though the floor would have read it. Turned away so — refused outright, never a stall or a fault
-   * that passes — it is asked once more at the floor, as it was asked through 2.12.61. */
+   * that passes, and in words that name the reply's own length (providers.js REPLY_FIELD) — it is asked once more at the
+   * floor, as it was asked through 2.12.61. (Only then: a refusal of the words themselves, or of more than the model
+   * holds, is the same refusal at any room — asked again, it was one more call for nothing, and it took the place of the
+   * look that tells a model that is down from one that refuses.) */
   let asked = answer;
-  if (!first.ok && answer > helperRoom(conn) && !first.leashed && first.permanent && Number(first.status) >= 400 && Number(first.status) < 500 && ![401, 403, 404].includes(Number(first.status))) {
+  if (!first.ok && answer > helperRoom(conn) && !first.leashed && first.permanent && Number(first.status) >= 400 && Number(first.status) < 500 && ![401, 403, 404].includes(Number(first.status)) && REPLY_FIELD.test(String(first.error || ''))) {
     asked = helperRoom(conn);
     if (beforeAsk) await beforeAsk();
     first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: asked }), stream: true, worker: true, patient: true });
