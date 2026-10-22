@@ -395,8 +395,10 @@ function card(novelId, x) {
     }
     if (item.why) el.append(h('div.sugwhy', item.why));
     if (item.lift) el.append(h('div.sugwhy', h('b', 'To reach it: '), item.lift));
-    /* written again by itself, and it failed: said, and never tried by itself again (S11-G6) */
-    if (item.liftFailed) el.append(h('div.sugwhy', h('b', 'Written again by itself, it did not come: '), `${item.liftFailed.why}. It is not tried by itself again — the button below still asks for it.`));
+    /* written again by itself, and it failed: said, and never tried by itself again (S11-G6) — and the button that still
+     * asks for it named only where it is there (a grade with nothing to write toward has none; 2.12.63: the line said
+     * "the button below" over a card with no button) */
+    if (item.liftFailed) el.append(h('div.sugwhy', h('b', 'Written again by itself, it did not come: '), `${item.liftFailed.why}. It is not tried by itself again${item.lift ? ` — Write it again toward ${item.target}, below, still asks for it` : ''}.`));
     el.append(h('div.btnrow',
       item.lift ? h('button.btn.primary.small', { title: 'The writer writes the passage again with this as its note; the words before stay one arrow away.', onclick: () => {
         if (C.sheet) C.sheet.close();

@@ -1599,6 +1599,24 @@ async def scenario_suggestions_more(b):
     titles = await pg.evaluate("[...document.querySelectorAll('.sheet.on .sug button')].filter((x) => !x.classList.contains('link')).map((x) => [x.textContent.trim(), x.title])")
     check('every button in Suggestions says what it does', titles and all(t for _, t in titles), titles)
     await close_sheet(pg)
+    # the same grade with nothing to write toward: no button, and its line names none (2.12.63: it said "the button below")
+    await pg.evaluate("""async () => {
+      const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const cid = (await import('/js/ui/desk.js')).deskState().chapterId;
+      store.change('chapter', cid, (ch) => { const p2 = ch.passages[1]; const card = ch.checks[p2.id][shape.picked(p2).id].items.find((x) => x.kind === 'grade'); window.__liftWas = card.lift; card.lift = ''; }, { now: true });
+    }""")
+    await pg.wait_for_timeout(300)
+    await pg.click('#checkBubble')
+    await pg.wait_for_selector('.sheet.on .sug')
+    cards = await pg.locator('.sheet.on .sug').all_inner_texts()
+    grade = next((c for c in cards if 'UNDER YOUR MARK' in c.upper()), '')
+    check('a failed writing-again with nothing to write toward names no button it does not have', 'It is not tried by itself again.' in grade and 'still asks' not in grade and 'Write it again toward' not in grade, grade)
+    await close_sheet(pg)
+    await pg.evaluate("""async () => {
+      const store = await import('/js/store.js'); const shape = await import('/js/novel/shape.js');
+      const cid = (await import('/js/ui/desk.js')).deskState().chapterId;
+      store.change('chapter', cid, (ch) => { const p2 = ch.passages[1]; const card = ch.checks[p2.id][shape.picked(p2).id].items.find((x) => x.kind === 'grade'); card.lift = window.__liftWas; }, { now: true });
+    }""")
     # his edit, made on the words he opened: a version that comes meanwhile stays one arrow back
     await pg.click('#passages .passage >> nth=0', position={'x': 6, 'y': 6}); await pg.wait_for_timeout(200)
     await pg.click('.passage.selected .pctl button:has-text("Edit")')
