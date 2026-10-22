@@ -35,7 +35,7 @@ import { assemble, partnerReply } from './context.js';
 import { connFor } from './writer.js';
 import { picked, passageNumbers, chapterLabel, premisesOf, renameCount, renamesSince } from './shape.js';
 import { quickAddRequest, quickAgainRequest, keptByHelper, PREMISE_ROOM, JSON_AGAIN, JSON_CUT } from './prompts.js';
-import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
+import { findFirstObject, findLastObject } from './jsonutil.js';
 import { findIn } from './search.js';
 import { namesAndFigures, foldedText, foldName, nearName, stopEndsNoSentence, renameIn } from './names.js';
 import { entriesOf, entriesNamed, entryFor, otherKindSaid, entryWords, kindSaid, kindOf, nameForms, makeFinder, formKey } from './bibliography.js';
@@ -2069,11 +2069,19 @@ function renamedFrom(value, novelId, count) {
 }
 const want = (o) => isObj(o) && (Array.isArray(o.entries) || typeof o.verdict === 'string' || Array.isArray(o.conflicts));
 const wantAgain = (o) => isObj(o) && Array.isArray(o.entries);
-/* the partner's own check, said before the record — the sentences, never the object (2.12.46) */
-function talkBefore(text) {
-  let raw = String(text || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/```(?:json|JSON)?/g, '');
-  const at = raw.search(/\{\s*"/);
-  const prose = (at < 0 ? '' : raw.slice(0, at)).replace(/\s+/g, ' ').trim();
+/* THE PARTNER'S OWN CHECK, said before the record — the sentences, never the object (2.12.46): the words before the
+ * object its answer was read from, where that reading found it (jsonutil.js findFirstObject `at` — 2.12.63, the review:
+ * they were cut at a second guess, the first {", so a brace in its words cut them short, a record in curly quotes left
+ * none, and "Here's the record:" stayed). Its thinking and a code fence's marks are not its words, and nor is a last line
+ * that only leads into the record — the words of that line after its last full stop, up to the colon it ends on. */
+function talkBefore(before) {
+  const lines = String(before || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/(?:`{3,}|~{3,})[\w+-]*/g, '').replace(/\s+$/, '').split('\n');
+  const last = lines[lines.length - 1];
+  if (/[:：]$/.test(last)) {
+    const stop = last.match(/^([\s\S]*[.!?…][”’"')\]]*)\s+[^.!?…]*$/);
+    lines[lines.length - 1] = stop ? stop[1] : '';
+  }
+  const prose = lines.join(' ').replace(/\s+/g, ' ').trim();
   return prose.length >= 12 ? prose.slice(0, 1800) : '';
 }
 const CUT_TWICE = 'its answer was cut off at the reply’s length both times — give your partner’s connection a longer Longest reply (Settings → Connections)';
@@ -2140,31 +2148,39 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
       return { system: a.system, systemParts: a.systemParts, messages: [...a.messages, ...more], maxTokens: partnerReply(c, 'scene', wireOf(c) === 'anthropic'), refuse: a.refuse, least: a.stats.least, seed: a.seed };
     };
     const opts = { stream: true, signal: ctl.signal, leash: true, noPrefill: true, noStructured: true };
+    /* the record an answer gives and the words it said before it, from the one reading that found the record — an
+     * answer cut off counts only where no brace before the record leaves it open (jsonutil.js `whole`); written only in
+     * its thinking, the last whole answer there, and no words of its own: its thinking is never said to him */
     const readOut = (o, wanted) => {
-      let obj = !o.cut || closesWhole(o.text) ? parseFirstObject(o.text, wanted) : null;
-      if (!obj && !String(o.text || '').trim() && o.thinking && (!o.cut || closesWhole(o.thinking))) obj = parseLastObject(o.thinking, wanted);
-      return obj;
+      const whole = Boolean(o.cut);
+      const found = findFirstObject(o.text, wanted, { whole });
+      if (found) return { obj: found.value, talk: talkBefore(String(o.text || '').slice(0, found.at)) };
+      const thought = !String(o.text || '').trim() && o.thinking ? findLastObject(o.thinking, wanted, { whole }) : null;
+      return thought ? { obj: thought.value, talk: '' } : null;
     };
     const stopped = () => ({ ok: false, stopped: true, row: settle({ state: 'stopped' }), giveBack: t });
     let out = await ask(conn, { ...opts, build: build([]) });
     if (out.stopped) return stopped();
     if (!out.ok) return { ok: false, error: out.error || 'no answer came', row: settle({ state: 'failed', error: line(out.error || 'no answer came', 400) }), giveBack: t };
-    let obj = readOut(out, want);
+    let reply = readOut(out, want);
+    let obj = reply && reply.obj;
     let answered = out;
-    let talk = talkBefore(out.text);
-    /* once more, told what went wrong (as the helper is) */
+    /* once more, told what went wrong (as the helper is) — its talk then is the words of the answer its record was read
+     * from: the first one's record could not be read, so nothing says where in it the record began (its verdict, the
+     * same sentences, stands where it says none) */
     if (!obj) {
       const first = out;
       out = await ask(conn, { ...opts, build: build([{ role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)', at: takenAt }, { role: 'user', content: first.cut ? JSON_CUT : JSON_AGAIN }]) });
       if (out.stopped) return stopped();
-      obj = out.ok ? readOut(out, want) : null;
+      reply = out.ok ? readOut(out, want) : null;
+      obj = reply && reply.obj;
       if (!obj) {
         const why = !out.ok ? (out.error || 'no answer came') : first.cutBy === 'length' && out.cutBy === 'length' ? CUT_TWICE : 'its answer could not be read';
         return { ok: false, error: why, row: settle({ state: 'failed', error: line(why, 400) }), giveBack: t };
       }
       answered = out;
-      talk = talk || talkBefore(out.text);
     }
+    let talk = reply.talk;
     let seen = seenNow;
     let { novel, chapters } = bookNow(novelId);
     if (!novel) return { ok: false, error: 'the book was closed' };
@@ -2195,7 +2211,7 @@ export async function quickAdd({ novelId, chapterId = '', words }) {
         over = read.over;
         said = renamedFrom(t, novelId, sentAt);
       }
-      const obj2 = out.ok ? readOut(out, wantAgain) : null;
+      const obj2 = out.ok ? (readOut(out, wantAgain) || {}).obj : null;
       if (obj2) Object.assign(obj2, renamedFrom(obj2, novelId, takenAt));
       if (obj2) {
         again = 'answered';

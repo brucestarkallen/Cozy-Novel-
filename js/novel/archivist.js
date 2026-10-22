@@ -24,7 +24,7 @@ import * as store from '../store.js';
 import { ask, emptyWhy } from '../model/call.js';
 import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow, setHisAsk } from './writer.js';
-import { parseFirstObject, parseLastObject, closesWhole } from './jsonutil.js';
+import { findFirstObject, findLastObject } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows, plural } from '../util.js';
 import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps, renameCount, renamesSince, wordsElsewhere } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures, premiseNames, bookEvidence, splitSentences } from './names.js';
@@ -1933,6 +1933,16 @@ const hasGone = (o) => Boolean(o && Array.isArray(o.gone) && o.gone.length);
 
 /* (a call let go on its leash: on its longest one, and how long it was waited — call.js `leashMs`, 2.12.41) */
 const leashKept = (r) => ({ ...(r.longest ? { longest: true } : {}), ...(r.leashMs ? { leashMs: r.leashMs } : {}) });
+/* the answer an answer gives: one cut off counts only where no brace before the object read leaves it open — one cut
+ * inside it holds pieces, never the answer (Cozy Tavern's M685, M737); asked of the object the reading found, never of
+ * the first brace, which words before it may hold (2.12.63). A model that wrote its answer in its thinking and nothing
+ * after it: the last whole answer there is the answer (Cozy Tavern's M590) */
+function answerIn(out, want) {
+  const whole = Boolean(out.cut);
+  const found = findFirstObject(out.text, want, { whole })
+    || (!String(out.text || '').trim() && out.thinking ? findLastObject(out.thinking, want, { whole }) : null);
+  return found ? found.value : null;
+}
 export async function askJson(conn, system, request, { want, room = 0, beforeAsk } = {}) {
   /* the floor his connection allows — or the room a caller proved its ask leaves (readingReplyOf, 2.12.62): never below it,
    * never past three fifths of the window, the share a cut answer's own second ask was always given */
@@ -1940,10 +1950,7 @@ export async function askJson(conn, system, request, { want, room = 0, beforeAsk
   if (beforeAsk) await beforeAsk();
   const first = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }], maxTokens: answer }), stream: true, worker: true, patient: true });
   if (!first.ok) return { ok: false, error: first.error, permanent: first.permanent, status: first.status, retryAfterMs: first.retryAfterMs, leashed: first.leashed, ...leashKept(first) };
-  /* an answer cut off counts only when its object closed: one cut inside it holds pieces, never the answer (Cozy Tavern's M685, M737) */
-  let obj = !first.cut || closesWhole(first.text) ? parseFirstObject(first.text, want) : null;
-  /* a model that wrote its answer in its thinking and nothing after it: the last whole answer there is the answer (Cozy Tavern's M590) */
-  if (!obj && !String(first.text || '').trim() && first.thinking && (!first.cut || closesWhole(first.thinking))) obj = parseLastObject(first.thinking, want);
+  let obj = answerIn(first, want);
   if (obj) return { ok: true, obj };
   /* let go on its leash partway: not out of room — asked again it would stall the same way */
   if (first.leashed) return { ok: false, error: first.error, status: 0, leashed: first.leashed, ...leashKept(first) };
@@ -1953,8 +1960,7 @@ export async function askJson(conn, system, request, { want, room = 0, beforeAsk
   if (beforeAsk) await beforeAsk();
   const second = await ask(conn, { build: () => ({ system, messages: [{ role: 'user', content: request }, { role: 'assistant', content: String(first.text || '').slice(0, 20000) || '(nothing)' }, { role: 'user', content: cut ? JSON_CUT : JSON_AGAIN }], maxTokens: more }), stream: true, worker: true, patient: true });
   if (!second.ok) return { ok: false, error: second.error, permanent: second.permanent, status: second.status, retryAfterMs: second.retryAfterMs, leashed: second.leashed, ...leashKept(second) };
-  obj = !second.cut || closesWhole(second.text) ? parseFirstObject(second.text, want) : null;
-  if (!obj && !String(second.text || '').trim() && second.thinking && (!second.cut || closesWhole(second.thinking))) obj = parseLastObject(second.thinking, want);
+  obj = answerIn(second, want);
   if (obj) return { ok: true, obj };
   if (second.leashed) return { ok: false, error: second.error, status: 0, leashed: second.leashed, ...leashKept(second) };
   return { ok: false, error: unreadWhy(second), unreadable: true, ...(second.cut ? { cut: true } : {}) };

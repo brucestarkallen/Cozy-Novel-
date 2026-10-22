@@ -190,6 +190,26 @@ async def scenario(browser, w, hgt, mobile):
           and told == 'She has no family of her own yet.'
           and await pg.locator('.bibview .quickrow').last.get_by_role('button', name='Ask again').count() == 1, [row, told])
 
+    # (2.12.63, the review) it talks first: where its record went in as it said, its own words lead alone, said once —
+    # never the line that leads into its record, nor the record's fence; where nothing went in, what came of it leads and
+    # its words follow as its own — its promise never heads the row
+    promise = 'I checked it against the book, and nothing on the page says otherwise. It goes in as you said.'
+    await ask(pg, 'TALK The Night Market is a street of stalls.')
+    last = pg.locator('.bibview .quickrow').last
+    kinds = await last.evaluate("(r) => [...r.children].map((c) => c.className)")
+    told = await last.locator('.quick-talk').all_inner_texts()
+    check(f'{tag} its own words lead alone where its record went in as it said — once, with no lead-in and no fence',
+          kinds[:2] == ['quick-mine', 'quick-talk'] and 'quick-verdict' not in kinds and [t.strip() for t in told] == [promise], [kinds, told])
+    await ask(pg, 'TALK LONE Emilia has a brother.')
+    last = pg.locator('.bibview .quickrow').last
+    kinds = await last.evaluate("(r) => [...r.children].map((c) => c.className)")
+    lead = (await last.locator('.quick-verdict').first.inner_text()).strip() if await last.locator('.quick-verdict').count() else ''
+    who = await last.locator('.quick-who').all_inner_texts()
+    told = await last.locator('.quick-talk').all_inner_texts()
+    check(f'{tag} where nothing went in, what came of it leads, and its words follow as its own',
+          kinds[:4] == ['quick-mine', 'quick-verdict', 'quick-who', 'quick-talk'] and lead.startswith('Nothing went in')
+          and [w.strip() for w in who] == ['Your partner said'] and [t.strip() for t in told] == [promise], [kinds, lead, who, told])
+
     # (2.12.41, the fourth review) its own words for his newer word, that cannot go in as they are: his entry as he wrote it,
     # and the row says so in those words — never that it gave none — with Ask again
     await ask(pg, 'SHAPE Emilia has a brother.')

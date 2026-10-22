@@ -227,6 +227,7 @@
   font: 15.5px/1.55 var(--serif); white-space: pre-wrap; overflow-wrap: anywhere; }
 .bibview .quick-verdict { margin: 0; padding: 10px 12px; border-radius: 12px; color: var(--chrome-ink); font: italic 15px/1.55 var(--serif);
   background: color-mix(in srgb, var(--chrome-ink) 4%, transparent); border: 1px solid var(--line); }
+.bibview .quick-who { margin: 2px 0 -4px; font: 600 12px/1.3 var(--ui); letter-spacing: .04em; color: var(--chrome-soft); }
 .bibview .quick-wait { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; color: var(--chrome-soft); }
 .bibview .quick-wait .ring { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 1s linear infinite; }
 .bibview .quick-sec { padding: 8px 10px 4px 12px; border-radius: 12px; border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--line));

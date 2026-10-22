@@ -7322,6 +7322,22 @@ await test('an answer cut off inside its object is never taken for the answer �
   await putAway(c);
 });
 
+/* (2.12.63, the review's same pattern: whether a cut answer's object closed was asked of the first brace, not of the
+ * object the reading found — words before the answer holding a {…} of their own passed for its close, and an inner
+ * piece of the answer cut off was taken for the answer) */
+await test('an answer cut off inside its object is never taken for the answer where the words before it hold a {…} of their own — its close is asked of the object read', async () => {
+  const k = await makeBook([['The mill stood by the river.']]);
+  markAllSeen(k);
+  store.change('chapter', k.ids[0], (c) => { c.passages[0].versions[0].text = 'The mill stood by the river, burned.'; }, { now: true });
+  await reset();
+  await script([{ text: 'I read {the mill} first.\n{"places":[{"about":"The old mill by the river, burned to its stones."}],"people":[{"name":"Mi', finish: 'length' }, { text: '{"places": [{"name": "The mill", "about": "Burned."}]}' }]);
+  await archivist.run(k.novelId);
+  assert.notEqual((k.novel().kept.about || {}).text, 'The old mill by the river, burned to its stones.', 'no inner piece taken for what the book is about');
+  assert.ok(k.novel().notes.places.some((c) => c.name === 'The mill'), 'the second, whole answer read');
+  assert.ok((await requests()).some((x) => x.body.messages.some((m) => m.content === prompts.JSON_CUT)), 'asked again as cut off');
+  await putAway(k);
+});
+
 await test('Go on of a passage the helper read keeps what it read, so the next reading is told what the passage used to say — never all of it read again as new', async () => {
   const b = await makeBook([['Mara climbed to the lamp.', 'The storm']], { manual: true });
   store.change('chapter', b.ids[0], (c) => { const v = c.passages[1].versions[0]; v.cut = true; v.by = 'ai'; }, { now: true });
@@ -15013,8 +15029,12 @@ await test('Quick add: the partner talks the check through first — its own sen
   assert.ok(sent.includes('Talk to me first') && sent.includes('Something I left unsaid'), 'told to check it in its own words, and not to invent a clash');
   assert.equal(out.row.talk, talk, 'its own sentences stay');
   assert.equal(out.row.verdictBy, 'partner');
+  assert.deepEqual(prompts.quickSaid(out.row).lines, [{ kind: 'talk', text: talk }], 'its words lead alone where its record went in as it said, said once');
   assert.equal(bib.entriesOf(b.novel())[0].name, 'Night Market');
-  /* a verdict that claims it went in, while a page says the opposite: the sentences stay, and the account says what happened */
+  /* A VERDICT THAT CLAIMS IT WENT IN, while a page says the opposite (2.12.63, the review: this check held only that the
+   * sentences stay and the account says what happened — and the row showed the sentences first, so it led with "Your
+   * newer word goes in." where nothing went in, the account under it. The app knows what came of it: that leads, and the
+   * partner's words follow as its own; both ride in the next request as they were said) */
   const c = await makeBook([['Emilia Vermaine had silver hair.']], { manual: true });
   markAllSeen(c);
   await reset();
@@ -15028,9 +15048,71 @@ await test('Quick add: the partner talks the check through first — its own sen
   assert.equal(held.row.talk, lied, 'its check stays even where the look-up parts from it');
   assert.equal(held.row.verdictBy, 'app');
   assert.ok(held.row.verdict.startsWith('Nothing went in'), held.row.verdict);
+  assert.deepEqual(prompts.quickSaid(held.row).lines.map((x) => x.kind), ['account', 'talk'], 'what came of it leads; its promise never heads the row');
+  assert.equal(prompts.quickSaid(held.row).lines[0].text, held.row.verdict);
   assert.equal(bib.entriesOf(c.novel()).length, 0, 'the line the page contradicts does not go in');
+  await quietAll();
+  await reset();
+  await script([{ text: JSON.stringify({ verdict: 'Fine.', entries: [] }) }]);
+  await quickadd.quickAdd({ novelId: c.novelId, words: 'Emilia keeps a raven.' });
+  const next = (await quickSent()).at(-1);
+  const rode = next.slice(next.indexOf('Earlier in Quick add'), next.indexOf('\n\n', next.indexOf('Earlier in Quick add')));
+  assert.ok(rode.includes(`You said: “${lied}”`) && rode.includes('What came of it: Nothing went in') && !rode.includes('You found'), rode);
   await putAway(b);
   await putAway(c);
+});
+
+/* ITS TALK IS THE WORDS BEFORE THE RECORD ITS ANSWER WAS READ FROM (2.12.63, the review): they were cut at the first {"
+ * — a second guess beside the reading that found the record — so a brace in its words cut them short, a record in curly
+ * quotes left none, "Here's the record:" stayed, and "Sure! Here is the JSON:" was its talk. And they ride in the next
+ * request once, as "You said" — never with its verdict beside them as "You found", whatever a word of it differs by */
+await test('Quick add: its talk is the words before the record it was read from, said once on the row and riding once in the next request', async () => {
+  await setHouse();
+  const entry = { name: 'Night Market', kind: 'places', line: 'A street that opens after dark.', text: 'A street of stalls that opens only after dark.' };
+  const said = 'It holds — the Night Market is new, and no page says otherwise. I’ll write it as a place.';
+  const curly = (o) => JSON.stringify(o).replace(/"/g, (_, i, s) => (/[{[,:]\s*$/.test(s.slice(0, i)) ? '“' : '”'));
+  const cases = [
+    ['a lead-in and a fence', `${said}\n\nHere’s the record:\n\`\`\`json\n${JSON.stringify({ verdict: said, entries: [entry] })}\n\`\`\``, said],
+    ['a lead-in after its words on their line, a fence of another name', `${said} Here it is:\n\`\`\`javascript\n${JSON.stringify({ verdict: said, entries: [entry] })}\n\`\`\``, said],
+    ['only an announcement', `Sure! Here is the JSON:\n${JSON.stringify({ verdict: 'It holds.', entries: [entry] })}`, ''],
+    ['a brace in its words', `It holds. Your note reads {"night", "stalls"} as one place, so I’ll write the Night Market as a place.\n\n${JSON.stringify({ verdict: 'It holds.', entries: [entry] })}`, 'It holds. Your note reads {"night", "stalls"} as one place, so I’ll write the Night Market as a place.'],
+    ['a record in curly quotes', `${said}\n\n${curly({ verdict: said, entries: [entry] })}`, said],
+    ['its verdict a word apart', `It holds, and I'll write it as a place.\n\n${JSON.stringify({ verdict: 'It holds, and I will write it as a place.', entries: [entry] })}`, 'It holds, and I\'ll write it as a place.'],
+  ];
+  for (const [what, text, talk] of cases) {
+    const b = await makeBook([['The city keeps its own hours.']], { manual: true });
+    markAllSeen(b);
+    await quietAll();
+    await reset();
+    await script([{ text }]);
+    const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'The Night Market is a street of stalls that opens only after dark.' });
+    assert.equal(out.ok, true, `${what}: ${out.error}`);
+    assert.equal(bib.entriesOf(b.novel())[0].name, 'Night Market', what);
+    assert.equal(out.row.talk || '', talk, what);
+    const lines = prompts.quickSaid(out.row).lines;
+    assert.deepEqual(lines, talk ? [{ kind: 'talk', text: talk }] : [{ kind: 'verdict', text: out.row.verdict }], `${what}: said once`);
+    await quietAll();
+    await reset();
+    await script([{ text: JSON.stringify({ verdict: 'Fine.', entries: [] }) }]);
+    await quickadd.quickAdd({ novelId: b.novelId, words: 'The Night Market sells lanterns.' });
+    const next = (await quickSent()).at(-1);
+    const rode = next.slice(next.indexOf('Earlier in Quick add'), next.indexOf('\n\n', next.indexOf('Earlier in Quick add')));
+    if (talk) assert.ok(rode.includes(`You said: “${talk}”`) && !rode.includes('You found') && rode.split('You said').length === 2, `${what}: ${rode}`);
+    else assert.ok(rode.includes(`You found: ${out.row.verdict}`) && !rode.includes('You said'), `${what}: ${rode}`);
+    await putAway(b);
+  }
+  /* its record not read the first time and asked again for the record alone: the words the first answer said before an
+   * object nothing could read are no place the reading found — its verdict, the same sentences, stands for them */
+  const b = await makeBook([['The city keeps its own hours.']], { manual: true });
+  markAllSeen(b);
+  await quietAll();
+  await reset();
+  await script([{ text: `${said}\n\n{"verdict": "It holds.", "entries": [` }, { text: JSON.stringify({ verdict: said, entries: [entry] }) }]);
+  const out = await quickadd.quickAdd({ novelId: b.novelId, words: 'The Night Market is a street of stalls that opens only after dark.' });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.row.talk, undefined);
+  assert.deepEqual(prompts.quickSaid(out.row).lines, [{ kind: 'verdict', text: said }]);
+  await putAway(b);
 });
 
 await test('Quick add: his words held against the book first — a page that says otherwise said with where it stands, his own earlier words changed as his newer word, what cannot be with its rule, words quoted from nowhere set aside; what holds goes in as his, with one Undo', async () => {

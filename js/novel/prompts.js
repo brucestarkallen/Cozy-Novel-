@@ -1905,13 +1905,32 @@ export const JSON_CUT = 'That answer was cut off before it finished. Answer agai
  * block): the passages that name what he adds, his premises and his entries for those names ride with it whole. What
  * it quotes is looked up in code — a contradiction is said only where its words stand. */
 export const QUICK_ASK = 'Hold my words against the book as it stands';
+/* WHO SAID WHAT ON A QUICK ADD ROW — one answer for the row he sees (ui/bibliography.js quickRow) and for what rides in
+ * the next request: the partner's own words once — what it said before its record (`talk`), or, on a row where it said
+ * nothing first, its verdict — and the app's account of what came of it where the look-ups parted from its record
+ * (`verdictBy: 'app'`, 2.12.40). Its verdict is asked to be the same sentences it said first, so beside them it is never
+ * said again, whatever a word of it differs by (2.12.63, the review: "I'll" and "I will" showed, and rode, twice).
+ * `lines`, in the order the row says them: what came of it first, where the app said it — the partner's words promise
+ * what its record said, and the account is what was done, so a promise nothing bore out never heads the row (2.12.63,
+ * the review: "Your newer word goes in." led a row where nothing went in) — then the partner's own words. */
+export function quickSaid(r) {
+  const row = r || {};
+  const account = row.verdictBy === 'app' && row.verdict ? String(row.verdict) : '';
+  const talk = row.talk ? String(row.talk) : '';
+  const verdict = account || talk ? '' : String(row.verdict || '');
+  const lines = [['account', account], ['talk', talk], ['verdict', verdict]].filter(([, text]) => text).map(([kind, text]) => ({ kind, text }));
+  return { account, talk, verdict, lines };
+}
 export function quickAddRequest({ words, earlier = [], premises = [], premisesLeft = 0, entries = [], entriesLeft = 0, passages = [], passagesLeft = 0 }) {
   const parts = [`Quick add — what I want in our world, to go into my bibliography now:\n${fence(words)}`];
   const before = (earlier || []).map((r) => {
     const said = [`I said: “${String(r.said || '').replace(/\s+/g, ' ').trim()}”`];
-    if (r.talk) said.push(`You said: “${String(r.talk).replace(/\s+/g, ' ').trim()}”`);
-    /* (its own verdict, or — where the look-ups parted from it — the app's account of what came of it, 2.12.40) */
-    if (r.verdict && r.verdict !== r.talk) said.push(`${r.verdictBy === 'app' ? 'What came of it' : 'You found'}: ${String(r.verdict).replace(/\s+/g, ' ').trim()}`);
+    /* (what it said first, once — its verdict only where it said nothing first; and where the look-ups parted from it,
+     * the app's account of what came of it, 2.12.40) */
+    const says = quickSaid(r);
+    if (says.talk) said.push(`You said: “${says.talk.replace(/\s+/g, ' ').trim()}”`);
+    if (says.verdict) said.push(`You found: ${says.verdict.replace(/\s+/g, ' ').trim()}`);
+    if (says.account) said.push(`What came of it: ${says.account.replace(/\s+/g, ' ').trim()}`);
     if ((r.added || []).length) said.push(`Into the bibliography: ${r.added.map((a) => a.name).join(', ')}${r.added.some((a) => a.status === 'undone') ? ' (I took some back out)' : ''}.`);
     /* (what was held back, so asking again asks with it — 2.12.40, the review) */
     const held = [...(r.refused || []).filter((x) => x && x.held).map((x) => x.name), ...(r.held || [])];

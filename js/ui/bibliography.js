@@ -17,7 +17,7 @@ import { superActive } from '../novel/auto.js';
 
 /* the entry sheet's "page by page" (Super automatic): never kept as such — it keeps what the entry was set to */
 const BY_PAGE = 'page';
-import { nowLabelOf } from '../novel/prompts.js';
+import { nowLabelOf, quickSaid } from '../novel/prompts.js';
 import { plural, nameKey, slug, numberWords } from '../util.js';
 import * as archivist from '../novel/archivist.js';
 import { connFor } from '../novel/writer.js';
@@ -543,9 +543,13 @@ function quickRow(novelId, r, redraw) {
   /* (one its closed tab was asking, put right as stopped: said as that — 2.12.40, the review) */
   if (r.state === 'stopped') { row.append(h('p.notekey', r.closed ? 'Not checked — its window closed before it answered. Nothing went in.' : 'Not checked — it was stopped before it finished. Nothing went in.'), h('div.btnrow', again())); return row; }
   if (r.state === 'failed') { row.append(h('p.notekey.bibdue', `Not checked — ${r.error || 'no answer came'}. Nothing went in.`), h('div.btnrow', again())); return row; }
-  if (r.talk) row.append(h('p.quick-talk', r.talk));
-  const sameTalk = r.talk && r.verdict && String(r.talk).replace(/\s+/g, ' ').trim() === String(r.verdict).replace(/\s+/g, ' ').trim();
-  if (r.verdict && !sameTalk) row.append(h('p.quick-verdict', r.verdict));
+  /* WHAT CAME OF IT LEADS, where the app said it (2.12.63, the review: "Your newer word goes in." stood at the head of a
+   * row where nothing went in): the partner's words follow it, as the partner's — kept whole, never judged line by line.
+   * Where its record went in as it said, its own words lead alone; each is said once (prompts.js quickSaid) */
+  quickSaid(r).lines.forEach((x, i) => {
+    if (x.kind === 'talk' && i) row.append(h('p.quick-who', 'Your partner said'));
+    row.append(h(x.kind === 'talk' ? 'p.quick-talk' : 'p.quick-verdict', x.text));
+  });
   const go = (x) => (x.chapterId && x.passageId && hooks.whenOpen ? h('button.link', { title: 'Go to the passage, its words lit.', onclick: () => { if (hooks.closeSide) hooks.closeSide(); hooks.whenOpen(x.chapterId, { passageId: x.passageId, show: { query: x.against || x.rule || '' } }); } }, x.label) : h('span', x.label));
   const section = (title, items, cls = '') => h('div.quick-sec' + cls, h('h4', title), h('ul', ...items));
   const added = r.added || [];
