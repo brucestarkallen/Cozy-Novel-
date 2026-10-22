@@ -71,6 +71,21 @@ await test('a whole branch owns every record, keeps paid history, and changes no
   assert.deepEqual(source, before);
 });
 
+await test('his unsent words in a page’s premise box stay in the book he typed them in — a whole branch and a conversation branch carry none, the source keeps them', () => {
+  const source = fixture();
+  const draft = source.records.find((r) => r.kind === 'draft').data;
+  draft.premises = { 'p-one': 'My unsent premise for the gate.' };
+  const before = copy(source);
+  for (const opts of [options(), options({ conversationId: 'cv-one' })]) {
+    const result = buildBranch(source, opts);
+    const copied = rowsOf(result, 'draft')[0];
+    assert.ok(copied && copied.direction === 'My unsent page.', 'the branch keeps the box below as it was');
+    assert.equal(copied.premises, undefined, 'no page box of the source shows in the branch');
+    assert.ok(rowsOf(result, 'chapter')[0].passages.some((p) => p.id === 'p-one'), 'the page itself is there, under its own id');
+  }
+  assert.deepEqual(source, before, 'the source keeps his words');
+});
+
 await test('a passage branch removes its future from prose, notes, summaries, talks and drafts', () => {
   const result = buildBranch(fixture(), options({ chapterId: 'ch-one', through: 'p-one' }));
   const novel = novelOf(result), chapter = rowsOf(result, 'chapter')[0];

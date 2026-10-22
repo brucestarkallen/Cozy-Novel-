@@ -9,7 +9,7 @@ import * as talk from '../novel/talk.js';
 import * as checker from '../novel/checker.js';
 import { h, icon, toast, undoToast, menu, autoGrow, copyText, confirmIt, askChoice, onBack, openSheet } from './dom.js';
 import { drawProse, growProse, selectionIn } from './prose.js';
-import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf, premiseOf, passagePrint } from '../novel/shape.js';
+import { picked, chapterSteps, novelSteps, newChapter, chapterWords, chapterLabel, LENGTHS, OUTCOMES, outcomeOf, newPassage, passageNumbers, cutAtEnd, keptFor, NOTE_KINDS, handsOf, premiseOf, passagePrint, draftSteps } from '../novel/shape.js';
 import { putBackWords } from '../novel/inplace.js';
 import { numberWords, plural, debounce, countWords, timeAgo, clamp } from '../util.js';
 import { showSent } from './sent.js';
@@ -294,8 +294,7 @@ export function drawPage({ keepScroll = true } = {}) {
   /* what he is typing on the page survives the page being drawn again */
   const editing = ui.passages.querySelector('.editbox');
   const rewriting = ui.passages.querySelector('.rewriterow input');
-  const premiseLive = ui.passages.querySelector('textarea.premiseedit');
-  if (premiseLive && S.premiseEdit && premiseLive.dataset.key === S.premiseEdit) S.premiseDraft.set(S.premiseEdit, premiseLive.value);
+  /* (a premise box's words are kept as he types them, in this window and on the phone: setPremiseWords) */
   const kept = { edit: editing ? editing.value : null, editFocus: editing && document.activeElement === editing, editSel: editing ? [editing.selectionStart, editing.selectionEnd] : null,
     note: rewriting ? rewriting.value : null };
   const list = c.passages || [];
@@ -357,7 +356,7 @@ function drawnKey(p, { tint, nums, working, names = null, snapshot = false }) {
     p.pick, (p.versions || []).length, ...(p.versions || []).map((x) => x.id), Boolean(v.streaming || live), cutAtEnd(v), Boolean(writer.takeOf(p)),
     v.how, v.why, ...handsOf(v), (v.before || []).length, checkpoint ? null : v.words, checkpoint ? null : v.text, v.tokensIn, v.tokensCounted, v.ask && v.ask.note,
     v.cut, v.cutWhy, (v.notes || []).length, ...(v.notes || []), (v.sources || []).length, ...(v.sources || []).flatMap((x) => x ? [x.url, x.title] : []),
-    S.premiseOpen.has(p.id), S.premiseEdit === premiseKey(p.id), premiseOf(p)] : [];
+    S.premiseOpen.has(p.id), S.premiseEdit === premiseKey(p.id), premiseOf(p), premiseWords(p.id)] : [];
   return { body, controls };
 }
 
@@ -492,14 +491,16 @@ function controls(p) {
    * One button, one meaning (2.12.63): Edit, in the premise's own line, opens it in its box; Resend, there only while
    * the box is open, writes the page again from the words in it, as a new version; the premise as it stands again is
    * Another take. What he types in the box stays until he sends it (the page came) or lets it go (Cancel): putting the
-   * premise away, opening another page's box, or a page that did not come never takes it. */
+   * premise away, opening another page's box, or a page that did not come never takes it — and it is kept on the phone
+   * (premiseWords), so a page with words of his not sent opens its Premise on its box with them, in any window. */
   const premise = premiseOf(p);
   const key = premiseKey(p.id);
-  const editing = Boolean(premise) && S.premiseEdit === key;
-  const premiseBox = editing ? h('textarea.premiseedit', { rows: 3, 'aria-label': 'Your premise', 'data-key': key }) : null;
+  const unsent = premiseWords(p.id);
+  const editing = Boolean(premise) && (S.premiseEdit === key || Boolean(unsent && unsent.trim() && unsent.trim() !== premise));
+  const premiseBox = editing ? h('textarea.premiseedit', { rows: 3, 'aria-label': 'Your premise' }) : null;
   if (premiseBox) {
-    premiseBox.value = S.premiseDraft.has(key) ? S.premiseDraft.get(key) : premise;
-    premiseBox.addEventListener('input', () => S.premiseDraft.set(key, premiseBox.value));
+    premiseBox.value = unsent !== undefined ? unsent : premise;
+    premiseBox.addEventListener('input', () => setPremiseWords(p.id, premiseBox.value));
     if (S.focusNext === 'premise') { S.focusNext = null; setTimeout(() => premiseBox.focus({ preventScroll: true }), 30); }
   }
   const held = (fn) => (e) => { e.preventDefault(); e.stopPropagation(); fn(); };
@@ -509,10 +510,10 @@ function controls(p) {
         h('button', { type: 'button', title: 'Writes this page again from the premise in the box — a new version. The one you have stays an arrow back.', disabled: working, onclick: held(() => {
           const words = premiseBox.value.trim();
           if (!words) { toast('Write the premise first.'); return; }
-          S.premiseDraft.set(key, premiseBox.value);
+          setPremiseWords(p.id, premiseBox.value);
           resendPage(c.id, p.id, words);
         }) }, 'Resend'),
-        h('button', { type: 'button', title: 'Lets the words in the box go — the premise stays as it was.', onclick: held(() => { S.premiseEdit = null; S.premiseDraft.delete(key); drawPage(); }) }, 'Cancel'))]
+        h('button', { type: 'button', title: 'Lets the words in the box go — the premise stays as it was.', onclick: held(() => { S.premiseEdit = null; setPremiseWords(p.id, null); drawPage(); }) }, 'Cancel'))]
       : [h('span.premisewords', premise), ' ',
         h('button', { type: 'button', title: 'Opens the premise in a box to change it — Resend then writes the page again from it.', disabled: working, onclick: held(() => openPremise(p.id)) }, 'Edit')]) : null;
   if (premise) {
@@ -561,25 +562,55 @@ function controls(p) {
 
 /* a page's premise box, by its book too: a branch keeps its pages' ids, and his words in one book's box are never
  * another's */
-function premiseKey(pid) { return `${S.novelId}/${pid}`; }
-/* words in a page's premise box he has neither sent nor let go — kept in this window only, so an update waits for them
- * as for his other boxes (app.js quietNow); a page or a book taken out takes its box with it */
-export function premiseUnsent() {
-  for (const [key, words] of S.premiseDraft) {
-    const said = String(words || '').trim();
-    if (!said) continue;
-    const [novelId, pid] = key.split('/');
-    const n = store.peek('novel', novelId);
-    const p = n && (n.order || []).flatMap((id) => (store.peek('chapter', id) || {}).passages || []).find((x) => x.id === pid);
-    if (p && said !== premiseOf(p)) return true;
+function premiseKey(pid, novelId = S.novelId) { return `${novelId}/${pid}`; }
+/* HIS UNSENT WORDS IN A PAGE'S PREMISE BOX (2.12.63): this window's own (what he is typing now), else the ones kept on
+ * the phone in the book's draft record (shape.js draftSteps.premise) — a window Android closed, an update, another
+ * window; undefined when there are none */
+function premiseWords(pid, novelId = S.novelId) {
+  const key = premiseKey(pid, novelId);
+  if (S.premiseDraft.has(key)) return S.premiseDraft.get(key);
+  const kept = ((store.peek('draft', novelId) || {}).premises || {})[pid];
+  return typeof kept === 'string' ? kept : undefined;
+}
+/* his words in a page's premise box — `null` lets them go: kept in this window and handed to the phone at once, a step
+ * on that page's words alone (another window's words for other pages stay; a letting go takes only the words this
+ * window had). Every step is in the store's hands before he types again, so an update waits for it there (store
+ * hasPending); only a draft record still being opened or made waits here (draftWaiting). */
+let premiseHanding = 0;
+function setPremiseWords(pid, words, novelId = S.novelId) {
+  const expect = premiseWords(pid, novelId);
+  const key = premiseKey(pid, novelId);
+  if (words === null) S.premiseDraft.delete(key); else S.premiseDraft.set(key, words);
+  const step = draftSteps.premise(pid, words, expect);
+  const lay = () => {
+    const d = store.peek('draft', novelId);
+    if (!d) return;
+    /* (nothing to change on the copy here: no save for it) */
+    if (step(JSON.parse(JSON.stringify(d))) === false) return;
+    store.change('draft', novelId, step, { delay: 300 });
+  };
+  if (store.peek('draft', novelId)) { lay(); return; }
+  premiseHanding++;
+  draftRecord(novelId).then(lay).catch(() => { /* the words are still in this window; the next keystroke hands them again */ }).finally(() => { premiseHanding--; });
+}
+/* a book's draft record, opened — or made, the first time anything is kept in it; one at a time for a book */
+const draftOpening = new Map();
+function draftRecord(novelId) {
+  if (!draftOpening.has(novelId)) {
+    draftOpening.set(novelId, (async () => {
+      let d = store.peek('draft', novelId);
+      if (d === undefined) d = await store.open('draft', novelId);
+      if (!d) await store.create('draft', novelId, { id: novelId, novelId });
+    })().finally(() => draftOpening.delete(novelId)));
   }
-  return false;
+  return draftOpening.get(novelId);
 }
 /* Edit: the premise of a page in its box — with the words he typed there and has not sent, if any; else the premise
  * as it stands */
 function openPremise(pid) {
   const key = premiseKey(pid);
-  if (S.premiseDraft.has(key) && !String(S.premiseDraft.get(key)).trim()) S.premiseDraft.delete(key);
+  const words = premiseWords(pid);
+  if (words !== undefined && !words.trim()) setPremiseWords(pid, null);
   S.premiseEdit = key;
   S.premiseOpen.add(pid);
   S.focusNext = 'premise';
@@ -591,19 +622,20 @@ function openPremise(pid) {
  * for, so a page that did not come took his edited premise with it). */
 async function resendPage(chapterId, pid, words) {
   const novelId = S.novelId;
-  const key = premiseKey(pid);
+  const key = premiseKey(pid, novelId);
   /* (the page is written where its box was; the box comes back with his words if they are not the page's) */
   const wasOpen = S.premiseEdit === key;
   if (wasOpen) S.premiseEdit = null;
   const out = await run(() => writer.resend({ novelId, chapterId, passageId: pid, direction: words }));
   if (!out) return out;
-  const draft = S.premiseDraft.get(key);
+  const draft = premiseWords(pid, novelId);
   if (out.ok) {
-    /* written: his words are the page's premise now — other words he typed in the box since stay there */
-    if (draft === undefined || draft.trim() === words) S.premiseDraft.delete(key);
-    else if (wasOpen && !S.premiseEdit) S.premiseEdit = key;
-  } else {
-    if (!String(draft || '').trim()) S.premiseDraft.set(key, words);
+    /* written: his words are the page's premise now, here and on the phone — other words he typed in the box since stay */
+    if (draft !== undefined && draft.trim() === words) setPremiseWords(pid, null, novelId);
+    else if (draft !== undefined && wasOpen && !S.premiseEdit) S.premiseEdit = key;
+  } else if (((store.peek('chapter', chapterId) || {}).passages || []).some((x) => x.id === pid)) {
+    /* (a page taken out while it was written has no box to come back to) */
+    if (!String(draft || '').trim()) setPremiseWords(pid, words, novelId);
     if (!S.premiseEdit || S.premiseEdit === key) { S.premiseEdit = key; S.premiseOpen.add(pid); }
     const err = S.errors.get(chapterId);
     if (err) err.again = { direction: words, passageId: pid };
@@ -945,9 +977,9 @@ function drawEnd() {
   /* Super automatic: the writer ended this chapter — the next page goes in the next one (writer.js closedGoesOn, the
    * very answer Write and Add as my words go by) */
   const goes = writer.closedGoesOn(n.id, c.id);
-  /* a page from his premise that did not come (Write, Resend): asked again only where it was asked for — the passage
-   * it was to follow, or the page it was to write again, still there */
-  const again = err && err.again && (err.again.passageId ? list.some((p) => p.id === err.again.passageId)
+  /* a page from his premise that did not come (Write, Resend), or the words he selected written again: asked again only
+   * where it was asked for — the passage it was to follow, the page it was to write again, the words as they stand */
+  const again = err && err.again && (err.again.sel ? selectionStands(err.again.sel) : err.again.passageId ? list.some((p) => p.id === err.again.passageId)
     : !err.again.after || list.some((p) => p.id === err.again.after)) ? err.again : null;
   const key = [n.id, c.id, Boolean(list.length), hasText, at, n.order.length, n.order[at + 1], next && next.name, busy(), S.making,
     err, again, again && again.direction, err && err.words, err && err.thought, err && err.stopped, err && err.needsConnection, goes && goes.number];
@@ -975,8 +1007,8 @@ function drawEnd() {
      * the premise that did not come, in the box it was typed in, never over words he typed since; with none (Continue),
      * there is no premise to edit (2.12.63) */
     card.append(h('div.row', err.needsConnection ? h('button.btn.primary.small', { onclick: () => hooks.openSettings('connections') }, 'Open Connections') : null,
-      again && again.direction ? h('button.btn.small', { type: 'button', title: again.passageId ? 'The premise that did not come, in its box under the page, to change.' : 'The premise that did not come, back in the box below to change. If the box has other words in it, you are asked first.', onclick: () => editAgain(again) }, 'Edit premise') : null,
-      again ? h('button.btn.primary.small', { type: 'button', title: again.direction ? 'Tries the same premise again, in the same place.' : 'Asks again for the page that did not come, in the same place — the writer decides what happens.', disabled: busy(), onclick: () => retryAgain(again) }, 'Retry') : null,
+      again && again.direction && !again.sel ? h('button.btn.small', { type: 'button', title: again.passageId ? 'The premise that did not come, in its box under the page, to change.' : 'The premise that did not come, back in the box below to change. If the box has other words in it, you are asked first.', onclick: () => editAgain(again) }, 'Edit premise') : null,
+      again ? h('button.btn.primary.small', { type: 'button', title: again.sel ? `Writes the same selected words again${again.direction ? ', with the same note' : ''}.` : again.direction ? 'Tries the same premise again, in the same place.' : 'Asks again for the page that did not come, in the same place — the writer decides what happens.', disabled: busy(), onclick: () => retryAgain(again) }, 'Retry') : null,
       err.thought ? h('button.btn.small', { title: 'Its thinking, to paste anywhere', onclick: async () => toast((await copyText(err.thought)) ? 'What it thought is copied.' : 'It could not be copied.') }, 'Copy what it thought') : null,
       h('button.btn.small', { onclick: () => { S.errors.delete(c.id); drawEnd(); } }, 'Dismiss')));
     ui.end.append(card);
@@ -1219,18 +1251,18 @@ async function writeAt(direction, after) {
   }
 }
 
-/* the card's Retry: the premise that did not come, again, where it was asked for */
+/* the card's Retry: what did not come, again, where it was asked for — the premise, or his note on the words he selected */
 function retryAgain(again) {
   if (busy()) return;
-  if (again.passageId) resendPage(S.chapterId, again.passageId, again.direction);
+  if (again.sel) rewriteSelected(again.sel, again.direction);
+  else if (again.passageId) resendPage(S.chapterId, again.passageId, again.direction);
   else writeAt(again.direction, again.after || null);
 }
 /* the card's Edit premise: back in the box it was typed in — the box below (asked first when it holds other words:
  * useAsDirection), or the page's own box, with the words he typed there since if any */
 function editAgain(again) {
   if (!again.passageId) { useAsDirection(again.direction); return; }
-  const key = premiseKey(again.passageId);
-  if (!String(S.premiseDraft.get(key) || '').trim()) S.premiseDraft.set(key, again.direction);
+  if (!String(premiseWords(again.passageId) || '').trim()) setPremiseWords(again.passageId, again.direction);
   S.selected = again.passageId;
   S.rewriting = null;
   openPremise(again.passageId);
@@ -1315,13 +1347,36 @@ function drawSelBar() {
 async function onRewriteSelection() {
   const s = S.sel;
   if (!s || busy()) return;
-  const note = ui.direction.value.trim();
-  S.sel = null;
-  window.getSelection().removeAllRanges();
+  await rewriteSelected(s, ui.direction.value.trim());
+}
+/* The words he selected, written again with his note: Rewrite (the box's note), and Retry on the card of one that did
+ * not come (its note). One that does not come keeps the words selected for Rewrite, and for its Retry, while they still
+ * read as they did (2.12.63: the selection was let go before the words were asked for, so Write then wrote a new page
+ * from his note) */
+async function rewriteSelected(s, note) {
+  if (S.sel === s) S.sel = null;
+  try { window.getSelection().removeAllRanges(); } catch (_) { /* fine */ }
   drawSelBar();
   S.selected = s.passageId;
-  const out = await run(() => writer.rewriteSelection({ novelId: S.novelId, chapterId: S.chapterId, passageId: s.passageId, start: s.start, end: s.end, note }));
-  if (out && out.ok && note && ui.direction.value.trim() === note) { ui.direction.value = ''; ui.direction.dispatchEvent(new Event('input')); }
+  const asked = S.chapterId;
+  const out = await run(() => writer.rewriteSelection({ novelId: S.novelId, chapterId: asked, passageId: s.passageId, start: s.start, end: s.end, note }));
+  if (out && out.ok) {
+    if (note && ui.direction.value.trim() === note) { ui.direction.value = ''; ui.direction.dispatchEvent(new Event('input')); }
+  } else if (out && selectionStands(s, asked)) {
+    const err = S.errors.get(asked);
+    if (err) err.again = { direction: note, sel: s };
+    if (S.chapterId === asked) {
+      if (!S.sel && !S.insertAfter) { S.sel = s; drawComposer(); }
+      drawEnd();
+    }
+  }
+}
+/* the words he selected still read as they did, on the version on show */
+function selectionStands(s, chapterId = S.chapterId) {
+  const c = store.peek('chapter', chapterId);
+  const p = c && (c.passages || []).find((x) => x.id === s.passageId);
+  const v = p && picked(p);
+  return Boolean(v && String(v.text || '').slice(s.start, s.end) === s.text);
 }
 
 /* --------------------------------------------------------- live words */
@@ -1573,8 +1628,9 @@ function saveDraft() {
   draftDue = { id: S.novelId, text: ui.direction.value };
   saveDraftSoon();
 }
-/* the box's last words, not yet handed to the store (the moment after he types): an update waits for them */
-export function draftWaiting() { return Boolean(draftDue); }
+/* the box's last words, not yet handed to the store (the moment after he types) — a premise box's while its book's
+ * draft record is being opened or made (setPremiseWords): an update waits for them */
+export function draftWaiting() { return Boolean(draftDue) || premiseHanding > 0; }
 /* the page going away: they are handed over now, to go with the rest */
 export function draftNow() { if (draftDue) saveDraftSoon.now(); }
 
@@ -1600,6 +1656,8 @@ async function loadDraft() {
     const d = await store.open('draft', id);
     /* still this book, and he has not started typing meanwhile */
     if (S.novelId === id && d && d.direction && !ui.direction.value) { ui.direction.value = d.direction; fitDirection(); drawWriteLabel(); }
+    /* his words in a page's premise box, kept on the phone: the page on show takes them up (premiseWords) */
+    if (S.novelId === id && d && d.premises && Object.keys(d.premises).length) drawPage();
   } catch (_) { /* nothing kept */ }
 }
 
