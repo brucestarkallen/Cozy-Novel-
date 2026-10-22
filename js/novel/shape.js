@@ -608,31 +608,107 @@ function relayWindow(was, after) {
   }
   return { a, b, start, end, found: a.slice(start, end) };
 }
+/* WORDS FOUND ONLY AS WORDS (2.12.63, the review of 2.12.42: "rain" was found inside "Terrain", and "heavy rain" laid
+ * there made "Terheavy rain"): a stretch standing where the letters either side of it carry on a word of the newer
+ * words is not found there. Its one place on word bounds, or -1 where it stands on none or on more than one. */
+const WORD_END = /[\p{L}\p{N}\p{M}]$/u;
+const WORD_START = /^[\p{L}\p{N}\p{M}]/u;
+function onBounds(n, at, found) {
+  if (WORD_START.test(found) && WORD_END.test(n.slice(Math.max(0, at - 2), at))) return false;
+  const end = at + found.length;
+  return !(WORD_END.test(found) && WORD_START.test(n.slice(end, end + 2)));
+}
+function placesOn(n, found) {
+  const out = [];
+  if (!found) return out;
+  for (let at = n.indexOf(found); at >= 0; at = n.indexOf(found, at + 1)) if (onBounds(n, at, found)) out.push(at);
+  return out;
+}
+function standsOnce(n, found) {
+  const at = placesOn(n, found);
+  return at.length === 1 ? at[0] : -1;
+}
 export function relaidOn(was, after, now) {
   const { a, b, start, end, found } = relayWindow(was, after);
   const n = String(now || '');
   if (!found.trim()) return null;
-  const at = n.indexOf(found);
-  if (at < 0 || n.indexOf(found, at + 1) >= 0) return null;
+  const at = standsOnce(n, found);
+  if (at < 0) return null;
   return n.slice(0, at) + b.slice(start, b.length - (a.length - end)) + n.slice(at + found.length);
 }
-/* the words the change itself left, in that same stretch — what still has to be readable for the change to stand */
-export function laidStretch(was, after) {
-  const { a, b, start, end } = relayWindow(was, after);
-  return b.slice(start, b.length - (a.length - end));
+/* A CHANGE TO A FIELD'S WORDS, LAID AGAIN OVER ANOTHER WINDOW'S NEWER WORDS (2.12.63 — the review of 2.12.42 found the
+ * lay writing words nobody wrote: a name taken off "The gate" laid over "The gate at dusk" left " at dusk", a whole new
+ * name laid there made "Night falls at dusk", a subtitle cleared left ", told at night", and a sentence the newer words
+ * already held went in twice). What the change did, widened to whole words: the words it put in (`put`), whether any
+ * word of the words it found stands outside the stretch it changed (`kept`), and that stretch with a few whole words
+ * either side as it found them (`found`) and as it left them (`left`). */
+function relayParts(was, after) {
+  const a = String(was || '');
+  const b = String(after || '');
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let t = 0;
+  while (t < a.length - s && t < b.length - s && a[a.length - 1 - t] === b[b.length - 1 - t]) t++;
+  const solid = (ch) => ch !== undefined && !/\s/.test(ch);
+  /* (a change inside a word is the whole word changed) */
+  if ((solid(a[s - 1]) && solid(a[s])) || (solid(b[s - 1]) && solid(b[s]))) while (s > 0 && solid(a[s - 1])) s--;
+  const ea = a.length - t;
+  const eb = b.length - t;
+  if ((solid(a[ea - 1]) && solid(a[ea])) || (solid(b[eb - 1]) && solid(b[eb]))) while (t > 0 && solid(a[a.length - t])) t--;
+  let start = s;
+  let end = a.length - t;
+  for (let w = 0; w < RELAY_WORDS && start > 0; w++) {
+    while (start > 0 && /\s/.test(a[start - 1])) start--;
+    while (start > 0 && !/\s/.test(a[start - 1])) start--;
+  }
+  for (let w = 0; w < RELAY_WORDS && end < a.length; w++) {
+    while (end < a.length && /\s/.test(a[end])) end++;
+    while (end < a.length && !/\s/.test(a[end])) end++;
+  }
+  return {
+    put: b.slice(s, b.length - t),
+    kept: Boolean((a.slice(0, s) + a.slice(a.length - t)).trim()),
+    found: a.slice(start, end),
+    left: b.slice(start, b.length - (a.length - end)),
+  };
 }
-/* the words a change leaves, on the words there now (2.12.42): still as it found them, the change as made; already the
- * words it left, nothing to lay (null); the stretch still standing once, the change laid there and the rest kept
- * (relaidOn); standing nowhere or more than once, nothing (null) */
+/* the words a change leaves, on the words there now (2.12.42; the rule, 2.12.63): still as it found them, the change as
+ * made; already the words it left, nothing to lay (null). On newer words, only a clean edit of a stretch that stands
+ * there once: found on word bounds with the words around it, never a removal (nothing of its own to find it by) nor the
+ * whole of the words written anew (no word of the old kept to find it by), never where the newer words already hold
+ * what it puts in — more often than the words it found did. Anything else, nothing (null), and its card says it no
+ * longer reads that way (changes.js madeGone, relayStands). A short field — a chapter's name, the title, the subtitle,
+ * a card's name — is never laid this way: it is set only while it reads as the change found it. */
+const heldTimes = (text, words) => placesOn(text, words).length;
 export function relayedOn(from, to, now) {
   const a = String(from == null ? '' : from);
   const b = String(to == null ? '' : to);
   const n = String(now == null ? '' : now);
   if (n === a) return b === n ? null : b;
   if (n === b) return null;
-  const laid = relaidOn(a, b, n);
-  if (laid == null || laid === n) return null;
-  return laid;
+  const r = relayParts(a, b);
+  const put = r.put.trim();
+  if (!put || !r.kept) return null;
+  if (heldTimes(n, put) > heldTimes(a, put)) return null;
+  const at = standsOnce(n, r.found);
+  if (at < 0) return null;
+  const laid = n.slice(0, at) + r.left + n.slice(at + r.found.length);
+  return laid === n ? null : laid;
+}
+/* whether the words there now read as a change left them (changes.js madeGone): the very words; or, for one that keeps
+ * words of the old around it, the words it put in with those around them standing once — and, for one that only took
+ * words out, those words gone from among them. The whole of the words written anew stands while all of them stand
+ * once, as whole words (his newer words after them, say). */
+export function relayStands(from, to, now) {
+  const a = String(from == null ? '' : from);
+  const b = String(to == null ? '' : to);
+  const n = String(now == null ? '' : now);
+  if (n === b || a === b) return true;
+  if (n === a) return false;
+  const r = relayParts(a, b);
+  if (!r.kept) return Boolean(b.trim()) && standsOnce(n, b.trim()) >= 0;
+  if (!r.put.trim()) return standsOnce(n, r.found) < 0 && standsOnce(n, r.left) >= 0;
+  return standsOnce(n, r.left) >= 0;
 }
 
 export function newPassage(by, text = '', fields = {}) {
@@ -1209,7 +1285,8 @@ export const novelSteps = {
           if (next[field] !== undefined) { delete next[field]; laid.push(field); }
           continue;
         }
-        if (was && cur && textual(was[field]) && textual(words[field]) && textual(cur[field])) {
+        /* (its name is a short field: set only while it reads as the change found it, never laid into another's — 2.12.63) */
+        if (field !== 'name' && was && cur && textual(was[field]) && textual(words[field]) && textual(cur[field])) {
           const got = relayedOn(was[field] == null ? '' : was[field], words[field] == null ? '' : words[field], cur[field] == null ? '' : cur[field]);
           if (got == null) continue;
           next[field] = got;
@@ -1364,12 +1441,24 @@ export const novelSteps = {
    * and what the reading found lost) */
   /* (`mark`: {id} — the change of names, by its own mark — or {undoes} — the Undo of the change so marked: an Undo puts each
    * page's words back as they were, which no change of names does — names.js renameSteps, 2.12.41, round 7) */
+  /* (KEPT BY THEIR COUNT, NEVER BY THE CLOCK — 2.12.63, the review of 2.12.42: kept an hour and twenty pairs, a row of
+   * Quick add carried through the renames since it was said found none of them an hour on, and Ask again gave back the
+   * old name. Kept: every change of names a row of Quick add kept on the book may still be carried through, and the
+   * newest RENAMES_FEW for work on its way, RENAMES_MOST at the most — each change whole, never cut from its fellows;
+   * `renamesFrom`, the oldest count kept whole) */
   noteRenames: (pairs, at, mark = {}) => (n) => {
     n.memory = n.memory || {};
-    const count = (Number(n.memory.renameN) || 0) + 1;
-    n.memory.renameN = count;
+    const m = n.memory;
+    const whole = renamesWholeFrom(m);
+    const count = (Number(m.renameN) || 0) + 1;
+    m.renameN = count;
     const tag = { ...(mark && mark.id ? { id: mark.id } : {}), ...(mark && mark.undoes ? { undoes: mark.undoes } : {}) };
-    n.memory.renames = [...(n.memory.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at, n: count, ...tag }))].filter((x) => at - x.at < 3600000).slice(-20);
+    const rows = (Array.isArray(n.quick) ? n.quick : []).map((r) => r && r.renameCount).filter((x) => typeof x === 'number' && Number.isFinite(x));
+    let from = count - RENAMES_FEW + 1;
+    if (rows.length) from = Math.min(from, Math.min(...rows) + 1);
+    from = Math.max(from, count - RENAMES_MOST + 1, whole, 1);
+    m.renames = [...(m.renames || []), ...pairs.map((x) => ({ from: x.from, to: x.to, at, n: count, ...tag }))].filter((x) => x && Number(x.n) >= from);
+    m.renamesFrom = from;
   },
   /* what the helper's model would not read, set aside with why (archivist.js) */
   setAside: (entries) => (n) => { n.memory = n.memory || {}; n.memory.aside = { ...(n.memory.aside || {}), ...entries }; },
@@ -1421,7 +1510,28 @@ export const novelSteps = {
  * changed since a count was noted, in order: work asked before them is given them when it lands (archivist.js
  * readChanges, writer.js; names.js renameIn applies them one change at a time) */
 export const renameCount = (novel) => Number(((novel || {}).memory || {}).renameN) || 0;
-export const renamesSince = (novel, count) => (((novel || {}).memory || {}).renames || []).filter((x) => x && Number(x.n) > count);
+const RENAMES_FEW = 20;
+const RENAMES_MOST = 200;
+/* the oldest count of the changes of names the book still holds whole (noteRenames `renamesFrom`). Kept before 2.12.63,
+ * by the clock and twenty pairs: the clock let whole changes go, and twenty pairs could cut the oldest one kept from its
+ * fellows only while twenty were kept — then only the changes after it are known whole */
+function renamesWholeFrom(m) {
+  if (m && m.renamesFrom != null && Number.isFinite(Number(m.renamesFrom))) return Number(m.renamesFrom);
+  const list = ((m && m.renames) || []).filter(Boolean);
+  const ns = list.map((x) => Number(x.n)).filter(Number.isFinite);
+  if (!ns.length) return (Number(m && m.renameN) || 0) + 1;
+  const low = Math.min(...ns);
+  return list.length >= 20 ? low + 1 : low;
+}
+/* (only while the book still holds every change of names since that count — some of them carried and others not would
+ * make one name of two: 2.12.63. Then none, and what was said stays in the names it was said in, as a row of Quick add
+ * from before 2.12.42 does) */
+export function renamesSince(novel, count) {
+  const m = (novel || {}).memory || {};
+  const list = (m.renames || []).filter((x) => x && Number(x.n) > count);
+  if (list.length && Number(count) + 1 < renamesWholeFrom(m)) return [];
+  return list;
+}
 
 /* ----------------------------------------------------- steps (chapter) */
 

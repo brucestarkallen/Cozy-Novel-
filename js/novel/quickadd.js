@@ -1947,7 +1947,9 @@ function plainAccount(r, { his = false, novelId = '' } = {}) {
   if (mended.length) out.push(`${listOf(mended)} now say${mended.length === 1 ? 's' : ''} what ${your} newer words say.`);
   const missed = (r.book || []).filter((b) => novelId && b.status === 'made' && b.change && madeGone(novelId, b.change)).map((b) => b.label);
   if (missed.length) out.push(`${listOf(missed)} no longer ${missed.length === 1 ? 'reads' : 'read'} that way.`);
-  if (!made.length && !mended.length) out.push('Nothing went in.');
+  /* (a change made that no longer reads that way was made — never "Nothing went in" beside it: 2.12.63, the review of
+   * 2.12.42) */
+  if (!made.length && !mended.length && !missed.length) out.push('Nothing went in.');
   const held = (r.refused || []).filter((x) => x.held).length + (r.held || []).length;
   if (held) out.push(`${many(held, 'entry waits', 'entries wait')} with what the book says otherwise.`);
   const heldBook = (r.book || []).filter((b) => b.held).map((b) => b.label);

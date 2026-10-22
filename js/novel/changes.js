@@ -15,7 +15,7 @@
  */
 
 import * as store from '../store.js';
-import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey, wordsElsewhere, passagePrint, hisAtOf, hasWords as passageHasWords, hisCard, relayedOn, laidStretch } from './shape.js';
+import { chapterSteps, novelSteps, newChapter, newVersion, endOf, rootOf, picked, passageNumbers, newCard, chapterPrint, chapterLabel, NOTE_KINDS, matchCard, CARD_FIELDS, hisStamp, cleanCard, keptTail, writtenWith, withStamps, stampsOf, entrySentences, sentenceKey, wordsElsewhere, passagePrint, hisAtOf, hasWords as passageHasWords, hisCard, relayedOn, relayStands } from './shape.js';
 import { countWords, nameKey, numberWords, newId, clone, truthOf, openOf, hashText, cutWords, linesOf, sameLines } from '../util.js';
 import { parseLenient } from './jsonutil.js';
 import { CHANGES_OPEN, CHANGES_CLOSE, READ_OPEN, READ_CLOSE, DIRECTION_OPEN, DIRECTION_CLOSE, bookNames, macroMap } from './prompts.js';
@@ -1190,49 +1190,66 @@ function entryStep(found, made, { more = '' } = {}) {
   /* (both as they stood when the step was made) */
   const cur = found ? clone(found) : null;
   const after = clone(made);
+  /* each part on the entry as the copy has it (`now`), only while it still reads as the change found it (`was`). His newer
+   * words in its words: the paragraph it adds goes after them, once, and nothing else of its words is laid there — never
+   * in among them, nor where they hold it already (2.12.41's rule, back: 2.12.63, the review of 2.12.42 — laid as an edit
+   * first, "He rides at dawn." went in before his newer "He is the last.", and twice where he had typed it). A change of
+   * its words that adds no paragraph is laid where its stretch still stands (shape.js relayedOn) */
+  const lay = (now, was, { more: adds = '', edit = null } = {}) => {
+    const next = clone(now);
+    let any = false;
+    for (const k of ENTRY_PARTS) {
+      if (same(after[k], was[k])) continue;
+      if (same(now[k], was[k])) { next[k] = clone(after[k]); any = true; continue; }
+      if (k !== 'text') continue;
+      let have = String(now.text || '');
+      if (edit != null) {
+        const laid = relayedOn(String(was.text || ''), edit, have);
+        if (laid != null) { have = laid; next.text = laid; any = true; }
+      }
+      if (adds && !have.includes(adds)) { next.text = [have.trim(), adds].filter(Boolean).join('\n\n'); any = true; }
+    }
+    return any ? next : null;
+  };
   return (n) => {
     const list = Array.isArray(n.bibliography) ? n.bibliography : [];
     const now = list.find((x) => x && x.id === after.id) || null;
     if (!cur) {
       if (now) return false;
-      /* (another window's entry of the same name and kind, made meanwhile under another id: its words go on that entry,
-       * after the words already there, never a second entry — another kind of the same name may be another thing, and
-       * both stay. 2.12.42) */
+      /* (another window's entry of the same name and kind, made meanwhile under another id: never a second entry —
+       * another kind of the same name may be another thing, and both stay. 2.12.42.) Every part of the new one laid on
+       * that entry the way a change to an entry already there is laid, found with nothing in it: a part it has no words
+       * for takes the new one's, a part it has its own words for keeps his, and the new words go after his, once — what
+       * the merge wrote kept with the book for its Undo and its card (`memory.entryMerged`). 2.12.63, the review of
+       * 2.12.42: a new entry with only a line, laid so, wrote its line nowhere while its card said made, and its Undo
+       * said the entry had been taken out since. */
       const named = entryFor(list, after.name, { kind: after.kind || '' });
       const hit = named && named.entry;
       if (hit && (hit.kind || '') === (after.kind || '')) {
-        const extra = String(after.text || '').trim();
-        const have = String(hit.text || '');
-        if (!extra || have.includes(extra)) return false;
-        const merged = clone(hit);
-        merged.text = [have.trim(), extra].filter(Boolean).join('\n\n');
-        merged.at = after.at;
-        novelSteps.putEntry(merged)(n);
+        const blank = { name: after.name, aka: [], kind: after.kind, line: '', text: '', rides: 'named' };
+        const next = lay(hit, blank, { more: String(after.text || '').trim() });
+        if (!next) return false;
+        const before = clone(hit);
+        const by = after.by === 'you' ? 'you' : hit.by;
+        novelSteps.putEntry({ ...tidyEntry(next), at: after.at, ...(by ? { by } : {}) })(n);
+        const left = (n.bibliography || []).find((x) => x && x.id === hit.id);
+        n.memory = n.memory || {};
+        const kept = Object.entries(n.memory.entryMerged || {}).filter(([k]) => k !== after.id).slice(-(MERGES_KEPT - 1));
+        n.memory.entryMerged = Object.fromEntries([...kept, [after.id, { into: hit.id, before, after: clone(left) }]]);
         return true;
       }
       novelSteps.putEntry(after)(n);
       return true;
     }
     if (!now) return false;
-    const next = clone(now);
-    let any = false;
-    for (const k of ENTRY_PARTS) {
-      if (same(after[k], cur[k])) continue;
-      if (same(now[k], cur[k])) { next[k] = clone(after[k]); any = true; }
-      else if (k === 'text') {
-        const have = String(now.text || '');
-        const want = String(after.text || '');
-        if (have === want) continue;
-        const laid = relayedOn(String(cur.text || ''), want, have);
-        if (laid != null) { next.text = laid; any = true; }
-        else if (more && !have.includes(more)) { next.text = [have.trim(), more].filter(Boolean).join('\n\n'); any = true; }
-      }
-    }
-    if (!any) return false;
+    const next = lay(now, cur, more ? { more } : { edit: String(after.text || '') });
+    if (!next) return false;
     novelSteps.putEntry({ ...tidyEntry(next), at: after.at, ...(after.by ? { by: after.by } : {}) })(n);
     return true;
   };
 }
+/* (the new entries laid onto another window's entry of their name, kept for their Undo — the newest few) */
+const MERGES_KEPT = 20;
 function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner', entriesSeen = null, dry = false }) {
   const entries = entriesOf(novel);
   const name = archivist.cleanName(op.entry);
@@ -1315,10 +1332,14 @@ function makeEntry(novelId, novel, op, { base, refuse, put, at, newBy = 'partner
   /* (with when each of its words was written, as the entry's one write keeps it — a sentence kept keeps its time, only
    * one new or changed takes now: shape.js withStamps, 2.12.41 — so its Undo finds it as it was left) */
   const after = withStamps(cur, { ...tidy, at, ...(by ? { by } : {}) }, { elsewhere: () => wordsElsewhere(novel, tidy.id) });
-  put('novel', novelId, entryStep(cur, after, { more: more && !twice ? more : '' }), { now: true });
+  /* (a paragraph added; and, for its card, the words it changed before it where it changed them too — `lead`: laid
+   * over his newer words only the paragraph goes in, entryStep, so made is said only while those words stand: madeGone) */
+  const adds = more && !twice ? more : '';
+  const lead = adds && cur && had.trim() !== String(cur.text || '').trim() ? had.trim() : null;
+  put('novel', novelId, entryStep(cur, after, { more: adds }), { now: true });
   /* (the Undo expects the entry as it was left — as the copy here has it now, the step laid) */
   const left = dry ? after : entriesOf(store.peek('novel', novelId)).find((x) => x && x.id === after.id) || after;
-  return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(left) }, before: cur ? (cur.text || cur.line || '') : '', after: left.text || left.line || '' };
+  return { ...base, status: 'made', undo: { what: 'entry', id: after.id, before: cur, after: clone(left), ...(adds ? { added: adds } : {}), ...(lead != null ? { lead } : {}) }, before: cur ? (cur.text || cur.line || '') : '', after: left.text || left.line || '' };
 }
 
 export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = null, where = null, numbers = null, short = null, entryBy = '', entriesSeen = null } = {}) {
@@ -1394,12 +1415,21 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     /* kept for the chapter as it reads, so a version brought back brings his back too (Cozy Tavern's M680-9) */
     const keptBefore = clone((chapter.summaries || []).find((x) => x.fp === after.fp) || null);
     /* (the summary's words laid where they still stand — another window's words around that stretch stay. The step that
-     * sets a summary whole still asks for the one it found, and Undo uses that. 2.12.42) */
+     * sets a summary whole still asks for the one it found, and Undo uses that. 2.12.42. A summary is the summary of one
+     * print of the chapter: laid only on the one the change found, or on words typed over it for that same print — never
+     * on one made for the chapter as it reads another way, 2.12.63, the review of 2.12.42: the helper's sentence about a
+     * page written in another window was filed as his own words, under the old print) */
     put('chapter', chapterId, (c) => {
-      const cur = String((c.summary && c.summary.text) || '');
-      const laid = relayedOn(old, next, cur);
+      const live = c.summary || null;
+      if (JSON.stringify(live) === JSON.stringify(was)) {
+        chapterSteps.setSummary(after)(c);
+        chapterSteps.keepSummary(after)(c);
+        return true;
+      }
+      if (!live || !was || live.fp !== was.fp) return false;
+      const laid = relayedOn(old, next, String(live.text || ''));
       if (laid == null) return false;
-      const row = laid === next ? after : { ...after, text: laid };
+      const row = { ...after, text: laid };
       chapterSteps.setSummary(row)(c);
       chapterSteps.keepSummary(row)(c);
       return true;
@@ -1561,14 +1591,11 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
     if (name === (chapter.name || '')) return refuse('it already has that name');
     /* how it was, taken before the change (the record changes in place) */
     const was = { name: chapter.name || '', nameBy: chapter.nameBy || '' };
-    /* named for him: the helper never names it again. (laid where the name still stands — setName itself stays exact, for
-     * Undo. 2.12.42) */
-    put('chapter', chapterId, (c) => {
-      const laid = relayedOn(was.name, name, String(c.name || ''));
-      if (laid == null) return false;
-      chapterSteps.setName(laid, 'you')(c);
-      return true;
-    }, { now: true });
+    /* named for him: the helper never names it again. (A name is a short field: set only while the chapter is still
+     * called as the change found it — never laid into a name another window gave it, 2.12.63, the review of 2.12.42:
+     * "The gate" made "Night falls" laid over "The gate at dusk" made "Night falls at dusk". Where it does not land, its
+     * card says the chapter's name no longer reads that way: madeGone) */
+    put('chapter', chapterId, chapterSteps.setName(name, 'you', was.name), { now: true });
     return { ...base, status: 'made', undo: { what: 'chapter', chapterId, before: was, after: name }, before: was.name, after: name };
   }
 
@@ -1632,17 +1659,18 @@ export function makeChange(novelId, op, { id = newId('cg'), dry = false, seen = 
      * window's newer copy) */
     const added = op.find === undefined && op.add !== undefined ? text(op.add) : '';
     /* (a paragraph added stays added after his newer words. Anything else is laid where the stretch still stands — his
-     * words either side of it stay. setField and setMeta themselves stay exact, for Undo. 2.12.42) */
+     * words either side of it stay. setField and setMeta themselves stay exact, for Undo. 2.12.42. The title and the
+     * subtitle are short fields: set only while they read as the change found them, never laid into another window's —
+     * 2.12.63, the review of 2.12.42: a subtitle cleared over "A ghost story, told at night" left ", told at night") */
     const addOn = (n) => { const cur = String(n[field] || ''); if (cur === old) { n[field] = next; return true; } if (cur.includes(added)) return false; n[field] = [cur.replace(/\s+$/, ''), added].filter(Boolean).join('\n\n'); return true; };
     const layField = (n) => {
-      const cur = String((meta ? (n.meta || {})[field] : n[field]) || '');
-      const laid = relayedOn(old, next, cur);
+      const laid = relayedOn(old, next, String(n[field] || ''));
       if (laid == null) return false;
-      if (meta) novelSteps.setMeta({ [field]: laid })(n); else novelSteps.setField(field, laid)(n);
+      novelSteps.setField(field, laid)(n);
       return true;
     };
-    put('novel', novelId, meta ? (added ? novelSteps.setMeta({ [field]: next }, { [field]: old }) : layField) : added ? addOn : layField, { now: true });
-    return { ...base, status: 'made', undo: { what: 'book', field, meta, before: old, after: next }, before: old, after: next };
+    put('novel', novelId, meta ? novelSteps.setMeta({ [field]: next }, { [field]: old }) : added ? addOn : layField, { now: true });
+    return { ...base, status: 'made', undo: { what: 'book', field, meta, before: old, after: next, ...(added && !meta ? { added } : {}) }, before: old, after: next };
   }
 
   /* an entry in his bibliography (bibliography.js): his, made at his asking */
@@ -1890,6 +1918,23 @@ export function undoChange(novelId, change) {
     return { ok: true, said: kept ? `${back} put back; ${kept} changed since, kept as they are` : '' };
   }
   if (u.what === 'entry') {
+    /* a new entry laid onto another window's entry of its name (entryStep): what it wrote there taken back — only while
+     * that entry still reads as the merge left it (2.12.63, the review of 2.12.42: it said the entry had been taken out
+     * since, and kept its words in his) */
+    const novel = store.peek('novel', novelId);
+    const merged = !u.before && u.after && !entriesOf(novel).some((e) => e.id === u.id) ? (((novel || {}).memory || {}).entryMerged || {})[u.id] : null;
+    if (merged) {
+      const back = store.change('novel', novelId, (n) => {
+        if (novelSteps.entryBack(merged.into, merged.before, merged.after)(n) === false) return false;
+        n.memory = n.memory || {};
+        const rest = { ...(n.memory.entryMerged || {}) };
+        delete rest[u.id];
+        n.memory.entryMerged = rest;
+        return true;
+      }, { now: true });
+      if (back === false) return { ok: false, said: entriesOf(store.peek('novel', novelId)).some((e) => e.id === merged.into) ? 'the entry has been changed since' : 'the entry has been taken out since' };
+      return { ok: true };
+    }
     const done = store.change('novel', novelId, novelSteps.entryBack(u.id, u.before, u.after), { now: true });
     /* (one he took out since is said so — 2.12.40, the audit: it was "changed since") */
     const there = entriesOf(store.peek('novel', novelId)).some((e) => e.id === u.id);
@@ -2234,20 +2279,25 @@ export function changeShort(c) {
 /* a change made that the page no longer shows: he put back the words before it, or another version is on show (his
  * report, 2.12.2: the partner must know what the book holds now) — '' when it stands. The same for a plan, a summary, a
  * chapter's name, the book's own words, a module, an entry, a card: made is said only while the words it left still
- * stand (2.12.42). */
-function textStands(before, after, now) {
-  const a = String(before == null ? '' : before);
-  const b = String(after == null ? '' : after);
-  const n = String(now == null ? '' : now);
-  if (n === b || a === b) return n === b || a === b;
-  if (n === a) return false;
-  const fresh = laidStretch(a, b);
-  if (!String(fresh || '').trim()) return false;
-  const at = n.indexOf(fresh);
-  return at >= 0 && n.indexOf(fresh, at + 1) < 0;
-}
+ * stand (2.12.42) — read by the same rule its words were laid by (2.12.63): a field's words as shape.js relayStands
+ * reads them; a short field — a chapter's name, the title, the subtitle, an entry's or a card's name, an entry's line —
+ * only as the very words; a paragraph added, while it stands in the words, wherever his newer words put it. */
+const textStands = (before, after, now) => relayStands(before, after, now);
+const shortStands = (before, after, now) => String(before == null ? '' : before) === String(after == null ? '' : after) || String(now == null ? '' : now) === String(after == null ? '' : after);
+/* (a paragraph added after his newer words: standing while it is in them — and the words the change wrote before it,
+ * where it changed them too, read as above) */
+const addedStands = (before, after, now, added, lead = null) => String(now || '') === String(after || '') || (String(now || '').includes(added) && (lead == null || relayStands(before, lead, now)));
 function textGone(before, after, now, what) {
   return textStands(before, after, now) ? '' : `${what} no longer reads that way`;
+}
+/* the parts a new entry gives, standing on the entry of its name it was laid onto (entryStep) */
+function newEntryStands(hit, made) {
+  const extra = String(made.text || '').trim();
+  if (extra && !String(hit.text || '').includes(extra)) return false;
+  if (String(made.line || '').trim() && String(hit.line || '') !== String(made.line || '')) return false;
+  const names = [hit.name, ...(hit.aka || [])].map(nameKey);
+  if ((made.aka || []).some((a) => !names.includes(nameKey(a)))) return false;
+  return !(made.rides && made.rides !== 'named' && hit.rides !== made.rides);
 }
 const BOOK_GONE = { brief: 'what it’s about', style: 'how it reads', plans: 'where it’s headed', title: 'the title', subtitle: 'the subtitle' };
 export function madeGone(novelId, c) {
@@ -2289,13 +2339,16 @@ export function madeGone(novelId, c) {
     const ch = store.peek('chapter', u.chapterId);
     if (!ch) return 'that chapter is not there any more';
     const before = u.before && typeof u.before === 'object' ? String(u.before.name || '') : String(u.before || '');
-    return textGone(before, u.after, String(ch.name || ''), 'the chapter’s name');
+    return shortStands(before, u.after, String(ch.name || '')) ? '' : 'the chapter’s name no longer reads that way';
   }
   if (u.what === 'book') {
     const live = store.peek('novel', novelId);
     if (!live) return '';
     const now = String((u.meta ? (live.meta || {})[u.field] : live[u.field]) || '');
-    return textGone(u.before, u.after, now, BOOK_GONE[u.field] || 'the book’s words');
+    const what = BOOK_GONE[u.field] || 'the book’s words';
+    if (u.meta) return shortStands(u.before, u.after, now) ? '' : `${what} no longer reads that way`;
+    if (u.added) return addedStands(u.before, u.after, now, u.added) ? '' : `${what} no longer reads that way`;
+    return textGone(u.before, u.after, now, what);
   }
   if (u.what === 'module') {
     const m = listModules(store.peek('house', 'house') || {}).find((x) => x.id === u.id);
@@ -2303,21 +2356,24 @@ export function madeGone(novelId, c) {
     return textGone(u.before == null ? '' : u.before, u.after, String(m.text || ''), 'the module');
   }
   if (u.what === 'entry') {
-    const list = entriesOf(store.peek('novel', novelId));
+    const novel = store.peek('novel', novelId);
+    const list = entriesOf(novel);
     const cur = list.find((e) => e && e.id === u.id) || null;
     if (!u.after) return cur ? 'the entry is back in the bibliography' : '';
     if (!u.before) {
       if (cur) return '';
-      const named = entryFor(list, u.after.name, { kind: u.after.kind || '' });
-      const hit = named && named.entry;
-      const extra = String(u.after.text || '').trim();
-      if (hit && (hit.kind || '') === (u.after.kind || '') && (!extra || String(hit.text || '').includes(extra))) return '';
-      return 'the entry no longer reads that way';
+      /* laid onto another window's entry of its name (entryStep `memory.entryMerged`), or found there by its name */
+      const merged = (((novel || {}).memory || {}).entryMerged || {})[u.id];
+      const named = merged ? null : entryFor(list, u.after.name, { kind: u.after.kind || '' });
+      const hit = merged ? list.find((e) => e && e.id === merged.into) : named && named.entry && (named.entry.kind || '') === (u.after.kind || '') ? named.entry : null;
+      if (!hit) return 'the entry has been taken out since';
+      return newEntryStands(hit, u.after) ? '' : 'the entry no longer reads that way';
     }
     if (!cur) return 'the entry has been taken out since';
     for (const k of ENTRY_PARTS) {
       if (JSON.stringify(u.before[k] == null ? null : u.before[k]) === JSON.stringify(u.after[k] == null ? null : u.after[k])) continue;
-      if (k === 'text' || k === 'line' || k === 'name') { if (!textStands(u.before[k], u.after[k], cur[k])) return 'the entry no longer reads that way'; }
+      if (k === 'text') { if (!(u.added ? addedStands(u.before.text, u.after.text, cur.text, u.added, u.lead == null ? null : u.lead) : textStands(u.before.text, u.after.text, cur.text))) return 'the entry no longer reads that way'; }
+      else if (k === 'line' || k === 'name') { if (!shortStands(u.before[k], u.after[k], cur[k])) return 'the entry no longer reads that way'; }
       else if (JSON.stringify(cur[k] == null ? null : cur[k]) !== JSON.stringify(u.after[k] == null ? null : u.after[k])) return 'the entry no longer reads that way';
     }
     return '';
@@ -2332,7 +2388,8 @@ export function madeGone(novelId, c) {
       if (JSON.stringify(u.before && u.before[k] != null ? u.before[k] : null) === JSON.stringify(u.after[k] == null ? null : u.after[k])) continue;
       const was = u.before ? u.before[k] : '';
       const after = u.after[k];
-      if (typeof after === 'string' || typeof was === 'string' || was == null) { if (!textStands(was || '', after || '', (cur && cur[k]) || '')) return 'the card no longer reads that way'; }
+      if (k === 'name') { if (!shortStands(was || '', after || '', (cur && cur[k]) || '')) return 'the card no longer reads that way'; }
+      else if (typeof after === 'string' || typeof was === 'string' || was == null) { if (!textStands(was || '', after || '', (cur && cur[k]) || '')) return 'the card no longer reads that way'; }
       else if (JSON.stringify(cur[k] == null ? null : cur[k]) !== JSON.stringify(after == null ? null : after)) return 'the card no longer reads that way';
     }
     return '';
