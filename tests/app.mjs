@@ -294,6 +294,36 @@ await test('after a Resend from an edited premise, Another take, a Rewrite and w
   await putAway(b);
 });
 
+await test('his unsent words in a page’s premise box are kept on the phone, a step on that page’s words alone: another window’s words for other pages stay, and letting his go takes only the words he had', async () => {
+  const b = await makeBook([['The lamp was cold.', 'Mara struck a match.']]);
+  const [p0, p1] = b.ch().passages.map((p) => p.id);
+  const MINE = 'MY WORDS for the first page.', THEIRS = 'THEIR WORDS for the second page.', NEWER = 'NEWER WORDS for the first page, typed in the other window.';
+  await store.create('draft', b.novelId, { id: b.novelId, novelId: b.novelId, direction: 'My next page.' });
+  await store.flush('draft', b.novelId);
+  /* another window keeps its words for the other page; this window's step, laid after, is played over that copy */
+  await otherWindow('draft', b.novelId, (d) => { d.premises = { [p1]: THEIRS }; });
+  store.change('draft', b.novelId, shape.draftSteps.premise(p0, MINE), { now: true });
+  await store.flush('draft', b.novelId);
+  let kept = await onPhone('draft', b.novelId);
+  assert.deepEqual([kept.premises, kept.direction], [{ [p1]: THEIRS, [p0]: MINE }, 'My next page.'], 'both pages’ words, and the box below as it was');
+  /* letting his go where the other window typed newer words for that page since: theirs stay */
+  await otherWindow('draft', b.novelId, (d) => { d.premises[p0] = NEWER; });
+  store.change('draft', b.novelId, shape.draftSteps.premise(p0, null, MINE), { now: true });
+  await store.flush('draft', b.novelId);
+  kept = await onPhone('draft', b.novelId);
+  assert.equal(kept.premises[p0], NEWER, 'newer words typed for the page elsewhere are never taken with his');
+  /* where they still read as the words he had, they go — and only that page's */
+  store.change('draft', b.novelId, shape.draftSteps.premise(p0, null, NEWER), { now: true });
+  await store.flush('draft', b.novelId);
+  kept = await onPhone('draft', b.novelId);
+  assert.deepEqual(kept.premises, { [p1]: THEIRS });
+  /* a letting go with no words of his to go takes nothing */
+  store.change('draft', b.novelId, shape.draftSteps.premise(p1, null, undefined), { now: true });
+  await store.flush('draft', b.novelId);
+  assert.deepEqual((await onPhone('draft', b.novelId)).premises, { [p1]: THEIRS });
+  await putAway(b);
+});
+
 await test('Resend on a page whose premise only a rewrite kept writes from the box — never "these are your own words"; a new take that opens the chapter, its premise the same or changed, names it again', async () => {
   const b = await makeBook([[]]);
   store.change('novel', b.novelId, shape.novelSteps.setPref('length', 'paragraphs'), { now: true });

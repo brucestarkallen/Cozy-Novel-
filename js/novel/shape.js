@@ -2025,6 +2025,28 @@ export const turnSteps = {
   set: (patch) => (d) => { Object.assign(d, patch); },
 };
 
+/* ------------------------------------------------- the draft (unsent words) */
+
+/* THE WORDS IN A PAGE'S PREMISE BOX THAT HE HAS NOT SENT (2.12.63), kept on the phone in the book's draft record beside
+ * the box under the page — `premises`, one key a page — so a window Android closed, or an update, gives them back when
+ * the page's Premise is opened again (desk.js). Each step changes only its own page's words on the copy it is laid on:
+ * another window's words for other pages stay. `null` lets them go, and only while they still read `expect` (the words
+ * this window had): words typed for that page in another window since stay. */
+export const draftSteps = {
+  premise: (pid, words, expect = undefined) => (d) => {
+    const now = d.premises && typeof d.premises[pid] === 'string' ? d.premises[pid] : undefined;
+    if (words === null) {
+      if (now === undefined || now !== expect) return false;
+      delete d.premises[pid];
+      return true;
+    }
+    if (now === words) return false;
+    d.premises = d.premises && typeof d.premises === 'object' ? d.premises : {};
+    d.premises[pid] = String(words);
+    return true;
+  },
+};
+
 /* A book's words and chapters, counted from its chapters. */
 export function countBook(novel, chapters) {
   let words = 0;

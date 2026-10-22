@@ -248,6 +248,10 @@ export function buildBranch(bundle, options = {}) {
       .map(([k, value]) => [k === key ? `talk:${source.id}:${conversationId}` : k, value]));
   }
   if (draft) { draft.id = source.id; draft.novelId = source.id; }
+  /* his unsent words in a page's premise box are that book's page changing: they stay in the book he typed them in, and
+   * the branch's pages open on their premises as they stand — the pages keep their ids, so a copy would show one book's
+   * box in the other's (2.12.63) */
+  if (draft) delete draft.premises;
   const map = new Map([[source.id, novelId], ...keptChapterIds.map((id) => [id, makeId('ch')]), ...plays.map((p) => [p.id, makeId('pl')])]);
   const newChapters = Object.fromEntries(Object.values(chapters).map((chapter) => { const c = remapBranchData(chapter, map); return [c.id, c]; }));
   const resultNovel = remapBranchData(novel, map);
