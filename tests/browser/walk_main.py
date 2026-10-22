@@ -124,7 +124,12 @@ async def scenario_main(b):
     await pg.wait_for_timeout(500)
     notes = await pg.inner_text('#sideBody')
     check('Notes shows what the helper kept', 'Mara Venn' in notes and 'Crane Point' in notes and 'Who sent the letter?' in notes, notes[:400])
-    check('a chapter of a few hundred words is not named yet', await pg.text_content('#chapname') == '', await pg.text_content('#chapname'))
+    # (2.12.63 — changed with a comment why: through 2.12.41 a chapter was named only once it held 600 words, and this
+    # walk said a chapter of a few hundred words was not named yet. Since 2.12.49 his word is that the page that opens a
+    # chapter names it, however short — 2.12.53: "the next page you write names the chapter" — and 2.12.63 makes that one
+    # rule: the reading that saw the opening page, or the name's own short ask, names it. Another take put a page of its
+    # own at the start and was named in turn; the Rewrite of it and the arrow back to it are the same page and keep it.)
+    check('a chapter is named from the page that opens it, however short', await pg.text_content('#chapname') == 'The Bottle', await pg.text_content('#chapname'))
     await pg.go_back(); await pg.wait_for_timeout(400)
     check('Back closes the notes drawer, not the book', await pg.locator('#sidePane.open').count() == 0 and await pg.locator('#desk:not([hidden])').count() == 1, '')
     # ---- partner

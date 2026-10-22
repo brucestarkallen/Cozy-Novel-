@@ -601,7 +601,14 @@ async function bringBackCopy(id, row, box, s, given = null) {
   if (!(await confirmIt('Bring this copy back?', `The chapter goes back to the copy of ${new Date(row.at).toLocaleString()} (${plural((old.passages || []).filter((p) => p.by !== 'break').length, 'passage')}, ${plural(chapterWords(old), 'word')}). The chapter as it is now is kept as the newest earlier copy, at the top of this list.`, 'Bring it back'))) return;
   /* what the helper had read that this changes is kept for it, so the notes follow the book back */
   archivist.retireBeforeReplace(P.novelId, id, old.passages || []);
-  store.change('chapter', id, (d) => { d.passages = JSON.parse(JSON.stringify(old.passages || [])); d.name = old.name || ''; d.nameBy = old.nameBy || ''; }, { now: true });
+  /* (its name back with it, and whether one was owed for the page that opened it then — never a name owed for the pages
+   * now asked for the pages brought back: 2.12.63) */
+  store.change('chapter', id, (d) => {
+    d.passages = JSON.parse(JSON.stringify(old.passages || []));
+    d.name = old.name || ''; d.nameBy = old.nameBy || '';
+    if (old.nameDue) d.nameDue = true; else delete d.nameDue;
+    if (old.nameWas) d.nameWas = JSON.parse(JSON.stringify(old.nameWas)); else delete d.nameWas;
+  }, { now: true });
   archivist.nudge(P.novelId);
   writer.recount(P.novelId);
   s.close();

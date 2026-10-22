@@ -176,6 +176,9 @@ def answer_for(body):
         return '{"ok": true}'
     if "Check every card against the book as it stands" in last_user:
         return json.dumps({"clear": True, "verdict": "Every card holds true to the book."})
+    if "Give it a chapter title" in last_user:
+        # the chapter's name asked by itself (2.12.63, archivist.js nameChapters): a title from how it opens
+        return json.dumps({"name": "The Bottle"})
     if "Update the notes for what this changes" in last_user:
         kept = {}
         if '"about": "what the book is about' in last_user:

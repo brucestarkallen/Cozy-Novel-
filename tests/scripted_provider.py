@@ -107,6 +107,7 @@ class H(BaseHTTPRequestHandler):
             proof = "Find every slip of the hand in them" in last_user
             # the Timeline read for itself (2.12.37): an honest reading with no turns, unless the test queued an answer for it ({"turns": true})
             turns = "Read these passages for the Timeline alone" in last_user
+            # the chapter's name asked by itself (2.12.63, archivist.js nameChapters): "The Lantern", unless the test queued an answer for it ({"title": true})
             title = "Give it a chapter title" in last_user
             # a provider that gives at most so many tokens in one reply ({"most": n, "message": "…"}): it turns away every ask
             # for more, in its own words, and answers the first that asks for no more (2.12.63)

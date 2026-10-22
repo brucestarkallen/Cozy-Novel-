@@ -26,9 +26,9 @@ import { contextOf, thinksOn, thinkingFloor } from '../model/providers.js';
 import { connFor, busy as writerBusy, setNotesWait, setBeforeGrow, setHisAsk } from './writer.js';
 import { findFirstObject, findLastObject } from './jsonutil.js';
 import { hashText, countWords, nameKey, newId, clone, estimateTokens, openOf, numberWords, truthOf, cutWords, fitRows, plural } from '../util.js';
-import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps, renameCount, renamesSince, wordsElsewhere } from './shape.js';
+import { picked, premiseOf, premisesOf, premiseAt, laterWords, chapterLabel, chapterText, chapterPrint, chapterWords, chapterSteps, novelSteps, turnSteps, passageNumbers, NOTE_KINDS, matchCard, cardsCalled, cardStands, carriersOf, sameThreadTitle, threadsNear, hisField, keptStamp, letGoStamp, hisAtOf, hisChange, ownWords, unrender, cleanCard, PRIOR_KEEP, stampsOf, entrySentences, sentenceKey, withStamps, renameCount, renamesSince, wordsElsewhere, openingOf, openingPrint, copiesPremise, nameOwed, NAME_WORDS } from './shape.js';
 import { foldedText, foldName, tokensMissing, figuresInvented, looksLikeTokenDump, isGroupName, isDescriptorName, renameIn, renameAll, nameInText, firstSentence, namesNear, namesAndFigures, premiseNames, bookEvidence, splitSentences } from './names.js';
-import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, entryOverWords, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook, BESIDE_FLOOR } from './prompts.js';
+import { autoOn, helperFrame, premisesPart, premiseRow, premisesHead, leftLine, entriesPart, entryRow, entryOverWords, ENTRIES_HEAD, timelinePart, timelineRow, TIMELINE_HEAD, readingFocus, premiseBeside, timelineRequest, bibFactsRequest, notesRequest, summaryRequest, stretchRequest, sceneStretchRequest, summaryCheckRequest, summaryAgainRequest, summarySize, SUMMARY_MOST, keepRequest, chapterNameRequest, keptByHelper, bookText, JSON_AGAIN, JSON_CUT, notesText, aboutTheBook, auditRequest, ASKED_WORDS, namedBook, BESIDE_FLOOR } from './prompts.js';
 import { fitBook, bibAutoOn, shortOf } from './context.js';
 import { readingOf, readingAt, planOf, moved, changedBy, newestRead, unread } from './readings.js';
 import { continuityOf, mergeContinuity, continuityStep, timelineOf, continuityNow, carriedContinuity, turnsOfPrint, withCarriedTurns, sameTurn, turnStands, turnsOwed, setAsideNow, turnsLost } from './timeline.js';
@@ -773,6 +773,21 @@ export function saysNothing(v) { const t = wordsOf(v).replace(/\r/g, '').trim();
 export function cleanName(v) {
   const t = wordsOf(v).replace(/\s+/g, ' ').trim().slice(0, 120);
   return t && !NOTHING.test(bare(t)) && !SORRY.test(t) && !echoed(bare(t)) && /[\p{L}\p{N}]/u.test(t) ? t : '';
+}
+/* A CHAPTER'S NAME AS IT IS LAID (2.12.63 — one tidy for the name's own ask, a reading and a summary): what only dresses
+ * it taken off — quotes or marks around it, a "Chapter Two:" before it, a full stop after it — never a sentence (more
+ * than a dozen words), at most eighty letters, cut on a whole word; '' for none */
+export function titleOf(v) {
+  let t = cleanName(v);
+  for (let i = 0; i < 2; i++) {
+    const m = /^["“'‘*_]+([\s\S]+?)["”'’*_]+$/u.exec(t);
+    if (m) t = m[1].trim();
+    t = t.replace(/^chapter\s+[\p{L}\p{N}-]+\s*[:.—–-]\s*/iu, '').trim();
+  }
+  t = t.replace(/\.+$/u, '').trim();
+  if (!t || !/[\p{L}\p{N}]/u.test(t) || t.split(/\s+/).length > 12) return '';
+  if (t.length > 80) { const room = t.slice(0, 80); const sp = room.search(/\s\S*$/); t = (sp > 40 ? room.slice(0, sp) : room).trim(); }
+  return t;
 }
 const his = (card) => Boolean(card && card.updated && card.updated.by === 'you');
 const NO_THREAD = /^(?:no\s+(?:new\s+)?threads?|untitled|title|tbd|todo|to\s+do)[.!]?$/i;
@@ -2192,6 +2207,9 @@ export async function run(novelId) {
        * by, a reading settled — and the first ask of it ends the run, booked for the end of that wait: requireHelper,
        * silentWait, round 7) */
       await readChanges(novelId, conn);
+      /* the chapters whose opening changed under their name, named from it as it stands — once no reading of them is owed
+       * (2.12.63) */
+      const namesLeft = await nameChapters(novelId, conn);
       /* (each returns whether something it counted is owed the next run — asked again by itself: 2.12.41) */
       const stretchLeft = await stretchUp(novelId, conn);
       const sceneLeft = await sceneStretchUp(novelId, conn);
@@ -2216,7 +2234,7 @@ export async function run(novelId) {
       }
       /* (what the notes' reading waits to ask again after a stall is booked below, never asked every two seconds:
        * pendingNow — 2.12.41, round 6) */
-      const left = pendingNow(novelId) || stretchLeft || sceneLeft || checksLeft || bibLeft || turnsLeft;
+      const left = pendingNow(novelId) || namesLeft || stretchLeft || sceneLeft || checksLeft || bibLeft || turnsLeft;
       if (left) nudge(novelId, 2000);
       else {
         /* (the whole book read again is done only once every page is read or set aside — none still waiting its time) */
@@ -2593,7 +2611,8 @@ const tooSlow = (them) => `its model was too slow to answer for ${them ? 'them' 
 /* WHY IT IS ASKED AGAIN: its model too slow to answer — or, the first time it was asked, it would not (`refused`: a
  * refusal stops only that stage for the run and is asked again in a moment, counted toward its pass-by as a stall is —
  * 2.12.41, round 8: it was thrown, and the whole run waited out a failure's wait) */
-const whyAgain = (r, them) => (r && r.refused ? `its model would not answer for ${them ? 'them' : 'it'} the first time` : tooSlow(them));
+/* (`copied`: a chapter's name its model gave back as the premise, or as no title at all — 2.12.63) */
+const whyAgain = (r, them) => (r && r.copied ? 'its model gave back only your premise, or no title, the first time' : r && r.refused ? `its model would not answer for ${them ? 'them' : 'it'} the first time` : tooSlow(them));
 /* (the same for a stage's own line — "the helper’s model …": the summary sheet, the stretches, What it's about, the check) */
 export function againWhy(wait, them = false) { return `the helper’s ${whyAgain(wait, them).replace(/^its /, '')}`; }
 const STAGE_SAYS = {
@@ -2606,12 +2625,13 @@ const STAGE_SAYS = {
   keep: (r, when) => `The helper writes ${r.label} from the book again ${when} — ${whyAgain(r, String(r.fp || '').includes(','))}.`,
   out: (r, when) => `The helper reads what was taken out of ${r.label} again ${when} — ${whyAgain(r)}.`,
   chapter: (r, when) => `The helper reads a chapter taken out again ${when} — ${whyAgain(r)}.`,
+  name: (r, when) => `The helper names ${r.label} again ${when} — ${whyAgain(r)}.`,
 };
 /* (what it is of, by its label as the book stands now — a chapter named since it was asked is said by its name) */
 function labelNow(novel, r) {
   const ch = r.chapterId ? store.peek('chapter', r.chapterId) : null;
   if (ch && (r.what === 'summary' || r.what === 'tokens' || r.what === 'stretch')) return chapterLabel(novel, ch, { withName: true });
-  if (ch && r.what === 'out') return chapterLabel(novel, ch, { withName: false });
+  if (ch && (r.what === 'out' || r.what === 'name')) return chapterLabel(novel, ch, { withName: false });
   const d = r.what === 'scene' ? store.peek('play', r.playId) : null;
   const c = d ? store.peek('chapter', d.chapterId) : null;
   if (d) return `the scene played as ${d.who || 'my character'} from ${c ? chapterLabel(novel, c, { withName: true }) : 'the book'}`;
@@ -2646,6 +2666,8 @@ function stageLive(novelId, novel, key, r) {
     case 'keep': return toKeep(novel).join(',') === r.fp;
     case 'out': return Boolean(ch) && changesIn(novel, ch).removed.some((x) => outKey(x) === key);
     case 'chapter': return ((novel && novel.memory && novel.memory.removed) || []).some((x) => x.id === r.chapterId);
+    /* (a chapter's name: still owed, its opening reading as it was asked) */
+    case 'name': return Boolean(ch) && order.includes(r.chapterId) && nameOwed(ch) && openingPrint(ch) === r.fp;
     default: return false;
   }
 }
@@ -2959,7 +2981,7 @@ async function readChanges(novelId, conn) {
          * parts after it are not (2.12.40, the audit) */
         const parts = partsOf(c.text, Math.max(150, batchWords), Math.max(150, batchWords - besideWords - (oldFirst ? 0 : countWords(c.old))));
         if (!parts.length) parts.push('');
-        parts.forEach((part, i) => batches.push(ask({ items: [{ ...c, whole: c.text, fromChange: Boolean(c.old), premise: i === 0 ? c.premise : '', text: part + (parts.length > 1 ? `\n\n(part ${i + 1} of ${parts.length})` : ''), old: !oldFirst && i === 0 ? c.old : '', partial: i < parts.length - 1 }] })));
+        parts.forEach((part, i) => batches.push(ask({ items: [{ ...c, whole: c.text, fromChange: Boolean(c.old), premise: i === 0 ? c.premise : '', text: part + (parts.length > 1 ? `\n\n(part ${i + 1} of ${parts.length})` : ''), old: !oldFirst && i === 0 ? c.old : '', partial: i < parts.length - 1, first: i === 0 }] })));
         continue;
       }
       if ((words + w > batchWords || (c.pid === newest && changes.length > 1)) && batch.length) push();
@@ -2972,6 +2994,19 @@ async function readChanges(novelId, conn) {
     /* the chapter up to the new part rides with the first passages read */
     const firstItems = batches.find((x) => x.items.length);
     if (firstItems) firstItems.before = beforeTail;
+    /* WHETHER AN ASK SEES THE PAGE THAT OPENS THE CHAPTER AS IT STANDS (2.12.63 — through 2.12.62 a reading of only the
+     * words taken out from the start of a chapter named it from them): its own words read (whole, or the first part of
+     * them), or the chapter up to the new words riding whole before them. Only such an ask names the chapter, and only
+     * while its opening still reads so (`opening`: its print — shape.js openingPrint); a name owed is otherwise left to
+     * its own ask (nameChapters). */
+    const op0 = chapter ? openingOf(chapter) : null;
+    const opAt = op0 ? chapter.passages.findIndex((p) => p.id === op0.pid) : -1;
+    const opSig = op0 ? `${op0.vid}${SIG_SEP}${hashText(op0.text)}` : '';
+    const opPrint = op0 ? openingPrint(chapter) : '';
+    for (const x of batches) {
+      x.opening = op0 && ((x.before && x.before === before && opAt >= 0 && opAt < firstChanged)
+        || x.items.some((c) => c.pid === op0.pid && !c.oldOnly && c.sig === opSig && c.first !== false)) ? opPrint : '';
+    }
     /* what a passage read in parts changed, gathered until its last part */
     let acc = [];
     let accKept = {};
@@ -3209,18 +3244,17 @@ async function readChanges(novelId, conn) {
       midPassage = B.items.some((c) => c.partial);
       if (midPassage) store.change('novel', novelId, novelSteps.setMemory({ inParts: { cards: parts.cards, kept: parts.kept, from: parts.from, at: Date.now() } }));
       else if ((store.peek('novel', novelId).memory || {}).inParts) store.change('novel', novelId, novelSteps.setMemory({ inParts: null }));
-      /* the chapter's name, when it has none, he has not cleared it, and it is long enough to have earned one */
-      const cn = cleanName(got.obj.chapterName);
+      /* THE CHAPTER'S NAME — owed (its opening changed under the one it had: nameDue, however short it is), or none and
+       * long enough to have earned one, and not cleared by him: laid only by an ask that saw its opening as it stands, while
+       * it still reads so, never his premise copied (shape.js nameFrom, on the copy it is laid on — 2.12.41, 2.12.63). One
+       * that did not see it, or gave his premise back: the name is owed to its own ask (nameChapters). */
+      const cn = titleOf(got.obj.chapterName);
       const liveCh = chapter ? store.peek('chapter', chapter.id) : null;
-      if (liveCh && cn && (liveCh.nameDue || (!liveCh.name && liveCh.nameBy !== 'you' && chapterWords(liveCh) >= 600))) {
-        const tidy = cn.replace(/^chapter\s+\w+\s*[:—-]\s*/i, '').slice(0, 80);
-        /* (on the chapter as the copy it is laid on has it: never over a name he gave it meanwhile — 2.12.41.
-         * nameDue: the opening changed, so a name the helper gave before is replaced, however short the chapter) */
+      if (liveCh && cn && liveCh.nameBy !== 'you' && (liveCh.nameDue ? B.opening : !liveCh.name && chapterWords(liveCh) >= NAME_WORDS)) {
         store.change('chapter', chapter.id, (ch) => {
-          if (ch.nameBy === 'you') return false;
-          if (!ch.nameDue && (ch.name || chapterWords(ch) < 600)) return false;
-          chapterSteps.setName(tidy, 'helper')(ch);
-          delete ch.nameDue;
+          if (B.opening && chapterSteps.nameFrom(cn, { print: B.opening })(ch)) return true;
+          if (ch.nameDue || ch.nameBy === 'you' || ch.name || chapterWords(ch) < NAME_WORDS || !openingOf(ch)) return false;
+          ch.nameDue = true;
           return true;
         });
       }
@@ -3556,6 +3590,78 @@ async function stretchUp(novelId, conn) {
   return owed;
 }
 
+/* ------------------------------------------------- the chapter's name */
+
+/* THE CHAPTER'S NAME, ITS OWN SMALL ASK (2.12.63 — through 2.12.62 a chapter whose opening changed under its name waited
+ * for a reading to name it: one that read only the words taken out named it from them, one that answered his premise made
+ * that the name, and a version picked back — settled with no call, its summary back with none — left it blank for good).
+ * A chapter owed a name (nameDue: writer.js releaseOpening, mend.js mendNames) is named once no reading of it is owed —
+ * a reading that sees its opening names it as it reads — by one short ask: how it opens as it stands now, what came
+ * before in a few lines, and his premise for it, shown only so the title can follow it. Leashed as every helper ask is and
+ * counted by the one rule (stallRule), kept with the book by its opening as asked (memory.tries 'name:<chapter>');
+ * refused, or answered with his premise or no title, asked again in a moment; passed by at the second until its opening
+ * changes — a summary may name it meanwhile. Laid only where the opening still reads as it was asked, never over a name
+ * he typed (shape.js nameFrom). NAMES_PER_RUN a run; whether more are owed now. */
+export const NAMES_PER_RUN = 3;
+const NAME_OPENING_CHARS = 3000;
+const NAME_BEFORE_CHARS = 500;
+/* what came before it, in a few lines: the chapter before, by its summary or its words — its end, where this one picks up */
+function beforeLines(novel, chapterId) {
+  const order = novel.order || [];
+  const at = order.indexOf(chapterId);
+  const prev = at > 0 ? store.peek('chapter', order[at - 1]) : null;
+  if (!prev) return '';
+  const said = (prev.summary && String(prev.summary.text || '').trim()) || chapterText(prev).trim();
+  if (!said) return '';
+  const tail = said.length > NAME_BEFORE_CHARS ? `…${said.slice(-NAME_BEFORE_CHARS).replace(/^\S*\s+/, '')}` : said;
+  return `${chapterLabel(novel, prev, { withName: true })}: ${tail.replace(/\s+/g, ' ')}`;
+}
+async function nameChapters(novelId, conn) {
+  let asked = 0;
+  for (const id of [...((store.peek('novel', novelId) || {}).order || [])]) {
+    const novel = store.peek('novel', novelId);
+    const c = store.peek('chapter', id);
+    if (!novel || !c || !(novel.order || []).includes(id) || !nameOwed(c)) continue;
+    const op = openingOf(c);
+    if (!op) continue;
+    /* (a reading of it still owed comes first: one that sees the opening names it as it reads) */
+    const owed = changesIn(novel, c);
+    if (owed.streaming || owed.changes.length || owed.removed.length) continue;
+    const key = 'name:' + id;
+    const fp = openingPrint(c);
+    if (stageWaits(novel, key, fp) || stagePassed(novel, key, fp)) continue;
+    if (asked >= NAMES_PER_RUN) return true;
+    asked++;
+    const label = chapterLabel(novel, c, { withName: false });
+    const info = { what: 'name', fp, chapterId: id, label };
+    const house = store.peek('house', 'house') || {};
+    setLight(novelId, 'reading', `Naming ${label}…`);
+    const request = chapterNameRequest({ novel: namedBook(novel, house), chapterLabel: label, opening: cutWords(chapterText(c).trim(), NAME_OPENING_CHARS), premise: op.premise, before: beforeLines(novel, id) });
+    const got = await helperJson(novelId, conn, helperFrame(house, novel), request, { want: (o) => Boolean(cleanName(o && o.name)) });
+    await mustHold('helper', novelId);
+    if (!got.ok) {
+      if (got.leashed === 'gaveway') throw failed(got);
+      /* let go on its leash: naming ends for this run, never the run — waited as long, counted on the longest leash or no
+       * progress, passed by at the second (stageStalled) */
+      if (got.leashed) { stageStalled(novelId, key, info, got); return false; }
+      const fault = await helperFault(novelId, conn, got);
+      await mustHold('helper', novelId);
+      if (fault !== 'words') throw failed(fault === 'model' ? passingFrom(got) : fault);
+      /* its model will not name it: naming stops for this run — asked again in a moment, passed by at the second */
+      stageCount(novelId, key, { ...info, refused: true }, 1, store.phoneNow());
+      return false;
+    }
+    const name = titleOf(got.obj.name);
+    const live = store.peek('chapter', id);
+    /* his premise given back as the title, or no title at all: thrown out, asked again in a moment, passed by at the second */
+    if (!name || copiesPremise(name, live || c)) { stageCount(novelId, key, { ...info, copied: true }, 1, store.phoneNow()); continue; }
+    if (live) store.change('chapter', id, chapterSteps.nameFrom(name, { print: fp }));
+    stageDone(novelId, key);
+    await store.flush('chapter', id);
+  }
+  return false;
+}
+
 /* A chapter's summary is kept current once the writing has moved past it, or
  * once it has been quiet a while. A chapter longer than the helper's model
  * holds is summed up in parts, each part's summary carried into the next. */
@@ -3579,9 +3685,17 @@ function saveSummary(novelId, chapterId, stamp, summary, { cache = false, name =
     if (!n || !(n.order || []).includes(chapterId) || ((n.memory || {}).reread || 0) !== stamp.reread || !summaryMatches(c, stamp)) return false;
     chapterSteps.setSummary(clone(kept))(c);
     if (cache && kept) chapterSteps.keepSummary(kept)(c);
-    if (name && c.nameBy !== 'you' && (!c.name || c.nameDue)) { chapterSteps.setName(name, 'helper')(c); delete c.nameDue; }
+    /* (named where it has none — never over his, never his premise copied: shape.js nameFrom, 2.12.63; one owed since its
+     * opening changed is its own ask's, nameChapters — the summary names it only once that is passed by) */
+    if (name && summaryNames(n, c)) chapterSteps.nameFrom(name, { loose: true })(c);
     return true;
   });
+}
+/* whether a summary may name the chapter: it has none and owes none, or the name's own ask was passed by for its
+ * opening as it stands (2.12.63) */
+function summaryNames(novel, c) {
+  if (!c || c.nameBy === 'you') return false;
+  return c.nameDue ? stagePassed(novel, 'name:' + c.id, openingPrint(c)) : !c.name;
 }
 async function summaryStillCurrent(novelId, chapterId, stamp) {
   await mustHold('helper', novelId);
@@ -3678,7 +3792,7 @@ async function summarise(novelId, conn) {
     for (let k = 0; k < parts.length; k++) {
       const lastPart = k === parts.length - 1;
       /* a summary with words in it, or none (an empty one is asked again — M681) */
-      const got = await helperJson(novelId, conn, frame, summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[k], needsName: lastPart && c.nameBy !== 'you' && (!c.name || c.nameDue), words,
+      const got = await helperJson(novelId, conn, frame, summaryRequest({ novel: namedBook(now, house), chapterLabel: label, text: parts[k], needsName: lastPart && summaryNames(now, c), words,
         part: parts.length > 1 ? k + 1 : 0, parts: parts.length, soFar: summary, known, his: lastPart ? his : '', stretched: parts[0] === stretched && Boolean(stretched), tail: stretched ? tail : '' }), { want: (o) => Boolean(summaryWords(o.summary)) });
       if (!(await summaryStillCurrent(novelId, c.id, stamp))) { setAsideNow = true; break; }
       if (!got.ok) {
@@ -3717,7 +3831,7 @@ async function summarise(novelId, conn) {
     if (tokensStalled && stageStalled(novelId, 'tokens:' + c.id, { what: 'tokens', fp, chapterId: c.id, label }, tokensDue).passedBy) { stageDone(novelId, 'tokens:' + c.id); tokensDue = null; }
     if (summary) {
       const entry = { text: summary, fp, at: Date.now(), ...(tokensDue ? { again: true } : {}) };
-      saveSummary(novelId, c.id, stamp, entry, { cache: true, name: cutWords(name.replace(/^chapter\s+\w+\s*[:—-]\s*/i, ''), 80) });
+      saveSummary(novelId, c.id, stamp, entry, { cache: true, name: titleOf(name) });
       stageDone(novelId, 'summary:' + c.id);
       if (((store.peek('novel', novelId).memory || {}).aside || {})['summary:' + c.id]) store.change('novel', novelId, novelSteps.dropAside(['summary:' + c.id]));
     }

@@ -19,7 +19,8 @@
  * cut short keeps its unfinished end as it is (Go on finishes it). */
 
 import * as store from '../store.js';
-import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked, noHand, noneLetGo, wordsMatched, whoseFits, whoseNowWork } from './shape.js';
+import { howOf, chapterSteps, novelSteps, turnSteps, chapterText, handsOf, picked, noHand, noneLetGo, wordsMatched, whoseFits, whoseNowWork, copiesPremise } from './shape.js';
+import { connFor } from './writer.js';
 import { foldVersion, bookNameWords, bookTexts } from './inplace.js';
 import { joinSoftWraps, finishTail, mendMarks, dropGluedStrays, dropTop, dropMarkup, partBlock, mendSpacing, unglueSounds } from './textshape.js';
 import { shapeTelling } from './talk.js';
@@ -482,4 +483,35 @@ export async function keepWhose(novelId) {
     if (store.peek('novel', novelId)) store.change('novel', novelId, novelSteps.setMemory({ whoseKept: WHOSE_V }), { checkpoint: true });
   } finally { whoseBusy.delete(novelId); }
   return kept;
+}
+
+/* A CHAPTER NAMED WITH HIS PREMISE COPIED OUT, MENDED ONCE (2.12.63 — the app repairs what it can detect). 2.12.49 and
+ * 2.12.50 named a chapter with the first sentence of the premise that opened it, and 2.12.54–2.12.62 laid a reading's
+ * name that only repeated a premise; marked as the helper's, they stayed for good. When the book opens, once
+ * (`memory.namesMended`), a name the helper gave that only repeats a premise of its chapter (shape.js copiesPremise) is
+ * owed again (`nameDue`) — let go with a helper chosen, and named from the opening as it stands by its own ask
+ * (archivist.js nameChapters); kept meanwhile with none, since nobody could give it back. Each laid only where the
+ * chapter is still called so by the helper. How many. */
+export const NAMES_V = 1;
+const premiseNameStep = (name, helper) => (c) => {
+  if (c.nameBy !== 'helper' || c.name !== name || !copiesPremise(name, c)) return false;
+  if (helper) { c.name = ''; c.nameBy = ''; }
+  c.nameDue = true;
+  return true;
+};
+export function mendNames(novelId) {
+  const novel = store.peek('novel', novelId);
+  if (!novel || ((novel.memory || {}).namesMended || 0) >= NAMES_V) return 0;
+  const ids = novel.order || [];
+  /* (the book not all here yet: tried again the next time) */
+  if (ids.some((id) => !store.peek('chapter', id))) return 0;
+  const helper = Boolean(connFor(store.peek('house', 'house') || {}, 'helper'));
+  let n = 0;
+  for (const id of ids) {
+    const c = store.peek('chapter', id);
+    if (!c || c.nameBy !== 'helper' || !c.name || !copiesPremise(c.name, c)) continue;
+    if (store.change('chapter', id, premiseNameStep(c.name, helper), { checkpoint: true })) n++;
+  }
+  store.change('novel', novelId, novelSteps.setMemory({ namesMended: NAMES_V }), { checkpoint: true });
+  return n;
 }

@@ -1823,6 +1823,21 @@ ${his ? `\nMy own summary of this chapter, from before its latest changes — my
   return lines.join('\n\n');
 }
 
+/* A CHAPTER'S NAME, ASKED BY ITSELF (2.12.63 — archivist.js nameChapters): how it opens as it stands now, what came
+ * before it in a few lines, and his premise for it — shown so the title can follow it, never to be copied out (a name
+ * that only repeats it is thrown out: shape.js copiesPremise). */
+export const TITLE_ASK = 'Give it a chapter title';
+export function chapterNameRequest({ novel, chapterLabel, opening, premise = '', before = '' }) {
+  return [
+    `Name ${chapterLabel} of ${titled(novel)}.`,
+    before ? `What came before it, in short:\n${fence(before)}` : '',
+    `How ${chapterLabel} opens, as it stands now:\n${fence(opening)}`,
+    premise ? `What I asked for at its start — shown so the title can follow it. It is not the title: never write it out again, and never shorten it into the title:\n${fence(premise)}` : '',
+    `${TITLE_ASK}: a few words, in the voice of this book, from what this chapter does and what came before it. A title — not a sentence, not a summary, and not my words above copied. No quotation marks, and no “Chapter”.`,
+    'Answer with one JSON object and nothing else: {"name": "…"}',
+  ].filter(Boolean).join('\n\n');
+}
+
 /* A stretch of a long chapter (stretches.js), summed up on its own — what
  * rides for it when the chapter does not fit word for word. The summary of
  * the stretch before it comes along, so it picks up where that one ends. */
