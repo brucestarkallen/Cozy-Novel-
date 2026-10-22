@@ -294,7 +294,7 @@ await test('after a Resend from an edited premise, Another take, a Rewrite and w
   await putAway(b);
 });
 
-await test('Resend on a page whose premise only a rewrite kept writes from the box — never "these are your own words"; the same premise again keeps the chapter’s name, a changed one names it anew', async () => {
+await test('Resend on a page whose premise only a rewrite kept writes from the box — never "these are your own words"; a new take that opens the chapter, its premise the same or changed, names it again', async () => {
   const b = await makeBook([[]]);
   store.change('novel', b.novelId, shape.novelSteps.setPref('length', 'paragraphs'), { now: true });
   await script([{ text: 'Mara struck a match in the dark.' }]);
@@ -303,12 +303,14 @@ await test('Resend on a page whose premise only a rewrite kept writes from the b
   const p = () => b.ch().passages.find((x) => x.id === pid);
   const named = () => store.change('chapter', b.ids[0], (c) => { c.name = 'A Match in the Dark'; c.nameBy = 'helper'; delete c.nameDue; }, { now: true });
   named();
-  /* the premise as it stands, sent again: Another take — the name stays */
+  /* the premise as it stands, sent again: a new take, as Another take is — the page that opens the chapter is a new one,
+   * so the chapter is named again from it, and the take before keeps its own name to come back with it (2.12.63: one rule
+   * for the chapter's name — the premise fix had kept the name for the same premise, and Another take let it go) */
   await reset();
   await script([{ text: 'Mara struck a second match.' }]);
   const same = await writer.resend({ novelId: b.novelId, chapterId: b.ids[0], passageId: pid, direction: '  She lights the lamp. ' });
   assert.equal(same.ok, true, same.error);
-  assert.deepEqual([b.ch().name, b.ch().nameDue], ['A Match in the Dark', undefined], 'the same premise again names nothing anew');
+  assert.deepEqual([b.ch().name, b.ch().nameDue], ['', true], 'a new take opens the chapter: named again from it');
   assert.equal(picked(p()).ask.length, 'long', 'as long as the page was asked to be');
   /* written again with a note, and every version written from the premise taken out: the premise lives on the rewrite */
   await reset();
